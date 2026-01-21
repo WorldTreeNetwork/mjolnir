@@ -1,0 +1,29 @@
+# Elixir/Mix
+/_build/
+/deps/
+/*.ez
+*.beam
+
+# Rust
+native/*/target/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+.cursor/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/Dev
+/cover/
+/doc/
+*.log
+
+# Runtime
+/tmp/
+*.sock

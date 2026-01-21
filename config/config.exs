@@ -1,0 +1,17 @@
+import Config
+
+config :mjolnir,
+  # Paths
+  btrfs_root: "/var/lib/mjolnir/btrfs",
+  kernel_path: "/var/lib/mjolnir/vmlinux",
+  firecracker_bin: "/usr/local/bin/firecracker",
+
+  # Defaults
+  default_vcpus: 2,
+  default_memory_mb: 512,
+  default_base_image: "debian-12",
+
+  # Sockets
+  socket_dir: "/tmp/mjolnir"
+
+import_config "#{config_env()}.exs"
