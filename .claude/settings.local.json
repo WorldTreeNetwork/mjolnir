@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Skill(create_plan)",
-      "Skill(create_plan:*)"
-    ]
-  }
-}
