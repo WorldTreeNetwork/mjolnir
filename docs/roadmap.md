@@ -67,16 +67,25 @@ Mjolnir is a distributed computational fabric where:
 ### Milestone 1.2: BTRFS Integration
 **Goal**: Instant CoW clones and snapshots for VM filesystems
 
-- [ ] Mount BTRFS partition with optimal settings
-- [ ] Create subvolume structure (@base, @vms, @snapshots)
+Firecracker requires ext4 file images, so we store ext4 images on BTRFS and use reflink (`cp --reflink=auto`) for instant copy-on-write cloning.
+
+- [x] Mount BTRFS partition with optimal settings
+- [x] Create directory structure (@base, @vms, @snapshots)
+- [x] Implement `Mjolnir.BTRFS.clone/2` using reflink copy
 - [ ] Implement `Mjolnir.BTRFS.snapshot/2` for checkpointing
-- [ ] Implement `Mjolnir.BTRFS.clone/2` for VM spawning
 - [ ] Quota management per-VM
+
+**Architecture Note**: We use ext4 images on BTRFS (not BTRFS subvolumes) because Firecracker needs block device images. BTRFS reflinks give us instant CoW cloning of these ext4 files.
 
 **Deliverables**:
 ```elixir
-{:ok, path} = Mjolnir.BTRFS.clone("ubuntu-22.04", "vm-123")
+# Clone base ext4 image for new VM (instant via reflink)
+{:ok, path} = Mjolnir.BTRFS.clone("debian-12", "vm-123")
+# => {:ok, "/var/lib/mjolnir/btrfs/@vms/vm-123/rootfs.ext4"}
+
+# Snapshot VM rootfs (for checkpointing)
 {:ok, snap} = Mjolnir.BTRFS.snapshot("vm-123", "checkpoint-1")
+# => {:ok, "/var/lib/mjolnir/btrfs/@snapshots/vm-123/checkpoint-1.ext4"}
 ```
 
 ### Milestone 1.3: Checkpointing System
@@ -363,8 +372,8 @@ iex> Mjolnir.Agent.prompt(agent, "Write a hello world in Rust")
 
 ## Remaining Open Questions
 
-1. **Guest agent**: Custom vsock daemon vs SSH vs serial console?
-   - Leaning: Custom vsock for low latency, SSH as fallback
+1. ~~**Guest agent**: Custom vsock daemon vs SSH vs serial console?~~
+   - **Resolved**: Custom Rust guest agent (`mjolnir-agent`) via vsock. Simple JSON-RPC over vsock, starts early at `basic.target` for fast boot availability.
 
 2. **Checkpoint storage**: Local BTRFS + Iroh (content-addressed) vs S3?
    - Leaning: Iroh for distribution, local BTRFS for active VMs

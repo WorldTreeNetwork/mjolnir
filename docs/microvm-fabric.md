@@ -126,49 +126,73 @@ Firecracker provides:
 
 ### 2.2 BTRFS Storage Layer
 
-BTRFS provides the checkpointing foundation via copy-on-write semantics:
+BTRFS provides the checkpointing foundation via copy-on-write semantics. Firecracker requires ext4 file images (not directory trees), so we store ext4 images on a BTRFS filesystem to get the best of both worlds:
+
+- **Firecracker compatibility**: ext4 rootfs images that Firecracker expects
+- **Instant cloning**: BTRFS reflink copies (`cp --reflink=auto`) for near-instant CoW file duplication
+- **Snapshot flexibility**: Multiple checkpoint strategies available
 
 ```
 /var/lib/mjolnir/btrfs/
-├── @base/                    # Base OS images (immutable)
-│   ├── ubuntu-22.04/
-│   ├── debian-12/
-│   └── alpine-3.19/
-├── @vms/                     # Per-VM overlays
-│   ├── {vm_id}/
-│   │   ├── overlay/          # CoW layer on base
-│   │   ├── workspace/        # Agent workspace
-│   │   └── .snapshots/       # Checkpoint history
-│   │       ├── checkpoint-001/
-│   │       ├── checkpoint-002/
-│   │       └── latest -> checkpoint-002/
+├── @base/                    # Base OS images (immutable ext4 files)
+│   ├── debian-12.ext4        # ~300MB base image
+│   └── ubuntu-22.04.ext4     # Alternative base
+├── @vms/                     # Per-VM directories
+│   └── {vm_id}/
+│       └── rootfs.ext4       # CoW clone of base image
 └── @snapshots/               # Archived/transferred snapshots
     └── {vm_id}/
-        └── {timestamp}/
+        └── {timestamp}.ext4
 ```
+
+#### Why ext4 on BTRFS (Not BTRFS Subvolumes)
+
+**The challenge**: Firecracker requires a block device image (ext4 file) as the rootfs. It cannot mount a BTRFS subvolume directly—subvolumes are directory trees, not block devices.
+
+**The solution**: Store ext4 images on a BTRFS filesystem, using BTRFS's reflink feature for instant copy-on-write cloning:
+
+```bash
+# Clone base image for new VM (instant, ~0 bytes until writes)
+cp --reflink=auto @base/debian-12.ext4 @vms/{vm_id}/rootfs.ext4
+```
+
+This gives us:
+1. **Instant VM creation**: Reflink copy is O(1), regardless of image size
+2. **Storage efficiency**: Cloned images share blocks until modified (CoW)
+3. **Firecracker compatibility**: Each VM gets a proper ext4 block device
 
 #### BTRFS Operations
 
 ```bash
-# Create base subvolume from rootfs
-btrfs subvolume create /var/lib/mjolnir/btrfs/@base/ubuntu-22.04
+# Setup directory structure (done by bootstrap-host.sh)
+mkdir -p /var/lib/mjolnir/btrfs/@base
+mkdir -p /var/lib/mjolnir/btrfs/@vms
+mkdir -p /var/lib/mjolnir/btrfs/@snapshots
 
-# Clone for new VM (instant, CoW)
-btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@base/ubuntu-22.04 \
-  /var/lib/mjolnir/btrfs/@vms/{vm_id}/overlay
+# Clone base image for new VM (instant CoW via reflink)
+cp --reflink=auto /var/lib/mjolnir/btrfs/@base/debian-12.ext4 \
+  /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4
 
-# Checkpoint (instant snapshot)
-btrfs subvolume snapshot -r /var/lib/mjolnir/btrfs/@vms/{vm_id}/overlay \
-  /var/lib/mjolnir/btrfs/@vms/{vm_id}/.snapshots/checkpoint-{n}
+# Snapshot a running VM's rootfs (file-level)
+cp --reflink=auto /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4 \
+  /var/lib/mjolnir/btrfs/@snapshots/{vm_id}/{timestamp}.ext4
 
-# Send to remote node (incremental)
-btrfs send -p /prev/snapshot /new/snapshot | ssh node2 btrfs receive /dest/
-
-# Restore from checkpoint
-btrfs subvolume delete /var/lib/mjolnir/btrfs/@vms/{vm_id}/overlay
-btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@vms/{vm_id}/.snapshots/checkpoint-{n} \
-  /var/lib/mjolnir/btrfs/@vms/{vm_id}/overlay
+# Restore from snapshot
+cp --reflink=auto /var/lib/mjolnir/btrfs/@snapshots/{vm_id}/{timestamp}.ext4 \
+  /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4
 ```
+
+#### Checkpoint/Restore Strategies
+
+Three approaches for checkpointing VM state:
+
+| Strategy | Scope | Use Case | Notes |
+|----------|-------|----------|-------|
+| **File reflink** | Filesystem only | Quick fs snapshot | Instant, no memory state |
+| **BTRFS snapshot** | Entire @vms directory | Atomic multi-VM backup | Captures all VMs at once |
+| **Firecracker snapshot** | Memory + CPU + devices | Live VM pause/resume | Full state, supports migration |
+
+**Recommended approach** for live VMs: Firecracker's native snapshotting (covered in Section 3), which captures memory, CPU registers, and device state in addition to the filesystem.
 
 #### Compression Strategy
 
@@ -351,16 +375,18 @@ defmodule Mjolnir.VM do
   defp via_tuple(id), do: {:via, Registry, {Mjolnir.VMRegistry, id}}
   
   defp setup_btrfs_overlay(config) do
-    base_image = config.base_image || "ubuntu-22.04"
-    subvol_path = "/var/lib/mjolnir/btrfs/@vms/#{config.id}/overlay"
-    
-    case System.cmd("btrfs", [
-      "subvolume", "snapshot",
-      "/var/lib/mjolnir/btrfs/@base/#{base_image}",
-      subvol_path
-    ]) do
-      {_, 0} -> {:ok, subvol_path}
-      {err, _} -> {:error, {:btrfs_snapshot_failed, err}}
+    base_image = config.base_image || "debian-12"
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@base", "#{base_image}.ext4"])
+    dest_dir = Path.join([btrfs_root, "@vms", config.id])
+    dest = Path.join(dest_dir, "rootfs.ext4")
+
+    with :ok <- File.mkdir_p(dest_dir),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {:ok, dest}
+    else
+      {err, _} -> {:error, {:reflink_copy_failed, err}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -522,12 +548,16 @@ defmodule Mjolnir.Checkpoint.Coordinator do
   end
 
   defp snapshot_btrfs(vm_id, checkpoint_id) do
-    source = "/var/lib/mjolnir/btrfs/@vms/#{vm_id}/overlay"
-    dest = "/var/lib/mjolnir/btrfs/@vms/#{vm_id}/.snapshots/#{checkpoint_id}"
-    
-    case System.cmd("btrfs", ["subvolume", "snapshot", "-r", source, dest]) do
-      {_, 0} -> {:ok, dest}
-      {err, _} -> {:error, {:btrfs_failed, err}}
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
+    dest_dir = Path.join([btrfs_root, "@snapshots", vm_id])
+    dest = Path.join(dest_dir, "#{checkpoint_id}.ext4")
+
+    with :ok <- File.mkdir_p(dest_dir),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {:ok, dest}
+    else
+      {err, _} -> {:error, {:snapshot_failed, err}}
     end
   end
 end
@@ -647,42 +677,50 @@ end
 
 ### 4.2 Agent Workspace Management
 
+Agent workspaces are stored inside the VM's ext4 rootfs image. When agents need persistent workspaces that survive VM restarts, use the VM's rootfs snapshot capabilities.
+
 ```elixir
 defmodule Mjolnir.Agent.Workspace do
   @moduledoc """
-  Manages agent workspaces using BTRFS subvolumes.
-  Workspaces can be cloned, snapshotted, and shared.
+  Manages agent workspaces via VM rootfs snapshots.
+  Workspaces live inside the VM's ext4 image and can be
+  cloned/snapshotted using reflink copies.
   """
 
-  def create(agent_id, opts \\ []) do
-    base = opts[:clone_from] || "/var/lib/mjolnir/btrfs/@workspaces/empty"
-    path = "/var/lib/mjolnir/btrfs/@workspaces/#{agent_id}"
-    
-    System.cmd("btrfs", ["subvolume", "snapshot", base, path])
-    {:ok, path}
+  def snapshot_vm_rootfs(vm_id, name) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
+    dest_dir = Path.join([btrfs_root, "@snapshots", vm_id])
+    dest = Path.join(dest_dir, "#{name}.ext4")
+
+    with :ok <- File.mkdir_p(dest_dir),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {:ok, dest}
+    end
   end
 
-  def snapshot(agent_id, name) do
-    source = "/var/lib/mjolnir/btrfs/@workspaces/#{agent_id}"
-    dest = "#{source}/.snapshots/#{name}"
-    
-    System.cmd("btrfs", ["subvolume", "snapshot", "-r", source, dest])
-    {:ok, dest}
+  def clone_vm(source_vm_id, target_vm_id) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@vms", source_vm_id, "rootfs.ext4"])
+    dest_dir = Path.join([btrfs_root, "@vms", target_vm_id])
+    dest = Path.join(dest_dir, "rootfs.ext4")
+
+    # Instant CoW clone via reflink
+    with :ok <- File.mkdir_p(dest_dir),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {:ok, dest}
+    end
   end
 
-  def clone(source_agent_id, target_agent_id) do
-    source = "/var/lib/mjolnir/btrfs/@workspaces/#{source_agent_id}"
-    target = "/var/lib/mjolnir/btrfs/@workspaces/#{target_agent_id}"
-    
-    # Instant CoW clone
-    System.cmd("btrfs", ["subvolume", "snapshot", source, target])
-    {:ok, target}
-  end
+  def restore_from_snapshot(vm_id, snapshot_name) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@snapshots", vm_id, "#{snapshot_name}.ext4"])
+    dest = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
 
-  def diff(snapshot1, snapshot2) do
-    # Get changed files between snapshots
-    {output, 0} = System.cmd("btrfs", ["send", "--no-data", "-p", snapshot1, snapshot2])
-    parse_btrfs_diff(output)
+    # Replace current rootfs with snapshot (VM must be stopped)
+    with {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      :ok
+    end
   end
 end
 ```
@@ -944,11 +982,10 @@ mkfs.btrfs -L mjolnir /dev/sdb
 mkdir -p /var/lib/mjolnir/btrfs
 mount -o compress=zstd:3,noatime,ssd /dev/sdb /var/lib/mjolnir/btrfs
 
-# Create BTRFS structure
-btrfs subvolume create /var/lib/mjolnir/btrfs/@base
-btrfs subvolume create /var/lib/mjolnir/btrfs/@vms
-btrfs subvolume create /var/lib/mjolnir/btrfs/@snapshots
-btrfs subvolume create /var/lib/mjolnir/btrfs/@workspaces
+# Create directory structure for ext4 images on BTRFS
+mkdir -p /var/lib/mjolnir/btrfs/@base      # Base ext4 images
+mkdir -p /var/lib/mjolnir/btrfs/@vms       # Per-VM rootfs clones
+mkdir -p /var/lib/mjolnir/btrfs/@snapshots # Checkpoint storage
 
 # Download base kernel
 curl -L "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin" \
@@ -1410,12 +1447,11 @@ end
 
 ## Appendix A: BTRFS Best Practices
 
-```bash
-# Enable quotas for per-VM storage limits
-btrfs quota enable /var/lib/mjolnir/btrfs
+Since we use ext4 files on BTRFS (not subvolumes), quota management is simpler:
 
-# Set quota for VM subvolume
-btrfs qgroup limit 10G /var/lib/mjolnir/btrfs/@vms/{vm_id}
+```bash
+# Enable quotas for overall storage limits (optional)
+btrfs quota enable /var/lib/mjolnir/btrfs
 
 # Balance to prevent fragmentation (run periodically)
 btrfs balance start -dusage=50 /var/lib/mjolnir/btrfs
@@ -1423,8 +1459,24 @@ btrfs balance start -dusage=50 /var/lib/mjolnir/btrfs
 # Scrub for data integrity (weekly cron)
 btrfs scrub start /var/lib/mjolnir/btrfs
 
-# Defragment specific subvolume
-btrfs filesystem defragment -r /var/lib/mjolnir/btrfs/@vms/{vm_id}
+# Check reflink sharing (how much space is shared via CoW)
+compsize /var/lib/mjolnir/btrfs/@vms/
+
+# Defragment directory (may break reflinks - use with caution)
+# btrfs filesystem defragment -r /var/lib/mjolnir/btrfs/@vms/{vm_id}
+```
+
+### Reflink Behavior Notes
+
+When using `cp --reflink=auto`:
+- **Initial clone**: 0 bytes used (shares all blocks with source)
+- **After writes**: Only changed blocks use new space (CoW)
+- **Defragmentation**: Can break reflinks, causing space increase
+
+To check actual disk usage accounting for shared blocks:
+```bash
+# Install compsize if needed: apt install btrfs-compsize
+compsize /var/lib/mjolnir/btrfs/@vms/
 ```
 
 ## Appendix B: Firecracker Jailer
