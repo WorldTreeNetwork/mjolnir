@@ -88,18 +88,32 @@ Firecracker requires ext4 file images, so we store ext4 images on BTRFS and use 
 # => {:ok, "/var/lib/mjolnir/btrfs/@snapshots/vm-123/checkpoint-1.ext4"}
 ```
 
-### Milestone 1.3: Checkpointing System
-**Goal**: Full VM checkpoint (memory + disk) and restore
+### Milestone 1.3: Filesystem Checkpointing
+**Goal**: Snapshot VM filesystems for backup and cloning
 
-- [ ] Implement Firecracker snapshot API integration
-- [ ] Coordinate memory + BTRFS snapshots atomically
-- [ ] Implement `Mjolnir.Checkpoint.create/1` and `restore/1`
-- [ ] Checkpoint metadata storage and retrieval
+We focus on **filesystem-only checkpoints** (not memory/CPU state). This gives us:
+- Instant VM cloning via BTRFS reflink
+- Workspace backup and restore
+- Cross-host transfer via `btrfs send/receive`
+
+Memory snapshots (pausing a VM and restoring exact execution state) are deferred—Firecracker supports this natively, but we don't need it yet. See [orthogonal-persistence.md](orthogonal-persistence.md) for notes on future full-state checkpointing.
+
+- [ ] Implement `Mjolnir.BTRFS.snapshot/2` for VM rootfs snapshots
+- [ ] Implement `Mjolnir.BTRFS.restore/2` to restore from snapshot
+- [ ] Checkpoint metadata storage (timestamp, VM config, parent snapshot)
+- [ ] Quota management per-VM
 
 **Deliverables**:
 ```elixir
-{:ok, checkpoint_id} = Mjolnir.Checkpoint.create(vm_id)
-{:ok, new_vm_id} = Mjolnir.Checkpoint.restore(checkpoint_id)
+# Snapshot a VM's filesystem (VM should be stopped or quiesced)
+{:ok, snap_path} = Mjolnir.BTRFS.snapshot("vm-123", "backup-1")
+# => {:ok, "/var/lib/mjolnir/btrfs/@snapshots/vm-123/backup-1.ext4"}
+
+# Restore from snapshot
+:ok = Mjolnir.BTRFS.restore("vm-123", "backup-1")
+
+# Clone a VM (instant CoW copy)
+{:ok, new_path} = Mjolnir.BTRFS.clone_vm("vm-123", "vm-456")
 ```
 
 ---
@@ -124,15 +138,20 @@ Mjolnir.Scheduler.place(%{vcpus: 4, memory_mb: 4096})
 ```
 
 ### Milestone 2.2: Cross-Node Migration
-**Goal**: Live-migrate VMs between hosts
+**Goal**: Migrate VM filesystems between hosts
+
+Initial scope is **cold migration** (VM stopped during transfer). This uses BTRFS send/receive for efficient incremental transfer.
+
+Live migration (using Firecracker memory snapshots) is a future enhancement—see [orthogonal-persistence.md](orthogonal-persistence.md).
 
 - [ ] Implement BTRFS send/receive for filesystem transfer
-- [ ] Implement checkpoint transfer protocol
-- [ ] Coordinate checkpoint → transfer → restore workflow
+- [ ] Transfer protocol over Tailscale/Iroh
+- [ ] Coordinate stop → transfer → start workflow
 - [ ] Handle network reconfiguration post-migration
 
 **Deliverables**:
 ```elixir
+# Stop VM, transfer filesystem, start on target
 :ok = Mjolnir.VM.migrate(vm_id, target_node: :"mjolnir@host2")
 ```
 
@@ -175,16 +194,21 @@ Mjolnir.Agent.prompt(agent, "Analyze this codebase")
 ```
 
 ### Milestone 3.2: Agent State Management
-**Goal**: Checkpoint and restore agent sessions
+**Goal**: Snapshot and clone agent workspaces
 
-- [ ] Agent checkpoint including conversation state
-- [ ] Workspace snapshots for agent projects
-- [ ] Agent cloning (fork agent with same context)
-- [ ] Long-running agent support (periodic checkpoints)
+Focuses on **workspace state** (files, installed packages) rather than memory state. Agents are expected to be resumable via their own context mechanisms (conversation history, etc.).
+
+- [ ] Workspace snapshots for agent projects (via BTRFS)
+- [ ] Agent cloning (fork with same workspace)
+- [ ] Periodic workspace snapshots for long-running agents
+- [ ] Snapshot retention and cleanup policies
 
 **Deliverables**:
 ```elixir
-{:ok, cp} = Mjolnir.Agent.checkpoint(agent)
+# Snapshot agent's workspace (filesystem only)
+{:ok, snap} = Mjolnir.Agent.snapshot_workspace(agent)
+
+# Clone agent with same workspace state
 {:ok, cloned_agent} = Mjolnir.Agent.clone(agent)
 ```
 
@@ -308,7 +332,7 @@ end
 |-----------|------------|-----------|
 | **Virtualization** | Firecracker | Sub-second boot, minimal overhead, snapshotting |
 | **Guest OS** | **Debian 12 (Bookworm)** | Minimal, apt-native, no Ubuntu bloat |
-| **Filesystem** | BTRFS | CoW snapshots, send/receive, compression |
+| **Filesystem** | BTRFS | CoW cloning (reflink), send/receive for migration, compression |
 | **Orchestration** | Elixir/OTP | Supervision trees, distributed by default, message-passing |
 | **Host OS** | Debian 12 or Ubuntu 22.04 | Stable, good Firecracker support |
 | **Kernel** | Linux 6.1 LTS | Modern BTRFS, good virtualization support |

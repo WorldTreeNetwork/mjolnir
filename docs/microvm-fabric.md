@@ -5,11 +5,11 @@
 
 This document specifies a distributed computational fabric where:
 - **Compute units** are Firecracker microVMs (Linux shells with full `apt` access)
-- **State persistence** leverages BTRFS copy-on-write snapshots for instant checkpointing
+- **State persistence** leverages BTRFS copy-on-write for instant VM cloning and filesystem snapshots
 - **Orchestration** is handled by Elixir/OTP for actor-based concurrency, supervision trees, and distributed message-passing
 - **AI agents** (e.g., Claude Code) run natively inside microVMs with full system access
 
-The fabric implements orthogonal persistence at the VM level—processes can be paused, checkpointed, migrated, and resumed transparently across nodes.
+VMs can be cloned instantly (BTRFS reflink), their filesystems snapshotted, and migrated between nodes. Full orthogonal persistence (memory + CPU state) is a future option via Firecracker's native snapshotting—see [orthogonal-persistence.md](orthogonal-persistence.md).
 
 ---
 
@@ -182,17 +182,21 @@ cp --reflink=auto /var/lib/mjolnir/btrfs/@snapshots/{vm_id}/{timestamp}.ext4 \
   /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4
 ```
 
-#### Checkpoint/Restore Strategies
+#### Checkpoint/Restore Strategy
 
-Three approaches for checkpointing VM state:
+We use **filesystem-only checkpoints** via BTRFS reflink copies:
 
-| Strategy | Scope | Use Case | Notes |
-|----------|-------|----------|-------|
-| **File reflink** | Filesystem only | Quick fs snapshot | Instant, no memory state |
-| **BTRFS snapshot** | Entire @vms directory | Atomic multi-VM backup | Captures all VMs at once |
-| **Firecracker snapshot** | Memory + CPU + devices | Live VM pause/resume | Full state, supports migration |
+```bash
+# Snapshot a VM's rootfs (instant CoW copy)
+cp --reflink=auto @vms/{vm_id}/rootfs.ext4 @snapshots/{vm_id}/{name}.ext4
 
-**Recommended approach** for live VMs: Firecracker's native snapshotting (covered in Section 3), which captures memory, CPU registers, and device state in addition to the filesystem.
+# Restore from snapshot
+cp --reflink=auto @snapshots/{vm_id}/{name}.ext4 @vms/{vm_id}/rootfs.ext4
+```
+
+This captures workspace state (files, installed packages, project data) but **not** running process state (memory, CPU registers). For our current use cases—workspace backup, VM cloning, cross-host transfer—this is sufficient.
+
+**Future option**: Firecracker provides native memory+CPU snapshots for true pause/resume. See [orthogonal-persistence.md](orthogonal-persistence.md) for details on when we might need this.
 
 #### Compression Strategy
 
@@ -455,148 +459,111 @@ end
 
 ## 3. Checkpointing System
 
-### 3.1 Checkpoint Types
+Mjolnir uses **filesystem-only checkpoints**—we snapshot the VM's rootfs (ext4 image) via BTRFS reflink copies. This captures workspace state but not running process memory.
 
-| Type | Scope | Use Case |
-|------|-------|----------|
-| **Memory Snapshot** | Firecracker VM state | Pause/resume, fast restore |
-| **Filesystem Snapshot** | BTRFS subvolume | Workspace preservation |
-| **Full Checkpoint** | Both + metadata | Migration, long-term archival |
-| **Incremental Checkpoint** | Delta from previous | Periodic checkpointing |
+For full VM state snapshots (memory + CPU + devices), see [orthogonal-persistence.md](orthogonal-persistence.md). We defer this complexity until live migration or VM forking becomes a requirement.
 
-### 3.2 Checkpoint Coordinator
+### 3.1 Snapshot Operations
 
 ```elixir
-defmodule Mjolnir.Checkpoint.Coordinator do
-  use GenServer
-  
-  defstruct [
-    :checkpoint_store,    # Where checkpoints are persisted
-    :retention_policy,    # How long to keep checkpoints
-    :scheduled_jobs       # Periodic checkpoint schedules
-  ]
+defmodule Mjolnir.BTRFS do
+  @moduledoc """
+  Filesystem snapshot operations using BTRFS reflink copies.
+  """
 
-  def schedule_periodic(vm_id, interval_ms) do
-    GenServer.call(__MODULE__, {:schedule, vm_id, interval_ms})
-  end
-
-  def create_checkpoint(vm_id, opts \\ []) do
-    GenServer.call(__MODULE__, {:create, vm_id, opts}, :infinity)
-  end
-
-  def restore_checkpoint(vm_id, checkpoint_id, opts \\ []) do
-    GenServer.call(__MODULE__, {:restore, vm_id, checkpoint_id, opts}, :infinity)
-  end
-
-  def list_checkpoints(vm_id) do
-    GenServer.call(__MODULE__, {:list, vm_id})
-  end
-
-  @impl true
-  def handle_call({:create, vm_id, opts}, _from, state) do
-    checkpoint_id = generate_checkpoint_id()
-    
-    with :ok <- pause_vm(vm_id),
-         {:ok, mem_path} <- snapshot_firecracker_memory(vm_id, checkpoint_id),
-         {:ok, fs_path} <- snapshot_btrfs(vm_id, checkpoint_id),
-         {:ok, metadata} <- capture_metadata(vm_id),
-         :ok <- store_checkpoint(checkpoint_id, %{
-           vm_id: vm_id,
-           memory: mem_path,
-           filesystem: fs_path,
-           metadata: metadata,
-           created_at: DateTime.utc_now()
-         }),
-         :ok <- maybe_resume(vm_id, opts) do
-      
-      {:reply, {:ok, checkpoint_id}, state}
-    else
-      error ->
-        resume_vm(vm_id)  # Ensure VM isn't left paused
-        {:reply, error, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:restore, vm_id, checkpoint_id, opts}, _from, state) do
-    with {:ok, checkpoint} <- fetch_checkpoint(checkpoint_id),
-         :ok <- stop_existing_vm(vm_id),
-         :ok <- restore_btrfs_snapshot(vm_id, checkpoint.filesystem),
-         {:ok, _pid} <- start_vm_from_snapshot(vm_id, checkpoint) do
-      
-      {:reply, :ok, state}
-    else
-      error -> {:reply, error, state}
-    end
-  end
-
-  defp snapshot_firecracker_memory(vm_id, checkpoint_id) do
-    snapshot_path = "/var/lib/mjolnir/checkpoints/#{vm_id}/#{checkpoint_id}"
-    File.mkdir_p!(snapshot_path)
-    
-    # Firecracker snapshot API
-    body = Jason.encode!(%{
-      snapshot_type: "Full",
-      snapshot_path: "#{snapshot_path}/snapshot",
-      mem_file_path: "#{snapshot_path}/memory"
-    })
-    
-    case http_put("http+unix:///tmp/mjolnir/fc/#{vm_id}.sock/snapshot/create", body) do
-      {:ok, 204} -> {:ok, snapshot_path}
-      error -> {:error, {:snapshot_failed, error}}
-    end
-  end
-
-  defp snapshot_btrfs(vm_id, checkpoint_id) do
+  @doc """
+  Snapshot a VM's rootfs. VM should be stopped or quiesced for consistency.
+  """
+  def snapshot(vm_id, snapshot_name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     source = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
     dest_dir = Path.join([btrfs_root, "@snapshots", vm_id])
-    dest = Path.join(dest_dir, "#{checkpoint_id}.ext4")
+    dest = Path.join(dest_dir, "#{snapshot_name}.ext4")
 
     with :ok <- File.mkdir_p(dest_dir),
          {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
       {:ok, dest}
-    else
-      {err, _} -> {:error, {:snapshot_failed, err}}
+    end
+  end
+
+  @doc """
+  Restore a VM's rootfs from a snapshot. VM must be stopped.
+  """
+  def restore(vm_id, snapshot_name) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@snapshots", vm_id, "#{snapshot_name}.ext4"])
+    dest = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
+
+    case System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {_, 0} -> :ok
+      {err, _} -> {:error, {:restore_failed, err}}
+    end
+  end
+
+  @doc """
+  Clone a VM's rootfs to create a new VM. Source VM should be stopped.
+  """
+  def clone_vm(source_vm_id, target_vm_id) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@vms", source_vm_id, "rootfs.ext4"])
+    dest_dir = Path.join([btrfs_root, "@vms", target_vm_id])
+    dest = Path.join(dest_dir, "rootfs.ext4")
+
+    with :ok <- File.mkdir_p(dest_dir),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+      {:ok, dest}
+    end
+  end
+
+  @doc """
+  List snapshots for a VM.
+  """
+  def list_snapshots(vm_id) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    snapshot_dir = Path.join([btrfs_root, "@snapshots", vm_id])
+
+    case File.ls(snapshot_dir) do
+      {:ok, files} ->
+        snapshots = files
+        |> Enum.filter(&String.ends_with?(&1, ".ext4"))
+        |> Enum.map(&String.trim_trailing(&1, ".ext4"))
+        {:ok, snapshots}
+      {:error, :enoent} -> {:ok, []}
+      error -> error
     end
   end
 end
 ```
 
-### 3.3 Cross-Node Migration
+### 3.2 Cross-Node Transfer
+
+For migrating VMs between hosts, we use `btrfs send/receive` for efficient incremental transfer:
 
 ```elixir
 defmodule Mjolnir.Migration do
   @moduledoc """
-  Handles live migration of VMs between nodes using BTRFS send/receive
-  and Firecracker snapshot restore.
+  Cold migration of VMs between nodes.
+  VM is stopped, filesystem transferred, then started on target.
   """
 
-  def migrate(vm_id, source_node, target_node, opts \\ []) do
-    with {:ok, checkpoint_id} <- create_migration_checkpoint(source_node, vm_id),
-         :ok <- transfer_checkpoint(checkpoint_id, source_node, target_node),
-         :ok <- restore_on_target(target_node, vm_id, checkpoint_id),
-         :ok <- cleanup_source(source_node, vm_id, opts) do
+  def migrate(vm_id, target_node) do
+    with :ok <- Mjolnir.VM.stop(vm_id),
+         {:ok, _} <- transfer_rootfs(vm_id, target_node),
+         {:ok, _} <- start_on_target(vm_id, target_node) do
+      cleanup_local(vm_id)
       :ok
     end
   end
 
-  defp transfer_checkpoint(checkpoint_id, source, target) do
-    # Use BTRFS send/receive for efficient incremental transfer
-    source_path = "/var/lib/mjolnir/btrfs/@vms/*/#{checkpoint_id}"
-    
-    # Get parent snapshot for incremental send
-    parent = get_parent_snapshot(source, checkpoint_id)
-    
-    send_cmd = case parent do
-      nil -> "btrfs send #{source_path}"
-      p -> "btrfs send -p #{p} #{source_path}"
-    end
-    
-    # Stream via SSH or internal transport
-    :rpc.call(source, System, :cmd, ["sh", ["-c", 
-      "#{send_cmd} | ssh #{target} 'btrfs receive /var/lib/mjolnir/btrfs/@incoming/'"
-    ]])
+  defp transfer_rootfs(vm_id, target_node) do
+    # For now, simple rsync over SSH/Tailscale
+    # Future: btrfs send/receive for incremental transfer
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@vms", vm_id])
+
+    # Transfer via rsync (or btrfs send in future)
+    cmd = "rsync -az #{source}/ #{target_node}:#{source}/"
+    System.cmd("sh", ["-c", cmd])
   end
 end
 ```
@@ -883,14 +850,16 @@ end
 
 ### 7.2 Mapping to Orthogonal Persistence
 
-The orthogonal persistence pattern from `orthogonal-persistence.md` maps directly:
+The orthogonal persistence pattern from `orthogonal-persistence.md` maps to our implementation:
 
 | Concept | Implementation |
 |---------|----------------|
-| State persistence | BTRFS snapshot + Firecracker memory dump |
+| State persistence | BTRFS reflink snapshots (filesystem) |
 | Identity preservation | VM ID + cryptographic keypair |
-| State validation | Checkpoint integrity verification |
-| Transparent restoration | `Mjolnir.Checkpoint.restore/2` |
+| State validation | BTRFS integrity (scrub, checksums) |
+| Transparent restoration | `Mjolnir.BTRFS.restore/2` |
+
+Note: Full orthogonal persistence (memory + CPU state) is deferred. Currently we persist filesystem state only; agents/processes are expected to be resumable via their own mechanisms (conversation history, etc.).
 
 ### 7.3 Remote Closures
 

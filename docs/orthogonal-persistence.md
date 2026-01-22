@@ -259,12 +259,64 @@ Key takeaways:
 
 This implementation serves as a concrete example of how theoretical computer science concepts like orthogonal persistence and process calculus can be applied to solve practical engineering challenges in blockchain and distributed systems development.
 
+## Future: Full VM State Snapshots with Firecracker
+
+Mjolnir currently implements **filesystem-only persistence** via BTRFS reflink copies. This captures workspace state (files, installed packages) but not running process state (memory, CPU registers).
+
+For true orthogonal persistence—where a VM can be paused mid-execution and resumed exactly where it left off—Firecracker provides native **memory + CPU + device state snapshots**:
+
+```bash
+# Pause VM and create full state snapshot
+curl --unix-socket $API_SOCK -X PATCH /vm -d '{"state": "Paused"}'
+curl --unix-socket $API_SOCK -X PUT /snapshot/create -d '{
+  "snapshot_path": "/path/to/snapshot",
+  "mem_file_path": "/path/to/memory",
+  "snapshot_type": "Full"
+}'
+
+# Restore on same or different host
+curl --unix-socket $API_SOCK -X PUT /snapshot/load -d '{
+  "snapshot_path": "/path/to/snapshot",
+  "mem_backend": {"backend_path": "/path/to/memory", "backend_type": "File"},
+  "enable_diff_snapshots": false
+}'
+```
+
+### Capabilities This Enables
+
+| Capability | Description |
+|------------|-------------|
+| **Instant resume** | Sub-8ms restore time (lazy page loading) |
+| **Live migration** | Transfer running VM between hosts without restart |
+| **VM forking** | Clone a running VM, both continue independently |
+| **Time travel debugging** | Checkpoint before risky operations, restore on failure |
+
+### Key Limitations
+
+Firecracker snapshots have significant constraints:
+
+- **CPU compatibility**: Snapshots not portable across CPU models (Intel ↔ AMD)
+- **Kernel compatibility**: Cross-kernel-version restore is "considered unstable"
+- **Network state**: TCP connections and vsock state may not survive
+- **Disk not included**: Firecracker snapshots capture memory/CPU only—disk must be managed separately (hence BTRFS)
+
+### When We'll Need This
+
+Full-state snapshots become valuable for:
+1. **Live migration** across hosts without service interruption
+2. **Agent forking** where multiple agents diverge from same point
+3. **Speculative execution** with rollback on failure
+4. **Long-running computation** checkpointing
+
+For now, filesystem snapshots + fresh VM boots are sufficient. The path to full orthogonal persistence is documented here for when the need arises.
+
 ## References for Further Reading
 
 - Atkinson, M.P. & Morrison, R. (1985). "Procedures as Persistent Data Objects"
 - Milner, R. (1999). "Communicating and Mobile Systems: The π-Calculus"
 - Cardelli, L. & Gordon, A.D. (1998). "Mobile Ambients"
 - Morrison, R. et al. (1999). "Design of an Object-Oriented Database for Orthogonal Persistence"
+- [Firecracker Snapshot Documentation](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md)
 
 ## Application to Pi-Calculus Based Systems
 
