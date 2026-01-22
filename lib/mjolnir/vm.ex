@@ -224,6 +224,7 @@ defmodule Mjolnir.VM do
       kernel_path: Application.get_env(:mjolnir, :kernel_path),
       # Set during boot
       rootfs_path: "",
+      base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb)
     }
@@ -231,20 +232,22 @@ defmodule Mjolnir.VM do
 
   defp do_boot(state) do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
-    base_image = state.config[:base_image] || Application.get_env(:mjolnir, :default_base_image)
+    base_image = state.config.base_image
 
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
     vsock_path = Path.join(socket_dir, "#{state.id}_vsock.sock")
 
+    # Remove stale sockets if they exist (ignore if missing)
+    _ = File.rm(socket_path)
+    _ = File.rm(vsock_path)
+
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, rootfs_path} <- BTRFS.clone(base_image, state.id),
-         # Remove stale socket if exists
-         :ok <- File.rm(socket_path),
          {:ok, fc_port} <- start_firecracker(state.id, socket_path),
          :ok <- wait_for_socket(socket_path),
          :ok <- configure_vm(socket_path, vsock_path, %{state.config | rootfs_path: rootfs_path}),
          :ok <- Client.start_instance(socket_path),
-         :ok <- wait_for_boot(state.id) do
+         :ok <- wait_for_boot(vsock_path) do
       {:ok,
        %{
          state
@@ -317,11 +320,49 @@ defmodule Mjolnir.VM do
     end)
   end
 
-  defp wait_for_boot(_vm_id, timeout \\ 10_000) do
-    # Simple approach: wait for a fixed time for the VM to boot
-    # TODO: Use vsock or serial to detect when boot is complete
-    Process.sleep(min(timeout, 2000))
-    :ok
+  defp wait_for_boot(vsock_path, timeout \\ 30_000) do
+    # Wait for guest agent to respond to ping
+    start_time = System.monotonic_time(:millisecond)
+    wait_for_agent(vsock_path, timeout, start_time)
+  end
+
+  defp wait_for_agent(vsock_path, timeout, start_time) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if elapsed > timeout do
+      {:error, :boot_timeout}
+    else
+      case try_ping_agent(vsock_path) do
+        :ok ->
+          Logger.debug("Guest agent responded after #{elapsed}ms")
+          :ok
+
+        {:error, _reason} ->
+          Process.sleep(500)
+          wait_for_agent(vsock_path, timeout, start_time)
+      end
+    end
+  end
+
+  defp try_ping_agent(vsock_path) do
+    # Try to connect and send a ping
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 2000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, response} <- :gen_tcp.recv(sock, 0, 2000) do
+      :gen_tcp.close(sock)
+
+      if String.starts_with?(response, "OK") do
+        :ok
+      else
+        {:error, {:bad_response, response}}
+      end
+    else
+      error ->
+        # Clean up socket if it was opened
+        {:error, error}
+    end
   end
 
   defp execute_command(state, command) do
@@ -345,14 +386,15 @@ defmodule Mjolnir.VM do
       Port.close(state.firecracker_port)
     end
 
-    # Remove socket
-    if state.socket_path && File.exists?(state.socket_path) do
-      File.rm(state.socket_path)
-    end
+    # Remove sockets
+    if state.socket_path, do: File.rm(state.socket_path)
+    if state.vsock_path, do: File.rm(state.vsock_path)
 
-    # Delete BTRFS subvolume
+    # Delete rootfs file and VM directory
     if state.rootfs_path do
-      BTRFS.delete_subvolume(state.rootfs_path)
+      File.rm(state.rootfs_path)
+      # Also remove the parent VM directory
+      state.rootfs_path |> Path.dirname() |> File.rm_rf()
     end
 
     :ok

@@ -142,15 +142,44 @@ defmodule Mjolnir.Vsock.Connection do
   defp connect(state) do
     # Connect to Firecracker's vsock proxy socket
     # The socket path is provided by Firecracker's vsock configuration
-    opts = [:binary, active: true, packet: :raw]
+    # For Firecracker vsock, we connect to the UDS, then send "CONNECT <port>\n"
+    opts = [:binary, active: false, packet: :raw]
 
-    case :gen_tcp.connect({:local, state.socket_path}, @vsock_port, opts) do
+    case :gen_tcp.connect({:local, state.socket_path}, 0, opts) do
       {:ok, socket} ->
-        Logger.debug("Connected to vsock for VM #{state.vm_id}")
-        {:ok, socket}
+        # Send CONNECT command to establish vsock connection to guest port
+        connect_cmd = "CONNECT #{@vsock_port}\n"
+
+        case :gen_tcp.send(socket, connect_cmd) do
+          :ok ->
+            # Wait for "OK <local_port>\n" response
+            case :gen_tcp.recv(socket, 0, 5000) do
+              {:ok, response} ->
+                if String.starts_with?(response, "OK") do
+                  # Switch to active mode for async message handling
+                  :inet.setopts(socket, active: true)
+                  Logger.debug("Connected to vsock for VM #{state.vm_id}")
+                  {:ok, socket}
+                else
+                  Logger.error("Vsock connect rejected: #{inspect(response)}")
+                  :gen_tcp.close(socket)
+                  {:error, {:vsock_rejected, response}}
+                end
+
+              {:error, reason} ->
+                Logger.error("Vsock connect response error: #{inspect(reason)}")
+                :gen_tcp.close(socket)
+                {:error, reason}
+            end
+
+          {:error, reason} ->
+            Logger.error("Failed to send vsock connect: #{inspect(reason)}")
+            :gen_tcp.close(socket)
+            {:error, reason}
+        end
 
       {:error, reason} ->
-        Logger.error("Failed to connect to vsock: #{inspect(reason)}")
+        Logger.error("Failed to connect to vsock UDS: #{inspect(reason)}")
         {:error, reason}
     end
   end

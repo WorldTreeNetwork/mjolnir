@@ -9,6 +9,7 @@ defmodule Mjolnir.Firecracker.Config do
     field(:vm_id, String.t(), enforce: true)
     field(:kernel_path, String.t(), enforce: true)
     field(:rootfs_path, String.t(), enforce: true)
+    field(:base_image, String.t(), default: "debian-12")
     field(:vcpu_count, pos_integer(), default: 2)
     field(:mem_size_mib, pos_integer(), default: 512)
     field(:boot_args, String.t(), default: "console=ttyS0 reboot=k panic=1 pci=off")

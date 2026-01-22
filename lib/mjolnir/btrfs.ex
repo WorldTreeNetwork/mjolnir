@@ -8,19 +8,34 @@ defmodule Mjolnir.BTRFS do
   require Logger
 
   @doc """
-  Clone a base image to create a new VM overlay.
+  Clone a base image to create a new VM rootfs.
 
-  Uses BTRFS snapshot for instant CoW clone.
+  Uses cp --reflink for instant CoW clone on BTRFS.
+  The base image should be an ext4 file stored on the BTRFS filesystem.
   """
   def clone(base_image, vm_id) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@base", base_image])
+    # Base image is an ext4 file, e.g., @base/debian-12.ext4
+    source = Path.join([btrfs_root, "@base", "#{base_image}.ext4"])
     dest_dir = Path.join([btrfs_root, "@vms", vm_id])
-    dest = Path.join(dest_dir, "overlay")
+    dest = Path.join(dest_dir, "rootfs.ext4")
 
     with :ok <- ensure_dir(dest_dir),
-         :ok <- snapshot(source, dest) do
+         :ok <- reflink_copy(source, dest) do
       {:ok, dest}
+    end
+  end
+
+  # Use cp --reflink for instant CoW copy on BTRFS
+  defp reflink_copy(source, dest) do
+    case System.cmd("cp", ["--reflink=auto", source, dest], stderr_to_stdout: true) do
+      {_, 0} ->
+        Logger.debug("Created reflink copy: #{source} -> #{dest}")
+        :ok
+
+      {output, code} ->
+        Logger.error("Reflink copy failed: #{output}")
+        {:error, {:reflink_copy_failed, code, output}}
     end
   end
 

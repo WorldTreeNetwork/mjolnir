@@ -6,10 +6,12 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
+use tokio_vsock::VsockListener;
 use tracing::{error, info, warn};
 
 const VSOCK_PORT: u32 = 5000;
+// VMADDR_CID_ANY (0xFFFFFFFF / -1) means accept connections from any CID
+const VMADDR_CID_ANY: u32 = 0xFFFFFFFF;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -40,8 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Mjolnir guest agent starting on vsock port {}", VSOCK_PORT);
 
-    let addr = VsockAddr::new(VMADDR_CID_ANY, VSOCK_PORT);
-    let listener = VsockListener::bind(addr)?;
+    let mut listener = VsockListener::bind(VMADDR_CID_ANY, VSOCK_PORT)?;
 
     info!("Listening for connections...");
 
