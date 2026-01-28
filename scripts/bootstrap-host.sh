@@ -225,7 +225,9 @@ install_base_packages() {
         debootstrap \
         musl-tools \
         pkg-config \
-        libssl-dev
+        libssl-dev \
+        socat \
+        screen
 
     log_success "Base packages installed"
 }

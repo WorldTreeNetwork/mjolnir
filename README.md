@@ -123,6 +123,12 @@ Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so you won't clobb
 recompile()
 ```
 
+## Current Limitations
+
+- **No interactive shell** — Use `VM.exec/2` for commands. Interactive SSH requires networking (coming soon).
+- **No networking** — VMs currently only communicate via vsock. TAP networking for SSH is planned.
+- **Single node** — VMs run on local host only. Distributed scheduling is a future milestone.
+
 ## Bootstrap Environment Variables
 
 | Variable | Default | Description |

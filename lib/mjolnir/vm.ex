@@ -19,6 +19,7 @@ defmodule Mjolnir.VM do
     :firecracker_port,
     :socket_path,
     :vsock_path,
+    :serial_path,
     :rootfs_path,
     :state,
     :boot_time
@@ -116,6 +117,62 @@ defmodule Mjolnir.VM do
       end
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  @doc """
+  Get the serial console socket path for a VM.
+
+  Connect to this with: screen <path>
+
+  ## Examples
+
+      {:ok, path} = Mjolnir.VM.console(vm.id)
+      # Then in another terminal: screen /tmp/mjolnir-dev/abc123_serial.sock
+  """
+  @spec console(vm_id()) :: {:ok, String.t()} | {:error, term()}
+  def console(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+        if state.serial_path do
+          {:ok, state.serial_path}
+        else
+          {:error, :no_serial_console}
+        end
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Print instructions for interacting with the VM.
+
+  Serial console is currently disabled. Use `exec/2` for commands,
+  or wait for networking support (TAP + SSH) for interactive shells.
+  """
+  @spec attach(vm_id()) :: :ok | {:error, term()}
+  def attach(vm_id) do
+    case status(vm_id) do
+      :running ->
+        IO.puts("""
+
+        VM #{String.slice(vm_id, 0..7)}... is running.
+
+        Interactive serial console is not currently enabled.
+        Use VM.exec/2 to run commands:
+
+          Mjolnir.VM.exec("#{vm_id}", "uname -a")
+          Mjolnir.VM.exec("#{vm_id}", "ps aux")
+          Mjolnir.VM.exec("#{vm_id}", "cat /etc/os-release")
+
+        For interactive SSH access, networking support is needed (TODO).
+
+        """)
+        :ok
+
+      other ->
+        {:error, other}
+    end
   end
 
   # ============================================================================
@@ -236,14 +293,16 @@ defmodule Mjolnir.VM do
 
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
     vsock_path = Path.join(socket_dir, "#{state.id}_vsock.sock")
+    serial_path = Path.join(socket_dir, "#{state.id}_serial.sock")
 
     # Remove stale sockets if they exist (ignore if missing)
     _ = File.rm(socket_path)
     _ = File.rm(vsock_path)
+    _ = File.rm(serial_path)
 
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, rootfs_path} <- BTRFS.clone(base_image, state.id),
-         {:ok, fc_port} <- start_firecracker(state.id, socket_path),
+         {:ok, fc_port} <- start_firecracker(state.id, socket_path, serial_path),
          :ok <- wait_for_socket(socket_path),
          :ok <- configure_vm(socket_path, vsock_path, %{state.config | rootfs_path: rootfs_path}),
          :ok <- Client.start_instance(socket_path),
@@ -253,6 +312,7 @@ defmodule Mjolnir.VM do
          state
          | socket_path: socket_path,
            vsock_path: vsock_path,
+           serial_path: serial_path,
            rootfs_path: rootfs_path,
            firecracker_port: fc_port
        }}
@@ -262,21 +322,22 @@ defmodule Mjolnir.VM do
       {:error, {:boot_exception, e}}
   end
 
-  defp start_firecracker(vm_id, socket_path) do
+  defp start_firecracker(vm_id, socket_path, serial_path) do
     firecracker_bin = Application.get_env(:mjolnir, :firecracker_bin)
+    wrapper_script = Application.get_env(:mjolnir, :console_wrapper_script)
 
-    args = [
-      "--api-sock",
-      socket_path,
-      "--id",
-      vm_id,
-      "--level",
-      "Warning"
-    ]
+    # Use wrapper script that exposes serial console on a Unix socket
+    {executable, args} =
+      if wrapper_script && File.exists?(wrapper_script) do
+        {wrapper_script, [serial_path, socket_path, vm_id, firecracker_bin]}
+      else
+        # Direct Firecracker (no serial console socket)
+        {firecracker_bin, ["--api-sock", socket_path, "--id", vm_id, "--level", "Warning"]}
+      end
 
     port =
       Port.open(
-        {:spawn_executable, firecracker_bin},
+        {:spawn_executable, executable},
         [:binary, :exit_status, :stderr_to_stdout, args: args]
       )
 
@@ -389,6 +450,10 @@ defmodule Mjolnir.VM do
     # Remove sockets
     if state.socket_path, do: File.rm(state.socket_path)
     if state.vsock_path, do: File.rm(state.vsock_path)
+    if state.serial_path, do: File.rm(state.serial_path)
+
+    # Remove PTY link created by console wrapper
+    File.rm("/tmp/mjolnir-pty-#{state.id}")
 
     # Delete rootfs file and VM directory
     if state.rootfs_path do
