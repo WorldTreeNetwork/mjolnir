@@ -1,3 +1,14 @@
 import Config
 
 config :logger, level: :debug
+
+# Dev uses the same kernel/base images as prod (installed by bootstrap)
+# but separate VM storage and sockets to avoid conflicts
+config :mjolnir,
+  # Shared resources (read-only, installed by bootstrap)
+  btrfs_root: "/var/lib/mjolnir/btrfs",
+  kernel_path: "/var/lib/mjolnir/vmlinux",
+
+  # Dev-specific paths (isolated from prod)
+  vm_storage_subdir: "@vms-dev",
+  socket_dir: "/tmp/mjolnir-dev"

@@ -15,9 +15,10 @@ defmodule Mjolnir.BTRFS do
   """
   def clone(base_image, vm_id) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
     # Base image is an ext4 file, e.g., @base/debian-12.ext4
     source = Path.join([btrfs_root, "@base", "#{base_image}.ext4"])
-    dest_dir = Path.join([btrfs_root, "@vms", vm_id])
+    dest_dir = Path.join([btrfs_root, vm_subdir, vm_id])
     dest = Path.join(dest_dir, "rootfs.ext4")
 
     with :ok <- ensure_dir(dest_dir),
@@ -44,8 +45,9 @@ defmodule Mjolnir.BTRFS do
   """
   def snapshot_readonly(vm_id, snapshot_name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@vms", vm_id, "overlay"])
-    dest = Path.join([btrfs_root, "@vms", vm_id, ".snapshots", snapshot_name])
+    vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
+    source = Path.join([btrfs_root, vm_subdir, vm_id, "overlay"])
+    dest = Path.join([btrfs_root, vm_subdir, vm_id, ".snapshots", snapshot_name])
 
     with :ok <- ensure_dir(Path.dirname(dest)) do
       snapshot(source, dest, readonly: true)

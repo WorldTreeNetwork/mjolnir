@@ -362,7 +362,7 @@ git clone https://github.com/identikey/mjolnir
 cd mjolnir
 
 # 2. Setup host (requires root)
-sudo ./scripts/setup-host.sh
+sudo USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
 
 # 3. Start mjolnir
 mix deps.get
