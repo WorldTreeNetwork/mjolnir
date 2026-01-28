@@ -2,21 +2,112 @@
 
 Distributed computational fabric for spawning checkpointable Linux shells in Firecracker microVMs.
 
+## Requirements
+
+### Hardware
+
+| Requirement | Minimum | Recommended | How to Check |
+|-------------|---------|-------------|--------------|
+| CPU | x86_64 with VT-x/AMD-V | Same | `grep -E "(vmx|svm)" /proc/cpuinfo` |
+| KVM | Enabled in BIOS | Same | `ls -la /dev/kvm` |
+| Memory | 4 GB | 8+ GB | `free -h` |
+| Disk | 20 GB free | 50+ GB free | `df -h /` |
+
+### Software
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| OS | Ubuntu 22.04+, Debian 12+ | Other distros may work but untested |
+| Kernel | 5.10+ | `uname -r` |
+| Firecracker | 1.5+ | Installed by bootstrap script |
+| Erlang | 26+ | Installed by bootstrap script via mise |
+| Elixir | 1.15+ | Installed by bootstrap script via mise |
+| Rust | stable | Installed by bootstrap script (for guest agent) |
+
+### Pre-flight Checklist
+
+Run these commands before setup to verify your system is ready:
+
+```bash
+# 1. Check architecture (must be x86_64)
+uname -m
+
+# 2. Check for Intel VT-x or AMD-V (should output "vmx" or "svm")
+grep -oE "(vmx|svm)" /proc/cpuinfo | head -1
+
+# 3. Check if KVM is available
+ls -la /dev/kvm
+# If missing, try: sudo modprobe kvm && sudo modprobe kvm_intel  # (or kvm_amd)
+
+# 4. Check if you're in the kvm group (needed for non-root access)
+groups | grep -q kvm && echo "OK: in kvm group" || echo "WARN: not in kvm group"
+# To fix: sudo usermod -aG kvm $USER && newgrp kvm
+
+# 5. Check available disk space (need 20GB+ free)
+df -h /var/lib
+
+# 6. Check if running in a VM (nested virt required if so)
+grep -q "^flags.*hypervisor" /proc/cpuinfo && echo "Running in VM - needs nested virt" || echo "Bare metal OK"
+```
+
 ## Quick Start
 
-### Host Setup
+### Option A: Dev Bootstrap (Recommended for Contributors)
+
+Sets up everything while keeping code in your workspace for live editing:
 
 ```bash
-# On a fresh Debian 12 or Ubuntu 22.04 server with a spare disk
-sudo BTRFS_DEVICE=/dev/sdb ./scripts/setup-host.sh
+# Clone the repo
+git clone https://github.com/IdentiKey/mjolnir.git
+cd mjolnir
+
+# Run dev bootstrap (loopback if no spare disk)
+sudo DEV_MODE=1 USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
 ```
 
-### Run Mjolnir
+### Option B: Production Bootstrap
+
+Deploys to `/opt/mjolnir` for production use:
 
 ```bash
+# With loopback storage
+sudo USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
+
+# Or with a dedicated device
+sudo BTRFS_DEVICE=/dev/sdb ./scripts/bootstrap-host.sh
+```
+
+### Option C: Manual Setup (Already Have Deps Installed)
+
+If you already have Erlang 26+, Elixir 1.15+, Rust, and Firecracker:
+
+```bash
+# Install mise and project tool versions
+curl https://mise.run | sh
+eval "$(mise activate bash)"
+mise trust && mise install
+
+# Build the guest agent
+./scripts/build-guest-agent.sh
+
+# Get Elixir deps
 mix deps.get
-iex -S mix
+
+# You still need BTRFS storage, kernel, and rootfs from bootstrap
+# or set up manually per docs/roadmap.md
 ```
+
+### Running Mjolnir
+
+```bash
+# Production (from /opt/mjolnir)
+cd /opt/mjolnir && iex -S mix
+
+# Development (from workspace, after DEV_MODE bootstrap)
+cd ~/work/IdentiKey/mjolnir && iex -S mix
+```
+
+Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so you won't clobber prod.
 
 ```elixir
 # Spawn a VM
@@ -27,14 +118,58 @@ iex -S mix
 
 # Stop the VM
 :ok = Mjolnir.VM.stop(vm.id)
+
+# Hot reload after code changes (no restart needed)
+recompile()
 ```
 
-## Requirements
+## Bootstrap Environment Variables
 
-- Linux with KVM support (`/dev/kvm`)
-- BTRFS partition for CoW snapshots
-- Firecracker 1.5+
-- Elixir 1.15+, Erlang 26+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEV_MODE` | `0` | Set to `1` for dev setup (workspace-based, no /opt deploy) |
+| `BTRFS_DEVICE` | (prompts) | Block device for BTRFS, e.g. `/dev/sdb` |
+| `USE_LOOPBACK` | `0` | Set to `1` to create a loopback file instead of using a device |
+| `BTRFS_LOOPBACK_SIZE_GB` | `50` | Size of loopback file when using `USE_LOOPBACK=1` |
+| `SKIP_BTRFS` | `0` | Set to `1` to skip BTRFS setup |
+| `SKIP_ROOTFS` | `0` | Set to `1` to skip rootfs build |
+| `MJOLNIR_REPO` | (current dir) | Git repo URL if not running from repo |
+| `MJOLNIR_BRANCH` | `main` | Git branch to checkout |
+
+## Troubleshooting
+
+### `/dev/kvm` not found
+
+```bash
+# Load KVM modules
+sudo modprobe kvm
+sudo modprobe kvm_intel  # or kvm_amd for AMD CPUs
+
+# Make persistent
+echo "kvm" | sudo tee /etc/modules-load.d/kvm.conf
+echo "kvm_intel" | sudo tee -a /etc/modules-load.d/kvm.conf
+```
+
+### Permission denied on `/dev/kvm`
+
+```bash
+# Add yourself to the kvm group
+sudo usermod -aG kvm $USER
+
+# Apply without logout (for current shell)
+newgrp kvm
+```
+
+### Firecracker fails to start VM
+
+Check if running inside a VM without nested virtualization:
+```bash
+# If this shows hypervisor flag, you're in a VM
+grep "hypervisor" /proc/cpuinfo
+
+# For cloud VMs, enable nested virt in your provider's console
+# For local VMs (VirtualBox, VMware), enable VT-x/AMD-V passthrough
+```
 
 ## Documentation
 

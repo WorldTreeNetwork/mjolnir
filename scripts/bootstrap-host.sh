@@ -18,11 +18,14 @@ set -euo pipefail
 #   sudo ./bootstrap-host.sh
 #
 # Environment variables:
-#   BTRFS_DEVICE    - Block device for BTRFS (will prompt if not set)
-#   MJOLNIR_REPO    - Git repo URL (default: current directory or GitHub)
-#   MJOLNIR_BRANCH  - Git branch (default: main)
-#   SKIP_BTRFS      - Set to 1 to skip BTRFS setup (use existing)
-#   SKIP_ROOTFS     - Set to 1 to skip rootfs build
+#   DEV_MODE             - Set to 1 for development setup (skip /opt deploy, setup dev dirs)
+#   BTRFS_DEVICE         - Block device for BTRFS (will prompt if not set)
+#   USE_LOOPBACK         - Set to 1 to auto-create a loopback file instead of using a device
+#   BTRFS_LOOPBACK_SIZE_GB - Size of loopback file in GB (default: 50)
+#   MJOLNIR_REPO         - Git repo URL (default: current directory or GitHub)
+#   MJOLNIR_BRANCH       - Git branch (default: main)
+#   SKIP_BTRFS           - Set to 1 to skip BTRFS setup (use existing)
+#   SKIP_ROOTFS          - Set to 1 to skip rootfs build
 
 # =============================================================================
 # Configuration
@@ -245,57 +248,44 @@ install_erlang_elixir() {
         fi
     fi
 
-    # Use asdf for reliable version management
-    log_info "Installing asdf for Erlang/Elixir version management..."
+    # Use mise for reliable version management (faster than asdf, compatible syntax)
+    log_info "Installing mise for Erlang/Elixir version management..."
 
-    # Install asdf dependencies
+    # Install Erlang build dependencies
     apt-get update
-    apt-get install -y autoconf libncurses5-dev libssl-dev libwxgtk3.2-dev libwxgtk-webview3.2-dev \
+    apt-get install -y autoconf libncurses5-dev libssl-dev \
         libgl1-mesa-dev libglu1-mesa-dev libpng-dev libssh-dev unixodbc-dev xsltproc fop \
         libxml2-utils libncurses-dev openjdk-17-jdk 2>/dev/null || true
+    # wxWidgets libs vary by distro version; try both naming conventions
+    apt-get install -y libwxgtk3.2-dev libwxgtk-webview3.2-dev 2>/dev/null || \
+        apt-get install -y libwxgtk3.0-gtk3-dev 2>/dev/null || true
 
-    # Install asdf if not present
-    if [[ ! -d "$HOME/.asdf" ]]; then
-        git clone https://github.com/asdf-vm/asdf.git "$HOME/.asdf" --branch v0.14.0
+    # Install mise if not present
+    if ! command -v mise &>/dev/null; then
+        log_info "Downloading mise..."
+        curl https://mise.run | sh
+
+        # Add mise to PATH for this session
+        export PATH="$HOME/.local/bin:$PATH"
     fi
 
-    # Source asdf
-    # shellcheck source=/dev/null
-    . "$HOME/.asdf/asdf.sh"
+    # Activate mise for this session
+    eval "$(mise activate bash)"
 
-    # Add to bashrc for future sessions (shellcheck: we want literal $HOME in the file)
-    if ! grep -q "asdf.sh" "$HOME/.bashrc" 2>/dev/null; then
+    # Add to bashrc for future sessions
+    if ! grep -q "mise activate" "$HOME/.bashrc" 2>/dev/null; then
         # shellcheck disable=SC2016
-        echo '. "$HOME/.asdf/asdf.sh"' >> "$HOME/.bashrc"
-    fi
-
-    # Install Erlang plugin and version
-    if ! asdf plugin list 2>/dev/null | grep -q erlang; then
-        asdf plugin add erlang
+        echo 'eval "$(mise activate bash)"' >> "$HOME/.bashrc"
     fi
 
     local erlang_version="26.2.5"
-    log_info "Installing Erlang $erlang_version (this takes a while)..."
-    if ! asdf list erlang 2>/dev/null | grep -q "$erlang_version"; then
-        asdf install erlang "$erlang_version"
-    fi
-    asdf global erlang "$erlang_version"
-
-    # Install Elixir plugin and version
-    if ! asdf plugin list 2>/dev/null | grep -q elixir; then
-        asdf plugin add elixir
-    fi
-
     local elixir_version="1.16.2-otp-26"
-    log_info "Installing Elixir $elixir_version..."
-    if ! asdf list elixir 2>/dev/null | grep -q "$elixir_version"; then
-        asdf install elixir "$elixir_version"
-    fi
-    asdf global elixir "$elixir_version"
 
-    # Reshim to ensure binaries are available
-    asdf reshim erlang
-    asdf reshim elixir
+    log_info "Installing Erlang $erlang_version (this takes a while)..."
+    mise use -g erlang@"$erlang_version"
+
+    log_info "Installing Elixir $elixir_version..."
+    mise use -g elixir@"$elixir_version"
 
     # Verify installation
     log_info "Erlang version: $(erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell 2>/dev/null || echo 'unknown')"
@@ -306,36 +296,39 @@ install_erlang_elixir() {
     mix local.hex --force
     mix local.rebar --force
 
-    log_success "Erlang/Elixir installed via asdf"
+    log_success "Erlang/Elixir installed via mise"
 }
 
 install_rust() {
     log_section "Installing Rust"
 
-    # Check if already installed
-    if command -v rustc &>/dev/null; then
-        log_success "Rust already installed: $(rustc --version)"
+    # Use mise for Rust (consistent with Erlang/Elixir, and matches .mise.toml)
+    # Mise uses rustup under the hood, so rustup commands still work after
 
-        # Ensure musl target is available
-        if ! rustup target list --installed 2>/dev/null | grep -q "x86_64-unknown-linux-musl"; then
-            log_info "Adding musl target..."
-            rustup target add x86_64-unknown-linux-musl
-        fi
-        return 0
+    # Ensure mise is available (should be from install_erlang_elixir)
+    if ! command -v mise &>/dev/null; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+    eval "$(mise activate bash 2>/dev/null)" || true
+
+    log_info "Installing Rust stable via mise..."
+    mise use -g rust@stable
+
+    # Source cargo env for rustup commands
+    if [[ -f "$HOME/.cargo/env" ]]; then
+        # shellcheck source=/dev/null
+        source "$HOME/.cargo/env"
     fi
 
-    log_info "Installing Rust via rustup..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+    # Ensure musl target is available (required for static guest agent binary)
+    if ! rustup target list --installed 2>/dev/null | grep -q "x86_64-unknown-linux-musl"; then
+        log_info "Adding musl target for static linking..."
+        rustup target add x86_64-unknown-linux-musl
+    else
+        log_success "musl target already installed"
+    fi
 
-    # Source cargo env
-    # shellcheck source=/dev/null
-    source "$HOME/.cargo/env"
-
-    # Add musl target for static binaries
-    log_info "Adding musl target for static linking..."
-    rustup target add x86_64-unknown-linux-musl
-
-    log_success "Rust installed: $(rustc --version)"
+    log_success "Rust ready: $(rustc --version)"
 }
 
 install_firecracker() {
@@ -372,17 +365,20 @@ install_firecracker() {
 # Code Deployment
 # =============================================================================
 
+# Get the repo root (works whether running from repo or not)
+get_repo_root() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    dirname "$script_dir"
+}
+
 deploy_mjolnir_code() {
     log_section "Deploying Mjolnir Code"
 
     local repo="${MJOLNIR_REPO:-}"
     local branch="${MJOLNIR_BRANCH:-main}"
-
-    # If we're running from within the repo, use that
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local repo_root
-    repo_root="$(dirname "$script_dir")"
+    repo_root="$(get_repo_root)"
 
     if [[ -f "$repo_root/mix.exs" ]] && grep -q "mjolnir" "$repo_root/mix.exs" 2>/dev/null; then
         log_info "Running from within Mjolnir repo at $repo_root"
@@ -411,6 +407,31 @@ deploy_mjolnir_code() {
     MIX_ENV=prod mix compile
 
     log_success "Mjolnir code deployed to $MJOLNIR_CODE"
+}
+
+setup_dev_workspace() {
+    log_section "Setting Up Dev Workspace"
+
+    local repo_root
+    repo_root="$(get_repo_root)"
+
+    if [[ ! -f "$repo_root/mix.exs" ]] || ! grep -q "mjolnir" "$repo_root/mix.exs" 2>/dev/null; then
+        log_error "DEV_MODE requires running from within the Mjolnir repo"
+        log_error "Current directory: $repo_root"
+        exit 1
+    fi
+
+    # Set MJOLNIR_CODE to the workspace for other functions
+    MJOLNIR_CODE="$repo_root"
+    log_info "Using workspace at $MJOLNIR_CODE"
+
+    cd "$MJOLNIR_CODE"
+
+    # Fetch deps for dev environment
+    log_info "Fetching dependencies..."
+    mix deps.get
+
+    log_success "Dev workspace ready at $MJOLNIR_CODE"
 }
 
 build_guest_agent() {
@@ -449,6 +470,9 @@ setup_btrfs() {
     fi
 
     local device="${BTRFS_DEVICE:-}"
+    local use_loopback=0
+    local loopback_file="$MJOLNIR_ROOT/btrfs.img"
+    local loopback_size="${BTRFS_LOOPBACK_SIZE_GB:-50}"
 
     # Check if BTRFS is already set up
     if mountpoint -q "$MJOLNIR_ROOT/btrfs" 2>/dev/null; then
@@ -456,13 +480,68 @@ setup_btrfs() {
         return 0
     fi
 
-    # Prompt for device if not set
+    # Determine device: explicit device, existing loopback, or create new loopback
     if [[ -z "$device" ]]; then
-        echo ""
-        log_info "Available block devices:"
-        lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "disk|part"
-        echo ""
-        read -rp "Enter device for BTRFS (e.g., /dev/sdb): " device
+        # Check if loopback file already exists
+        if [[ -f "$loopback_file" ]]; then
+            log_info "Found existing loopback file at $loopback_file"
+            use_loopback=1
+        elif [[ "${USE_LOOPBACK:-0}" == "1" ]]; then
+            log_info "USE_LOOPBACK=1, will create loopback device"
+            use_loopback=1
+        else
+            echo ""
+            log_info "No BTRFS_DEVICE specified. Options:"
+            echo ""
+            echo "  1. Use a loopback file (recommended for dev/testing)"
+            echo "  2. Use a dedicated block device (recommended for production)"
+            echo ""
+            log_info "Available block devices:"
+            lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "disk|part" || true
+            echo ""
+            read -rp "Enter device (e.g., /dev/sdb) or 'loop' for loopback: " device
+
+            if [[ "$device" == "loop" ]]; then
+                use_loopback=1
+                device=""
+            fi
+        fi
+    fi
+
+    # Create loopback device if needed
+    if [[ $use_loopback -eq 1 ]]; then
+        mkdir -p "$MJOLNIR_ROOT"
+
+        if [[ ! -f "$loopback_file" ]]; then
+            log_info "Creating ${loopback_size}GB sparse loopback file at $loopback_file..."
+            dd if=/dev/zero of="$loopback_file" bs=1M count=0 seek=$((loopback_size * 1024)) 2>/dev/null
+            log_success "Loopback file created (sparse, actual size will grow as needed)"
+        fi
+
+        # Find a free loop device and attach
+        device=$(losetup -f)
+        log_info "Attaching loopback file to $device..."
+        losetup "$device" "$loopback_file"
+
+        # Create systemd service to re-attach loopback on boot
+        log_info "Creating systemd service for loopback persistence..."
+        cat > /etc/systemd/system/mjolnir-loopback.service << EOF
+[Unit]
+Description=Mount Mjolnir BTRFS loopback device
+DefaultDependencies=no
+Before=local-fs.target
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/losetup -f $loopback_file
+RemainAfterExit=yes
+
+[Install]
+WantedBy=local-fs.target
+EOF
+        systemctl daemon-reload
+        systemctl enable mjolnir-loopback.service
     fi
 
     if [[ ! -b "$device" ]]; then
@@ -471,8 +550,8 @@ setup_btrfs() {
     fi
 
     # Confirm destructive operation (auto-confirm if BTRFS_DEVICE was explicitly set in env)
-    if [[ -n "${BTRFS_DEVICE:-}" ]]; then
-        log_warn "BTRFS_DEVICE was explicitly set - auto-confirming format of $device"
+    if [[ -n "${BTRFS_DEVICE:-}" ]] || [[ $use_loopback -eq 1 ]]; then
+        log_warn "Auto-confirming format of $device"
     else
         log_warn "This will DESTROY all data on $device"
         read -rp "Type 'yes' to continue: " confirm
@@ -488,13 +567,24 @@ setup_btrfs() {
 
     # Create mount point and mount
     mkdir -p "$MJOLNIR_ROOT/btrfs"
-    mount -o compress=zstd:3,noatime,ssd,discard=async "$device" "$MJOLNIR_ROOT/btrfs"
+    # Use different mount options for loopback (no ssd/discard)
+    if [[ $use_loopback -eq 1 ]]; then
+        mount -o compress=zstd:3,noatime "$device" "$MJOLNIR_ROOT/btrfs"
+    else
+        mount -o compress=zstd:3,noatime,ssd,discard=async "$device" "$MJOLNIR_ROOT/btrfs"
+    fi
 
-    # Add to fstab
-    local uuid
-    uuid=$(blkid -s UUID -o value "$device")
-    if ! grep -q "$uuid" /etc/fstab; then
-        echo "UUID=$uuid $MJOLNIR_ROOT/btrfs btrfs compress=zstd:3,noatime,ssd,discard=async 0 0" >> /etc/fstab
+    # Add to fstab (use loopback file path for loopback devices)
+    if [[ $use_loopback -eq 1 ]]; then
+        if ! grep -q "mjolnir.*btrfs.img" /etc/fstab; then
+            echo "$loopback_file $MJOLNIR_ROOT/btrfs btrfs loop,compress=zstd:3,noatime 0 0" >> /etc/fstab
+        fi
+    else
+        local uuid
+        uuid=$(blkid -s UUID -o value "$device")
+        if ! grep -q "$uuid" /etc/fstab; then
+            echo "UUID=$uuid $MJOLNIR_ROOT/btrfs btrfs compress=zstd:3,noatime,ssd,discard=async 0 0" >> /etc/fstab
+        fi
     fi
 
     # Create directory structure
@@ -510,7 +600,11 @@ setup_btrfs() {
     # Enable quotas
     btrfs quota enable "$MJOLNIR_ROOT/btrfs"
 
-    log_success "BTRFS setup complete"
+    if [[ $use_loopback -eq 1 ]]; then
+        log_success "BTRFS setup complete (loopback: $loopback_file)"
+    else
+        log_success "BTRFS setup complete"
+    fi
 }
 
 download_kernel() {
@@ -584,19 +678,18 @@ build_rootfs() {
 setup_directories() {
     log_section "Setting Up Directories"
 
-    # Socket directories
-    mkdir -p /tmp/mjolnir
-    mkdir -p /tmp/mjolnir-test
-    chmod 755 /tmp/mjolnir /tmp/mjolnir-test
+    # Socket directories (prod, test, dev)
+    mkdir -p /tmp/mjolnir /tmp/mjolnir-test /tmp/mjolnir-dev
+    chmod 755 /tmp/mjolnir /tmp/mjolnir-test /tmp/mjolnir-dev
 
     # Ensure /var/lib/mjolnir exists
     mkdir -p "$MJOLNIR_ROOT"
 
-    # Set up test directories within BTRFS for reflink to work
-    # Tests use /var/lib/mjolnir/btrfs-test which we symlink to actual BTRFS dirs
+    # Set up test and dev directories within BTRFS for reflink to work
     if [[ -d "$MJOLNIR_ROOT/btrfs" ]]; then
         mkdir -p "$MJOLNIR_ROOT/btrfs/@base-test"
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-test"
+        mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-dev"
 
         # Copy base image to test directory for test isolation
         if [[ -f "$MJOLNIR_ROOT/btrfs/@base/debian-12.ext4" ]]; then
@@ -609,6 +702,11 @@ setup_directories() {
         mkdir -p "$MJOLNIR_ROOT/btrfs-test"
         ln -sf "$MJOLNIR_ROOT/btrfs/@base-test" "$MJOLNIR_ROOT/btrfs-test/@base"
         ln -sf "$MJOLNIR_ROOT/btrfs/@vms-test" "$MJOLNIR_ROOT/btrfs-test/@vms"
+
+        # Make dev directories writable by the user who ran sudo
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            chown "$SUDO_USER:$SUDO_USER" "$MJOLNIR_ROOT/btrfs/@vms-dev" /tmp/mjolnir-dev
+        fi
     fi
 
     log_success "Directories created"
@@ -640,19 +738,38 @@ print_summary() {
     log_section "Setup Complete!"
 
     echo ""
-    echo "Mjolnir has been installed and configured:"
-    echo ""
-    echo "  Code:           $MJOLNIR_CODE"
-    echo "  Data:           $MJOLNIR_ROOT"
-    echo "  BTRFS:          $MJOLNIR_ROOT/btrfs"
-    echo "  Kernel:         $MJOLNIR_ROOT/vmlinux"
-    echo "  Base images:    $MJOLNIR_ROOT/btrfs/@base/"
-    echo "  Socket dir:     /tmp/mjolnir"
-    echo ""
-    echo "To start Mjolnir:"
-    echo ""
-    echo "  cd $MJOLNIR_CODE"
-    echo "  iex -S mix"
+    if [[ "${DEV_MODE:-0}" == "1" ]]; then
+        echo "Mjolnir DEV environment configured:"
+        echo ""
+        echo "  Workspace:      $MJOLNIR_CODE"
+        echo "  Data:           $MJOLNIR_ROOT"
+        echo "  BTRFS:          $MJOLNIR_ROOT/btrfs"
+        echo "  Kernel:         $MJOLNIR_ROOT/vmlinux"
+        echo "  Base images:    $MJOLNIR_ROOT/btrfs/@base/"
+        echo "  Dev VMs:        $MJOLNIR_ROOT/btrfs/@vms-dev/"
+        echo "  Dev sockets:    /tmp/mjolnir-dev"
+        echo ""
+        echo "To start developing:"
+        echo ""
+        echo "  cd $MJOLNIR_CODE"
+        echo "  iex -S mix"
+        echo ""
+        echo "Code changes are live. Use recompile() in IEx to pick them up."
+    else
+        echo "Mjolnir has been installed and configured:"
+        echo ""
+        echo "  Code:           $MJOLNIR_CODE"
+        echo "  Data:           $MJOLNIR_ROOT"
+        echo "  BTRFS:          $MJOLNIR_ROOT/btrfs"
+        echo "  Kernel:         $MJOLNIR_ROOT/vmlinux"
+        echo "  Base images:    $MJOLNIR_ROOT/btrfs/@base/"
+        echo "  Socket dir:     /tmp/mjolnir"
+        echo ""
+        echo "To start Mjolnir:"
+        echo ""
+        echo "  cd $MJOLNIR_CODE"
+        echo "  iex -S mix"
+    fi
     echo ""
     echo "Then in IEx:"
     echo ""
@@ -669,7 +786,11 @@ print_summary() {
 main() {
     echo ""
     echo "========================================"
-    echo "   Mjolnir Host Bootstrap Script"
+    if [[ "${DEV_MODE:-0}" == "1" ]]; then
+        echo "   Mjolnir Dev Bootstrap Script"
+    else
+        echo "   Mjolnir Host Bootstrap Script"
+    fi
     echo "========================================"
     echo ""
 
@@ -678,13 +799,25 @@ main() {
     install_erlang_elixir
     install_rust
     install_firecracker
-    deploy_mjolnir_code
+
+    # Dev mode: use workspace directly; Prod mode: deploy to /opt/mjolnir
+    if [[ "${DEV_MODE:-0}" == "1" ]]; then
+        setup_dev_workspace
+    else
+        deploy_mjolnir_code
+    fi
+
     build_guest_agent
     setup_btrfs
     download_kernel
     build_rootfs
     setup_directories
-    run_verification
+
+    # Skip verification in dev mode (user will run tests manually)
+    if [[ "${DEV_MODE:-0}" != "1" ]]; then
+        run_verification
+    fi
+
     print_summary
 }
 
