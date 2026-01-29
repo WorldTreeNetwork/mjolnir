@@ -42,8 +42,31 @@ build-rootfs:
         /var/lib/mjolnir/btrfs/@base/debian-12.ext4 512
     echo "✓ Rootfs built"
 
+    # Also sync to test environment
+    if [[ -d "/var/lib/mjolnir/btrfs/@base-test" ]]; then
+        echo "Syncing to test environment..."
+        sudo cp --reflink=auto /var/lib/mjolnir/btrfs/@base/debian-12.ext4 \
+            /var/lib/mjolnir/btrfs/@base-test/debian-12.ext4
+        echo "✓ Test rootfs synced"
+    fi
+
 # Build both agent and rootfs
 build-all: build-agent build-rootfs
+
+# Sync base image to test environment (after rebuilding rootfs)
+sync-test-rootfs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SRC="/var/lib/mjolnir/btrfs/@base/debian-12.ext4"
+    DST="/var/lib/mjolnir/btrfs/@base-test/debian-12.ext4"
+    if [[ -f "$SRC" ]]; then
+        echo "Syncing base image to test environment..."
+        sudo cp --reflink=auto "$SRC" "$DST"
+        echo "✓ Test rootfs updated"
+    else
+        echo "Error: Base image not found at $SRC"
+        exit 1
+    fi
 
 # ============================================================================
 # Networking

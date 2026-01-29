@@ -88,8 +88,15 @@ defmodule Mjolnir.VM do
   @spec status(vm_id()) :: :booting | :running | :stopped | {:error, :not_found}
   def status(vm_id) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
-      [{pid, _}] -> GenServer.call(pid, :status)
-      [] -> {:error, :not_found}
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, :status)
+        catch
+          :exit, _ -> {:error, :not_found}
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -513,6 +520,12 @@ defmodule Mjolnir.VM do
     # Kill Firecracker if still running
     if state.firecracker_port do
       Port.close(state.firecracker_port)
+    end
+
+    # Remove TAP interface and route
+    if state.net_config do
+      Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
+      Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
     end
 
     # Remove sockets
