@@ -46,4 +46,16 @@ defmodule Mjolnir.Vsock.Protocol do
   Build a ping message.
   """
   def ping, do: %{"type" => "ping"}
+
+  @doc """
+  Build a configure_network request message.
+  Guest agent will configure eth0 with the given IP.
+  """
+  def configure_network_request(ip, request_id \\ nil) do
+    %{
+      "type" => "configure_network",
+      "id" => request_id || UUID.uuid4(),
+      "ip" => ip
+    }
+  end
 end

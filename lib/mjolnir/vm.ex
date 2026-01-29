@@ -21,6 +21,7 @@ defmodule Mjolnir.VM do
     :vsock_path,
     :serial_path,
     :rootfs_path,
+    :net_config,
     :state,
     :boot_time
   ]
@@ -302,11 +303,14 @@ defmodule Mjolnir.VM do
 
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, rootfs_path} <- BTRFS.clone(base_image, state.id),
+         {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
          {:ok, fc_port} <- start_firecracker(state.id, socket_path, serial_path),
          :ok <- wait_for_socket(socket_path),
-         :ok <- configure_vm(socket_path, vsock_path, %{state.config | rootfs_path: rootfs_path}),
+         config <- %{state.config | rootfs_path: rootfs_path, network_interface: net_config},
+         :ok <- configure_vm(socket_path, vsock_path, config),
          :ok <- Client.start_instance(socket_path),
-         :ok <- wait_for_boot(vsock_path) do
+         :ok <- wait_for_boot(vsock_path),
+         :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
       {:ok,
        %{
          state
@@ -314,6 +318,7 @@ defmodule Mjolnir.VM do
            vsock_path: vsock_path,
            serial_path: serial_path,
            rootfs_path: rootfs_path,
+           net_config: net_config,
            firecracker_port: fc_port
        }}
     end
@@ -367,8 +372,19 @@ defmodule Mjolnir.VM do
     with :ok <- Client.put_boot_source(socket_path, Config.boot_source(config)),
          :ok <- put_drives(socket_path, config),
          :ok <- Client.put_machine_config(socket_path, Config.machine_config(config)),
+         :ok <- put_network_interface(socket_path, config),
          :ok <- Client.put_vsock(socket_path, Config.vsock(config, vsock_path)) do
       :ok
+    end
+  end
+
+  defp put_network_interface(socket_path, config) do
+    case Config.network_interface(config) do
+      nil ->
+        :ok
+
+      net_config ->
+        Client.put_network_interface(socket_path, "eth0", net_config)
     end
   end
 
@@ -402,6 +418,58 @@ defmodule Mjolnir.VM do
           Process.sleep(500)
           wait_for_agent(vsock_path, timeout, start_time)
       end
+    end
+  end
+
+  defp configure_guest_network(vsock_path, guest_ip) do
+    # Send configure_network command to guest agent
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(connect_response, "OK") do
+      # Send the configure_network message
+      request = Mjolnir.Vsock.Protocol.configure_network_request(guest_ip)
+      message = Mjolnir.Vsock.Protocol.encode(request)
+
+      :ok = :gen_tcp.send(sock, message)
+
+      # Wait for response (4 byte length prefix + body)
+      case :gen_tcp.recv(sock, 4, 10_000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+
+              case Jason.decode(body) do
+                {:ok, %{"exit_code" => 0}} ->
+                  Logger.info("Guest network configured: #{guest_ip}")
+                  :ok
+
+                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+                  Logger.error("Guest network config failed (exit #{code}): #{stderr}")
+                  {:error, {:network_config_failed, code, stderr}}
+
+                {:error, _} = err ->
+                  err
+              end
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false ->
+        {:error, :vsock_connect_rejected}
+
+      {:error, reason} ->
+        {:error, {:vsock_connect_failed, reason}}
     end
   end
 

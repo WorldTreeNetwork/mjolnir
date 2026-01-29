@@ -14,6 +14,8 @@ defmodule Mjolnir.Firecracker.Config do
     field(:mem_size_mib, pos_integer(), default: 512)
     field(:boot_args, String.t(), default: "console=ttyS0 reboot=k panic=1 pci=off")
     field(:vsock_cid, pos_integer(), default: 3)
+    # Network interface config: %{tap_name: String.t(), guest_mac: String.t(), guest_ip: String.t()}
+    field(:network_interface, map(), default: nil)
   end
 
   @doc """
@@ -58,6 +60,20 @@ defmodule Mjolnir.Firecracker.Config do
     %{
       "guest_cid" => config.vsock_cid,
       "uds_path" => socket_path
+    }
+  end
+
+  @doc """
+  Generates the network-interface configuration for Firecracker API.
+  Returns nil if no network interface is configured.
+  """
+  def network_interface(%__MODULE__{network_interface: nil}), do: nil
+
+  def network_interface(%__MODULE__{network_interface: net}) do
+    %{
+      "iface_id" => "eth0",
+      "guest_mac" => net.guest_mac,
+      "host_dev_name" => net.tap_name
     }
   end
 end

@@ -113,6 +113,41 @@ else
     echo "WARNING: No guest agent - vsock commands won't work"
 fi
 
+# Network setup script (called by guest agent)
+# Uses point-to-point routing - no gateway IP needed
+echo "Installing network setup script..."
+cat > "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup" << 'NETEOF'
+#!/bin/bash
+# Called by guest agent with: $1=ip (e.g., 10.200.45.123)
+# Point-to-point link - default route goes directly via eth0
+set -e
+IP="$1"
+
+if [[ -z "$IP" ]]; then
+    echo "Usage: mjolnir-network-setup <ip>" >&2
+    exit 1
+fi
+
+# Configure IP on eth0 (point-to-point, /32)
+ip addr add "${IP}/32" dev eth0 2>/dev/null || true
+ip link set eth0 up
+
+# Point-to-point default route (no gateway needed)
+ip route add default dev eth0 2>/dev/null || true
+
+# DNS
+echo "nameserver 8.8.8.8" > /etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+
+echo "Network configured: $IP"
+NETEOF
+chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup"
+
+# Install iproute2 for network setup
+echo "Installing network tools..."
+chroot "$MOUNT_DIR" apt-get update -qq
+chroot "$MOUNT_DIR" apt-get install -y -qq iproute2
+
 # Cleanup apt cache
 chroot "$MOUNT_DIR" apt-get clean
 rm -rf "$MOUNT_DIR/var/lib/apt/lists/"*

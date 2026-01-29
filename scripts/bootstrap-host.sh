@@ -227,7 +227,9 @@ install_base_packages() {
         pkg-config \
         libssl-dev \
         socat \
-        screen
+        screen \
+        iptables \
+        iptables-persistent
 
     log_success "Base packages installed"
 }
@@ -714,6 +716,50 @@ setup_directories() {
     log_success "Directories created"
 }
 
+setup_networking() {
+    log_section "Setting Up VM Networking"
+
+    # VM subnet - 10.200.0.0/10 gives us ~4 million VMs
+    # Using 10.200.x.x avoids conflicts with common LAN ranges (10.0.x, 10.1.x)
+    local vm_subnet="10.200.0.0/10"
+
+    # Enable IP forwarding
+    log_info "Enabling IP forwarding..."
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+
+    # Make persistent
+    if ! grep -q "^net.ipv4.ip_forward" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+    fi
+
+    # Add NAT rule for VM subnet (MASQUERADE rewrites source IP)
+    if ! iptables -t nat -C POSTROUTING -s "$vm_subnet" -j MASQUERADE 2>/dev/null; then
+        log_info "Adding NAT masquerade rule for $vm_subnet..."
+        iptables -t nat -A POSTROUTING -s "$vm_subnet" -j MASQUERADE
+    else
+        log_info "NAT rule already exists"
+    fi
+
+    # Allow forwarding for VM traffic (both directions)
+    if ! iptables -C FORWARD -s "$vm_subnet" -j ACCEPT 2>/dev/null; then
+        log_info "Adding FORWARD rules for VM traffic..."
+        iptables -A FORWARD -s "$vm_subnet" -j ACCEPT
+        iptables -A FORWARD -d "$vm_subnet" -j ACCEPT
+    else
+        log_info "FORWARD rules already exist"
+    fi
+
+    # Make iptables rules persistent
+    if command -v netfilter-persistent &>/dev/null; then
+        netfilter-persistent save 2>/dev/null || true
+    elif command -v iptables-save &>/dev/null; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    fi
+
+    log_success "VM networking configured (subnet: $vm_subnet)"
+}
+
 run_verification() {
     log_section "Running Verification"
 
@@ -814,6 +860,7 @@ main() {
     download_kernel
     build_rootfs
     setup_directories
+    setup_networking
 
     # Skip verification in dev mode (user will run tests manually)
     if [[ "${DEV_MODE:-0}" != "1" ]]; then

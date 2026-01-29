@@ -20,6 +20,8 @@ enum Request {
     Exec { id: String, command: String },
     #[serde(rename = "ping")]
     Ping { id: String },
+    #[serde(rename = "configure_network")]
+    ConfigureNetwork { id: String, ip: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +131,29 @@ fn handle_request(request: Request) -> Response {
         Request::Ping { id } => {
             info!("Received ping");
             Response::Pong { id }
+        }
+        Request::ConfigureNetwork { id, ip } => {
+            info!("Configuring network: ip={}", ip);
+
+            // Run the network setup script
+            let output = Command::new("/usr/local/bin/mjolnir-network-setup")
+                .arg(&ip)
+                .output();
+
+            match output {
+                Ok(out) => Response::ExecResponse {
+                    id,
+                    exit_code: out.status.code().unwrap_or(-1),
+                    stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+                },
+                Err(e) => Response::ExecResponse {
+                    id,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Failed to configure network: {}", e),
+                },
+            }
         }
     }
 }
