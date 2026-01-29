@@ -58,4 +58,22 @@ defmodule Mjolnir.Vsock.Protocol do
       "ip" => ip
     }
   end
+
+  @doc """
+  Parse an iroh_ready message from the guest.
+
+  The guest agent sends this proactively when its Iroh endpoint connects to relay.
+
+  Returns `{:ok, %{node_id: string, ticket: string, generated_key: bool}}` or `{:error, reason}`.
+  """
+  def parse_iroh_ready(%{"type" => "iroh_ready", "node_id" => node_id, "ticket" => ticket} = msg) do
+    {:ok,
+     %{
+       node_id: node_id,
+       ticket: ticket,
+       generated_key: Map.get(msg, "generated_key", true)
+     }}
+  end
+
+  def parse_iroh_ready(_), do: {:error, :invalid_iroh_ready}
 end

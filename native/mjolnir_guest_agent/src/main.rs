@@ -1,173 +1,55 @@
 //! Mjolnir Guest Agent
 //!
-//! Runs inside the Firecracker VM and handles commands from the host
-//! via vsock.
+//! Runs inside the Firecracker VM:
+//! - Listens on vsock for host commands (exec, ping, configure_network)
+//! - Runs Iroh endpoint for remote shell access
+//! - Sends iroh_ready notification to host when shell is available
 
-use serde::{Deserialize, Serialize};
-use std::process::Command;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_vsock::VsockListener;
-use tracing::{error, info, warn};
+mod iroh;
+mod protocol;
+mod pty;
+mod vsock;
+
+use std::path::Path;
+use tokio::sync::oneshot;
+use tracing::{error, info};
 
 const VSOCK_PORT: u32 = 5000;
-// VMADDR_CID_ANY (0xFFFFFFFF / -1) means accept connections from any CID
-const VMADDR_CID_ANY: u32 = 0xFFFFFFFF;
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum Request {
-    #[serde(rename = "exec")]
-    Exec { id: String, command: String },
-    #[serde(rename = "ping")]
-    Ping { id: String },
-    #[serde(rename = "configure_network")]
-    ConfigureNetwork { id: String, ip: String },
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum Response {
-    #[serde(rename = "exec_response")]
-    ExecResponse {
-        id: String,
-        exit_code: i32,
-        stdout: String,
-        stderr: String,
-    },
-    #[serde(rename = "pong")]
-    Pong { id: String },
-}
+const IROH_KEY_PATH: &str = "/etc/mjolnir/iroh.key";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    info!("Mjolnir guest agent starting on vsock port {}", VSOCK_PORT);
+    info!("Mjolnir guest agent starting");
 
-    let mut listener = VsockListener::bind(VMADDR_CID_ANY, VSOCK_PORT)?;
+    // Channel to send iroh_ready info to vsock task
+    let (iroh_tx, iroh_rx) = oneshot::channel();
 
-    info!("Listening for connections...");
+    // Spawn vsock listener (handles exec, ping, configure_network, sends iroh_ready)
+    let vsock_handle = tokio::spawn(vsock::run_vsock_listener(VSOCK_PORT, iroh_rx));
 
-    loop {
-        match listener.accept().await {
-            Ok((stream, addr)) => {
-                info!("Accepted connection from {:?}", addr);
-                tokio::spawn(handle_connection(stream));
-            }
-            Err(e) => {
-                error!("Failed to accept connection: {}", e);
-            }
-        }
-    }
-}
+    // Start Iroh endpoint (sends ticket via channel when ready)
+    let key_path = Path::new(IROH_KEY_PATH);
+    let iroh_handle = tokio::spawn(iroh::run_iroh_server(key_path, iroh_tx));
 
-async fn handle_connection(mut stream: tokio_vsock::VsockStream) {
-    let mut buf = vec![0u8; 65536];
-
-    loop {
-        // Read length prefix (4 bytes, big-endian)
-        match stream.read_exact(&mut buf[..4]).await {
-            Ok(_) => {}
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                    error!("Failed to read length: {}", e);
-                }
-                return;
+    // Wait for either to exit (shouldn't happen normally)
+    tokio::select! {
+        res = vsock_handle => {
+            match res {
+                Ok(Ok(())) => info!("Vsock listener exited normally"),
+                Ok(Err(e)) => error!("Vsock listener error: {}", e),
+                Err(e) => error!("Vsock task panicked: {}", e),
             }
         }
-
-        let length = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-
-        if length > buf.len() {
-            error!("Message too large: {}", length);
-            return;
-        }
-
-        // Read message body
-        if let Err(e) = stream.read_exact(&mut buf[..length]).await {
-            error!("Failed to read message: {}", e);
-            return;
-        }
-
-        // Parse and handle request
-        let response = match serde_json::from_slice::<Request>(&buf[..length]) {
-            Ok(request) => handle_request(request),
-            Err(e) => {
-                warn!("Failed to parse request: {}", e);
-                continue;
-            }
-        };
-
-        // Send response
-        if let Err(e) = send_response(&mut stream, &response).await {
-            error!("Failed to send response: {}", e);
-            return;
-        }
-    }
-}
-
-fn handle_request(request: Request) -> Response {
-    match request {
-        Request::Exec { id, command } => {
-            info!("Executing command: {}", command);
-
-            let output = Command::new("sh").arg("-c").arg(&command).output();
-
-            match output {
-                Ok(output) => Response::ExecResponse {
-                    id,
-                    exit_code: output.status.code().unwrap_or(-1),
-                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                },
-                Err(e) => Response::ExecResponse {
-                    id,
-                    exit_code: -1,
-                    stdout: String::new(),
-                    stderr: format!("Failed to execute: {}", e),
-                },
-            }
-        }
-        Request::Ping { id } => {
-            info!("Received ping");
-            Response::Pong { id }
-        }
-        Request::ConfigureNetwork { id, ip } => {
-            info!("Configuring network: ip={}", ip);
-
-            // Run the network setup script
-            let output = Command::new("/usr/local/bin/mjolnir-network-setup")
-                .arg(&ip)
-                .output();
-
-            match output {
-                Ok(out) => Response::ExecResponse {
-                    id,
-                    exit_code: out.status.code().unwrap_or(-1),
-                    stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-                },
-                Err(e) => Response::ExecResponse {
-                    id,
-                    exit_code: -1,
-                    stdout: String::new(),
-                    stderr: format!("Failed to configure network: {}", e),
-                },
+        res = iroh_handle => {
+            match res {
+                Ok(Ok(())) => info!("Iroh server exited normally"),
+                Ok(Err(e)) => error!("Iroh server error: {}", e),
+                Err(e) => error!("Iroh task panicked: {}", e),
             }
         }
     }
-}
-
-async fn send_response(
-    stream: &mut tokio_vsock::VsockStream,
-    response: &Response,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let json = serde_json::to_vec(response)?;
-    let length = json.len() as u32;
-
-    stream.write_all(&length.to_be_bytes()).await?;
-    stream.write_all(&json).await?;
-    stream.flush().await?;
 
     Ok(())
 }

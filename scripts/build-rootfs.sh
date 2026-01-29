@@ -88,6 +88,10 @@ if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
     cp "$AGENT_BIN" "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
     chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
 
+    # Create mjolnir config directory (for optional pre-generated Iroh keys)
+    mkdir -p "$MOUNT_DIR/etc/mjolnir"
+    chmod 700 "$MOUNT_DIR/etc/mjolnir"
+
     # Create service file - start early in boot (after sysinit.target)
     # This ensures the agent is available before multi-user.target which
     # can wait on serial-getty and other services that delay boot
@@ -147,6 +151,16 @@ chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup"
 echo "Installing network tools..."
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2"
+
+# Disable IPv6 system-wide
+# Iroh tries IPv6 first, but we don't have routable IPv6, causing hangs
+echo "Disabling IPv6..."
+cat > "$MOUNT_DIR/etc/sysctl.d/99-disable-ipv6.conf" << 'EOF'
+# Disable IPv6 - we use IPv4 with NAT for simplicity
+# Without this, Iroh hangs trying IPv6 relay connections
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
 
 # Cleanup apt cache
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get clean"

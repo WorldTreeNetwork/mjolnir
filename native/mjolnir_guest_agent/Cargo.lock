@@ -1621,6 +1621,7 @@ dependencies = [
  "iroh",
  "libc",
  "nix 0.29.0",
+ "rand",
  "serde",
  "serde_json",
  "tokio",

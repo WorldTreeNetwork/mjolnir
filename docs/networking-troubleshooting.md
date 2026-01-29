@@ -338,3 +338,86 @@ iptables -t nat -A POSTROUTING -s 10.200.0.0/10 -j MASQUERADE
 iptables -A FORWARD -s 10.200.0.0/10 -j ACCEPT
 iptables -A FORWARD -d 10.200.0.0/10 -j ACCEPT
 ```
+
+---
+
+## Iroh Shell Troubleshooting
+
+VMs include an Iroh endpoint for NAT-traversing shell access. When working, you can shell into a VM from anywhere using a ticket.
+
+### Quick Checks
+
+**1. Is shell ready?**
+```elixir
+vm = Mjolnir.VM.list() |> hd()
+IO.inspect(vm.shell_ready)    # true or false
+IO.inspect(vm.iroh_node_id)   # 52-char base32 string
+IO.inspect(vm.iroh_ticket)    # longer address string
+```
+
+**2. Can guest reach internet?**
+Shell requires outbound connectivity for relay connection:
+```elixir
+Mjolnir.VM.exec(vm.id, "curl -s https://example.com | head -1")
+```
+
+**3. Guest agent running?**
+```elixir
+Mjolnir.VM.exec(vm.id, "ps aux | grep mjolnir")
+# Should show mjolnir-agent process
+```
+
+**4. Guest agent logs?**
+```elixir
+Mjolnir.VM.exec(vm.id, "journalctl -u mjolnir-agent -n 50")
+```
+
+### Common Issues
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| `shell_ready: false` | Network not configured | Check Phase 1 networking |
+| `iroh_ticket: nil` | Relay connection failed | Check guest can reach internet |
+| Connection hangs | Firewall blocking UDP | Check iptables FORWARD rules |
+| PTY not working | Missing shell | Check rootfs has /bin/bash or /bin/zsh |
+
+### Iroh Endpoint Details
+
+- **ALPN:** `mjolnir-shell/1`
+- **Key location:** `/etc/mjolnir/iroh.key` (generated if missing)
+- **Relay:** Uses n0's public relays by default
+- **Protocol:** QUIC with TLS encryption
+
+### Verifying Iroh Connectivity
+
+**On guest (if you can exec):**
+```elixir
+# Check if iroh is listening
+Mjolnir.VM.exec(vm.id, "ss -unp | grep mjolnir")
+
+# Check DNS/relay reachability
+Mjolnir.VM.exec(vm.id, "curl -I https://relay.iroh.network")
+```
+
+**Packet capture (on host):**
+```bash
+# Watch QUIC traffic (UDP port 443 for relay, random high ports for direct)
+tcpdump -i any -n 'udp and (port 443 or portrange 49152-65535)'
+```
+
+### API Reference
+
+```elixir
+# Get ticket for VM
+{:ok, ticket} = Mjolnir.VM.get_ticket(vm.id)
+
+# Get node ID
+{:ok, node_id} = Mjolnir.VM.node_id(vm.id)
+
+# Wait for shell to become ready (with timeout)
+{:ok, ticket} = Mjolnir.VM.await_shell(vm.id, 30_000)
+```
+
+### Binary Size Note
+
+Adding Iroh increases the guest agent binary from ~1.4 MB to ~24 MB. This is expected due to the QUIC/TLS networking stack.

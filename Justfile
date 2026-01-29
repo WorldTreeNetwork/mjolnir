@@ -133,6 +133,11 @@ test-vm:
     #!/usr/bin/env bash
     sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_test.exs"
 
+# Run Iroh shell tests (requires sudo)
+test-iroh:
+    #!/usr/bin/env bash
+    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_iroh_test.exs"
+
 # ============================================================================
 # Development
 # ============================================================================
@@ -218,3 +223,31 @@ cleanup-taps:
         sudo ip link del "$tap" 2>/dev/null || true
     done
     echo "✓ Cleanup complete"
+
+# ============================================================================
+# Remote Debug (via TCP on localhost:9999)
+# ============================================================================
+
+# Spawn a new VM via debug server
+vm-spawn:
+    echo '{"cmd":"spawn"}' | nc -q1 localhost 9999 | jq .
+
+# List all running VMs
+vm-list:
+    echo '{"cmd":"list"}' | nc -q1 localhost 9999 | jq .
+
+# Execute command in a VM: just vm-exec <vm_id> <command>
+vm-exec vm_id cmd:
+    echo '{"cmd":"exec","vm_id":"{{vm_id}}","command":"{{cmd}}"}' | nc -q1 localhost 9999 | jq .
+
+# Stop a VM: just vm-stop <vm_id>
+vm-stop vm_id:
+    echo '{"cmd":"stop","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
+
+# Wait for shell to be ready: just vm-await-shell <vm_id> [timeout_ms]
+vm-await-shell vm_id timeout="30000":
+    echo '{"cmd":"await_shell","vm_id":"{{vm_id}}","timeout":{{timeout}}}' | nc -q1 localhost 9999 | jq .
+
+# Get VM status
+vm-status vm_id:
+    echo '{"cmd":"status","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .

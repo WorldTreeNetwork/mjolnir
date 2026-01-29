@@ -1,0 +1,68 @@
+//! Wire protocol messages for vsock and Iroh communication.
+
+use serde::{Deserialize, Serialize};
+
+/// Messages from host to guest (vsock)
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum VsockRequest {
+    #[serde(rename = "exec")]
+    Exec { id: String, command: String },
+    #[serde(rename = "ping")]
+    Ping { id: String },
+    #[serde(rename = "configure_network")]
+    ConfigureNetwork { id: String, ip: String },
+}
+
+/// Messages from guest to host (vsock)
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum VsockResponse {
+    #[serde(rename = "exec_response")]
+    ExecResponse {
+        id: String,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+    },
+    #[serde(rename = "pong")]
+    Pong { id: String },
+}
+
+/// Notification sent when Iroh is ready
+#[derive(Debug, Serialize)]
+pub struct IrohReady {
+    #[serde(rename = "type")]
+    pub msg_type: &'static str,
+    pub node_id: String,
+    pub ticket: String,
+    pub generated_key: bool,
+}
+
+impl IrohReady {
+    pub fn new(node_id: String, ticket: String, generated_key: bool) -> Self {
+        Self {
+            msg_type: "iroh_ready",
+            node_id,
+            ticket,
+            generated_key,
+        }
+    }
+}
+
+/// Shell protocol messages (over Iroh QUIC stream)
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ShellMessage {
+    /// Raw data from client stdin or to client stdout
+    #[serde(rename = "data")]
+    Data { payload: Vec<u8> },
+
+    /// Window resize request from client
+    #[serde(rename = "resize")]
+    Resize { rows: u16, cols: u16 },
+
+    /// Shell exited
+    #[serde(rename = "exit")]
+    Exit { code: i32 },
+}

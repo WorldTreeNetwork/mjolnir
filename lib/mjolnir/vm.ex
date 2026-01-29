@@ -23,7 +23,11 @@ defmodule Mjolnir.VM do
     :rootfs_path,
     :net_config,
     :state,
-    :boot_time
+    :boot_time,
+    # Iroh shell support (Phase 2)
+    :iroh_node_id,
+    :iroh_ticket,
+    :shell_ready
   ]
 
   @type t :: %__MODULE__{}
@@ -149,6 +153,92 @@ defmodule Mjolnir.VM do
         end
       [] ->
         {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Get the Iroh connection ticket for a VM.
+
+  Returns the ticket string that can be used to connect to the VM's shell
+  from anywhere with NAT traversal.
+
+  ## Examples
+
+      {:ok, ticket} = Mjolnir.VM.get_ticket(vm.id)
+      # ticket can be used with `mjolnir connect <ticket>`
+  """
+  @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
+  def get_ticket(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+
+        if state.iroh_ticket do
+          {:ok, state.iroh_ticket}
+        else
+          {:error, :not_ready}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Get the Iroh node ID for a VM.
+
+  The node ID is the public key of the VM's Iroh endpoint, used for addressing.
+  """
+  @spec node_id(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
+  def node_id(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+
+        if state.iroh_node_id do
+          {:ok, state.iroh_node_id}
+        else
+          {:error, :not_ready}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Wait for shell to be ready, with timeout.
+
+  Returns `{:ok, ticket}` when ready, or `{:error, :timeout}`.
+
+  ## Examples
+
+      {:ok, vm} = Mjolnir.VM.spawn()
+      {:ok, ticket} = Mjolnir.VM.await_shell(vm.id)
+  """
+  @spec await_shell(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
+  def await_shell(vm_id, timeout \\ 30_000) do
+    start_time = System.monotonic_time(:millisecond)
+    do_await_shell(vm_id, timeout, start_time)
+  end
+
+  defp do_await_shell(vm_id, timeout, start_time) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if elapsed > timeout do
+      {:error, :timeout}
+    else
+      case get_ticket(vm_id) do
+        {:ok, ticket} ->
+          {:ok, ticket}
+
+        {:error, :not_ready} ->
+          Process.sleep(500)
+          do_await_shell(vm_id, timeout, start_time)
+
+        {:error, :not_found} ->
+          {:error, :not_found}
+      end
     end
   end
 
@@ -318,6 +408,10 @@ defmodule Mjolnir.VM do
          :ok <- Client.start_instance(socket_path),
          :ok <- wait_for_boot(vsock_path),
          :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
+      # Try to get iroh shell info (short timeout, VM works without it)
+      # Keep this short - old agents won't send iroh_ready
+      iroh_info = await_iroh_ready(vsock_path, 5_000)
+
       {:ok,
        %{
          state
@@ -326,7 +420,10 @@ defmodule Mjolnir.VM do
            serial_path: serial_path,
            rootfs_path: rootfs_path,
            net_config: net_config,
-           firecracker_port: fc_port
+           firecracker_port: fc_port,
+           iroh_node_id: iroh_info[:node_id],
+           iroh_ticket: iroh_info[:ticket],
+           shell_ready: iroh_info != nil
        }}
     end
   rescue
@@ -424,6 +521,53 @@ defmodule Mjolnir.VM do
         {:error, _reason} ->
           Process.sleep(500)
           wait_for_agent(vsock_path, timeout, start_time)
+      end
+    end
+  end
+
+  defp await_iroh_ready(vsock_path, timeout) do
+    # Connect to vsock and wait for iroh_ready message
+    # The guest agent sends this proactively after Iroh connects to relay
+    start_time = System.monotonic_time(:millisecond)
+    do_await_iroh_ready(vsock_path, timeout, start_time)
+  end
+
+  defp do_await_iroh_ready(vsock_path, timeout, start_time) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if elapsed > timeout do
+      Logger.warning("Timeout waiting for iroh_ready, shell access unavailable")
+      nil
+    else
+      opts = [:binary, active: false, packet: :raw]
+
+      with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+           :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+           {:ok, response} <- :gen_tcp.recv(sock, 0, 2000),
+           true <- String.starts_with?(response, "OK"),
+           {:ok, <<length::big-32>>} <- :gen_tcp.recv(sock, 4, timeout - elapsed),
+           {:ok, body} <- :gen_tcp.recv(sock, length, 5000) do
+        :gen_tcp.close(sock)
+
+        case Jason.decode(body) do
+          {:ok, %{"type" => "iroh_ready"} = msg} ->
+            {:ok, info} = Mjolnir.Vsock.Protocol.parse_iroh_ready(msg)
+            Logger.info("VM shell ready: node_id=#{info.node_id}")
+            info
+
+          {:ok, _other} ->
+            # Not iroh_ready, retry
+            Process.sleep(500)
+            do_await_iroh_ready(vsock_path, timeout, start_time)
+
+          {:error, _} ->
+            Process.sleep(500)
+            do_await_iroh_ready(vsock_path, timeout, start_time)
+        end
+      else
+        _ ->
+          Process.sleep(500)
+          do_await_iroh_ready(vsock_path, timeout, start_time)
       end
     end
   end
