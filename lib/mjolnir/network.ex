@@ -60,6 +60,7 @@ defmodule Mjolnir.Network do
 
     with :ok <- create_tap_device(tap_name),
          :ok <- bring_tap_up(tap_name),
+         :ok <- enable_proxy_arp(tap_name),
          :ok <- add_route(guest_ip, tap_name) do
       Logger.info("Created TAP #{tap_name} for VM #{short_id(vm_id)} with IP #{guest_ip}")
 
@@ -188,6 +189,13 @@ defmodule Mjolnir.Network do
 
   defp bring_tap_up(tap_name) do
     run_cmd("ip", ["link", "set", tap_name, "up"])
+  end
+
+  defp enable_proxy_arp(tap_name) do
+    # Proxy ARP makes the host respond to ARP requests for any IP on behalf of the guest
+    # Required for point-to-point /32 routing where guest ARPs for destination directly
+    path = "/proc/sys/net/ipv4/conf/#{tap_name}/proxy_arp"
+    File.write(path, "1")
   end
 
   defp add_route(guest_ip, tap_name) do

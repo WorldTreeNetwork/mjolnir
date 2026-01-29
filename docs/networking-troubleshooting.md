@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-Mjolnir uses flat /32 routing for VM networking:
+Mjolnir uses flat /32 routing for VM networking with proxy ARP:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -32,7 +32,51 @@ Mjolnir uses flat /32 routing for VM networking:
 - Each VM gets one IP (e.g., `10.200.45.123`)
 - Host adds `/32` route per VM via its TAP device
 - Guest uses point-to-point link (no gateway IP)
+- Host enables **proxy ARP** on TAP so guest can reach external IPs
 - Host NATs traffic via iptables MASQUERADE
+
+## How Proxy ARP Works
+
+With traditional subnet routing, when a guest wants to reach `8.8.8.8`:
+1. Guest checks: "Is 8.8.8.8 on my subnet (e.g., 10.200.45.0/24)?" → No
+2. Guest ARPs for the **gateway** (e.g., 10.200.45.1)
+3. Gateway responds with its MAC address
+4. Guest sends packets to gateway's MAC, gateway forwards them
+
+With our **/32 point-to-point** setup:
+1. Guest has `10.200.45.123/32` - a single address, no subnet
+2. Guest has route: `default dev eth0` - no gateway IP specified
+3. When guest wants to reach `8.8.8.8`, it ARPs for `8.8.8.8` **directly**
+4. Without proxy ARP: nobody responds → `ip neigh` shows `FAILED` → no connectivity
+5. **With proxy ARP**: host's TAP interface responds "I can reach 8.8.8.8, send to me"
+6. Guest sends packets to TAP's MAC, host receives and forwards via NAT
+
+```
+Guest: "Who has 8.8.8.8? Tell 10.200.45.123"
+       ↓
+   [TAP interface with proxy_arp=1]
+       ↓
+Host:  "8.8.8.8 is at 02:FC:00:xx:xx:xx" (TAP's MAC)
+       ↓
+Guest: Sends packet to TAP's MAC
+       ↓
+Host:  Receives on TAP → routes → NAT → internet
+```
+
+**Why /32 + proxy ARP instead of subnets?**
+- No IP waste: each VM gets exactly 1 IP, not a /24 (254 wasted)
+- Simpler: no per-VM subnet configuration
+- Flat routing: all VMs in one big pool
+- Scales to millions of VMs without subnet exhaustion
+
+**Enabling proxy ARP:**
+```bash
+# Per interface (done automatically by Mjolnir)
+echo 1 > /proc/sys/net/ipv4/conf/mj-XXXXXXXX/proxy_arp
+
+# Verify
+cat /proc/sys/net/ipv4/conf/mj-XXXXXXXX/proxy_arp  # Should be 1
+```
 
 ## Quick Checks
 
@@ -167,6 +211,29 @@ Mjolnir.VM.exec(vm.id, "curl -I 93.184.216.34")  # example.com
 
 3. Firecracker has network interface configured?
    Check VM spawn logs for network interface setup.
+
+### Guest ARP fails (`ip neigh` shows FAILED)
+
+**Symptoms:** Guest can't reach any IP. `ip neigh` shows:
+```
+8.8.8.8 dev eth0 FAILED
+1.1.1.1 dev eth0 FAILED
+```
+
+**Cause:** Proxy ARP not enabled on TAP interface.
+
+**Fix:**
+```bash
+# Check proxy_arp status
+cat /proc/sys/net/ipv4/conf/mj-XXXXXXXX/proxy_arp  # Should be 1
+
+# Enable if missing
+echo 1 > /proc/sys/net/ipv4/conf/mj-XXXXXXXX/proxy_arp
+```
+
+**Why this happens:** With /32 point-to-point routing, the guest has no gateway.
+When it wants to reach 8.8.8.8, it ARPs for 8.8.8.8 directly. Without proxy ARP,
+nobody responds. With proxy ARP, the host TAP says "send it to me, I'll forward."
 
 ### TAP creation fails
 

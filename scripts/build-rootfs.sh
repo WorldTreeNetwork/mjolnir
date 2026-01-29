@@ -143,13 +143,13 @@ echo "Network configured: $IP"
 NETEOF
 chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup"
 
-# Install iproute2 for network setup
+# Install iproute2 for network setup (noninteractive to suppress debconf warnings)
 echo "Installing network tools..."
-chroot "$MOUNT_DIR" apt-get update -qq
-chroot "$MOUNT_DIR" apt-get install -y -qq iproute2
+chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
+chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2"
 
 # Cleanup apt cache
-chroot "$MOUNT_DIR" apt-get clean
+chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get clean"
 rm -rf "$MOUNT_DIR/var/lib/apt/lists/"*
 rm -rf "$MOUNT_DIR/var/cache/apt/"*
 

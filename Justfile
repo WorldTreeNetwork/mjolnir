@@ -97,7 +97,9 @@ test:
 
 # Run all tests including integration (requires sudo + built rootfs)
 test-all:
-    sudo -E $(which mix) test --include integration
+    #!/usr/bin/env bash
+    MIX_PATH="$(which mix)"
+    sudo bash -c "eval \"\$(mise activate bash)\" && mix test --include integration"
 
 # Run network-specific tests
 test-network:
@@ -105,7 +107,8 @@ test-network:
 
 # Run VM integration tests (requires sudo)
 test-vm:
-    sudo -E $(which mix) test --include integration test/mjolnir/vm_test.exs
+    #!/usr/bin/env bash
+    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_test.exs"
 
 # ============================================================================
 # Development
@@ -117,7 +120,8 @@ iex:
 
 # Start IEx as root (required for VM operations)
 iex-root:
-    sudo -E $(which iex) -S mix
+    #!/usr/bin/env bash
+    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && iex -S mix"
 
 # Compile the project
 compile:
