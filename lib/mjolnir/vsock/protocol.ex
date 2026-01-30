@@ -60,6 +60,17 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build a get_iroh_status request message.
+  Guest agent will return the current Iroh status.
+  """
+  def get_iroh_status_request(request_id \\ nil) do
+    %{
+      "type" => "get_iroh_status",
+      "id" => request_id || UUID.uuid4()
+    }
+  end
+
+  @doc """
   Parse an iroh_ready message from the guest.
 
   The guest agent sends this proactively when its Iroh endpoint connects to relay.

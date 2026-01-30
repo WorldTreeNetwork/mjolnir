@@ -1,6 +1,6 @@
-# Mjolnir
+# Mjolnir Orchestrator
 
-Distributed computational fabric for spawning checkpointable Linux shells in Firecracker microVMs.
+Distributed computational fabric for spawning checkpointable Linux shells in Firecracker microVMs with NAT-traversing remote access via [Iroh](https://iroh.computer).
 
 ## Requirements
 
@@ -97,21 +97,37 @@ mix deps.get
 # or set up manually per docs/roadmap.md
 ```
 
-### Running Mjolnir
+### Running the Orchestrator
 
 ```bash
-# Production (from /opt/mjolnir)
-cd /opt/mjolnir && iex -S mix
+# Start with sudo (required for TAP interfaces and Firecracker)
+just iex-root
 
-# Development (from workspace, after DEV_MODE bootstrap)
-cd ~/work/IdentiKey/mjolnir && iex -S mix
+# Or manually:
+sudo bash -c "eval \"\$(mise activate bash)\" && iex -S mix"
 ```
 
 Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so you won't clobber prod.
 
+#### Via Control Server (Recommended)
+
+```bash
+# In another terminal while orchestrator is running:
+just vm-spawn                    # Returns JSON with vm_id, iroh_ticket, etc.
+just vm-exec <vm_id> "uname -a"  # Execute command in VM
+just vm-list                     # List running VMs
+just vm-stop <vm_id>             # Stop VM
+```
+
+#### Via IEx (Interactive)
+
 ```elixir
 # Spawn a VM
 {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "debian-12", memory_mb: 1024})
+
+# Check Iroh shell status
+vm.shell_ready  # true if connected to relay
+vm.iroh_ticket  # Connection ticket for remote access
 
 # Execute a command
 {:ok, output} = Mjolnir.VM.exec(vm.id, "uname -a")
@@ -123,10 +139,31 @@ Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so you won't clobb
 recompile()
 ```
 
+## Control Server
+
+The orchestrator exposes a TCP control server on `localhost:9999` for managing VMs via JSON commands.
+This enables CLI tools, scripts, and AI agents to interact with Mjolnir without needing Elixir.
+
+```bash
+# Start the orchestrator (requires sudo for TAP/Firecracker)
+just iex-root
+
+# In another terminal, use the control commands:
+just vm-spawn                           # Spawn a VM
+just vm-list                            # List running VMs
+just vm-exec <vm_id> "uname -a"         # Execute command
+just vm-stop <vm_id>                    # Stop a VM
+
+# Or use netcat directly:
+echo '{"cmd":"spawn"}' | nc -q1 localhost 9999 | jq .
+echo '{"cmd":"exec","vm_id":"...","command":"ls"}' | nc -q1 localhost 9999
+```
+
+See `Mjolnir.ControlServer` module docs for the full command reference.
+
 ## Current Limitations
 
-- **No interactive shell** — Use `VM.exec/2` for commands. Interactive SSH requires networking (coming soon).
-- **No networking** — VMs currently only communicate via vsock. TAP networking for SSH is planned.
+- **No interactive shell client** — VMs have Iroh endpoints ready, but the CLI client isn't built yet.
 - **Single node** — VMs run on local host only. Distributed scheduling is a future milestone.
 
 ## Bootstrap Environment Variables

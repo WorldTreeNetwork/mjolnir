@@ -2,63 +2,54 @@
 
 use crate::protocol::{IrohReady, VsockRequest, VsockResponse};
 use std::process::Command;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, RwLock};
 use tokio_vsock::{VsockListener, VsockStream};
 use tracing::{error, info, warn};
 
 const VMADDR_CID_ANY: u32 = 0xFFFFFFFF;
 
+/// Shared state for Iroh readiness
+pub type IrohState = Arc<RwLock<Option<IrohReady>>>;
+
 pub async fn run_vsock_listener(
     port: u32,
-    mut iroh_ready_rx: oneshot::Receiver<IrohReady>,
+    iroh_ready_rx: oneshot::Receiver<IrohReady>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = VsockListener::bind(VMADDR_CID_ANY, port)?;
     info!("Vsock listener started on port {}", port);
 
-    // Track whether we've sent iroh_ready yet
-    let mut iroh_ready_sent = false;
+    // Shared state for iroh readiness - can be queried by multiple connections
+    let iroh_state: IrohState = Arc::new(RwLock::new(None));
+
+    // Spawn task to receive iroh_ready and update shared state
+    let iroh_state_clone = iroh_state.clone();
+    tokio::spawn(async move {
+        match iroh_ready_rx.await {
+            Ok(ready) => {
+                info!("Iroh ready received, updating shared state");
+                *iroh_state_clone.write().await = Some(ready);
+            }
+            Err(_) => {
+                warn!("Iroh ready channel closed without sending");
+            }
+        }
+    });
 
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
                 info!("Vsock connection from {:?}", addr);
-
-                // Check if iroh_ready is available (non-blocking)
-                let ready_info = if !iroh_ready_sent {
-                    match iroh_ready_rx.try_recv() {
-                        Ok(info) => {
-                            iroh_ready_sent = true;
-                            Some(info)
-                        }
-                        Err(oneshot::error::TryRecvError::Empty) => None,
-                        Err(oneshot::error::TryRecvError::Closed) => {
-                            iroh_ready_sent = true; // Channel closed, won't get it
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                tokio::spawn(handle_vsock_connection(stream, ready_info));
+                let state = iroh_state.clone();
+                tokio::spawn(handle_vsock_connection(stream, state));
             }
             Err(e) => error!("Failed to accept vsock connection: {}", e),
         }
     }
 }
 
-async fn handle_vsock_connection(mut stream: VsockStream, iroh_ready: Option<IrohReady>) {
-    // If we have iroh_ready, send it immediately as first message
-    if let Some(ready) = iroh_ready {
-        info!("Sending iroh_ready: node_id={}", ready.node_id);
-        if let Err(e) = send_message(&mut stream, &ready).await {
-            error!("Failed to send iroh_ready: {}", e);
-            return;
-        }
-    }
-
-    // Normal request/response loop
+async fn handle_vsock_connection(mut stream: VsockStream, iroh_state: IrohState) {
     let mut buf = vec![0u8; 65536];
 
     loop {
@@ -82,7 +73,7 @@ async fn handle_vsock_connection(mut stream: VsockStream, iroh_ready: Option<Iro
         }
 
         let response = match serde_json::from_slice::<VsockRequest>(&buf[..length]) {
-            Ok(request) => handle_request(request),
+            Ok(request) => handle_request(request, &iroh_state).await,
             Err(e) => {
                 warn!("Failed to parse request: {}", e);
                 continue;
@@ -96,7 +87,7 @@ async fn handle_vsock_connection(mut stream: VsockStream, iroh_ready: Option<Iro
     }
 }
 
-fn handle_request(request: VsockRequest) -> VsockResponse {
+async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockResponse {
     match request {
         VsockRequest::Exec { id, command } => {
             info!("Exec: {}", command);
@@ -137,6 +128,24 @@ fn handle_request(request: VsockRequest) -> VsockResponse {
                     exit_code: -1,
                     stdout: String::new(),
                     stderr: format!("Failed to configure network: {}", e),
+                },
+            }
+        }
+        VsockRequest::GetIrohStatus { id } => {
+            info!("GetIrohStatus");
+            let state = iroh_state.read().await;
+            match state.as_ref() {
+                Some(ready) => VsockResponse::IrohStatus {
+                    id,
+                    ready: true,
+                    node_id: Some(ready.node_id.clone()),
+                    ticket: Some(ready.ticket.clone()),
+                },
+                None => VsockResponse::IrohStatus {
+                    id,
+                    ready: false,
+                    node_id: None,
+                    ticket: None,
                 },
             }
         }

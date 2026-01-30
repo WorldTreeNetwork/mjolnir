@@ -526,8 +526,7 @@ defmodule Mjolnir.VM do
   end
 
   defp await_iroh_ready(vsock_path, timeout) do
-    # Connect to vsock and wait for iroh_ready message
-    # The guest agent sends this proactively after Iroh connects to relay
+    # Poll the guest agent for Iroh status
     start_time = System.monotonic_time(:millisecond)
     do_await_iroh_ready(vsock_path, timeout, start_time)
   end
@@ -539,36 +538,72 @@ defmodule Mjolnir.VM do
       Logger.warning("Timeout waiting for iroh_ready, shell access unavailable")
       nil
     else
-      opts = [:binary, active: false, packet: :raw]
+      case query_iroh_status(vsock_path) do
+        {:ok, %{ready: true} = info} ->
+          Logger.info("VM shell ready: node_id=#{info.node_id}")
+          info
 
-      with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
-           :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-           {:ok, response} <- :gen_tcp.recv(sock, 0, 2000),
-           true <- String.starts_with?(response, "OK"),
-           {:ok, <<length::big-32>>} <- :gen_tcp.recv(sock, 4, timeout - elapsed),
-           {:ok, body} <- :gen_tcp.recv(sock, length, 5000) do
-        :gen_tcp.close(sock)
+        {:ok, %{ready: false}} ->
+          # Not ready yet, poll again
+          Process.sleep(500)
+          do_await_iroh_ready(vsock_path, timeout, start_time)
 
-        case Jason.decode(body) do
-          {:ok, %{"type" => "iroh_ready"} = msg} ->
-            {:ok, info} = Mjolnir.Vsock.Protocol.parse_iroh_ready(msg)
-            Logger.info("VM shell ready: node_id=#{info.node_id}")
-            info
-
-          {:ok, _other} ->
-            # Not iroh_ready, retry
-            Process.sleep(500)
-            do_await_iroh_ready(vsock_path, timeout, start_time)
-
-          {:error, _} ->
-            Process.sleep(500)
-            do_await_iroh_ready(vsock_path, timeout, start_time)
-        end
-      else
-        _ ->
+        {:error, _reason} ->
+          # Connection failed, retry
           Process.sleep(500)
           do_await_iroh_ready(vsock_path, timeout, start_time)
       end
+    end
+  end
+
+  defp query_iroh_status(vsock_path) do
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(response, "OK") do
+      # Send get_iroh_status request
+      request = Mjolnir.Vsock.Protocol.get_iroh_status_request()
+      message = Mjolnir.Vsock.Protocol.encode(request)
+      :ok = :gen_tcp.send(sock, message)
+
+      # Read response
+      case :gen_tcp.recv(sock, 4, 5000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+              parse_iroh_status_response(body)
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false -> {:error, :vsock_connect_rejected}
+      {:error, reason} -> {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
+  defp parse_iroh_status_response(body) do
+    case Jason.decode(body) do
+      {:ok, %{"type" => "iroh_status", "ready" => true, "node_id" => node_id, "ticket" => ticket}} ->
+        {:ok, %{ready: true, node_id: node_id, ticket: ticket}}
+
+      {:ok, %{"type" => "iroh_status", "ready" => false}} ->
+        {:ok, %{ready: false}}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:error, reason} ->
+        {:error, {:json_decode_failed, reason}}
     end
   end
 

@@ -351,7 +351,7 @@ VMs include an Iroh endpoint for NAT-traversing shell access. When working, you 
 ```elixir
 vm = Mjolnir.VM.list() |> hd()
 IO.inspect(vm.shell_ready)    # true or false
-IO.inspect(vm.iroh_node_id)   # 52-char base32 string
+IO.inspect(vm.iroh_node_id)   # 64-char hex string
 IO.inspect(vm.iroh_ticket)    # longer address string
 ```
 

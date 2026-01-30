@@ -1048,7 +1048,7 @@ defmodule Mjolnir.VMIrohTest do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       {:ok, node_id} = Mjolnir.VM.node_id(vm.id)
-      # Iroh node IDs are 52 chars (base32 encoded public key)
+      # Iroh node IDs are 64 chars (hex-encoded public key)
       assert String.length(node_id) == 52
 
       Mjolnir.VM.stop(vm.id)

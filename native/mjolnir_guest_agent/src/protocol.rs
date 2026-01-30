@@ -12,6 +12,8 @@ pub enum VsockRequest {
     Ping { id: String },
     #[serde(rename = "configure_network")]
     ConfigureNetwork { id: String, ip: String },
+    #[serde(rename = "get_iroh_status")]
+    GetIrohStatus { id: String },
 }
 
 /// Messages from guest to host (vsock)
@@ -27,6 +29,15 @@ pub enum VsockResponse {
     },
     #[serde(rename = "pong")]
     Pong { id: String },
+    #[serde(rename = "iroh_status")]
+    IrohStatus {
+        id: String,
+        ready: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ticket: Option<String>,
+    },
 }
 
 /// Notification sent when Iroh is ready

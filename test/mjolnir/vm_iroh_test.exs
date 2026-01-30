@@ -23,8 +23,8 @@ defmodule Mjolnir.VMIrohTest do
       if vm.shell_ready do
         assert is_binary(vm.iroh_node_id)
         assert is_binary(vm.iroh_ticket)
-        # Node IDs are base32-encoded 32-byte public keys (52 chars)
-        assert String.length(vm.iroh_node_id) == 52
+        # Node IDs are hex-encoded 32-byte public keys (64 chars)
+        assert String.length(vm.iroh_node_id) == 64
         # Tickets are longer (include address info)
         assert String.length(vm.iroh_ticket) > 50
       else
@@ -59,8 +59,8 @@ defmodule Mjolnir.VMIrohTest do
 
       case Mjolnir.VM.node_id(vm.id) do
         {:ok, node_id} ->
-          # Iroh node IDs are 52 chars (base32 encoded public key)
-          assert String.length(node_id) == 52
+          # Iroh node IDs are 64 chars (hex-encoded public key)
+          assert String.length(node_id) == 64
           assert node_id == vm.iroh_node_id
 
         {:error, :not_ready} ->

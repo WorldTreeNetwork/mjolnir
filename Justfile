@@ -118,25 +118,19 @@ networking-status:
 test:
     mix test --exclude integration
 
-# Run all tests including integration (requires sudo + built rootfs)
-test-all:
+# Run integration tests (requires sudo + built rootfs)
+test-integration:
     #!/usr/bin/env bash
-    MIX_PATH="$(which mix)"
-    sudo bash -c "eval \"\$(mise activate bash)\" && mix test --include integration"
+    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration"
 
-# Run network-specific tests
+# Run network-specific tests only
 test-network:
     mix test test/mjolnir/network_test.exs
 
-# Run VM integration tests (requires sudo)
+# Run VM tests only (requires sudo)
 test-vm:
     #!/usr/bin/env bash
-    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_test.exs"
-
-# Run Iroh shell tests (requires sudo)
-test-iroh:
-    #!/usr/bin/env bash
-    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_iroh_test.exs"
+    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_test.exs test/mjolnir/vm_iroh_test.exs"
 
 # ============================================================================
 # Development
@@ -225,10 +219,14 @@ cleanup-taps:
     echo "✓ Cleanup complete"
 
 # ============================================================================
-# Remote Debug (via TCP on localhost:9999)
+# Control Server Commands (TCP on localhost:9999)
 # ============================================================================
+# The Mjolnir Orchestrator exposes a control server for managing VMs.
+# These commands require the orchestrator to be running: just iex-root
+#
+# All commands return JSON: {"ok": true, ...} or {"ok": false, "error": "..."}
 
-# Spawn a new VM via debug server
+# Spawn a new VM
 vm-spawn:
     echo '{"cmd":"spawn"}' | nc -q1 localhost 9999 | jq .
 
@@ -244,10 +242,14 @@ vm-exec vm_id cmd:
 vm-stop vm_id:
     echo '{"cmd":"stop","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
 
-# Wait for shell to be ready: just vm-await-shell <vm_id> [timeout_ms]
+# Wait for Iroh shell to be ready: just vm-await-shell <vm_id> [timeout_ms]
 vm-await-shell vm_id timeout="30000":
     echo '{"cmd":"await_shell","vm_id":"{{vm_id}}","timeout":{{timeout}}}' | nc -q1 localhost 9999 | jq .
 
 # Get VM status
 vm-status vm_id:
     echo '{"cmd":"status","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
+
+# Get Iroh connection ticket for a VM
+vm-ticket vm_id:
+    echo '{"cmd":"get_ticket","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .

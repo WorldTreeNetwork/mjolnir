@@ -1,28 +1,51 @@
-defmodule Mjolnir.DebugServer do
+defmodule Mjolnir.ControlServer do
   @moduledoc """
-  Simple TCP debug server for remote control of Mjolnir.
+  TCP control server for Mjolnir Orchestrator.
 
-  Listens on localhost:9999 by default. Accepts JSON commands, returns JSON responses.
+  Provides a JSON-over-TCP interface for managing MicroVMs. Listens on
+  localhost:9999 by default. Useful for CLI tools, scripts, and AI agents.
 
   ## Commands
 
-  - `{"cmd": "spawn"}` - Spawn a new VM
-  - `{"cmd": "exec", "vm_id": "...", "command": "..."}` - Execute command in VM
-  - `{"cmd": "stop", "vm_id": "..."}` - Stop a VM
-  - `{"cmd": "list"}` - List all running VMs
-  - `{"cmd": "await_shell", "vm_id": "...", "timeout": 30000}` - Wait for shell ready
-  - `{"cmd": "status", "vm_id": "..."}` - Get VM status
+  All commands are JSON objects with a `cmd` field. Responses are JSON with an `ok` boolean.
 
-  ## Usage
+  | Command | Parameters | Description |
+  |---------|------------|-------------|
+  | `spawn` | `base_image`, `memory_mb`, `vcpus` (all optional) | Spawn a new VM |
+  | `exec` | `vm_id`, `command` | Execute shell command in VM |
+  | `stop` | `vm_id` | Stop and cleanup VM |
+  | `list` | - | List all running VMs |
+  | `status` | `vm_id` | Get VM status |
+  | `await_shell` | `vm_id`, `timeout` (optional, default 30000ms) | Wait for Iroh shell ready |
+  | `get_ticket` | `vm_id` | Get Iroh connection ticket |
+
+  ## Examples
 
       # Spawn a VM
-      echo '{"cmd":"spawn"}' | nc localhost 9999
+      echo '{"cmd":"spawn"}' | nc -q1 localhost 9999 | jq .
 
       # Execute command
-      echo '{"cmd":"exec","vm_id":"abc123","command":"uname -a"}' | nc localhost 9999
+      echo '{"cmd":"exec","vm_id":"abc123","command":"uname -a"}' | nc -q1 localhost 9999
 
-      # Or with curl (using netcat mode)
-      curl -s localhost:9999 -d '{"cmd":"list"}'
+      # List VMs
+      echo '{"cmd":"list"}' | nc -q1 localhost 9999 | jq .
+
+      # Stop VM
+      echo '{"cmd":"stop","vm_id":"abc123"}' | nc -q1 localhost 9999
+
+  ## Response Format
+
+      # Success
+      {"ok": true, "vm_id": "...", ...}
+
+      # Error
+      {"ok": false, "error": "reason"}
+
+  ## Configuration
+
+  The port can be configured in `config/config.exs`:
+
+      config :mjolnir, Mjolnir.ControlServer, port: 9999
   """
 
   use GenServer
@@ -46,20 +69,18 @@ defmodule Mjolnir.DebugServer do
            ip: {127, 0, 0, 1}
          ]) do
       {:ok, listen_socket} ->
-        Logger.info("Debug server listening on localhost:#{port}")
-        # Start acceptor
+        Logger.info("Mjolnir control server listening on localhost:#{port}")
         send(self(), :accept)
         {:ok, %{listen_socket: listen_socket, port: port}}
 
       {:error, reason} ->
-        Logger.error("Failed to start debug server: #{inspect(reason)}")
+        Logger.error("Failed to start control server: #{inspect(reason)}")
         {:stop, reason}
     end
   end
 
   @impl true
   def handle_info(:accept, state) do
-    # Accept in a task to not block
     Task.start(fn -> accept_loop(state.listen_socket) end)
     {:noreply, state}
   end
