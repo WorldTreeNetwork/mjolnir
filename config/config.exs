@@ -5,6 +5,7 @@ config :mjolnir,
   btrfs_root: "/var/lib/mjolnir/btrfs",
   kernel_path: "/var/lib/mjolnir/vmlinux",
   firecracker_bin: "/usr/local/bin/firecracker",
+  vm_storage_subdir: "@vms",
 
   # Defaults
   default_vcpus: 2,

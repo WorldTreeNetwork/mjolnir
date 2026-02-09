@@ -11,7 +11,7 @@ defmodule Mjolnir.Vsock.Connection do
 
   alias Mjolnir.Vsock.Protocol
 
-  defstruct [:vm_id, :socket_path, :socket, :pending_requests]
+  defstruct [:vm_id, :socket_path, :socket, :pending_requests, buffer: <<>>]
 
   # Port the guest agent listens on
   @vsock_port 5000
@@ -90,12 +90,27 @@ defmodule Mjolnir.Vsock.Connection do
 
   @impl true
   def handle_info({:tcp, _socket, data}, state) do
-    case Protocol.decode(data) do
+    # Accumulate data in buffer and process complete messages
+    buffer = state.buffer <> data
+    {new_buffer, state} = process_buffer(buffer, state)
+    {:noreply, %{state | buffer: new_buffer}}
+  end
+
+  defp process_buffer(<<length::big-32, rest::binary>> = buffer, state) when byte_size(rest) >= length do
+    <<json::binary-size(length), remaining::binary>> = rest
+    state = handle_message(json, state)
+    process_buffer(remaining, state)
+  end
+
+  defp process_buffer(buffer, state), do: {buffer, state}
+
+  defp handle_message(json, state) do
+    case Jason.decode(json) do
       {:ok, %{"type" => "exec_response", "id" => id} = response} ->
         case Map.pop(state.pending_requests, id) do
           {nil, _} ->
             Logger.warning("Received response for unknown request: #{id}")
-            {:noreply, state}
+            state
 
           {from, pending} ->
             result =
@@ -106,22 +121,32 @@ defmodule Mjolnir.Vsock.Connection do
               end
 
             GenServer.reply(from, result)
-            {:noreply, %{state | pending_requests: pending}}
+            %{state | pending_requests: pending}
         end
 
       {:ok, %{"type" => "pong", "id" => id}} ->
         case Map.pop(state.pending_requests, id) do
           {nil, _} ->
-            {:noreply, state}
+            state
 
           {from, pending} ->
             GenServer.reply(from, :pong)
-            {:noreply, %{state | pending_requests: pending}}
+            %{state | pending_requests: pending}
         end
 
+      {:ok, %{"type" => "iroh_ready"} = msg} ->
+        # Guest proactively sends this when Iroh is ready - just log and ignore
+        # The VM.ex module handles this during boot via await_iroh_ready
+        Logger.debug("Received iroh_ready (ignoring in connection): #{msg["node_id"]}")
+        state
+
+      {:ok, other} ->
+        Logger.warning("Unknown vsock message type: #{inspect(other)}")
+        state
+
       {:error, reason} ->
-        Logger.error("Failed to decode vsock message: #{inspect(reason)}")
-        {:noreply, state}
+        Logger.error("Failed to decode vsock JSON: #{inspect(reason)}")
+        state
     end
   end
 

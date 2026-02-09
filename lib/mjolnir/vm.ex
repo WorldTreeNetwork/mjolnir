@@ -19,9 +19,15 @@ defmodule Mjolnir.VM do
     :firecracker_port,
     :socket_path,
     :vsock_path,
+    :serial_path,
     :rootfs_path,
+    :net_config,
     :state,
-    :boot_time
+    :boot_time,
+    # Iroh shell support (Phase 2)
+    :iroh_node_id,
+    :iroh_ticket,
+    :shell_ready
   ]
 
   @type t :: %__MODULE__{}
@@ -86,8 +92,15 @@ defmodule Mjolnir.VM do
   @spec status(vm_id()) :: :booting | :running | :stopped | {:error, :not_found}
   def status(vm_id) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
-      [{pid, _}] -> GenServer.call(pid, :status)
-      [] -> {:error, :not_found}
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, :status)
+        catch
+          :exit, _ -> {:error, :not_found}
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -116,6 +129,148 @@ defmodule Mjolnir.VM do
       end
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  @doc """
+  Get the serial console socket path for a VM.
+
+  Connect to this with: screen <path>
+
+  ## Examples
+
+      {:ok, path} = Mjolnir.VM.console(vm.id)
+      # Then in another terminal: screen /tmp/mjolnir-dev/abc123_serial.sock
+  """
+  @spec console(vm_id()) :: {:ok, String.t()} | {:error, term()}
+  def console(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+        if state.serial_path do
+          {:ok, state.serial_path}
+        else
+          {:error, :no_serial_console}
+        end
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Get the Iroh connection ticket for a VM.
+
+  Returns the ticket string that can be used to connect to the VM's shell
+  from anywhere with NAT traversal.
+
+  ## Examples
+
+      {:ok, ticket} = Mjolnir.VM.get_ticket(vm.id)
+      # ticket can be used with `mjolnir connect <ticket>`
+  """
+  @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
+  def get_ticket(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+
+        if state.iroh_ticket do
+          {:ok, state.iroh_ticket}
+        else
+          {:error, :not_ready}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Get the Iroh node ID for a VM.
+
+  The node ID is the public key of the VM's Iroh endpoint, used for addressing.
+  """
+  @spec node_id(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
+  def node_id(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        state = GenServer.call(pid, :get_state)
+
+        if state.iroh_node_id do
+          {:ok, state.iroh_node_id}
+        else
+          {:error, :not_ready}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Wait for shell to be ready, with timeout.
+
+  Returns `{:ok, ticket}` when ready, or `{:error, :timeout}`.
+
+  ## Examples
+
+      {:ok, vm} = Mjolnir.VM.spawn()
+      {:ok, ticket} = Mjolnir.VM.await_shell(vm.id)
+  """
+  @spec await_shell(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
+  def await_shell(vm_id, timeout \\ 30_000) do
+    start_time = System.monotonic_time(:millisecond)
+    do_await_shell(vm_id, timeout, start_time)
+  end
+
+  defp do_await_shell(vm_id, timeout, start_time) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if elapsed > timeout do
+      {:error, :timeout}
+    else
+      case get_ticket(vm_id) do
+        {:ok, ticket} ->
+          {:ok, ticket}
+
+        {:error, :not_ready} ->
+          Process.sleep(500)
+          do_await_shell(vm_id, timeout, start_time)
+
+        {:error, :not_found} ->
+          {:error, :not_found}
+      end
+    end
+  end
+
+  @doc """
+  Print instructions for interacting with the VM.
+
+  Serial console is currently disabled. Use `exec/2` for commands,
+  or wait for networking support (TAP + SSH) for interactive shells.
+  """
+  @spec attach(vm_id()) :: :ok | {:error, term()}
+  def attach(vm_id) do
+    case status(vm_id) do
+      :running ->
+        IO.puts("""
+
+        VM #{String.slice(vm_id, 0..7)}... is running.
+
+        Interactive serial console is not currently enabled.
+        Use VM.exec/2 to run commands:
+
+          Mjolnir.VM.exec("#{vm_id}", "uname -a")
+          Mjolnir.VM.exec("#{vm_id}", "ps aux")
+          Mjolnir.VM.exec("#{vm_id}", "cat /etc/os-release")
+
+        For interactive SSH access, networking support is needed (TODO).
+
+        """)
+        :ok
+
+      other ->
+        {:error, other}
+    end
   end
 
   # ============================================================================
@@ -236,25 +391,39 @@ defmodule Mjolnir.VM do
 
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
     vsock_path = Path.join(socket_dir, "#{state.id}_vsock.sock")
+    serial_path = Path.join(socket_dir, "#{state.id}_serial.sock")
 
     # Remove stale sockets if they exist (ignore if missing)
     _ = File.rm(socket_path)
     _ = File.rm(vsock_path)
+    _ = File.rm(serial_path)
 
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, rootfs_path} <- BTRFS.clone(base_image, state.id),
-         {:ok, fc_port} <- start_firecracker(state.id, socket_path),
+         {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
+         {:ok, fc_port} <- start_firecracker(state.id, socket_path, serial_path),
          :ok <- wait_for_socket(socket_path),
-         :ok <- configure_vm(socket_path, vsock_path, %{state.config | rootfs_path: rootfs_path}),
+         config <- %{state.config | rootfs_path: rootfs_path, network_interface: net_config},
+         :ok <- configure_vm(socket_path, vsock_path, config),
          :ok <- Client.start_instance(socket_path),
-         :ok <- wait_for_boot(vsock_path) do
+         :ok <- wait_for_boot(vsock_path),
+         :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
+      # Try to get iroh shell info (short timeout, VM works without it)
+      # Keep this short - old agents won't send iroh_ready
+      iroh_info = await_iroh_ready(vsock_path, 5_000)
+
       {:ok,
        %{
          state
          | socket_path: socket_path,
            vsock_path: vsock_path,
+           serial_path: serial_path,
            rootfs_path: rootfs_path,
-           firecracker_port: fc_port
+           net_config: net_config,
+           firecracker_port: fc_port,
+           iroh_node_id: iroh_info[:node_id],
+           iroh_ticket: iroh_info[:ticket],
+           shell_ready: iroh_info != nil
        }}
     end
   rescue
@@ -262,21 +431,22 @@ defmodule Mjolnir.VM do
       {:error, {:boot_exception, e}}
   end
 
-  defp start_firecracker(vm_id, socket_path) do
+  defp start_firecracker(vm_id, socket_path, serial_path) do
     firecracker_bin = Application.get_env(:mjolnir, :firecracker_bin)
+    wrapper_script = Application.get_env(:mjolnir, :console_wrapper_script)
 
-    args = [
-      "--api-sock",
-      socket_path,
-      "--id",
-      vm_id,
-      "--level",
-      "Warning"
-    ]
+    # Use wrapper script that exposes serial console on a Unix socket
+    {executable, args} =
+      if wrapper_script && File.exists?(wrapper_script) do
+        {wrapper_script, [serial_path, socket_path, vm_id, firecracker_bin]}
+      else
+        # Direct Firecracker (no serial console socket)
+        {firecracker_bin, ["--api-sock", socket_path, "--id", vm_id, "--level", "Warning"]}
+      end
 
     port =
       Port.open(
-        {:spawn_executable, firecracker_bin},
+        {:spawn_executable, executable},
         [:binary, :exit_status, :stderr_to_stdout, args: args]
       )
 
@@ -306,8 +476,19 @@ defmodule Mjolnir.VM do
     with :ok <- Client.put_boot_source(socket_path, Config.boot_source(config)),
          :ok <- put_drives(socket_path, config),
          :ok <- Client.put_machine_config(socket_path, Config.machine_config(config)),
+         :ok <- put_network_interface(socket_path, config),
          :ok <- Client.put_vsock(socket_path, Config.vsock(config, vsock_path)) do
       :ok
+    end
+  end
+
+  defp put_network_interface(socket_path, config) do
+    case Config.network_interface(config) do
+      nil ->
+        :ok
+
+      net_config ->
+        Client.put_network_interface(socket_path, "eth0", net_config)
     end
   end
 
@@ -341,6 +522,140 @@ defmodule Mjolnir.VM do
           Process.sleep(500)
           wait_for_agent(vsock_path, timeout, start_time)
       end
+    end
+  end
+
+  defp await_iroh_ready(vsock_path, timeout) do
+    # Poll the guest agent for Iroh status
+    start_time = System.monotonic_time(:millisecond)
+    do_await_iroh_ready(vsock_path, timeout, start_time)
+  end
+
+  defp do_await_iroh_ready(vsock_path, timeout, start_time) do
+    elapsed = System.monotonic_time(:millisecond) - start_time
+
+    if elapsed > timeout do
+      Logger.warning("Timeout waiting for iroh_ready, shell access unavailable")
+      nil
+    else
+      case query_iroh_status(vsock_path) do
+        {:ok, %{ready: true} = info} ->
+          Logger.info("VM shell ready: node_id=#{info.node_id}")
+          info
+
+        {:ok, %{ready: false}} ->
+          # Not ready yet, poll again
+          Process.sleep(500)
+          do_await_iroh_ready(vsock_path, timeout, start_time)
+
+        {:error, _reason} ->
+          # Connection failed, retry
+          Process.sleep(500)
+          do_await_iroh_ready(vsock_path, timeout, start_time)
+      end
+    end
+  end
+
+  defp query_iroh_status(vsock_path) do
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(response, "OK") do
+      # Send get_iroh_status request
+      request = Mjolnir.Vsock.Protocol.get_iroh_status_request()
+      message = Mjolnir.Vsock.Protocol.encode(request)
+      :ok = :gen_tcp.send(sock, message)
+
+      # Read response
+      case :gen_tcp.recv(sock, 4, 5000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+              parse_iroh_status_response(body)
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false -> {:error, :vsock_connect_rejected}
+      {:error, reason} -> {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
+  defp parse_iroh_status_response(body) do
+    case Jason.decode(body) do
+      {:ok, %{"type" => "iroh_status", "ready" => true, "node_id" => node_id, "ticket" => ticket}} ->
+        {:ok, %{ready: true, node_id: node_id, ticket: ticket}}
+
+      {:ok, %{"type" => "iroh_status", "ready" => false}} ->
+        {:ok, %{ready: false}}
+
+      {:ok, other} ->
+        {:error, {:unexpected_response, other}}
+
+      {:error, reason} ->
+        {:error, {:json_decode_failed, reason}}
+    end
+  end
+
+  defp configure_guest_network(vsock_path, guest_ip) do
+    # Send configure_network command to guest agent
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(connect_response, "OK") do
+      # Send the configure_network message
+      request = Mjolnir.Vsock.Protocol.configure_network_request(guest_ip)
+      message = Mjolnir.Vsock.Protocol.encode(request)
+
+      :ok = :gen_tcp.send(sock, message)
+
+      # Wait for response (4 byte length prefix + body)
+      case :gen_tcp.recv(sock, 4, 10_000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+
+              case Jason.decode(body) do
+                {:ok, %{"exit_code" => 0}} ->
+                  Logger.info("Guest network configured: #{guest_ip}")
+                  :ok
+
+                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+                  Logger.error("Guest network config failed (exit #{code}): #{stderr}")
+                  {:error, {:network_config_failed, code, stderr}}
+
+                {:error, _} = err ->
+                  err
+              end
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false ->
+        {:error, :vsock_connect_rejected}
+
+      {:error, reason} ->
+        {:error, {:vsock_connect_failed, reason}}
     end
   end
 
@@ -395,9 +710,19 @@ defmodule Mjolnir.VM do
       end
     end
 
+    # Remove TAP interface and route
+    if state.net_config do
+      Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
+      Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
+    end
+
     # Remove sockets
     if state.socket_path, do: File.rm(state.socket_path)
     if state.vsock_path, do: File.rm(state.vsock_path)
+    if state.serial_path, do: File.rm(state.serial_path)
+
+    # Remove PTY link created by console wrapper
+    File.rm("/tmp/mjolnir-pty-#{state.id}")
 
     # Delete rootfs file and VM directory
     if state.rootfs_path do

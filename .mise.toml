@@ -1,0 +1,28 @@
+# Mjolnir development tool versions
+# Run `mise install` to install all tools
+
+[tools]
+erlang = "26.2.5"
+elixir = "1.16.2-otp-26"
+rust = "stable"
+just = "latest"
+
+[env]
+# Ensure musl target is available for guest agent builds
+_.path = ["./native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release"]
+
+[tasks.setup]
+description = "Install dependencies and build guest agent"
+run = """
+mix deps.get
+rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
+cd native/mjolnir_guest_agent && cargo build --release --target x86_64-unknown-linux-musl
+"""
+
+[tasks.test]
+description = "Run tests"
+run = "mix test"
+
+[tasks.test-integration]
+description = "Run integration tests (requires KVM)"
+run = "mix test --include integration"

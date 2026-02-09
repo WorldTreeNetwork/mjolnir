@@ -46,4 +46,45 @@ defmodule Mjolnir.Vsock.Protocol do
   Build a ping message.
   """
   def ping, do: %{"type" => "ping"}
+
+  @doc """
+  Build a configure_network request message.
+  Guest agent will configure eth0 with the given IP.
+  """
+  def configure_network_request(ip, request_id \\ nil) do
+    %{
+      "type" => "configure_network",
+      "id" => request_id || UUID.uuid4(),
+      "ip" => ip
+    }
+  end
+
+  @doc """
+  Build a get_iroh_status request message.
+  Guest agent will return the current Iroh status.
+  """
+  def get_iroh_status_request(request_id \\ nil) do
+    %{
+      "type" => "get_iroh_status",
+      "id" => request_id || UUID.uuid4()
+    }
+  end
+
+  @doc """
+  Parse an iroh_ready message from the guest.
+
+  The guest agent sends this proactively when its Iroh endpoint connects to relay.
+
+  Returns `{:ok, %{node_id: string, ticket: string, generated_key: bool}}` or `{:error, reason}`.
+  """
+  def parse_iroh_ready(%{"type" => "iroh_ready", "node_id" => node_id, "ticket" => ticket} = msg) do
+    {:ok,
+     %{
+       node_id: node_id,
+       ticket: ticket,
+       generated_key: Map.get(msg, "generated_key", true)
+     }}
+  end
+
+  def parse_iroh_ready(_), do: {:error, :invalid_iroh_ready}
 end

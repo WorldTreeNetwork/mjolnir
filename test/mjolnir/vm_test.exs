@@ -67,4 +67,81 @@ defmodule Mjolnir.VMTest do
       refute Mjolnir.BTRFS.subvolume?(rootfs_path)
     end
   end
+
+  describe "VM networking" do
+    setup do
+      {:ok, vm} = Mjolnir.VM.spawn()
+      on_exit(fn -> Mjolnir.VM.stop(vm.id) end)
+      {:ok, vm: vm}
+    end
+
+    test "VM has network config", %{vm: vm} do
+      assert vm.net_config != nil
+      assert vm.net_config.tap_name =~ ~r/^mj-/
+      assert vm.net_config.guest_ip =~ ~r/^10\.\d+\.\d+\.\d+$/
+      assert vm.net_config.guest_mac =~ ~r/^02:FC:00:/
+    end
+
+    test "VM has correct IP from allocation", %{vm: vm} do
+      expected_ip = Mjolnir.Network.allocate_ip(vm.id)
+      assert vm.net_config.guest_ip == expected_ip
+
+      # Verify guest has this IP configured
+      {:ok, output} = Mjolnir.VM.exec(vm.id, "ip -4 addr show eth0")
+      assert output =~ expected_ip
+    end
+
+    test "host has route to VM", %{vm: vm} do
+      guest_ip = vm.net_config.guest_ip
+      {output, 0} = System.cmd("ip", ["route", "get", guest_ip])
+      assert output =~ vm.net_config.tap_name
+    end
+
+    @tag :network
+    test "VM can reach external hosts", %{vm: vm} do
+      # This test requires host networking to be set up (iptables, ip_forward)
+      {:ok, output} = Mjolnir.VM.exec(vm.id, "curl -s --max-time 10 https://example.com")
+      assert output =~ "Example Domain"
+    end
+
+    @tag :network
+    test "VM can resolve DNS", %{vm: vm} do
+      # DNS test: curl a domain name. If DNS works, we get content. If not, curl exits 6.
+      {:ok, _output} = Mjolnir.VM.exec(vm.id, "curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://example.com")
+      # If we get here without error, DNS resolution worked
+    end
+
+    test "TAP and route cleaned up on VM stop" do
+      {:ok, vm} = Mjolnir.VM.spawn()
+      tap_name = vm.net_config.tap_name
+      guest_ip = vm.net_config.guest_ip
+
+      # TAP exists while running
+      assert tap_exists?(tap_name)
+      assert route_exists?(guest_ip)
+
+      Mjolnir.VM.stop(vm.id)
+
+      # Give cleanup a moment (process termination + TAP deletion)
+      Process.sleep(1000)
+
+      # Cleaned up after stop
+      refute tap_exists?(tap_name), "TAP #{tap_name} should be deleted after VM stop"
+      refute route_exists?(guest_ip), "Route to #{guest_ip} should be deleted after VM stop"
+    end
+  end
+
+  # Helpers
+
+  defp tap_exists?(name) do
+    case System.cmd("ip", ["link", "show", name], stderr_to_stdout: true) do
+      {_, 0} -> true
+      _ -> false
+    end
+  end
+
+  defp route_exists?(ip) do
+    {output, _} = System.cmd("ip", ["route"])
+    output =~ ip
+  end
 end

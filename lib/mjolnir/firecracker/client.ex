@@ -37,6 +37,13 @@ defmodule Mjolnir.Firecracker.Client do
   end
 
   @doc """
+  Configure a network interface.
+  """
+  def put_network_interface(socket_path, iface_id, config) do
+    put(socket_path, "/network-interfaces/#{iface_id}", config)
+  end
+
+  @doc """
   Start the VM (InstanceStart action).
   """
   def start_instance(socket_path) do
