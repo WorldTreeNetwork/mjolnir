@@ -44,8 +44,9 @@ pub async fn run_iroh_server(
     let endpoint_addr = endpoint.addr();
     let endpoint_id = endpoint.id();
 
-    // Format ticket as string (EndpointAddr uses Debug formatting)
-    let ticket = format!("{:?}", endpoint_addr);
+    // Serialize EndpointAddr as JSON so clients can parse and connect
+    let ticket = serde_json::to_string(&endpoint_addr)
+        .expect("EndpointAddr serialization should not fail");
 
     info!("Shell ready. Endpoint ID: {}", endpoint_id);
     info!("Shell ticket: {}", ticket);

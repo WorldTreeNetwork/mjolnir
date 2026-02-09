@@ -1,100 +1,184 @@
 defmodule Mjolnir.API.Router do
   @moduledoc """
-  HTTP API for Mjolnir VM management.
+  HTTP API router for Mjolnir VM management.
 
-  Endpoints:
-    GET    /api/health        - Health check
-    POST   /api/vms           - Spawn a new VM
-    GET    /api/vms           - List all VMs
-    GET    /api/vms/:id       - Get VM status
-    POST   /api/vms/:id/exec  - Execute a command in a VM
-    DELETE /api/vms/:id       - Stop a VM
+  Provides RESTful endpoints for spawning, listing, inspecting,
+  executing commands in, and stopping microVMs. Authentication is
+  handled by `Mjolnir.API.Auth` (JWT or localhost bypass).
   """
 
   use Plug.Router
-  use Plug.ErrorHandler
 
+  import Mjolnir.API.Authz
   alias Mjolnir.API.Views
 
-  plug(Plug.Logger)
-  plug(:match)
-  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
-  plug(:dispatch)
+  plug Plug.Logger
+  plug Plug.Parsers, parsers: [:json], json_decoder: Jason
+  plug Mjolnir.API.Auth
+  plug :match
+  plug :dispatch
 
-  # Health check
+  # Health check — no auth required (skipped by Auth plug)
   get "/api/health" do
     json(conn, 200, %{status: "ok"})
   end
 
   # Spawn a new VM
   post "/api/vms" do
-    opts =
-      conn.body_params
-      |> Map.take(["base_image", "vcpus", "memory_mb"])
-      |> atomize_keys()
+    conn = require_scope(conn, "vms:spawn")
 
-    case Mjolnir.VM.spawn(opts) do
-      {:ok, vm} ->
-        json(conn, 201, %{vm: Views.vm_json(vm)})
+    unless conn.halted do
+      opts = %{}
+      opts = if conn.body_params["base_image"], do: Map.put(opts, :base_image, conn.body_params["base_image"]), else: opts
+      opts = if conn.body_params["memory_mb"], do: Map.put(opts, :memory_mb, conn.body_params["memory_mb"]), else: opts
+      opts = if conn.body_params["vcpus"], do: Map.put(opts, :vcpus, conn.body_params["vcpus"]), else: opts
 
-      {:error, reason} ->
-        json(conn, 500, %{error: inspect(reason)})
+      case Mjolnir.VM.spawn(opts) do
+        {:ok, vm} ->
+          json(conn, 201, Views.render_vm(vm))
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      conn
     end
   end
 
   # List all VMs
   get "/api/vms" do
-    vms = Mjolnir.VM.list() |> Enum.map(&Views.vm_json/1)
-    json(conn, 200, %{vms: vms})
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      vms = Mjolnir.VM.list() |> Enum.map(&Views.render_vm_summary/1)
+      json(conn, 200, %{vms: vms})
+    else
+      conn
+    end
   end
 
   # Get VM status
   get "/api/vms/:id" do
-    case Mjolnir.VM.status(id) do
-      {:error, :not_found} ->
-        json(conn, 404, %{error: "not_found"})
+    conn = require_scope(conn, "vms:read")
 
-      status ->
-        json(conn, 200, %{id: id, status: status})
+    unless conn.halted do
+      case Mjolnir.VM.status(id) do
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+
+        state ->
+          json(conn, 200, %{id: id, state: state})
+      end
+    else
+      conn
     end
   end
 
-  # Execute command in a VM
+  # Execute command in VM
   post "/api/vms/:id/exec" do
-    command = conn.body_params["command"]
+    conn = require_scope(conn, "vms:exec")
 
-    if is_nil(command) or command == "" do
-      json(conn, 400, %{error: "command is required"})
+    unless conn.halted do
+      command = conn.body_params["command"]
+      timeout = conn.body_params["timeout"] || 30_000
+
+      case Mjolnir.VM.exec(id, command, timeout: timeout) do
+        {:ok, output} ->
+          json(conn, 200, %{output: output})
+
+        {:error, {:exit_code, code, stderr}} ->
+          json(conn, 200, %{exit_code: code, stderr: stderr})
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
     else
-      try do
-        case Mjolnir.VM.exec(id, command) do
-          {:ok, output} ->
-            json(conn, 200, %{output: output})
+      conn
+    end
+  end
 
-          {:error, {:exit_code, code, stderr}} ->
-            json(conn, 200, %{exit_code: code, stderr: stderr})
+  # Stop VM
+  delete "/api/vms/:id" do
+    conn = require_scope(conn, "vms:stop")
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
-        end
-      catch
-        :exit, {:noproc, _} ->
+    unless conn.halted do
+      case Mjolnir.VM.stop(id) do
+        :ok ->
+          json(conn, 200, %{ok: true})
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      conn
+    end
+  end
+
+  # Get Iroh connection ticket
+  get "/api/vms/:id/ticket" do
+    conn = require_scope(conn, "shell:connect")
+
+    unless conn.halted do
+      case Mjolnir.VM.get_ticket(id) do
+        {:ok, ticket} ->
+          json(conn, 200, %{ticket: ticket})
+
+        {:error, :not_ready} ->
+          json(conn, 503, %{error: "not_ready"})
+
+        {:error, :not_found} ->
           json(conn, 404, %{error: "not_found"})
       end
+    else
+      conn
     end
   end
 
-  # Stop a VM
-  delete "/api/vms/:id" do
-    case Mjolnir.VM.stop(id) do
-      :ok ->
-        json(conn, 200, %{status: "stopped"})
+  # Get Iroh node ID
+  get "/api/vms/:id/node-id" do
+    conn = require_scope(conn, "shell:connect")
 
-      {:error, :not_found} ->
-        json(conn, 404, %{error: "not_found"})
+    unless conn.halted do
+      case Mjolnir.VM.node_id(id) do
+        {:ok, node_id} ->
+          json(conn, 200, %{node_id: node_id})
 
-      {:error, reason} ->
-        json(conn, 500, %{error: inspect(reason)})
+        {:error, :not_ready} ->
+          json(conn, 503, %{error: "not_ready"})
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+      end
+    else
+      conn
+    end
+  end
+
+  # Await shell readiness
+  post "/api/vms/:id/await-shell" do
+    conn = require_scope(conn, "shell:connect")
+
+    unless conn.halted do
+      timeout = conn.body_params["timeout"] || 30_000
+
+      case Mjolnir.VM.await_shell(id, timeout) do
+        {:ok, ticket} ->
+          json(conn, 200, %{ticket: ticket})
+
+        {:error, :timeout} ->
+          json(conn, 504, %{error: "timeout"})
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+      end
+    else
+      conn
     end
   end
 
@@ -102,25 +186,9 @@ defmodule Mjolnir.API.Router do
     json(conn, 404, %{error: "not_found"})
   end
 
-  @impl Plug.ErrorHandler
-  def handle_errors(conn, %{kind: _kind, reason: reason, stack: _stack}) do
-    json(conn, 500, %{error: inspect(reason)})
-  end
-
   defp json(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
-  end
-
-  defp atomize_keys(map) do
-    allowed = %{"base_image" => :base_image, "vcpus" => :vcpus, "memory_mb" => :memory_mb}
-
-    Map.new(map, fn {k, v} ->
-      case Map.fetch(allowed, k) do
-        {:ok, atom_key} -> {atom_key, v}
-        :error -> {k, v}
-      end
-    end)
   end
 end

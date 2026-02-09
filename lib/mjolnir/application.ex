@@ -5,7 +5,7 @@ defmodule Mjolnir.Application do
   Starts the supervision tree for VM management including:
   - VM Registry for process lookup
   - VM Supervisor for dynamic VM processes
-  - Control Server for external TCP control (localhost:9999)
+  - HTTP API (Bandit) with JWT/OIDC authentication
   """
 
   use Application
@@ -13,28 +13,37 @@ defmodule Mjolnir.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Registry for VM processes
-      {Registry, keys: :unique, name: Mjolnir.VMRegistry},
+    api_port = Application.get_env(:mjolnir, :api_port, 4000)
 
-      # Dynamic supervisor for VM processes
-      {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.VMSupervisor},
+    children =
+      [
+        # Registry for VM processes
+        {Registry, keys: :unique, name: Mjolnir.VMRegistry},
 
-      # HTTP API
-      {Bandit, plug: Mjolnir.API.Router, port: api_port()}
-      # Control server for external commands (localhost:9999)
-      Mjolnir.ControlServer
-    ]
+        # Dynamic supervisor for VM processes
+        {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.VMSupervisor}
+      ] ++
+        maybe_jwks_strategy() ++
+        [
+          # HTTP API
+          {Bandit, plug: Mjolnir.API.Router, port: api_port}
+        ]
 
     opts = [strategy: :one_for_one, name: Mjolnir.Supervisor]
 
     Logger.info("Starting Mjolnir MicroVM Fabric")
     Mjolnir.Cleanup.sweep()
-    Logger.info("Starting Mjolnir Orchestrator")
+    Logger.info("Starting Mjolnir Orchestrator (HTTP API on port #{api_port})")
     Supervisor.start_link(children, opts)
   end
 
-  defp api_port do
-    Application.get_env(:mjolnir, :api_port, 4000)
+  defp maybe_jwks_strategy do
+    auth_config = Application.get_env(:mjolnir, :auth, [])
+
+    if Keyword.get(auth_config, :issuer) do
+      [{Mjolnir.Auth.KeycloakStrategy, issuer: auth_config[:issuer]}]
+    else
+      []
+    end
   end
 end

@@ -24,8 +24,11 @@ defmodule Mjolnir.MixProject do
 
   defp deps do
     [
-      {:bandit, "~> 1.5"},
+      {:bandit, "~> 1.6"},
+      {:hackney, "~> 1.20"},
       {:jason, "~> 1.4"},
+      {:joken, "~> 2.6"},
+      {:joken_jwks, "~> 1.7"},
       {:plug, "~> 1.16"},
       {:req, "~> 0.4"},
       {:typed_struct, "~> 0.3"},

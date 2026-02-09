@@ -15,3 +15,5 @@ config :mjolnir,
 
   # Serial console wrapper - disabled for now, use VM.exec/2 instead
   # console_wrapper_script: Path.expand("../scripts/firecracker-console.sh", __DIR__)
+
+config :mjolnir, :auth, bypass_localhost: true

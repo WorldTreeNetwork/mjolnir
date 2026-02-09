@@ -1,26 +1,39 @@
 defmodule Mjolnir.API.Views do
   @moduledoc """
-  JSON serialization for API responses.
+  JSON serialization helpers for VM data.
   """
 
   @doc """
-  Serialize a VM struct to a JSON-safe map.
+  Full VM representation including connection details.
   """
-  def vm_json(%Mjolnir.VM{} = vm) do
+  def render_vm(vm) do
     %{
       id: vm.id,
       state: vm.state,
-      config: config_json(vm.config)
+      guest_ip: get_in_net(vm, :guest_ip),
+      shell_ready: vm.shell_ready || false,
+      iroh_node_id: vm.iroh_node_id,
+      iroh_ticket: vm.iroh_ticket
     }
   end
 
-  defp config_json(nil), do: nil
-
-  defp config_json(config) do
+  @doc """
+  Summary VM representation for list endpoints.
+  """
+  def render_vm_summary(vm) do
     %{
-      base_image: config.base_image,
-      vcpu_count: config.vcpu_count,
-      mem_size_mib: config.mem_size_mib
+      id: vm.id,
+      state: vm.state,
+      guest_ip: get_in_net(vm, :guest_ip),
+      shell_ready: vm.shell_ready || false,
+      iroh_node_id: vm.iroh_node_id
     }
+  end
+
+  defp get_in_net(vm, key) do
+    case vm.net_config do
+      %{^key => val} -> val
+      _ -> nil
+    end
   end
 end

@@ -209,6 +209,10 @@ defmodule Mjolnir.VM do
   @doc """
   Wait for shell to be ready, with timeout.
 
+  Actively polls the guest agent for Iroh status via vsock rather than
+  relying on cached boot-time values, so this works even if Iroh took
+  longer than the initial boot timeout to connect to relay.
+
   Returns `{:ok, ticket}` when ready, or `{:error, :timeout}`.
 
   ## Examples
@@ -218,27 +222,12 @@ defmodule Mjolnir.VM do
   """
   @spec await_shell(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
   def await_shell(vm_id, timeout \\ 30_000) do
-    start_time = System.monotonic_time(:millisecond)
-    do_await_shell(vm_id, timeout, start_time)
-  end
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        GenServer.call(pid, {:await_shell, timeout}, timeout + 5_000)
 
-  defp do_await_shell(vm_id, timeout, start_time) do
-    elapsed = System.monotonic_time(:millisecond) - start_time
-
-    if elapsed > timeout do
-      {:error, :timeout}
-    else
-      case get_ticket(vm_id) do
-        {:ok, ticket} ->
-          {:ok, ticket}
-
-        {:error, :not_ready} ->
-          Process.sleep(500)
-          do_await_shell(vm_id, timeout, start_time)
-
-        {:error, :not_found} ->
-          {:error, :not_found}
-      end
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -335,6 +324,29 @@ defmodule Mjolnir.VM do
   def handle_call({:exec, command}, _from, state) do
     result = execute_command(state, command)
     {:reply, result, state}
+  end
+
+  def handle_call({:await_shell, timeout}, _from, state) do
+    # If we already have a ticket cached, return it immediately
+    if state.iroh_ticket do
+      {:reply, {:ok, state.iroh_ticket}, state}
+    else
+      # Poll the guest agent for live Iroh status via vsock
+      case await_iroh_ready(state.vsock_path, timeout) do
+        %{ticket: ticket} = info ->
+          updated = %{
+            state
+            | iroh_node_id: info[:node_id],
+              iroh_ticket: ticket,
+              shell_ready: true
+          }
+
+          {:reply, {:ok, ticket}, updated}
+
+        nil ->
+          {:reply, {:error, :timeout}, state}
+      end
+    end
   end
 
   @impl true

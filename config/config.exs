@@ -15,7 +15,10 @@ config :mjolnir,
   # Sockets
   socket_dir: "/tmp/mjolnir",
 
-  # API
+  # HTTP API
   api_port: 4000
+
+# Auth defaults
+config :mjolnir, :auth, bypass_localhost: false
 
 import_config "#{config_env()}.exs"
