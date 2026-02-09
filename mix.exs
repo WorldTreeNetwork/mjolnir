@@ -24,7 +24,9 @@ defmodule Mjolnir.MixProject do
 
   defp deps do
     [
+      {:bandit, "~> 1.5"},
       {:jason, "~> 1.4"},
+      {:plug, "~> 1.16"},
       {:req, "~> 0.4"},
       {:typed_struct, "~> 0.3"},
       {:uuid, "~> 1.1"}

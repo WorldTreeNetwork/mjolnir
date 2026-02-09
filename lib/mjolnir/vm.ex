@@ -383,7 +383,16 @@ defmodule Mjolnir.VM do
   defp cleanup(state) do
     # Kill Firecracker if still running
     if state.firecracker_port do
-      Port.close(state.firecracker_port)
+      # Get the OS PID before closing the port
+      case Port.info(state.firecracker_port, :os_pid) do
+        {:os_pid, os_pid} ->
+          Port.close(state.firecracker_port)
+          System.cmd("kill", ["-9", to_string(os_pid)])
+
+        nil ->
+          # Port already closed / process already exited
+          :ok
+      end
     end
 
     # Remove sockets

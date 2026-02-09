@@ -1,0 +1,40 @@
+# One "function" (task), with variants per model
+[functions.chat]
+type = "chat"
+
+[functions.chat.variants.haiku_4_5]
+type = "chat_completion"
+model = "haiku_4_5"
+
+[functions.chat.variants.gpt_5_2]
+type = "chat_completion"
+model = "gpt_5_2"
+
+[functions.chat.variants.gpt_5_mini_search]
+type = "chat_completion"
+model = "gpt-5-mini-search"
+
+# Model definitions
+[models.haiku_4_5]
+routing = ["anthropic"]
+
+[models.haiku_4_5.providers.anthropic]
+type = "anthropic"
+model_name = "claude-haiku-4-5"
+
+[models.gpt_5_2]
+routing = ["openai"]
+
+[models.gpt_5_2.providers.openai]
+type = "openai"
+model_name = "gpt-5.2"
+api_type = "responses"
+
+[models.gpt-5-mini-search]
+routing = ["openai"]
+
+[models.gpt-5-mini-search.providers.openai]
+type = "openai"
+model_name = "gpt-5-mini"
+api_type = "responses"
+provider_tools = [{type = "web_search"}]

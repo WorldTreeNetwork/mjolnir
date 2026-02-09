@@ -12,6 +12,9 @@ config :mjolnir,
   default_base_image: "debian-12",
 
   # Sockets
-  socket_dir: "/tmp/mjolnir"
+  socket_dir: "/tmp/mjolnir",
+
+  # API
+  api_port: 4000
 
 import_config "#{config_env()}.exs"
