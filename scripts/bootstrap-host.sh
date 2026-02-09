@@ -273,13 +273,12 @@ install_erlang_elixir() {
         export PATH="$HOME/.local/bin:$PATH"
     fi
 
-    # Activate mise for this session
-    eval "$(mise activate bash)"
+    # Activate mise for this session (use shims for non-interactive scripts)
+    eval "$(mise activate bash --shims)"
 
-    # Add to bashrc for future sessions
+    # Add to bashrc for future interactive sessions (use full path since ~/.local/bin may not be in PATH)
     if ! grep -q "mise activate" "$HOME/.bashrc" 2>/dev/null; then
-        # shellcheck disable=SC2016
-        echo 'eval "$(mise activate bash)"' >> "$HOME/.bashrc"
+        echo "eval \"\$($HOME/.local/bin/mise activate bash)\"" >> "$HOME/.bashrc"
     fi
 
     local erlang_version="26.2.5"
@@ -313,7 +312,7 @@ install_rust() {
     if ! command -v mise &>/dev/null; then
         export PATH="$HOME/.local/bin:$PATH"
     fi
-    eval "$(mise activate bash 2>/dev/null)" || true
+    eval "$(mise activate bash --shims 2>/dev/null)" || true
 
     log_info "Installing Rust stable via mise..."
     mise use -g rust@stable
