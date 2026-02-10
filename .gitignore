@@ -6,6 +6,7 @@
 
 # Rust
 native/*/target/
+native/target/
 
 # IDE
 .idea/

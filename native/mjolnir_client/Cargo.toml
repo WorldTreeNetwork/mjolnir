@@ -1,0 +1,21 @@
+[package]
+name = "mjolnir-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mjolnir-protocol = { path = "../mjolnir_protocol" }
+iroh = "0.96"
+iroh-base = "0.96"
+tokio = { version = "1", features = ["full", "signal"] }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+nix = { version = "0.29", features = ["term", "signal"] }
+libc = "0.2"
+scopeguard = "1"
+
+[[bin]]
+name = "mjolnir"
+path = "src/main.rs"

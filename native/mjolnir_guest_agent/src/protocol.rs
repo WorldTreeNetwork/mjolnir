@@ -61,19 +61,3 @@ impl IrohReady {
     }
 }
 
-/// Shell protocol messages (over Iroh QUIC stream)
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ShellMessage {
-    /// Raw data from client stdin or to client stdout
-    #[serde(rename = "data")]
-    Data { payload: Vec<u8> },
-
-    /// Window resize request from client
-    #[serde(rename = "resize")]
-    Resize { rows: u16, cols: u16 },
-
-    /// Shell exited
-    #[serde(rename = "exit")]
-    Exit { code: i32 },
-}
