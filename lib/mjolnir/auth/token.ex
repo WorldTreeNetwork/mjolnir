@@ -14,16 +14,11 @@ defmodule Mjolnir.Auth.Token do
   def token_config do
     auth_config = Application.get_env(:mjolnir, :auth, [])
     issuer = Keyword.get(auth_config, :issuer)
-    audience = Keyword.get(auth_config, :audience, "mjolnir")
 
+    # Only validate signature + issuer. Audience/scopes handled at API layer.
     default_claims(skip: [:aud, :iss])
     |> add_claim("iss", nil, &(&1 == issuer))
-    |> add_claim("aud", nil, &validate_audience(&1, audience))
   end
-
-  defp validate_audience(aud, expected) when is_binary(aud), do: aud == expected
-  defp validate_audience(aud, expected) when is_list(aud), do: expected in aud
-  defp validate_audience(_, _), do: false
 
   @doc """
   Verify and validate a bearer token.

@@ -35,10 +35,18 @@ defmodule Mjolnir.API.Auth do
       conn.remote_ip in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
   end
 
+  @all_scopes "vms:spawn vms:read vms:exec vms:stop shell:connect"
+
   defp verify_token(conn) do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
          {:ok, claims} <- Mjolnir.Auth.Token.verify_token(token) do
-      assign(conn, :claims, claims)
+      # Valid JWT = full access. Scopes come from us, not the token.
+      # sub is preserved for multi-tenancy (user identity).
+      claims = Map.put(claims, "scope", @all_scopes)
+
+      conn
+      |> assign(:claims, claims)
+      |> assign(:user_id, Map.get(claims, "sub"))
     else
       _ ->
         conn

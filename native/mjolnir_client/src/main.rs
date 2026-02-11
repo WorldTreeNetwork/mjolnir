@@ -1,13 +1,15 @@
 //! Mjolnir CLI — spawn VMs and connect to shells over Iroh QUIC.
 //!
 //! Usage:
-//!   mjolnir login                            # authenticate via browser
-//!   mjolnir shell <ticket>                   # connect to a VM shell
-//!   mjolnir spawn --api http://host:4000     # spawn a VM, print ticket
-//!   mjolnir list --api http://host:4000      # list your VMs
-//!   mjolnir ticket decode '<iroh-json>'      # JSON → base58
+//!   mjolnir login --api https://mjolnir.example.com   # authenticate + save API
+//!   mjolnir spawn                                      # spawn a VM, print ticket
+//!   mjolnir list                                       # list your VMs
+//!   mjolnir shell <ticket>                             # connect to a VM shell
+//!   mjolnir config                                     # show config
+//!   mjolnir config set api https://...                 # change API URL
 
 mod auth;
+mod config;
 
 use clap::{Parser, Subcommand};
 use iroh::endpoint::Endpoint;
@@ -42,8 +44,8 @@ enum Command {
     /// Spawn a new VM via the API
     Spawn {
         /// Mjolnir API base URL
-        #[arg(long, default_value = "http://localhost:4000")]
-        api: String,
+        #[arg(long)]
+        api: Option<String>,
         /// Connect to the shell immediately after spawn
         #[arg(long)]
         connect: bool,
@@ -54,8 +56,19 @@ enum Command {
     /// List VMs via the API
     List {
         /// Mjolnir API base URL
-        #[arg(long, default_value = "http://localhost:4000")]
-        api: String,
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Stop and destroy a VM
+    Kill {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
@@ -65,15 +78,34 @@ enum Command {
         /// OIDC issuer URL (default: identikey)
         #[arg(long)]
         issuer: Option<String>,
+        /// Mjolnir API base URL (saved to config)
+        #[arg(long)]
+        api: Option<String>,
     },
     /// Remove stored credentials
     Logout,
-    /// Show current auth status
+    /// Show current auth and config status
     Status,
+    /// View or update CLI configuration
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
     /// Convert between ticket formats
     Ticket {
         #[command(subcommand)]
         action: TicketAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Set a config value
+    Set {
+        /// Config key (e.g. "api")
+        key: String,
+        /// Value to set
+        value: String,
     },
 }
 
@@ -347,11 +379,12 @@ async fn run_shell_loop(
 // --- API commands ---
 
 async fn cmd_spawn(
-    api: &str,
+    api_flag: &Option<String>,
     token: &Option<String>,
     connect: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
     let base = api.trim_end_matches('/');
 
     eprintln!("Spawning VM...");
@@ -363,8 +396,6 @@ async fn cmd_spawn(
         .error_for_status()?
         .json()
         .await?;
-
-    eprintln!("VM {} ({})", resp.id, resp.state);
 
     // If shell not ready yet, await it
     let ticket = if resp.shell_ready == Some(true) {
@@ -384,6 +415,8 @@ async fn cmd_spawn(
 
     if let Some(ref t) = ticket {
         println!("{}", t);
+    } else {
+        eprintln!("VM {} (no ticket yet)", resp.id);
     }
 
     if connect {
@@ -396,10 +429,11 @@ async fn cmd_spawn(
 }
 
 async fn cmd_list(
-    api: &str,
+    api_flag: &Option<String>,
     token: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
     let base = api.trim_end_matches('/');
 
     let resp: ListResponse = client
@@ -417,14 +451,14 @@ async fn cmd_list(
 
     // Header
     println!(
-        "{:<38} {:<10} {:<16} {:<6} {}",
-        "ID", "STATE", "IP", "SHELL", "TICKET"
+        "{:<46} {:<10} {:<16} {:<6} {}",
+        "TICKET", "STATE", "IP", "SHELL", "ID"
     );
 
     for vm in &resp.vms {
         println!(
-            "{:<38} {:<10} {:<16} {:<6} {}",
-            vm.id,
+            "{:<46} {:<10} {:<16} {:<6} {}",
+            vm.ticket.as_deref().unwrap_or("-"),
             vm.state,
             vm.guest_ip.as_deref().unwrap_or("-"),
             if vm.shell_ready == Some(true) {
@@ -432,10 +466,58 @@ async fn cmd_list(
             } else {
                 "-"
             },
-            vm.ticket.as_deref().unwrap_or("-"),
+            vm.id,
         );
     }
 
+    Ok(())
+}
+
+/// Resolve a VM identifier: if it looks like a UUID, use it directly.
+/// Otherwise treat it as a ticket and look up the VM ID from the list.
+async fn resolve_vm_id(
+    client: &reqwest::Client,
+    base: &str,
+    id_or_ticket: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // UUIDs are 36 chars with hyphens
+    if id_or_ticket.len() == 36 && id_or_ticket.contains('-') {
+        return Ok(id_or_ticket.to_string());
+    }
+    // Look up by ticket
+    let resp: ListResponse = client
+        .get(format!("{}/api/vms", base))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    resp.vms
+        .iter()
+        .find(|vm| vm.ticket.as_deref() == Some(id_or_ticket))
+        .map(|vm| vm.id.clone())
+        .ok_or_else(|| format!("No VM found with ticket {}", id_or_ticket).into())
+}
+
+async fn cmd_kill(
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    client
+        .delete(format!("{}/api/vms/{}", base, &id))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    eprintln!("Killed {}", id);
     Ok(())
 }
 
@@ -459,9 +541,27 @@ async fn main() {
             token,
         } => cmd_spawn(&api, &token, connect).await,
         Command::List { api, token } => cmd_list(&api, &token).await,
-        Command::Login { issuer } => auth::login(issuer).await,
+        Command::Kill { id, api, token } => cmd_kill(&api, &token, &id).await,
+        Command::Login { issuer, api } => {
+            if let Some(ref url) = api {
+                if let Err(e) = config::set("api", url) {
+                    eprintln!("Warning: failed to save API config: {}", e);
+                }
+            }
+            auth::login(issuer).await
+        }
         Command::Logout => auth::logout().map_err(|e| e),
-        Command::Status => auth::status().map_err(|e| e),
+        Command::Status => {
+            config::show();
+            auth::status()
+        }
+        Command::Config { action } => match action {
+            Some(ConfigAction::Set { key, value }) => config::set(&key, &value),
+            None => {
+                config::show();
+                Ok(())
+            }
+        },
         Command::Ticket { action } => match action {
             TicketAction::Decode { json } => match serde_json::from_str::<EndpointAddr>(&json) {
                 Ok(addr) => {

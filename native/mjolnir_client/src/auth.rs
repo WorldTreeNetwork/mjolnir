@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_ISSUER: &str = "https://connect.identikey.io/realms/identikey";
 const CLIENT_ID: &str = "mjolnir-cli";
-const SCOPES: &str = "openid";
+const SCOPES: &str = "openid offline_access";
 
 // --- OIDC Discovery ---
 
@@ -160,6 +160,31 @@ pub async fn resolve_token(explicit: &Option<String>) -> Option<String> {
 
 pub async fn login(issuer: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let issuer = issuer.as_deref().unwrap_or(DEFAULT_ISSUER);
+
+    // Check if already logged in with a valid token
+    if let Ok(data) = std::fs::read_to_string(token_path()) {
+        if let Ok(stored) = serde_json::from_str::<StoredToken>(&data) {
+            if !stored.is_expired() {
+                eprintln!("Already logged in. Use `mjolnir logout` first to re-authenticate.");
+                return Ok(());
+            }
+            // Token expired — try refresh before prompting full login
+            if let Some(ref refresh) = stored.refresh_token {
+                if let Ok(new_token) = refresh_token(&stored.issuer, refresh).await {
+                    let refreshed = StoredToken {
+                        access_token: new_token.access_token,
+                        refresh_token: new_token.refresh_token.or(stored.refresh_token),
+                        expires_at: new_token.expires_in.map(|e| now_secs() + e),
+                        issuer: stored.issuer,
+                    };
+                    refreshed.save()?;
+                    eprintln!("Token refreshed. Logged in.");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     let config = discover(issuer).await?;
     let client = reqwest::Client::new();
 
@@ -291,13 +316,12 @@ pub fn status() -> Result<(), Box<dyn std::error::Error>> {
     let stored: StoredToken = serde_json::from_str(&data)?;
 
     println!("Issuer:  {}", stored.issuer);
-    if stored.is_expired() {
-        println!("Status:  expired (refresh available: {})", stored.refresh_token.is_some());
-    } else if let Some(exp) = stored.expires_at {
-        let remaining = exp.saturating_sub(now_secs());
-        println!("Status:  valid ({}m remaining)", remaining / 60);
+    if stored.is_expired() && stored.refresh_token.is_some() {
+        println!("Status:  active (will refresh automatically)");
+    } else if stored.is_expired() {
+        println!("Status:  expired");
     } else {
-        println!("Status:  valid (no expiry)");
+        println!("Status:  active");
     }
     println!("Token:   {}", token_path().display());
     Ok(())
