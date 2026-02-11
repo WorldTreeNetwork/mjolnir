@@ -24,9 +24,10 @@ defmodule Mjolnir.VM do
     :net_config,
     :state,
     :boot_time,
-    # Iroh shell support (Phase 2)
+    # Iroh shell support
     :iroh_node_id,
-    :iroh_ticket,
+    :iroh_json,
+    :ticket,
     :shell_ready
   ]
 
@@ -146,26 +147,23 @@ defmodule Mjolnir.VM do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
+
         if state.serial_path do
           {:ok, state.serial_path}
         else
           {:error, :no_serial_console}
         end
+
       [] ->
         {:error, :not_found}
     end
   end
 
   @doc """
-  Get the Iroh connection ticket for a VM.
+  Get the compact ticket (base58 node ID) for a VM.
 
-  Returns the ticket string that can be used to connect to the VM's shell
-  from anywhere with NAT traversal.
-
-  ## Examples
-
-      {:ok, ticket} = Mjolnir.VM.get_ticket(vm.id)
-      # ticket can be used with `mjolnir connect <ticket>`
+  Returns the base58-encoded ticket string (~44 chars) that can be used
+  to connect to the VM's shell: `mjolnir connect <ticket>`
   """
   @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
   def get_ticket(vm_id) do
@@ -173,8 +171,8 @@ defmodule Mjolnir.VM do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
-        if state.iroh_ticket do
-          {:ok, state.iroh_ticket}
+        if state.ticket do
+          {:ok, state.ticket}
         else
           {:error, :not_ready}
         end
@@ -185,18 +183,20 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Get the Iroh node ID for a VM.
+  Get connection info: compact ticket + full iroh JSON addr.
 
-  The node ID is the public key of the VM's Iroh endpoint, used for addressing.
+  The `iroh_addr` is the full iroh EndpointAddr JSON, useful for debugging
+  and for clients that want relay/IP hints for faster connection.
   """
-  @spec node_id(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
-  def node_id(vm_id) do
+  @spec connection_info(vm_id()) ::
+          {:ok, String.t(), String.t()} | {:error, :not_ready | :not_found}
+  def connection_info(vm_id) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
-        if state.iroh_node_id do
-          {:ok, state.iroh_node_id}
+        if state.ticket do
+          {:ok, state.ticket, state.iroh_json}
         else
           {:error, :not_ready}
         end
@@ -255,6 +255,7 @@ defmodule Mjolnir.VM do
         For interactive SSH access, networking support is needed (TODO).
 
         """)
+
         :ok
 
       other ->
@@ -328,20 +329,23 @@ defmodule Mjolnir.VM do
 
   def handle_call({:await_shell, timeout}, _from, state) do
     # If we already have a ticket cached, return it immediately
-    if state.iroh_ticket do
-      {:reply, {:ok, state.iroh_ticket}, state}
+    if state.ticket do
+      {:reply, {:ok, state.ticket}, state}
     else
       # Poll the guest agent for live Iroh status via vsock
       case await_iroh_ready(state.vsock_path, timeout) do
         %{ticket: ticket} = info ->
+          base58 = Mjolnir.Ticket.from_hex(info[:node_id])
+
           updated = %{
             state
             | iroh_node_id: info[:node_id],
-              iroh_ticket: ticket,
+              iroh_json: ticket,
+              ticket: base58,
               shell_ready: true
           }
 
-          {:reply, {:ok, ticket}, updated}
+          {:reply, {:ok, base58}, updated}
 
         nil ->
           {:reply, {:error, :timeout}, state}
@@ -434,7 +438,8 @@ defmodule Mjolnir.VM do
            net_config: net_config,
            firecracker_port: fc_port,
            iroh_node_id: iroh_info[:node_id],
-           iroh_ticket: iroh_info[:ticket],
+           iroh_json: iroh_info[:ticket],
+           ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
            shell_ready: iroh_info != nil
        }}
     end

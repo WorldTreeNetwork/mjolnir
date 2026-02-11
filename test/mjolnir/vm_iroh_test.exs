@@ -17,33 +17,35 @@ defmodule Mjolnir.VMIrohTest do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       # Shell may not be ready immediately (needs relay connection)
-      # Give it some time
       assert vm.shell_ready == true or vm.shell_ready == false
 
       if vm.shell_ready do
         assert is_binary(vm.iroh_node_id)
-        assert is_binary(vm.iroh_ticket)
+        assert is_binary(vm.iroh_json)
         # Node IDs are hex-encoded 32-byte public keys (64 chars)
         assert String.length(vm.iroh_node_id) == 64
         # Tickets are longer (include address info)
-        assert String.length(vm.iroh_ticket) > 50
+        assert String.length(vm.iroh_json) > 50
       else
         # If shell not ready, iroh fields should be nil
         assert is_nil(vm.iroh_node_id)
-        assert is_nil(vm.iroh_ticket)
+        assert is_nil(vm.iroh_json)
       end
 
       Mjolnir.VM.stop(vm.id)
     end
 
     @tag timeout: 60_000
-    test "get_ticket returns ticket for running VM" do
+    test "get_ticket returns base58 ticket for running VM" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       case Mjolnir.VM.get_ticket(vm.id) do
         {:ok, ticket} ->
           assert is_binary(ticket)
-          assert ticket == vm.iroh_ticket
+          # Base58 tickets are ~44 chars (32 bytes encoded)
+          assert String.length(ticket) >= 40 and String.length(ticket) <= 50
+          # Should match what Ticket.from_hex produces
+          assert ticket == Mjolnir.Ticket.from_hex(vm.iroh_node_id)
 
         {:error, :not_ready} ->
           # Shell not ready is acceptable - depends on network
@@ -54,17 +56,19 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "node_id returns valid iroh format" do
+    test "connection_info returns ticket and iroh_addr" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
-      case Mjolnir.VM.node_id(vm.id) do
-        {:ok, node_id} ->
-          # Iroh node IDs are 64 chars (hex-encoded public key)
-          assert String.length(node_id) == 64
-          assert node_id == vm.iroh_node_id
+      case Mjolnir.VM.connection_info(vm.id) do
+        {:ok, ticket, iroh_addr} ->
+          # ticket is base58
+          assert is_binary(ticket)
+          assert String.length(ticket) >= 40 and String.length(ticket) <= 50
+          # iroh_addr is JSON
+          assert is_binary(iroh_addr)
+          assert String.starts_with?(iroh_addr, "{")
 
         {:error, :not_ready} ->
-          # Shell not ready is acceptable
           :ok
       end
 
@@ -72,7 +76,7 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "await_shell returns quickly if already ready" do
+    test "await_shell returns base58 ticket" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       if vm.shell_ready do
@@ -82,7 +86,10 @@ defmodule Mjolnir.VMIrohTest do
           end)
 
         assert {:ok, ticket} = result
-        assert ticket == vm.iroh_ticket
+        # Should be base58 format, not iroh JSON
+        assert is_binary(ticket)
+        refute String.starts_with?(ticket, "{")
+        assert ticket == Mjolnir.Ticket.from_hex(vm.iroh_node_id)
         # Should return nearly instantly if already ready
         assert time < 1_000_000, "Expected < 1s, got #{time / 1000}ms"
       end
@@ -97,9 +104,9 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "node_id returns not_found for unknown VM" do
+    test "connection_info returns not_found for unknown VM" do
       fake_id = UUID.uuid4()
-      assert {:error, :not_found} = Mjolnir.VM.node_id(fake_id)
+      assert {:error, :not_found} = Mjolnir.VM.connection_info(fake_id)
     end
 
     @tag timeout: 60_000

@@ -12,11 +12,11 @@ defmodule Mjolnir.API.Router do
   import Mjolnir.API.Authz
   alias Mjolnir.API.Views
 
-  plug Plug.Logger
-  plug Plug.Parsers, parsers: [:json], json_decoder: Jason
-  plug Mjolnir.API.Auth
-  plug :match
-  plug :dispatch
+  plug(Plug.Logger)
+  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
+  plug(Mjolnir.API.Auth)
+  plug(:match)
+  plug(:dispatch)
 
   # Health check — no auth required (skipped by Auth plug)
   get "/api/health" do
@@ -29,9 +29,21 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       opts = %{}
-      opts = if conn.body_params["base_image"], do: Map.put(opts, :base_image, conn.body_params["base_image"]), else: opts
-      opts = if conn.body_params["memory_mb"], do: Map.put(opts, :memory_mb, conn.body_params["memory_mb"]), else: opts
-      opts = if conn.body_params["vcpus"], do: Map.put(opts, :vcpus, conn.body_params["vcpus"]), else: opts
+
+      opts =
+        if conn.body_params["base_image"],
+          do: Map.put(opts, :base_image, conn.body_params["base_image"]),
+          else: opts
+
+      opts =
+        if conn.body_params["memory_mb"],
+          do: Map.put(opts, :memory_mb, conn.body_params["memory_mb"]),
+          else: opts
+
+      opts =
+        if conn.body_params["vcpus"],
+          do: Map.put(opts, :vcpus, conn.body_params["vcpus"]),
+          else: opts
 
       case Mjolnir.VM.spawn(opts) do
         {:ok, vm} ->
@@ -120,14 +132,14 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Get Iroh connection ticket
+  # Get connection ticket (compact base58 + full iroh JSON for interop)
   get "/api/vms/:id/ticket" do
     conn = require_scope(conn, "shell:connect")
 
     unless conn.halted do
-      case Mjolnir.VM.get_ticket(id) do
-        {:ok, ticket} ->
-          json(conn, 200, %{ticket: ticket})
+      case Mjolnir.VM.connection_info(id) do
+        {:ok, ticket, iroh_addr} ->
+          json(conn, 200, %{ticket: ticket, iroh_addr: iroh_addr})
 
         {:error, :not_ready} ->
           json(conn, 503, %{error: "not_ready"})
@@ -140,27 +152,7 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Get Iroh node ID
-  get "/api/vms/:id/node-id" do
-    conn = require_scope(conn, "shell:connect")
-
-    unless conn.halted do
-      case Mjolnir.VM.node_id(id) do
-        {:ok, node_id} ->
-          json(conn, 200, %{node_id: node_id})
-
-        {:error, :not_ready} ->
-          json(conn, 503, %{error: "not_ready"})
-
-        {:error, :not_found} ->
-          json(conn, 404, %{error: "not_found"})
-      end
-    else
-      conn
-    end
-  end
-
-  # Await shell readiness
+  # Await shell readiness, returns compact ticket
   post "/api/vms/:id/await-shell" do
     conn = require_scope(conn, "shell:connect")
 

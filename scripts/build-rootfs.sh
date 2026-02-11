@@ -6,6 +6,7 @@ set -euo pipefail
 #
 # Usage: ./build-rootfs.sh [output-path] [size-mb]
 # Example: ./build-rootfs.sh /tmp/debian-12.ext4 512
+# sudo ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/debian-12.ext4
 
 OUTPUT="${1:-debian-12.ext4}"
 SIZE_MB="${2:-512}"
@@ -14,6 +15,8 @@ AGENT_BIN="${AGENT_BIN:-}"
 # Find agent binary
 if [[ -z "$AGENT_BIN" ]]; then
     for path in \
+        "./native/target/x86_64-unknown-linux-musl/release/mjolnir-agent" \
+        "../native/target/x86_64-unknown-linux-musl/release/mjolnir-agent" \
         "./native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent" \
         "../native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
     do
