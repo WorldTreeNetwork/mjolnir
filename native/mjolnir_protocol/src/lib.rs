@@ -16,6 +16,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// ALPN protocol identifier for Mjolnir shell connections.
 pub const SHELL_ALPN: &[u8] = b"mjolnir-shell/1";
 
+/// ALPN protocol identifier for Mjolnir TCP port forwarding.
+pub const TCP_FWD_ALPN: &[u8] = b"mjolnir-tcp-fwd/1";
+
 /// Current protocol version.
 pub const PROTOCOL_VERSION: u16 = 1;
 

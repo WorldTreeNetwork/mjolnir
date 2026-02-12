@@ -16,7 +16,10 @@ config :mjolnir,
   socket_dir: "/tmp/mjolnir",
 
   # HTTP API
-  api_port: 4000
+  api_port: 4000,
+
+  # SSH (nil = no default key injection; can be a path or inline key string)
+  default_ssh_public_key: nil
 
 # Auth defaults
 config :mjolnir, :auth, bypass_localhost: false

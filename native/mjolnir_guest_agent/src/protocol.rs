@@ -14,6 +14,8 @@ pub enum VsockRequest {
     ConfigureNetwork { id: String, ip: String },
     #[serde(rename = "get_iroh_status")]
     GetIrohStatus { id: String },
+    #[serde(rename = "configure_ssh")]
+    ConfigureSsh { id: String, authorized_keys: String },
 }
 
 /// Messages from guest to host (vsock)

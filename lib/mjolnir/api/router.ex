@@ -45,6 +45,11 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :vcpus, conn.body_params["vcpus"]),
           else: opts
 
+      opts =
+        if conn.body_params["ssh_public_key"],
+          do: Map.put(opts, :ssh_public_key, conn.body_params["ssh_public_key"]),
+          else: opts
+
       case Mjolnir.VM.spawn(opts) do
         {:ok, vm} ->
           json(conn, 201, Views.render_vm(vm))

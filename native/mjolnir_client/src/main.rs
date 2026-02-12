@@ -14,7 +14,7 @@ mod config;
 use clap::{Parser, Subcommand};
 use iroh::endpoint::Endpoint;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
-use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN};
+use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
 use nix::sys::termios;
 use serde::Deserialize;
 use std::io::Write;
@@ -40,6 +40,37 @@ enum Command {
         /// Direct IP hint(s) for faster hole-punching (ip:port, repeatable)
         #[arg(long)]
         ip: Vec<String>,
+    },
+    /// TCP proxy over Iroh QUIC (for use as SSH ProxyCommand)
+    Proxy {
+        /// Ticket (base58 node ID), hex node ID, or full iroh JSON
+        ticket: String,
+        /// Target port on the guest (default: 22 for SSH)
+        #[arg(long, default_value = "22")]
+        port: u16,
+        /// Relay URL hint
+        #[arg(long)]
+        relay: Option<String>,
+        /// Direct IP hint(s) (ip:port, repeatable)
+        #[arg(long)]
+        ip: Vec<String>,
+    },
+    /// SSH into a VM via Iroh QUIC tunnel
+    Ssh {
+        /// Ticket (base58 node ID), hex node ID, or full iroh JSON
+        ticket: String,
+        /// SSH user (default: root)
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Relay URL hint
+        #[arg(long)]
+        relay: Option<String>,
+        /// Direct IP hint(s) (ip:port, repeatable)
+        #[arg(long)]
+        ip: Vec<String>,
+        /// Extra args passed to ssh
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        ssh_args: Vec<String>,
     },
     /// Spawn a new VM via the API
     Spawn {
@@ -387,10 +418,19 @@ async fn cmd_spawn(
     let api = config::resolve_api(api_flag);
     let base = api.trim_end_matches('/');
 
+    // Include SSH public key if available
+    let mut body = serde_json::json!({});
+    if let Some(key_path) = config::resolve_ssh_key_path() {
+        if let Some(ssh_key) = config::read_ssh_public_key() {
+            eprintln!("Using SSH key: {}", key_path);
+            body["ssh_public_key"] = serde_json::Value::String(ssh_key);
+        }
+    }
+
     eprintln!("Spawning VM...");
     let resp: SpawnResponse = client
         .post(format!("{}/api/vms", base))
-        .json(&serde_json::json!({}))
+        .json(&body)
         .send()
         .await?
         .error_for_status()?
@@ -521,6 +561,101 @@ async fn cmd_kill(
     Ok(())
 }
 
+// --- Proxy / SSH ---
+
+/// Shell-escape a string by wrapping in single quotes.
+/// Any embedded single quotes are replaced with '\'' (end quote, escaped quote, start quote).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+
+async fn cmd_proxy(
+    ticket: &str,
+    port: u16,
+    relay: Option<String>,
+    ips: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let addr = resolve_addr(ticket, relay, ips)?;
+
+    let endpoint = Endpoint::builder().bind().await?;
+    endpoint.online().await;
+
+    let conn = endpoint.connect(addr, TCP_FWD_ALPN).await?;
+    let (mut send, mut recv) = conn.open_bi().await?;
+
+    // Send target port as 2 bytes (u16 big-endian)
+    send.write_all(&port.to_be_bytes()).await?;
+
+    // Bidirectional copy with graceful half-close: stdin <-> QUIC
+    let mut stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+
+    let c2s = async {
+        let r = tokio::io::copy(&mut stdin, &mut send).await;
+        let _ = send.finish();
+        r
+    };
+    let s2c = async {
+        let r = tokio::io::copy(&mut recv, &mut stdout).await;
+        r
+    };
+
+    let (c2s_result, s2c_result) = tokio::join!(c2s, s2c);
+    if let Err(e) = c2s_result {
+        eprintln!("stdin->quic error: {}", e);
+    }
+    if let Err(e) = s2c_result {
+        eprintln!("quic->stdout error: {}", e);
+    }
+
+    Ok(())
+}
+
+fn cmd_ssh(
+    ticket: &str,
+    user: &str,
+    relay: Option<String>,
+    ips: &[String],
+    ssh_args: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let self_exe = std::env::current_exe()?;
+
+    // Build the ProxyCommand with shell-safe quoting
+    let mut proxy_cmd = format!(
+        "{} proxy {} --port 22",
+        shell_quote(&self_exe.to_string_lossy()),
+        shell_quote(ticket),
+    );
+    if let Some(ref r) = relay {
+        proxy_cmd.push_str(&format!(" --relay {}", shell_quote(r)));
+    }
+    for ip in ips {
+        proxy_cmd.push_str(&format!(" --ip {}", shell_quote(ip)));
+    }
+
+    let mut args = vec![
+        "-o".to_string(),
+        format!("ProxyCommand={}", proxy_cmd),
+        "-o".to_string(),
+        "StrictHostKeyChecking=no".to_string(),
+        "-o".to_string(),
+        "UserKnownHostsFile=/dev/null".to_string(),
+        "-o".to_string(),
+        "RequestTTY=yes".to_string(),
+        "-l".to_string(),
+        user.to_string(),
+        "mjolnir".to_string(),
+    ];
+    args.extend_from_slice(ssh_args);
+
+    // Replace this process with ssh
+    use std::os::unix::process::CommandExt;
+    let err = std::process::Command::new("ssh").args(&args).exec();
+    // exec() only returns on error
+    Err(format!("Failed to exec ssh: {}", err).into())
+}
+
 // --- Main ---
 
 #[tokio::main]
@@ -535,6 +670,19 @@ async fn main() {
                 std::process::exit(1);
             }
         },
+        Command::Proxy {
+            ticket,
+            port,
+            relay,
+            ip,
+        } => cmd_proxy(&ticket, port, relay, &ip).await,
+        Command::Ssh {
+            ticket,
+            user,
+            relay,
+            ip,
+            ssh_args,
+        } => cmd_ssh(&ticket, &user, relay, &ip, &ssh_args),
         Command::Spawn {
             api,
             connect,

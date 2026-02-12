@@ -4,8 +4,10 @@ use crate::protocol::IrohReady;
 use crate::pty::PtySession;
 use iroh::endpoint::{Endpoint, Incoming};
 use iroh::SecretKey;
-use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN};
+use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
 use std::path::Path;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
@@ -29,7 +31,7 @@ pub async fn run_iroh_server(
     // Build endpoint
     let endpoint = Endpoint::builder()
         .secret_key(secret_key)
-        .alpns(vec![SHELL_ALPN.to_vec()])
+        .alpns(vec![SHELL_ALPN.to_vec(), TCP_FWD_ALPN.to_vec()])
         .bind()
         .await?;
 
@@ -103,13 +105,23 @@ async fn handle_incoming(incoming: Incoming) {
     };
 
     let remote_id = conn.remote_id();
-    info!("Shell connection from {:?}", remote_id);
+    let alpn = conn.alpn();
 
-    if let Err(e) = handle_shell_connection(conn).await {
-        error!("Shell session error: {}", e);
+    if alpn == SHELL_ALPN {
+        info!("Shell connection from {:?}", remote_id);
+        if let Err(e) = handle_shell_connection(conn).await {
+            error!("Shell session error: {}", e);
+        }
+        info!("Shell connection from {:?} closed", remote_id);
+    } else if alpn == TCP_FWD_ALPN {
+        info!("TCP forward connection from {:?}", remote_id);
+        if let Err(e) = handle_tcp_forward(conn).await {
+            error!("TCP forward error: {}", e);
+        }
+        info!("TCP forward connection from {:?} closed", remote_id);
+    } else {
+        warn!("Unknown ALPN: {:?}", alpn);
     }
-
-    info!("Shell connection from {:?} closed", remote_id);
 }
 
 async fn handle_shell_connection(
@@ -219,6 +231,44 @@ async fn handle_shell_connection(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+async fn handle_tcp_forward(
+    conn: iroh::endpoint::Connection,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (mut quic_send, mut quic_recv) = conn.accept_bi().await?;
+
+    // Read 2 bytes: target port (u16 big-endian)
+    let mut port_buf = [0u8; 2];
+    quic_recv.read_exact(&mut port_buf).await?;
+    let port = u16::from_be_bytes(port_buf);
+
+    info!("TCP forward to localhost:{}", port);
+
+    let tcp_stream = TcpStream::connect(("127.0.0.1", port)).await?;
+    let (mut tcp_read, mut tcp_write) = tokio::io::split(tcp_stream);
+
+    // Bidirectional copy with graceful half-close
+    let c2s = async {
+        let r = tokio::io::copy(&mut quic_recv, &mut tcp_write).await;
+        let _ = tcp_write.shutdown().await;
+        r
+    };
+    let s2c = async {
+        let r = tokio::io::copy(&mut tcp_read, &mut quic_send).await;
+        let _ = quic_send.finish();
+        r
+    };
+
+    let (c2s_result, s2c_result) = tokio::join!(c2s, s2c);
+    if let Err(e) = c2s_result {
+        info!("Client->server copy ended: {}", e);
+    }
+    if let Err(e) = s2c_result {
+        info!("Server->client copy ended: {}", e);
     }
 
     Ok(())

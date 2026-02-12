@@ -9,6 +9,8 @@ const DEFAULT_API: &str = "http://localhost:4000";
 pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key: Option<String>,
 }
 
 fn config_path() -> PathBuf {
@@ -58,6 +60,7 @@ pub fn show() {
     let path = config_path();
     println!("Config:  {}", path.display());
     println!("API:     {}", config.api.as_deref().unwrap_or("(default) http://localhost:4000"));
+    println!("SSH key: {}", config.ssh_key.as_deref().unwrap_or("(auto-detect)"));
 }
 
 /// Set a config key.
@@ -69,7 +72,42 @@ pub fn set(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
             config.save()?;
             eprintln!("Set api = {}", value);
         }
+        "ssh_key" | "ssh-key" => {
+            config.ssh_key = Some(value.to_string());
+            config.save()?;
+            eprintln!("Set ssh_key = {}", value);
+        }
         _ => return Err(format!("Unknown config key: {}", key).into()),
     }
     Ok(())
+}
+
+/// Resolve the SSH public key path.
+/// Order: explicit path > config > ~/.ssh/id_ed25519.pub > ~/.ssh/id_rsa.pub
+pub fn resolve_ssh_key_path() -> Option<String> {
+    let config = Config::load();
+    if let Some(ref path) = config.ssh_key {
+        return Some(path.clone());
+    }
+
+    // Auto-detect common key locations
+    if let Some(home) = dirs::home_dir() {
+        let candidates = [
+            home.join(".ssh/id_ed25519.pub"),
+            home.join(".ssh/id_rsa.pub"),
+        ];
+        for path in &candidates {
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Read the SSH public key content from a path.
+pub fn read_ssh_public_key() -> Option<String> {
+    let path = resolve_ssh_key_path()?;
+    std::fs::read_to_string(&path).ok()
 }

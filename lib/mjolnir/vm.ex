@@ -28,7 +28,9 @@ defmodule Mjolnir.VM do
     :iroh_node_id,
     :iroh_json,
     :ticket,
-    :shell_ready
+    :shell_ready,
+    # SSH key injection
+    :ssh_public_key
   ]
 
   @type t :: %__MODULE__{}
@@ -36,7 +38,8 @@ defmodule Mjolnir.VM do
   @type spawn_opts :: %{
           optional(:base_image) => String.t(),
           optional(:vcpus) => pos_integer(),
-          optional(:memory_mb) => pos_integer()
+          optional(:memory_mb) => pos_integer(),
+          optional(:ssh_public_key) => String.t()
         }
 
   # ============================================================================
@@ -283,10 +286,14 @@ defmodule Mjolnir.VM do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    # Resolve SSH public key: spawn opts > app config > nil
+    ssh_key = opts[:ssh_public_key] || Application.get_env(:mjolnir, :default_ssh_public_key)
+
     state = %__MODULE__{
       id: opts.id,
       state: :booting,
-      config: build_config(opts)
+      config: build_config(opts),
+      ssh_public_key: ssh_key
     }
 
     {:ok, state, {:continue, :boot}}
@@ -424,6 +431,14 @@ defmodule Mjolnir.VM do
          :ok <- Client.start_instance(socket_path),
          :ok <- wait_for_boot(vsock_path),
          :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
+      # Inject SSH public key if provided
+      if state.ssh_public_key do
+        case configure_ssh(vsock_path, state.ssh_public_key) do
+          :ok -> Logger.info("SSH key injected for VM #{state.id}")
+          {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
+        end
+      end
+
       # Try to get iroh shell info (short timeout, VM works without it)
       # Keep this short - old agents won't send iroh_ready
       iroh_info = await_iroh_ready(vsock_path, 5_000)
@@ -653,6 +668,53 @@ defmodule Mjolnir.VM do
                 {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
                   Logger.error("Guest network config failed (exit #{code}): #{stderr}")
                   {:error, {:network_config_failed, code, stderr}}
+
+                {:error, _} = err ->
+                  err
+              end
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false ->
+        {:error, :vsock_connect_rejected}
+
+      {:error, reason} ->
+        {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
+  defp configure_ssh(vsock_path, ssh_public_key) do
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(connect_response, "OK") do
+      request = Mjolnir.Vsock.Protocol.configure_ssh_request(ssh_public_key)
+      message = Mjolnir.Vsock.Protocol.encode(request)
+
+      :ok = :gen_tcp.send(sock, message)
+
+      case :gen_tcp.recv(sock, 4, 10_000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+
+              case Jason.decode(body) do
+                {:ok, %{"exit_code" => 0}} ->
+                  :ok
+
+                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+                  {:error, {:ssh_config_failed, code, stderr}}
 
                 {:error, _} = err ->
                   err

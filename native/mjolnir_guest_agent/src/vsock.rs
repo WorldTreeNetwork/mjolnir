@@ -1,6 +1,7 @@
 //! Vsock listener for host communication.
 
 use crate::protocol::{IrohReady, VsockRequest, VsockResponse};
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -146,6 +147,38 @@ async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockR
                     ready: false,
                     node_id: None,
                     ticket: None,
+                },
+            }
+        }
+        VsockRequest::ConfigureSsh { id, authorized_keys } => {
+            info!("ConfigureSsh");
+            let result = (|| -> std::io::Result<()> {
+                std::fs::create_dir_all("/root/.ssh")?;
+                std::fs::set_permissions("/root/.ssh", std::fs::Permissions::from_mode(0o700))?;
+                let keys = if authorized_keys.ends_with('\n') {
+                    authorized_keys.clone()
+                } else {
+                    format!("{}\n", authorized_keys)
+                };
+                std::fs::write("/root/.ssh/authorized_keys", keys)?;
+                std::fs::set_permissions(
+                    "/root/.ssh/authorized_keys",
+                    std::fs::Permissions::from_mode(0o600),
+                )?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => VsockResponse::ExecResponse {
+                    id,
+                    exit_code: 0,
+                    stdout: "SSH keys configured".to_string(),
+                    stderr: String::new(),
+                },
+                Err(e) => VsockResponse::ExecResponse {
+                    id,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Failed to configure SSH: {}", e),
                 },
             }
         }

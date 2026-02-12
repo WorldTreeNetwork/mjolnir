@@ -60,6 +60,18 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build a configure_ssh request message.
+  Guest agent will write the given authorized_keys to /root/.ssh/authorized_keys.
+  """
+  def configure_ssh_request(authorized_keys, request_id \\ nil) do
+    %{
+      "type" => "configure_ssh",
+      "id" => request_id || UUID.uuid4(),
+      "authorized_keys" => authorized_keys
+    }
+  end
+
+  @doc """
   Build a get_iroh_status request message.
   Guest agent will return the current Iroh status.
   """

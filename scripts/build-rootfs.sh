@@ -153,7 +153,7 @@ chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup"
 # Install iproute2 for network setup (noninteractive to suppress debconf warnings)
 echo "Installing network tools..."
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
-chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2"
+chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2 openssh-server"
 
 # Disable IPv6 system-wide
 # Iroh tries IPv6 first, but we don't have routable IPv6, causing hangs
@@ -164,6 +164,20 @@ cat > "$MOUNT_DIR/etc/sysctl.d/99-disable-ipv6.conf" << 'EOF'
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 EOF
+
+# Configure sshd for key-only authentication
+echo "Configuring sshd..."
+cat > "$MOUNT_DIR/etc/ssh/sshd_config.d/mjolnir.conf" << 'EOF'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+EOF
+
+# Create /root/.ssh directory (keys injected at runtime by guest agent)
+mkdir -p "$MOUNT_DIR/root/.ssh"
+chmod 700 "$MOUNT_DIR/root/.ssh"
+
+# Enable sshd (starts on boot, but rejects connections until keys are injected)
+chroot "$MOUNT_DIR" systemctl enable ssh
 
 # Cleanup apt cache
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get clean"
