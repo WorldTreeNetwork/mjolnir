@@ -653,10 +653,17 @@ async fn cmd_kill(
 
 // --- Proxy / SSH ---
 
-/// Shell-escape a string by wrapping in single quotes.
-/// Any embedded single quotes are replaced with '\'' (end quote, escaped quote, start quote).
+/// Shell-escape a string for use in commands.
+/// Unix: single quotes with embedded quote escaping.
+/// Windows: double quotes with embedded quote escaping.
+#[cfg(unix)]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(windows)]
+fn shell_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\\\""))
 }
 
 
@@ -724,13 +731,19 @@ fn cmd_ssh(
         proxy_cmd.push_str(&format!(" --ip {}", shell_quote(ip)));
     }
 
+    // Null device path differs per platform
+    #[cfg(unix)]
+    let null_known_hosts = "/dev/null";
+    #[cfg(windows)]
+    let null_known_hosts = "NUL";
+
     let mut args = vec![
         "-o".to_string(),
         format!("ProxyCommand={}", proxy_cmd),
         "-o".to_string(),
         "StrictHostKeyChecking=no".to_string(),
         "-o".to_string(),
-        "UserKnownHostsFile=/dev/null".to_string(),
+        format!("UserKnownHostsFile={}", null_known_hosts),
         "-o".to_string(),
         "RequestTTY=yes".to_string(),
         "-l".to_string(),
@@ -740,27 +753,20 @@ fn cmd_ssh(
     args.extend_from_slice(ssh_args);
 
     // On Unix, replace this process with ssh (exec)
-    // On Windows, spawn ssh and wait for it
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new("ssh").args(&args).exec();
-        // exec() only returns on error
         return Err(format!("Failed to exec ssh: {}", err).into());
     }
 
+    // On Windows, spawn ssh.exe and wait for it
     #[cfg(windows)]
     {
-        // MinGW's posix_spawnp can't resolve Windows PATH correctly.
-        // Use cmd.exe /C to let the native Windows shell find ssh.
-        let ssh_args_str = std::iter::once("ssh".to_string())
-            .chain(args.iter().cloned())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", &ssh_args_str])
+        let status = std::process::Command::new("ssh.exe")
+            .args(&args)
             .status()
-            .map_err(|e| format!("Failed to run ssh via cmd.exe: {}", e))?;
+            .map_err(|e| format!("Failed to run ssh: {}", e))?;
         std::process::exit(status.code().unwrap_or(1));
     }
 }
