@@ -158,10 +158,16 @@ fn parse_subdomain(host: &str, domain_suffix: &str) -> Result<SubdomainInfo, Pro
     })
 }
 
-/// Parse z32 node ID into an EndpointAddr using iroh-base's built-in FromStr.
-fn resolve_ticket(z32: &str) -> Result<EndpointAddr, ProxyError> {
-    let pubkey: PublicKey = z32
-        .parse()
+/// Parse z32 node ID into an EndpointAddr.
+///
+/// Decodes the z-base-32 string to 32 raw bytes, then constructs a PublicKey.
+fn resolve_ticket(z32_str: &str) -> Result<EndpointAddr, ProxyError> {
+    let bytes = z32::decode(z32_str.as_bytes())
+        .map_err(|e| ProxyError::InvalidTicket(format!("z32 decode: {}", e)))?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| ProxyError::InvalidTicket(format!("expected 32 bytes, got {}", v.len())))?;
+    let pubkey = PublicKey::from_bytes(&key_bytes)
         .map_err(|e| ProxyError::InvalidTicket(format!("{}", e)))?;
     Ok(EndpointAddr::new(pubkey))
 }
@@ -480,6 +486,40 @@ mod tests {
     fn test_extract_host_missing() {
         let headers = b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n";
         assert_eq!(extract_host(headers), None);
+    }
+
+    #[test]
+    fn test_z32_roundtrip() {
+        // Generate a valid key, encode as z32, parse it back, verify roundtrip.
+        let secret = iroh_base::SecretKey::generate(&mut rand::rng());
+        let key = secret.public();
+        let z32_str = z32::encode(key.as_bytes());
+        assert_eq!(z32_str.len(), 52, "z32 should be 52 chars for 32 bytes");
+        // Verify resolve_ticket parses it back correctly
+        let addr = resolve_ticket(&z32_str).unwrap();
+        assert_eq!(addr.id, key);
+    }
+
+    #[test]
+    fn test_z32_known_vectors() {
+        // Cross-validate with Elixir z32_from_hex implementation
+        let zeros = [0u8; 32];
+        assert_eq!(
+            z32::encode(&zeros),
+            "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+        );
+
+        let ones = [0xffu8; 32];
+        assert_eq!(
+            z32::encode(&ones),
+            "999999999999999999999999999999999999999999999999999o"
+        );
+
+        let deadbeef: Vec<u8> = (0..32).map(|i| [0xde, 0xad, 0xbe, 0xef][i % 4]).collect();
+        assert_eq!(
+            z32::encode(&deadbeef),
+            "54s57566is9q9zipz5z77mp679xk5xzx54s57566is9q9zipz5zo"
+        );
     }
 
     #[test]

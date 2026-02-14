@@ -28,6 +28,7 @@ defmodule Mjolnir.VM do
     :iroh_node_id,
     :iroh_json,
     :ticket,
+    :ticket_z32,
     :shell_ready,
     # SSH key injection
     :ssh_public_key
@@ -369,12 +370,14 @@ defmodule Mjolnir.VM do
       case await_iroh_ready(state.vsock_path, timeout) do
         %{ticket: ticket} = info ->
           base58 = Mjolnir.Ticket.from_hex(info[:node_id])
+          z32 = Mjolnir.Ticket.z32_from_hex(info[:node_id])
 
           updated = %{
             state
             | iroh_node_id: info[:node_id],
               iroh_json: ticket,
               ticket: base58,
+              ticket_z32: z32,
               shell_ready: true
           }
 
@@ -493,6 +496,7 @@ defmodule Mjolnir.VM do
            iroh_node_id: iroh_info[:node_id],
            iroh_json: iroh_info[:ticket],
            ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
+           ticket_z32: Mjolnir.Ticket.z32_from_hex(iroh_info[:node_id]),
            shell_ready: iroh_info != nil
        }}
     end

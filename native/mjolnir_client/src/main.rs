@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 use iroh::endpoint::Endpoint;
 use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
 use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
+#[cfg(unix)]
 use nix::sys::termios;
 use serde::Deserialize;
 use std::io::Write;
@@ -168,6 +169,7 @@ struct SpawnResponse {
     id: String,
     state: String,
     ticket: Option<String>,
+    ticket_z32: Option<String>,
     shell_ready: Option<bool>,
 }
 
@@ -181,6 +183,7 @@ struct VmSummary {
     id: String,
     state: String,
     ticket: Option<String>,
+    ticket_z32: Option<String>,
     guest_ip: Option<String>,
     shell_ready: Option<bool>,
 }
@@ -206,6 +209,7 @@ async fn api_client(token: &Option<String>) -> reqwest::Client {
         .expect("failed to build HTTP client")
 }
 
+#[cfg(unix)]
 fn get_terminal_size() -> (u16, u16) {
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
@@ -220,6 +224,16 @@ fn get_terminal_size() -> (u16, u16) {
     }
 }
 
+#[cfg(windows)]
+fn get_terminal_size() -> (u16, u16) {
+    crossterm::terminal::size()
+        .map(|(cols, rows)| (rows, cols))
+        .unwrap_or((24, 80))
+}
+
+// --- Terminal raw mode (Unix) ---
+
+#[cfg(unix)]
 /// Set terminal to raw mode, return the original termios for restoration.
 fn set_raw_mode() -> std::io::Result<termios::Termios> {
     let stdin = std::io::stdin();
@@ -232,9 +246,25 @@ fn set_raw_mode() -> std::io::Result<termios::Termios> {
     Ok(original)
 }
 
+#[cfg(unix)]
 fn restore_terminal(original: &termios::Termios) {
     let stdin = std::io::stdin();
     let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, original);
+}
+
+// --- Terminal raw mode (Windows) ---
+
+#[cfg(windows)]
+fn set_raw_mode() -> std::io::Result<u32> {
+    use crossterm::terminal;
+    terminal::enable_raw_mode()?;
+    // Return 0 as a dummy "original mode" — crossterm tracks state internally
+    Ok(0)
+}
+
+#[cfg(windows)]
+fn restore_terminal(_original: &u32) {
+    let _ = crossterm::terminal::disable_raw_mode();
 }
 
 /// Parse a ticket string into an EndpointAddr.
@@ -295,6 +325,7 @@ fn format_addr_info(addr: &EndpointAddr) -> String {
     let mut lines = Vec::new();
     let id_bytes = addr.id.as_bytes();
     lines.push(format!("Ticket: {}", bs58::encode(id_bytes).into_string()));
+    lines.push(format!("   z32: {}", z32::encode(id_bytes)));
     lines.push(format!("   Hex: {}", hex::encode(id_bytes)));
     for relay in addr.relay_urls() {
         lines.push(format!(" Relay: {}", relay));
@@ -330,9 +361,9 @@ async fn connect_to_vm(addr: EndpointAddr) -> Result<(), Box<dyn std::error::Err
     .await?;
 
     let original_termios = set_raw_mode()?;
-    let orig_clone = original_termios.clone();
+    let orig_for_guard = original_termios.clone();
     let _guard = scopeguard::guard((), move |_| {
-        restore_terminal(&orig_clone);
+        restore_terminal(&orig_for_guard);
     });
 
     let result = run_shell_loop(&mut send, &mut recv).await;
@@ -353,6 +384,7 @@ async fn connect_to_vm(addr: EndpointAddr) -> Result<(), Box<dyn std::error::Err
     }
 }
 
+#[cfg(unix)]
 async fn run_shell_loop(
     send: &mut iroh::endpoint::SendStream,
     recv: &mut iroh::endpoint::RecvStream,
@@ -402,6 +434,55 @@ async fn run_shell_loop(
             _ = sigwinch.recv() => {
                 let (rows, cols) = get_terminal_size();
                 let _ = write_frame(send, &Frame::Resize { rows, cols }).await;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_shell_loop(
+    send: &mut iroh::endpoint::SendStream,
+    recv: &mut iroh::endpoint::RecvStream,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let mut stdin = tokio::io::stdin();
+    let mut stdin_buf = vec![0u8; 4096];
+
+    loop {
+        tokio::select! {
+            result = read_frame(recv) => {
+                match result {
+                    Ok(Some(Frame::Data(data))) => {
+                        let mut stdout = std::io::stdout().lock();
+                        stdout.write_all(&data)?;
+                        stdout.flush()?;
+                    }
+                    Ok(Some(Frame::Exit { code })) => {
+                        return Ok(code);
+                    }
+                    Ok(Some(frame)) => {
+                        eprintln!("\r\nUnexpected frame: {:?}\r\n", frame);
+                    }
+                    Ok(None) => {
+                        return Ok(0);
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
+            }
+            result = stdin.read(&mut stdin_buf) => {
+                match result {
+                    Ok(0) => {
+                        let _ = write_frame(send, &Frame::Exit { code: 0 }).await;
+                        return Ok(0);
+                    }
+                    Ok(n) => {
+                        write_frame(send, &Frame::Data(stdin_buf[..n].to_vec())).await?;
+                    }
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
             }
         }
     }
@@ -491,14 +572,23 @@ async fn cmd_list(
 
     // Header
     println!(
-        "{:<46} {:<10} {:<16} {:<6} {}",
-        "TICKET", "STATE", "IP", "SHELL", "ID"
+        "{:<46} {:<54} {:<10} {:<16} {:<6} {}",
+        "TICKET", "Z32", "STATE", "IP", "SHELL", "ID"
     );
 
     for vm in &resp.vms {
+        // Compute z32 locally from base58 ticket if the server didn't provide it
+        let z32_display = vm.ticket_z32.clone().or_else(|| {
+            vm.ticket.as_deref().and_then(|t| {
+                bs58::decode(t).into_vec().ok().and_then(|bytes| {
+                    if bytes.len() == 32 { Some(z32::encode(&bytes)) } else { None }
+                })
+            })
+        });
         println!(
-            "{:<46} {:<10} {:<16} {:<6} {}",
+            "{:<46} {:<54} {:<10} {:<16} {:<6} {}",
             vm.ticket.as_deref().unwrap_or("-"),
+            z32_display.as_deref().unwrap_or("-"),
             vm.state,
             vm.guest_ip.as_deref().unwrap_or("-"),
             if vm.shell_ready == Some(true) {
@@ -649,11 +739,30 @@ fn cmd_ssh(
     ];
     args.extend_from_slice(ssh_args);
 
-    // Replace this process with ssh
-    use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new("ssh").args(&args).exec();
-    // exec() only returns on error
-    Err(format!("Failed to exec ssh: {}", err).into())
+    // On Unix, replace this process with ssh (exec)
+    // On Windows, spawn ssh and wait for it
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new("ssh").args(&args).exec();
+        // exec() only returns on error
+        return Err(format!("Failed to exec ssh: {}", err).into());
+    }
+
+    #[cfg(windows)]
+    {
+        // MinGW's posix_spawnp can't resolve Windows PATH correctly.
+        // Use cmd.exe /C to let the native Windows shell find ssh.
+        let ssh_args_str = std::iter::once("ssh".to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", &ssh_args_str])
+            .status()
+            .map_err(|e| format!("Failed to run ssh via cmd.exe: {}", e))?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 // --- Main ---
