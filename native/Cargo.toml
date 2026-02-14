@@ -3,5 +3,6 @@ members = [
     "mjolnir_protocol",
     "mjolnir_guest_agent",
     "mjolnir_client",
+    "mjolnir_gateway",
 ]
 resolver = "2"

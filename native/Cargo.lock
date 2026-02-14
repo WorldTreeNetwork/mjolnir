@@ -1907,6 +1907,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-gateway"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "iroh",
+ "iroh-base",
+ "mjolnir-protocol",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mjolnir-guest-agent"
 version = "0.1.0"
 dependencies = [

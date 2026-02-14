@@ -1,0 +1,17 @@
+[package]
+name = "mjolnir-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mjolnir-protocol = { path = "../mjolnir_protocol" }
+iroh = "0.96"
+iroh-base = "0.96"
+tokio = { version = "1", features = ["full", "signal"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[[bin]]
+name = "mjolnir-gateway"
+path = "src/main.rs"
