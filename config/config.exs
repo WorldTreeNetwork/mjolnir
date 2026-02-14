@@ -22,6 +22,9 @@ config :mjolnir,
   default_ssh_public_key: nil
 
 # Auth defaults
-config :mjolnir, :auth, bypass_localhost: false
+config :mjolnir, :auth,
+  bypass_localhost: false,
+  issuer: "https://connect.identikey.io/realms/identikey",
+  audience: "mjolnir"
 
 import_config "#{config_env()}.exs"
