@@ -14,7 +14,9 @@ defmodule Mjolnir.API.Views do
       shell_ready: vm.shell_ready || false,
       ticket: vm.ticket,
       ticket_z32: vm.ticket_z32,
-      iroh_addr: vm.iroh_json
+      iroh_addr: vm.iroh_json,
+      config: render_config(vm.config),
+      boot_time: vm.boot_time
     }
   end
 
@@ -37,5 +39,17 @@ defmodule Mjolnir.API.Views do
       %{^key => val} -> val
       _ -> nil
     end
+  end
+
+  defp render_config(nil), do: nil
+
+  defp render_config(config) do
+    %{
+      vcpu_count: config.vcpu_count,
+      mem_size_mib: config.mem_size_mib,
+      base_image: config.base_image,
+      snapshot: config.snapshot,
+      rootfs_size_mb: config.rootfs_size_mb
+    }
   end
 end

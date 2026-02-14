@@ -84,17 +84,17 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Get VM status
+  # Get VM details
   get "/api/vms/:id" do
     conn = require_scope(conn, "vms:read")
 
     unless conn.halted do
-      case Mjolnir.VM.status(id) do
+      case Mjolnir.VM.get(id) do
+        {:ok, vm} ->
+          json(conn, 200, Views.render_vm(vm))
+
         {:error, :not_found} ->
           json(conn, 404, %{error: "not_found"})
-
-        state ->
-          json(conn, 200, %{id: id, state: state})
       end
     else
       conn

@@ -84,9 +84,26 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Memory allocation in MB (default: 512)
+        #[arg(long)]
+        memory: Option<u32>,
+        /// Spawn from a snapshot instead of base image
+        #[arg(long)]
+        snapshot: Option<String>,
     },
     /// List VMs via the API
     List {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Get detailed info about a VM
+    Info {
+        /// VM ID or ticket
+        id: String,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -127,6 +144,31 @@ enum Command {
     Ticket {
         #[command(subcommand)]
         action: TicketAction,
+    },
+    /// List available snapshots
+    Snapshots {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Create a snapshot of a running VM
+    Snapshot {
+        /// VM ID or ticket
+        id: String,
+        /// Snapshot name
+        name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+        /// Compact the snapshot (reclaim freed blocks)
+        #[arg(long)]
+        compact: bool,
     },
 }
 
@@ -191,6 +233,48 @@ struct VmSummary {
 #[derive(Deserialize)]
 struct ListResponse {
     vms: Vec<VmSummary>,
+}
+
+#[derive(Deserialize)]
+struct VmConfig {
+    vcpu_count: u32,
+    mem_size_mib: u32,
+    base_image: String,
+    snapshot: Option<String>,
+    rootfs_size_mb: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct VmInfo {
+    id: String,
+    state: String,
+    ticket: Option<String>,
+    ticket_z32: Option<String>,
+    guest_ip: Option<String>,
+    shell_ready: Option<bool>,
+    config: Option<VmConfig>,
+    boot_time: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotMetadata {
+    name: String,
+    source_vm_id: String,
+    created_at: String,
+    size_bytes: u64,
+}
+
+#[derive(Deserialize)]
+struct SnapshotsResponse {
+    snapshots: Vec<SnapshotMetadata>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotCreateResponse {
+    name: String,
+    source_vm_id: String,
+    created_at: String,
+    size_bytes: u64,
 }
 
 // --- Helpers ---
@@ -494,6 +578,8 @@ async fn cmd_spawn(
     api_flag: &Option<String>,
     token: &Option<String>,
     connect: bool,
+    memory_mb: &Option<u32>,
+    snapshot: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = api_client(token).await;
     let api = config::resolve_api(api_flag);
@@ -506,6 +592,17 @@ async fn cmd_spawn(
             eprintln!("Using SSH key: {}", key_path);
             body["ssh_public_key"] = serde_json::Value::String(ssh_key);
         }
+    }
+
+    // Include memory override if specified
+    if let Some(memory) = memory_mb {
+        body["memory_mb"] = serde_json::Value::Number((*memory).into());
+    }
+
+    // Include snapshot if specified
+    if let Some(snap) = snapshot {
+        eprintln!("Spawning from snapshot: {}", snap);
+        body["snapshot"] = serde_json::Value::String(snap.clone());
     }
 
     eprintln!("Spawning VM...");
@@ -628,6 +725,149 @@ async fn resolve_vm_id(
         .find(|vm| vm.ticket.as_deref() == Some(id_or_ticket))
         .map(|vm| vm.id.clone())
         .ok_or_else(|| format!("No VM found with ticket {}", id_or_ticket).into())
+}
+
+async fn cmd_info(
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let resp: VmInfo = client
+        .get(format!("{}/api/vms/{}", base, &id))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    // Display VM info in a human-readable format
+    println!("VM Information");
+    println!("═══════════════════════════════════════════════════════");
+    println!("ID:           {}", resp.id);
+    println!("State:        {}", resp.state);
+    println!("Shell Ready:  {}", if resp.shell_ready == Some(true) { "yes" } else { "no" });
+
+    if let Some(ip) = resp.guest_ip {
+        println!("Guest IP:     {}", ip);
+    }
+
+    if let Some(ref ticket) = resp.ticket {
+        println!("\nConnection");
+        println!("───────────────────────────────────────────────────────");
+        println!("Ticket:       {}", ticket);
+        if let Some(ref z32) = resp.ticket_z32 {
+            println!("Z32:          {}", z32);
+        }
+    }
+
+    if let Some(config) = resp.config {
+        println!("\nResources");
+        println!("───────────────────────────────────────────────────────");
+        println!("vCPUs:        {}", config.vcpu_count);
+        println!("Memory:       {} MiB", config.mem_size_mib);
+        println!("Base Image:   {}", config.base_image);
+        if let Some(snapshot) = config.snapshot {
+            println!("Snapshot:     {}", snapshot);
+        }
+        if let Some(size) = config.rootfs_size_mb {
+            println!("Rootfs Size:  {} MiB", size);
+        }
+    }
+
+    if let Some(boot_time) = resp.boot_time {
+        println!("\nTiming");
+        println!("───────────────────────────────────────────────────────");
+        println!("Boot Time:    {} (unix timestamp)", boot_time);
+    }
+
+    Ok(())
+}
+
+async fn cmd_snapshot(
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    name: &str,
+    compact: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    eprintln!("Creating snapshot '{}'{}...", name, if compact { " (compact)" } else { "" });
+
+    let mut body = serde_json::json!({
+        "name": name
+    });
+    if compact {
+        body["compact"] = serde_json::Value::Bool(true);
+    }
+
+    let resp: SnapshotCreateResponse = client
+        .post(format!("{}/api/vms/{}/snapshots", base, &id))
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let size_mb = resp.size_bytes / 1024 / 1024;
+    eprintln!("✓ Snapshot '{}' created successfully", resp.name);
+    eprintln!("  Size: {} MB", size_mb);
+    eprintln!("  Source VM: {}", resp.source_vm_id);
+    eprintln!("  Created: {}", resp.created_at);
+
+    Ok(())
+}
+
+async fn cmd_snapshots(
+    api_flag: &Option<String>,
+    token: &Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = api_client(token).await;
+    let api = config::resolve_api(api_flag);
+    let base = api.trim_end_matches('/');
+
+    let resp: SnapshotsResponse = client
+        .get(format!("{}/api/snapshots", base))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    if resp.snapshots.is_empty() {
+        eprintln!("No snapshots found.");
+        return Ok(());
+    }
+
+    // Header
+    println!(
+        "{:<30} {:<38} {:<28} {:>12}",
+        "NAME", "SOURCE VM", "CREATED AT", "SIZE"
+    );
+
+    for snap in &resp.snapshots {
+        let size_mb = snap.size_bytes / 1024 / 1024;
+        println!(
+            "{:<30} {:<38} {:<28} {:>9} MB",
+            snap.name,
+            snap.source_vm_id,
+            snap.created_at,
+            size_mb
+        );
+    }
+
+    Ok(())
 }
 
 async fn cmd_kill(
@@ -802,8 +1042,19 @@ async fn main() {
             api,
             connect,
             token,
-        } => cmd_spawn(&api, &token, connect).await,
+            memory,
+            snapshot,
+        } => cmd_spawn(&api, &token, connect, &memory, &snapshot).await,
         Command::List { api, token } => cmd_list(&api, &token).await,
+        Command::Info { id, api, token } => cmd_info(&api, &token, &id).await,
+        Command::Snapshots { api, token } => cmd_snapshots(&api, &token).await,
+        Command::Snapshot {
+            id,
+            name,
+            api,
+            token,
+            compact,
+        } => cmd_snapshot(&api, &token, &id, &name, compact).await,
         Command::Kill { id, api, token } => cmd_kill(&api, &token, &id).await,
         Command::Login { issuer, api } => {
             if let Some(ref url) = api {

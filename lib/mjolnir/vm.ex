@@ -112,6 +112,24 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  Get the full VM state including configuration and metadata.
+  """
+  @spec get(vm_id()) :: {:ok, t()} | {:error, :not_found}
+  def get(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        try do
+          {:ok, GenServer.call(pid, :get_state)}
+        catch
+          :exit, _ -> {:error, :not_found}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
   Stop a VM gracefully.
   """
   @spec stop(vm_id()) :: :ok | {:error, term()}
