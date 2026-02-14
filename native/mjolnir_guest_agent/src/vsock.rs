@@ -182,6 +182,35 @@ async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockR
                 },
             }
         }
+        VsockRequest::ConfigureIdentity { id, vm_id, api_url } => {
+            info!("ConfigureIdentity: vm_id={}, api_url={}", vm_id, api_url);
+            let result = (|| -> std::io::Result<()> {
+                std::fs::create_dir_all("/etc/mjolnir")?;
+                let identity = serde_json::json!({
+                    "vm_id": vm_id,
+                    "api_url": api_url
+                });
+                std::fs::write(
+                    "/etc/mjolnir/vm.json",
+                    serde_json::to_string_pretty(&identity).unwrap(),
+                )?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => VsockResponse::ExecResponse {
+                    id,
+                    exit_code: 0,
+                    stdout: "Identity configured".to_string(),
+                    stderr: String::new(),
+                },
+                Err(e) => VsockResponse::ExecResponse {
+                    id,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Failed to configure identity: {}", e),
+                },
+            }
+        }
     }
 }
 

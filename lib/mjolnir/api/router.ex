@@ -50,6 +50,16 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :ssh_public_key, conn.body_params["ssh_public_key"]),
           else: opts
 
+      opts =
+        if conn.body_params["snapshot"],
+          do: Map.put(opts, :snapshot, conn.body_params["snapshot"]),
+          else: opts
+
+      opts =
+        if conn.body_params["rootfs_size_mb"],
+          do: Map.put(opts, :rootfs_size_mb, conn.body_params["rootfs_size_mb"]),
+          else: opts
+
       case Mjolnir.VM.spawn(opts) do
         {:ok, vm} ->
           json(conn, 201, Views.render_vm(vm))
@@ -173,6 +183,94 @@ defmodule Mjolnir.API.Router do
 
         {:error, :not_found} ->
           json(conn, 404, %{error: "not_found"})
+      end
+    else
+      conn
+    end
+  end
+
+  # Create snapshot of a VM
+  post "/api/vms/:id/snapshots" do
+    conn = require_scope(conn, "snapshots:create")
+
+    unless conn.halted do
+      name = conn.body_params["name"]
+
+      if is_nil(name) or name == "" do
+        json(conn, 400, %{error: "name is required"})
+      else
+        compact = conn.body_params["compact"] || false
+
+        case Mjolnir.VM.snapshot(id, name, compact: compact) do
+          {:ok, metadata} ->
+            json(conn, 201, metadata)
+
+          {:error, {:snapshot_exists, _}} ->
+            json(conn, 409, %{error: "snapshot already exists"})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "vm not_found"})
+
+          {:error, reason} ->
+            json(conn, 500, %{error: inspect(reason)})
+        end
+      end
+    else
+      conn
+    end
+  end
+
+  # List all snapshots
+  get "/api/snapshots" do
+    conn = require_scope(conn, "snapshots:read")
+
+    unless conn.halted do
+      case Mjolnir.BTRFS.list_snapshots() do
+        {:ok, snapshots} ->
+          json(conn, 200, %{snapshots: snapshots})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      conn
+    end
+  end
+
+  # Get snapshot metadata
+  get "/api/snapshots/:name" do
+    conn = require_scope(conn, "snapshots:read")
+
+    unless conn.halted do
+      case Mjolnir.BTRFS.get_snapshot(name) do
+        {:ok, %{metadata: metadata}} ->
+          json(conn, 200, metadata)
+
+        {:error, {:snapshot_not_found, _}} ->
+          json(conn, 404, %{error: "not_found"})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      conn
+    end
+  end
+
+  # Delete a snapshot
+  delete "/api/snapshots/:name" do
+    conn = require_scope(conn, "snapshots:delete")
+
+    unless conn.halted do
+      case Mjolnir.BTRFS.delete_snapshot(name) do
+        :ok ->
+          json(conn, 200, %{ok: true})
+
+        {:error, {:snapshot_not_found, _}} ->
+          json(conn, 404, %{error: "not_found"})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
       end
     else
       conn

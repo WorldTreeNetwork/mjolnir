@@ -6,11 +6,13 @@ set -euo pipefail
 # Usage:
 #   ./scripts/deploy.sh <host>                # rsync + rebuild elixir server
 #   ./scripts/deploy.sh <host> --agent        # also rebuild guest agent + rootfs
+#   ./scripts/deploy.sh <host> --rootfs       # rebuild rootfs only (no agent recompile)
 #   ./scripts/deploy.sh                       # uses MJOLNIR_HOST or prompts
 #
 # Examples:
 #   ./scripts/deploy.sh root@45.76.77.97
 #   ./scripts/deploy.sh root@45.76.77.97 --agent
+#   ./scripts/deploy.sh root@45.76.77.97 --rootfs
 #   MJOLNIR_HOST=root@mybox ./scripts/deploy.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -21,10 +23,12 @@ REMOTE_BTRFS="/var/lib/mjolnir/btrfs"
 # Parse args
 HOST=""
 BUILD_AGENT=false
+BUILD_ROOTFS=false
 
 for arg in "$@"; do
     case "$arg" in
         --agent) BUILD_AGENT=true ;;
+        --rootfs) BUILD_ROOTFS=true ;;
         -*) echo "Unknown flag: $arg"; exit 1 ;;
         *) HOST="$arg" ;;
     esac
@@ -72,10 +76,13 @@ if $BUILD_AGENT; then
     echo ""
     echo "--- Building guest agent (musl static binary) ---"
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && ./scripts/build-guest-agent.sh"
+    BUILD_ROOTFS=true
+fi
 
+if $BUILD_ROOTFS; then
     echo ""
     echo "--- Rebuilding rootfs ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/debian-12.ext4"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/ubuntu-24.04.ext4"
 fi
 
 echo ""

@@ -10,7 +10,7 @@ config :mjolnir,
   # Defaults
   default_vcpus: 2,
   default_memory_mb: 512,
-  default_base_image: "debian-12",
+  default_base_image: "ubuntu-24.04",
 
   # Sockets
   socket_dir: "/tmp/mjolnir",

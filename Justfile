@@ -39,14 +39,14 @@ build-rootfs:
     fi
     echo "Building Debian 12 rootfs (requires sudo)..."
     sudo AGENT_BIN="$AGENT" ./scripts/build-rootfs.sh \
-        /var/lib/mjolnir/btrfs/@base/debian-12.ext4 512
+        /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512
     echo "✓ Rootfs built"
 
     # Also sync to test environment
     if [[ -d "/var/lib/mjolnir/btrfs/@base-test" ]]; then
         echo "Syncing to test environment..."
-        sudo cp --reflink=auto /var/lib/mjolnir/btrfs/@base/debian-12.ext4 \
-            /var/lib/mjolnir/btrfs/@base-test/debian-12.ext4
+        sudo cp --reflink=auto /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 \
+            /var/lib/mjolnir/btrfs/@base-test/ubuntu-24.04.ext4
         echo "✓ Test rootfs synced"
     fi
 
@@ -57,8 +57,8 @@ build-all: build-agent build-rootfs
 sync-test-rootfs:
     #!/usr/bin/env bash
     set -euo pipefail
-    SRC="/var/lib/mjolnir/btrfs/@base/debian-12.ext4"
-    DST="/var/lib/mjolnir/btrfs/@base-test/debian-12.ext4"
+    SRC="/var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4"
+    DST="/var/lib/mjolnir/btrfs/@base-test/ubuntu-24.04.ext4"
     if [[ -f "$SRC" ]]; then
         echo "Syncing base image to test environment..."
         sudo cp --reflink=auto "$SRC" "$DST"

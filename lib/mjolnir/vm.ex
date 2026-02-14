@@ -39,7 +39,9 @@ defmodule Mjolnir.VM do
           optional(:base_image) => String.t(),
           optional(:vcpus) => pos_integer(),
           optional(:memory_mb) => pos_integer(),
-          optional(:ssh_public_key) => String.t()
+          optional(:ssh_public_key) => String.t(),
+          optional(:snapshot) => String.t(),
+          optional(:rootfs_size_mb) => pos_integer()
         }
 
   # ============================================================================
@@ -51,13 +53,13 @@ defmodule Mjolnir.VM do
 
   ## Options
 
-  - `:base_image` - Base image name (default: "debian-12")
+  - `:base_image` - Base image name (default: "ubuntu-24.04")
   - `:vcpus` - Number of vCPUs (default: 2)
   - `:memory_mb` - Memory in MiB (default: 512)
 
   ## Examples
 
-      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "debian-12", memory_mb: 1024})
+      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-24.04", memory_mb: 1024})
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
@@ -117,6 +119,25 @@ defmodule Mjolnir.VM do
       [{pid, _}] -> GenServer.stop(pid, :normal)
       [] -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  Create a named snapshot of a running VM's filesystem.
+
+  Quiesces the VM (sync + pause), takes a consistent reflink copy,
+  then resumes the VM. The VM is always resumed even if the snapshot fails.
+
+  ## Options
+
+  - `:compact` - Run `fallocate --dig-holes` before snapshotting to reclaim freed blocks
+
+  ## Examples
+
+      {:ok, metadata} = Mjolnir.VM.snapshot(vm_id, "my-node-env")
+  """
+  @spec snapshot(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def snapshot(vm_id, name, opts \\ []) do
+    GenServer.call(via_tuple(vm_id), {:snapshot, name, opts}, 60_000)
   end
 
   @doc """
@@ -334,6 +355,11 @@ defmodule Mjolnir.VM do
     {:reply, result, state}
   end
 
+  def handle_call({:snapshot, name, opts}, _from, state) do
+    result = do_snapshot(state, name, opts)
+    {:reply, result, state}
+  end
+
   def handle_call({:await_shell, timeout}, _from, state) do
     # If we already have a ticket cached, return it immediately
     if state.ticket do
@@ -404,7 +430,9 @@ defmodule Mjolnir.VM do
       rootfs_path: "",
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
-      mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb)
+      mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
+      snapshot: opts[:snapshot],
+      rootfs_size_mb: opts[:rootfs_size_mb]
     }
   end
 
@@ -422,7 +450,7 @@ defmodule Mjolnir.VM do
     _ = File.rm(serial_path)
 
     with :ok <- File.mkdir_p(socket_dir),
-         {:ok, rootfs_path} <- BTRFS.clone(base_image, state.id),
+         {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
          {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
          {:ok, fc_port} <- start_firecracker(state.id, socket_path, serial_path),
          :ok <- wait_for_socket(socket_path),
@@ -437,6 +465,16 @@ defmodule Mjolnir.VM do
           :ok -> Logger.info("SSH key injected for VM #{state.id}")
           {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
         end
+      end
+
+      # Inject VM identity (vm_id + API URL for in-VM snapshot trigger)
+      api_port = Application.get_env(:mjolnir, :api_port, 4000)
+      host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+      api_url = "http://#{host_ip}:#{api_port}"
+
+      case configure_identity(vsock_path, state.id, api_url) do
+        :ok -> Logger.info("VM identity injected for VM #{state.id}")
+        {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
       end
 
       # Try to get iroh shell info (short timeout, VM works without it)
@@ -461,6 +499,28 @@ defmodule Mjolnir.VM do
   rescue
     e ->
       {:error, {:boot_exception, e}}
+  end
+
+  defp clone_rootfs(vm_id, base_image, config) do
+    # Clone from snapshot or base image
+    result =
+      if config.snapshot do
+        BTRFS.clone_from_snapshot(config.snapshot, vm_id)
+      else
+        BTRFS.clone(base_image, vm_id)
+      end
+
+    # Optionally resize the rootfs
+    with {:ok, rootfs_path} <- result do
+      if config.rootfs_size_mb do
+        case BTRFS.resize_rootfs(rootfs_path, config.rootfs_size_mb) do
+          :ok -> {:ok, rootfs_path}
+          error -> error
+        end
+      else
+        {:ok, rootfs_path}
+      end
+    end
   end
 
   defp start_firecracker(vm_id, socket_path, serial_path) do
@@ -738,6 +798,53 @@ defmodule Mjolnir.VM do
     end
   end
 
+  defp configure_identity(vsock_path, vm_id, api_url) do
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
+         true <- String.starts_with?(connect_response, "OK") do
+      request = Mjolnir.Vsock.Protocol.configure_identity_request(vm_id, api_url)
+      message = Mjolnir.Vsock.Protocol.encode(request)
+
+      :ok = :gen_tcp.send(sock, message)
+
+      case :gen_tcp.recv(sock, 4, 10_000) do
+        {:ok, <<length::big-32>>} ->
+          case :gen_tcp.recv(sock, length, 5000) do
+            {:ok, body} ->
+              :gen_tcp.close(sock)
+
+              case Jason.decode(body) do
+                {:ok, %{"exit_code" => 0}} ->
+                  :ok
+
+                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+                  {:error, {:identity_config_failed, code, stderr}}
+
+                {:error, _} = err ->
+                  err
+              end
+
+            {:error, reason} ->
+              :gen_tcp.close(sock)
+              {:error, {:recv_body_failed, reason}}
+          end
+
+        {:error, reason} ->
+          :gen_tcp.close(sock)
+          {:error, {:recv_length_failed, reason}}
+      end
+    else
+      false ->
+        {:error, :vsock_connect_rejected}
+
+      {:error, reason} ->
+        {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
   defp try_ping_agent(vsock_path) do
     # Try to connect and send a ping
     opts = [:binary, active: false, packet: :raw]
@@ -771,6 +878,58 @@ defmodule Mjolnir.VM do
 
       {:error, reason} ->
         {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
+  defp do_snapshot(state, name, opts) do
+    # Step 1: Flush guest caches
+    case execute_command(state, "sync") do
+      {:ok, _} -> :ok
+      {:error, reason} -> Logger.warning("Guest sync failed: #{inspect(reason)}")
+    end
+
+    # Step 2: Pause VM to stop writes
+    case Client.pause_instance(state.socket_path) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to pause VM for snapshot: #{inspect(reason)}")
+        {:error, {:pause_failed, reason}}
+    end
+    |> case do
+      :ok ->
+        try do
+          # Step 3: Host-side fsync
+          case File.open(state.rootfs_path, [:read]) do
+            {:ok, fd} ->
+              :file.sync(fd)
+              File.close(fd)
+
+            {:error, reason} ->
+              Logger.warning("Host fsync failed: #{inspect(reason)}")
+          end
+
+          # Step 4: Optional compaction
+          if opts[:compact] do
+            BTRFS.compact_rootfs(state.rootfs_path)
+          end
+
+          # Step 5: Create the snapshot (reflink copy + metadata)
+          BTRFS.create_snapshot(state.id, name, source_vm_id: state.id)
+        after
+          # Step 6: Always resume
+          case Client.resume_instance(state.socket_path) do
+            :ok ->
+              Logger.debug("VM #{state.id} resumed after snapshot")
+
+            {:error, reason} ->
+              Logger.error("Failed to resume VM #{state.id} after snapshot: #{inspect(reason)}")
+          end
+        end
+
+      error ->
+        error
     end
   end
 

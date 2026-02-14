@@ -21,7 +21,7 @@ defmodule Mjolnir.API.Auth do
         conn
 
       localhost_bypass?(conn) ->
-        assign(conn, :claims, %{"scope" => "vms:spawn vms:read vms:exec vms:stop shell:connect"})
+        assign(conn, :claims, %{"scope" => "vms:spawn vms:read vms:exec vms:stop shell:connect snapshots:create snapshots:read snapshots:delete"})
 
       true ->
         verify_token(conn)
@@ -35,7 +35,7 @@ defmodule Mjolnir.API.Auth do
       conn.remote_ip in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
   end
 
-  @all_scopes "vms:spawn vms:read vms:exec vms:stop shell:connect"
+  @all_scopes "vms:spawn vms:read vms:exec vms:stop shell:connect snapshots:create snapshots:read snapshots:delete"
 
   defp verify_token(conn) do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),

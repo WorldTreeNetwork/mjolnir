@@ -72,6 +72,19 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build a configure_identity request message.
+  Guest agent will write /etc/mjolnir/vm.json with vm_id and api_url.
+  """
+  def configure_identity_request(vm_id, api_url, request_id \\ nil) do
+    %{
+      "type" => "configure_identity",
+      "id" => request_id || UUID.uuid4(),
+      "vm_id" => vm_id,
+      "api_url" => api_url
+    }
+  end
+
+  @doc """
   Build a get_iroh_status request message.
   Guest agent will return the current Iroh status.
   """

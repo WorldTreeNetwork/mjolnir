@@ -9,13 +9,18 @@ defmodule Mjolnir.Firecracker.Config do
     field(:vm_id, String.t(), enforce: true)
     field(:kernel_path, String.t(), enforce: true)
     field(:rootfs_path, String.t(), enforce: true)
-    field(:base_image, String.t(), default: "debian-12")
+    field(:base_image, String.t(), default: "ubuntu-24.04")
     field(:vcpu_count, pos_integer(), default: 2)
     field(:mem_size_mib, pos_integer(), default: 512)
     field(:boot_args, String.t(), default: "console=ttyS0 reboot=k panic=1 pci=off")
     field(:vsock_cid, pos_integer(), default: 3)
+
     # Network interface config: %{tap_name: String.t(), guest_mac: String.t(), guest_ip: String.t()}
     field(:network_interface, map(), default: nil)
+    # Snapshot name to spawn from (instead of base_image)
+    field(:snapshot, String.t(), default: nil)
+    # Optional rootfs size override in MB
+    field(:rootfs_size_mb, pos_integer(), default: nil)
   end
 
   @doc """

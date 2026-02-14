@@ -644,7 +644,7 @@ download_kernel() {
 }
 
 build_rootfs() {
-    log_section "Building Debian 12 Rootfs"
+    log_section "Building Ubuntu 24.04 Rootfs"
 
     if [[ "${SKIP_ROOTFS:-0}" == "1" ]]; then
         log_info "Skipping rootfs build (SKIP_ROOTFS=1)"
@@ -652,7 +652,7 @@ build_rootfs() {
     fi
 
     # Firecracker uses ext4 file images, not directories
-    local rootfs_ext4="$MJOLNIR_ROOT/btrfs/@base/debian-12.ext4"
+    local rootfs_ext4="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4"
     local agent_bin="$MJOLNIR_CODE/native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
     if [[ -f "$rootfs_ext4" ]]; then
@@ -695,9 +695,9 @@ setup_directories() {
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-dev"
 
         # Copy base image to test directory for test isolation
-        if [[ -f "$MJOLNIR_ROOT/btrfs/@base/debian-12.ext4" ]]; then
-            cp --reflink=auto "$MJOLNIR_ROOT/btrfs/@base/debian-12.ext4" \
-                "$MJOLNIR_ROOT/btrfs/@base-test/debian-12.ext4"
+        if [[ -f "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4" ]]; then
+            cp --reflink=auto "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4" \
+                "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04.ext4"
         fi
 
         # Create symlinks for test config paths

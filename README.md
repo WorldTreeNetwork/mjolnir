@@ -123,7 +123,7 @@ just vm-stop <vm_id>             # Stop VM
 
 ```elixir
 # Spawn a VM
-{:ok, vm} = Mjolnir.VM.spawn(%{base_image: "debian-12", memory_mb: 1024})
+{:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-24.04", memory_mb: 1024})
 
 # Check Iroh shell status
 vm.shell_ready  # true if connected to relay

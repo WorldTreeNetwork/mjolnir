@@ -6,7 +6,7 @@ defmodule Mjolnir do
   ## Quick Start
 
       # Spawn a VM
-      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "debian-12", memory_mb: 1024})
+      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-24.04", memory_mb: 1024})
 
       # Execute a command
       {:ok, output} = Mjolnir.VM.exec(vm.id, "uname -a")
