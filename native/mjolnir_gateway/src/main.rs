@@ -37,6 +37,11 @@ struct Config {
     /// Iroh connection timeout in seconds
     #[arg(long, default_value = "15", env = "GATEWAY_CONNECT_TIMEOUT")]
     connect_timeout: u64,
+
+    /// Response timeout in seconds (0 = no timeout). Time to wait for the
+    /// first byte from the VM after forwarding the request.
+    #[arg(long, default_value = "30", env = "GATEWAY_RESPONSE_TIMEOUT")]
+    response_timeout: u64,
 }
 
 /// Errors that can occur before the proxy starts bidirectional copying.
@@ -56,6 +61,8 @@ enum ProxyError {
     ConnectError(String),
     /// Failed to open a bidirectional stream on the QUIC connection.
     StreamError(String),
+    /// VM did not send any response bytes within the timeout.
+    ResponseTimeout,
 }
 
 impl std::fmt::Display for ProxyError {
@@ -68,6 +75,7 @@ impl std::fmt::Display for ProxyError {
             ProxyError::ConnectTimeout => write!(f, "VM connection timed out"),
             ProxyError::ConnectError(e) => write!(f, "Could not reach VM: {}", e),
             ProxyError::StreamError(e) => write!(f, "VM connection failed: {}", e),
+            ProxyError::ResponseTimeout => write!(f, "VM did not respond in time"),
         }
     }
 }
@@ -82,6 +90,7 @@ impl ProxyError {
             ProxyError::ConnectTimeout => 504,
             ProxyError::ConnectError(_) => 502,
             ProxyError::StreamError(_) => 502,
+            ProxyError::ResponseTimeout => 504,
         }
     }
 }
@@ -275,19 +284,48 @@ async fn setup_proxy(
     Ok((header_buf, send, recv))
 }
 
-/// Run the bidirectional proxy: forward buffered headers, then copy in both directions.
+/// Run the bidirectional proxy: forward buffered headers, wait for first response
+/// byte (with timeout), then copy in both directions.
+///
+/// Returns `Err(ProxyError)` only if the error occurs before any data is sent to
+/// the client, so the caller can still send an HTTP error response.
 async fn run_proxy(
     stream: TcpStream,
     header_buf: Vec<u8>,
     mut quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
-) {
+    response_timeout: Duration,
+) -> Result<(), (ProxyError, TcpStream)> {
     let (mut tcp_read, mut tcp_write) = stream.into_split();
 
     // Forward the already-read HTTP headers to the VM
     if let Err(e) = quic_send.write_all(&header_buf).await {
         warn!("Failed to forward headers to VM: {}", e);
-        return;
+        return Ok(());
+    }
+
+    // Wait for the first byte from the VM with a timeout.
+    // This catches the case where nothing is listening on the target port.
+    if !response_timeout.is_zero() {
+        let mut first_byte = [0u8; 1];
+        let err = match tokio::time::timeout(response_timeout, quic_recv.read(&mut first_byte)).await {
+            Ok(Ok(Some(1))) => {
+                // Got the first byte — forward it and continue with full copy
+                if let Err(e) = tcp_write.write_all(&first_byte).await {
+                    warn!("Failed to write first byte to client: {}", e);
+                    return Ok(());
+                }
+                None
+            }
+            Ok(Ok(Some(_) | None)) => Some(ProxyError::ResponseTimeout),
+            Ok(Err(e)) => Some(ProxyError::StreamError(e.to_string())),
+            Err(_) => Some(ProxyError::ResponseTimeout),
+        };
+        if let Some(e) = err {
+            // Reunite the split halves so caller can write an error response
+            let stream = tcp_read.reunite(tcp_write).expect("reunite failed");
+            return Err((e, stream));
+        }
     }
 
     // Bidirectional copy: client <-> VM
@@ -312,14 +350,21 @@ async fn run_proxy(
             warn!("vm->client error: {}", e);
         }
     }
+
+    Ok(())
 }
 
 /// Handle a single incoming TCP connection.
 async fn handle_connection(mut stream: TcpStream, peer: SocketAddr, ep: &Endpoint, cfg: &Config) {
+    let response_timeout = Duration::from_secs(cfg.response_timeout);
+
     match setup_proxy(&mut stream, ep, cfg).await {
         Ok((header_buf, quic_send, quic_recv)) => {
             info!("{}: proxying", peer);
-            run_proxy(stream, header_buf, quic_send, quic_recv).await;
+            if let Err((e, mut stream)) = run_proxy(stream, header_buf, quic_send, quic_recv, response_timeout).await {
+                warn!("{}: {}", peer, e);
+                let _ = stream.write_all(&error_to_http_response(&e)).await;
+            }
         }
         Err(e) => {
             warn!("{}: {}", peer, e);
@@ -536,5 +581,10 @@ mod tests {
         let resp = error_to_http_response(&ProxyError::HeaderTimeout);
         let resp_str = String::from_utf8(resp).unwrap();
         assert!(resp_str.starts_with("HTTP/1.1 408 Request Timeout"));
+
+        let resp = error_to_http_response(&ProxyError::ResponseTimeout);
+        let resp_str = String::from_utf8(resp).unwrap();
+        assert!(resp_str.starts_with("HTTP/1.1 504 Gateway Timeout"));
+        assert!(resp_str.contains("VM did not respond in time"));
     }
 }

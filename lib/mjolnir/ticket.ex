@@ -2,62 +2,23 @@ defmodule Mjolnir.Ticket do
   @moduledoc """
   Ticket encoding for 32-byte Iroh node IDs.
 
-  Supports two formats:
-  - **base58**: Bitcoin-style (~44 chars), used by the CLI
-  - **z32** (z-base-32): Case-insensitive (~52 chars), DNS-safe, used for web gateway subdomains
-
-  The full iroh JSON EndpointAddr is only used for debugging/interop.
+  Uses z32 (z-base-32): case-insensitive, DNS-safe, 52 chars for 32 bytes.
+  This is Iroh's native encoding, used in DNS discovery, mDNS, pkarr records,
+  and web gateway subdomains: `<z32>.vm.worldtree.network`
   """
-
-  # Bitcoin-style base58 alphabet (no 0, O, I, l)
-  @base58_alphabet ~c"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
   # z-base-32 alphabet (Iroh's native format for DNS discovery)
   @z32_alphabet ~c"ybndrfg8ejkmcpqxot1uwisza345h769"
 
   @doc """
-  Convert a hex-encoded node ID to a base58 ticket string.
+  Convert a hex-encoded node ID to a z32 (z-base-32) ticket string.
   """
   def from_hex(nil), do: nil
 
   def from_hex(hex) do
     hex
     |> Base.decode16!(case: :lower)
-    |> base58_encode()
-  end
-
-  @doc """
-  Convert a hex-encoded node ID to a z32 (z-base-32) string.
-
-  z32 is case-insensitive and DNS-safe (52 chars for 32 bytes).
-  Used for web gateway subdomains: `<z32>.vm.worldtree.network`
-  """
-  def z32_from_hex(nil), do: nil
-
-  def z32_from_hex(hex) do
-    hex
-    |> Base.decode16!(case: :lower)
     |> z32_encode()
-  end
-
-  defp base58_encode(<<>>), do: ""
-
-  defp base58_encode(bytes) do
-    leading_zeros = bytes |> :binary.bin_to_list() |> Enum.take_while(&(&1 == 0)) |> length()
-    prefix = String.duplicate("1", leading_zeros)
-
-    num = :binary.decode_unsigned(bytes, :big)
-    encoded = base58_encode_int(num, [])
-
-    prefix <> encoded
-  end
-
-  defp base58_encode_int(0, []), do: ""
-  defp base58_encode_int(0, acc), do: IO.iodata_to_binary(acc)
-
-  defp base58_encode_int(num, acc) do
-    char = Enum.at(@base58_alphabet, rem(num, 58))
-    base58_encode_int(div(num, 58), [char | acc])
   end
 
   # z-base-32 encoding: 5-bit groups from the binary, mapped to the z32 alphabet.

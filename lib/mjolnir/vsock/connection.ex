@@ -96,7 +96,17 @@ defmodule Mjolnir.Vsock.Connection do
     {:noreply, %{state | buffer: new_buffer}}
   end
 
-  defp process_buffer(<<length::big-32, rest::binary>> = buffer, state) when byte_size(rest) >= length do
+  def handle_info({:tcp_closed, _socket}, state) do
+    Logger.warning("vsock connection closed for VM #{state.vm_id}")
+    {:stop, :connection_closed, state}
+  end
+
+  def handle_info({:tcp_error, _socket, reason}, state) do
+    Logger.error("vsock error for VM #{state.vm_id}: #{inspect(reason)}")
+    {:stop, {:tcp_error, reason}, state}
+  end
+
+  defp process_buffer(<<length::big-32, rest::binary>> = _buffer, state) when byte_size(rest) >= length do
     <<json::binary-size(length), remaining::binary>> = rest
     state = handle_message(json, state)
     process_buffer(remaining, state)
@@ -148,16 +158,6 @@ defmodule Mjolnir.Vsock.Connection do
         Logger.error("Failed to decode vsock JSON: #{inspect(reason)}")
         state
     end
-  end
-
-  def handle_info({:tcp_closed, _socket}, state) do
-    Logger.warning("vsock connection closed for VM #{state.vm_id}")
-    {:stop, :connection_closed, state}
-  end
-
-  def handle_info({:tcp_error, _socket, reason}, state) do
-    Logger.error("vsock error for VM #{state.vm_id}: #{inspect(reason)}")
-    {:stop, {:tcp_error, reason}, state}
   end
 
   # ============================================================================

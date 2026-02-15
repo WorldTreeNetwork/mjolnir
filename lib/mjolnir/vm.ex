@@ -28,7 +28,6 @@ defmodule Mjolnir.VM do
     :iroh_node_id,
     :iroh_json,
     :ticket,
-    :ticket_z32,
     :shell_ready,
     # SSH key injection
     :ssh_public_key
@@ -42,7 +41,8 @@ defmodule Mjolnir.VM do
           optional(:memory_mb) => pos_integer(),
           optional(:ssh_public_key) => String.t(),
           optional(:snapshot) => String.t(),
-          optional(:rootfs_size_mb) => pos_integer()
+          optional(:rootfs_size_mb) => pos_integer(),
+          optional(:preserve_iroh_key) => boolean()
         }
 
   # ============================================================================
@@ -57,10 +57,13 @@ defmodule Mjolnir.VM do
   - `:base_image` - Base image name (default: "ubuntu-24.04")
   - `:vcpus` - Number of vCPUs (default: 2)
   - `:memory_mb` - Memory in MiB (default: 512)
+  - `:snapshot` - Snapshot name to spawn from (instead of base image)
+  - `:preserve_iroh_key` - Keep the iroh key from snapshot (default: false)
 
   ## Examples
 
       {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-24.04", memory_mb: 1024})
+      {:ok, vm} = Mjolnir.VM.spawn(%{snapshot: "my-snapshot", preserve_iroh_key: true})
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
@@ -203,9 +206,9 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Get the compact ticket (base58 node ID) for a VM.
+  Get the compact ticket (z32 node ID) for a VM.
 
-  Returns the base58-encoded ticket string (~44 chars) that can be used
+  Returns the z32-encoded ticket string (52 chars) that can be used
   to connect to the VM's shell: `mjolnir connect <ticket>`
   """
   @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
@@ -387,19 +390,17 @@ defmodule Mjolnir.VM do
       # Poll the guest agent for live Iroh status via vsock
       case await_iroh_ready(state.vsock_path, timeout) do
         %{ticket: ticket} = info ->
-          base58 = Mjolnir.Ticket.from_hex(info[:node_id])
-          z32 = Mjolnir.Ticket.z32_from_hex(info[:node_id])
+          z32 = Mjolnir.Ticket.from_hex(info[:node_id])
 
           updated = %{
             state
             | iroh_node_id: info[:node_id],
               iroh_json: ticket,
-              ticket: base58,
-              ticket_z32: z32,
+              ticket: z32,
               shell_ready: true
           }
 
-          {:reply, {:ok, base58}, updated}
+          {:reply, {:ok, z32}, updated}
 
         nil ->
           {:reply, {:error, :timeout}, state}
@@ -453,7 +454,8 @@ defmodule Mjolnir.VM do
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
       snapshot: opts[:snapshot],
-      rootfs_size_mb: opts[:rootfs_size_mb]
+      rootfs_size_mb: opts[:rootfs_size_mb],
+      preserve_iroh_key: opts[:preserve_iroh_key] || false
     }
   end
 
@@ -514,7 +516,6 @@ defmodule Mjolnir.VM do
            iroh_node_id: iroh_info[:node_id],
            iroh_json: iroh_info[:ticket],
            ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-           ticket_z32: Mjolnir.Ticket.z32_from_hex(iroh_info[:node_id]),
            shell_ready: iroh_info != nil
        }}
     end
@@ -532,8 +533,17 @@ defmodule Mjolnir.VM do
         BTRFS.clone(base_image, vm_id)
       end
 
-    # Optionally resize the rootfs
     with {:ok, rootfs_path} <- result do
+      # Delete iroh key from snapshot clones to ensure unique network identity
+      # (unless preserve_iroh_key is set)
+      if config.snapshot && !config.preserve_iroh_key do
+        case BTRFS.delete_iroh_key(rootfs_path) do
+          :ok -> :ok
+          {:error, reason} -> Logger.warning("Failed to delete iroh key: #{inspect(reason)}")
+        end
+      end
+
+      # Optionally resize the rootfs
       if config.rootfs_size_mb do
         case BTRFS.resize_rootfs(rootfs_path, config.rootfs_size_mb) do
           :ok -> {:ok, rootfs_path}

@@ -33,7 +33,7 @@ struct Cli {
 enum Command {
     /// Connect to a VM shell using a ticket
     Shell {
-        /// Ticket (base58 node ID), hex node ID, or full iroh JSON
+        /// Ticket (z32 node ID), hex node ID, or full iroh JSON
         ticket: String,
         /// Relay URL hint (only needed for self-hosted relays)
         #[arg(long)]
@@ -44,7 +44,7 @@ enum Command {
     },
     /// TCP proxy over Iroh QUIC (for use as SSH ProxyCommand)
     Proxy {
-        /// Ticket (base58 node ID), hex node ID, or full iroh JSON
+        /// Ticket (z32 node ID), hex node ID, or full iroh JSON
         ticket: String,
         /// Target port on the guest (default: 22 for SSH)
         #[arg(long, default_value = "22")]
@@ -58,7 +58,7 @@ enum Command {
     },
     /// SSH into a VM via Iroh QUIC tunnel
     Ssh {
-        /// Ticket (base58 node ID), hex node ID, or full iroh JSON
+        /// Ticket (z32 node ID), hex node ID, or full iroh JSON
         ticket: String,
         /// SSH user (default: root)
         #[arg(long, default_value = "root")]
@@ -185,14 +185,14 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum TicketAction {
-    /// Decode iroh JSON to compact ticket (base58)
+    /// Decode iroh JSON to compact ticket (z32)
     Decode {
         /// Iroh JSON EndpointAddr string
         json: String,
     },
     /// Encode compact ticket to iroh JSON
     Encode {
-        /// Base58 node ID ticket
+        /// z32 node ID ticket
         ticket: String,
         /// Relay URL
         #[arg(long)]
@@ -211,7 +211,6 @@ struct SpawnResponse {
     id: String,
     state: String,
     ticket: Option<String>,
-    ticket_z32: Option<String>,
     shell_ready: Option<bool>,
 }
 
@@ -225,7 +224,6 @@ struct VmSummary {
     id: String,
     state: String,
     ticket: Option<String>,
-    ticket_z32: Option<String>,
     guest_ip: Option<String>,
     shell_ready: Option<bool>,
 }
@@ -249,7 +247,6 @@ struct VmInfo {
     id: String,
     state: String,
     ticket: Option<String>,
-    ticket_z32: Option<String>,
     guest_ip: Option<String>,
     shell_ready: Option<bool>,
     config: Option<VmConfig>,
@@ -356,7 +353,7 @@ fn restore_terminal(_original: &u32) {
 /// Accepts three formats:
 /// - Full iroh JSON (starts with `{`)
 /// - 64-char hex string (raw node ID)
-/// - Base58-encoded node ID (the default compact format)
+/// - z32-encoded node ID (the default compact format, 52 chars)
 ///
 /// Optional relay URL and direct IP hints are appended to the resulting address.
 fn resolve_addr(
@@ -371,13 +368,12 @@ fn resolve_addr(
         return Ok(serde_json::from_str::<EndpointAddr>(ticket)?);
     }
 
-    // Decode node ID bytes from hex or base58
+    // Decode node ID bytes from hex or z32
     let bytes: Vec<u8> = if ticket.len() == 64 && ticket.chars().all(|c| c.is_ascii_hexdigit()) {
         hex::decode(ticket)?
     } else {
-        bs58::decode(ticket)
-            .into_vec()
-            .map_err(|e| format!("Invalid ticket: not valid base58, hex, or iroh JSON ({e})"))?
+        z32::decode(ticket.as_bytes())
+            .map_err(|e| format!("Invalid ticket: not valid z32, hex, or iroh JSON ({e})"))?
     };
 
     let key_bytes: [u8; 32] = bytes
@@ -408,8 +404,7 @@ fn resolve_addr(
 fn format_addr_info(addr: &EndpointAddr) -> String {
     let mut lines = Vec::new();
     let id_bytes = addr.id.as_bytes();
-    lines.push(format!("Ticket: {}", bs58::encode(id_bytes).into_string()));
-    lines.push(format!("   z32: {}", z32::encode(id_bytes)));
+    lines.push(format!("Ticket: {}", z32::encode(id_bytes)));
     lines.push(format!("   Hex: {}", hex::encode(id_bytes)));
     for relay in addr.relay_urls() {
         lines.push(format!(" Relay: {}", relay));
@@ -669,23 +664,14 @@ async fn cmd_list(
 
     // Header
     println!(
-        "{:<46} {:<54} {:<10} {:<16} {:<6} {}",
-        "TICKET", "Z32", "STATE", "IP", "SHELL", "ID"
+        "{:<54} {:<10} {:<16} {:<6} {}",
+        "TICKET", "STATE", "IP", "SHELL", "ID"
     );
 
     for vm in &resp.vms {
-        // Compute z32 locally from base58 ticket if the server didn't provide it
-        let z32_display = vm.ticket_z32.clone().or_else(|| {
-            vm.ticket.as_deref().and_then(|t| {
-                bs58::decode(t).into_vec().ok().and_then(|bytes| {
-                    if bytes.len() == 32 { Some(z32::encode(&bytes)) } else { None }
-                })
-            })
-        });
         println!(
-            "{:<46} {:<54} {:<10} {:<16} {:<6} {}",
+            "{:<54} {:<10} {:<16} {:<6} {}",
             vm.ticket.as_deref().unwrap_or("-"),
-            z32_display.as_deref().unwrap_or("-"),
             vm.state,
             vm.guest_ip.as_deref().unwrap_or("-"),
             if vm.shell_ready == Some(true) {
@@ -761,9 +747,6 @@ async fn cmd_info(
         println!("\nConnection");
         println!("───────────────────────────────────────────────────────");
         println!("Ticket:       {}", ticket);
-        if let Some(ref z32) = resp.ticket_z32 {
-            println!("Z32:          {}", z32);
-        }
     }
 
     if let Some(config) = resp.config {

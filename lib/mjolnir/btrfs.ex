@@ -214,6 +214,51 @@ defmodule Mjolnir.BTRFS do
   end
 
   @doc """
+  Delete the iroh key from a rootfs image to force new key generation.
+
+  This is needed when spawning a VM from a snapshot to ensure each VM gets
+  a unique iroh node ID and ticket, rather than sharing the same network
+  identity as the snapshot source.
+
+  Mounts the ext4 image, deletes /etc/mjolnir/iroh.key if present, unmounts.
+  """
+  def delete_iroh_key(rootfs_path) do
+    mount_point = Path.join(System.tmp_dir!(), "mjolnir-mount-#{:erlang.unique_integer([:positive])}")
+
+    with :ok <- ensure_dir(mount_point),
+         {_, 0} <- System.cmd("mount", ["-o", "loop", rootfs_path, mount_point], stderr_to_stdout: true) do
+      # Delete iroh key if it exists
+      key_path = Path.join(mount_point, "etc/mjolnir/iroh.key")
+
+      if File.exists?(key_path) do
+        File.rm!(key_path)
+        Logger.debug("Deleted iroh key from rootfs: #{rootfs_path}")
+      end
+
+      # Unmount
+      case System.cmd("umount", [mount_point], stderr_to_stdout: true) do
+        {_, 0} ->
+          File.rmdir(mount_point)
+          :ok
+
+        {output, code} ->
+          Logger.error("Failed to unmount #{mount_point}: #{output}")
+          {:error, {:unmount_failed, code, output}}
+      end
+    else
+      {:error, reason} ->
+        # ensure_dir failed
+        {:error, reason}
+
+      {output, code} ->
+        # mount failed
+        _ = File.rmdir(mount_point)
+        Logger.error("Failed to mount rootfs for key deletion: #{output}")
+        {:error, {:mount_failed, code, output}}
+    end
+  end
+
+  @doc """
   Delete a subvolume (VM overlay or snapshot).
   """
   def delete_subvolume(path) do

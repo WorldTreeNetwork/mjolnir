@@ -60,6 +60,11 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :rootfs_size_mb, conn.body_params["rootfs_size_mb"]),
           else: opts
 
+      opts =
+        if conn.body_params["preserve_iroh_key"],
+          do: Map.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
+          else: opts
+
       case Mjolnir.VM.spawn(opts) do
         {:ok, vm} ->
           json(conn, 201, Views.render_vm(vm))
@@ -147,7 +152,7 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Get connection ticket (compact base58 + full iroh JSON for interop)
+  # Get connection ticket (compact z32 + full iroh JSON for interop)
   get "/api/vms/:id/ticket" do
     conn = require_scope(conn, "shell:connect")
 

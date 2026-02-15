@@ -36,14 +36,14 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "get_ticket returns base58 ticket for running VM" do
+    test "get_ticket returns z32 ticket for running VM" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       case Mjolnir.VM.get_ticket(vm.id) do
         {:ok, ticket} ->
           assert is_binary(ticket)
-          # Base58 tickets are ~44 chars (32 bytes encoded)
-          assert String.length(ticket) >= 40 and String.length(ticket) <= 50
+          # z32 tickets are exactly 52 chars (32 bytes encoded)
+          assert String.length(ticket) == 52
           # Should match what Ticket.from_hex produces
           assert ticket == Mjolnir.Ticket.from_hex(vm.iroh_node_id)
 
@@ -61,9 +61,9 @@ defmodule Mjolnir.VMIrohTest do
 
       case Mjolnir.VM.connection_info(vm.id) do
         {:ok, ticket, iroh_addr} ->
-          # ticket is base58
+          # ticket is z32
           assert is_binary(ticket)
-          assert String.length(ticket) >= 40 and String.length(ticket) <= 50
+          assert String.length(ticket) == 52
           # iroh_addr is JSON
           assert is_binary(iroh_addr)
           assert String.starts_with?(iroh_addr, "{")
@@ -76,7 +76,7 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "await_shell returns base58 ticket" do
+    test "await_shell returns z32 ticket" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       if vm.shell_ready do
@@ -86,7 +86,7 @@ defmodule Mjolnir.VMIrohTest do
           end)
 
         assert {:ok, ticket} = result
-        # Should be base58 format, not iroh JSON
+        # Should be z32 format, not iroh JSON
         assert is_binary(ticket)
         refute String.starts_with?(ticket, "{")
         assert ticket == Mjolnir.Ticket.from_hex(vm.iroh_node_id)
