@@ -14,6 +14,7 @@ defmodule Mjolnir.API.Views do
       shell_ready: vm.shell_ready || false,
       ticket: vm.ticket,
       iroh_addr: vm.iroh_json,
+      enable_iroh: vm.enable_iroh,
       config: render_config(vm.config),
       boot_time: vm.boot_time
     }

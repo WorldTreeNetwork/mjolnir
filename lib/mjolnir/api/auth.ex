@@ -21,7 +21,10 @@ defmodule Mjolnir.API.Auth do
         conn
 
       localhost_bypass?(conn) ->
-        assign(conn, :claims, %{"scope" => "vms:spawn vms:read vms:exec vms:stop shell:connect snapshots:create snapshots:read snapshots:delete"})
+        assign(conn, :claims, %{
+          "scope" =>
+            "vms:spawn vms:read vms:exec vms:stop shell:connect snapshots:create snapshots:read snapshots:delete"
+        })
 
       true ->
         verify_token(conn)

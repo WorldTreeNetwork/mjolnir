@@ -223,10 +223,12 @@ defmodule Mjolnir.BTRFS do
   Mounts the ext4 image, deletes /etc/mjolnir/iroh.key if present, unmounts.
   """
   def delete_iroh_key(rootfs_path) do
-    mount_point = Path.join(System.tmp_dir!(), "mjolnir-mount-#{:erlang.unique_integer([:positive])}")
+    mount_point =
+      Path.join(System.tmp_dir!(), "mjolnir-mount-#{:erlang.unique_integer([:positive])}")
 
     with :ok <- ensure_dir(mount_point),
-         {_, 0} <- System.cmd("mount", ["-o", "loop", rootfs_path, mount_point], stderr_to_stdout: true) do
+         {_, 0} <-
+           System.cmd("mount", ["-o", "loop", rootfs_path, mount_point], stderr_to_stdout: true) do
       # Delete iroh key if it exists
       key_path = Path.join(mount_point, "etc/mjolnir/iroh.key")
 

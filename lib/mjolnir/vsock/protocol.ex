@@ -96,6 +96,18 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build a configure_iroh request message.
+  Tells the guest agent whether to start Iroh networking.
+  """
+  def configure_iroh_request(enabled, request_id \\ nil) do
+    %{
+      "type" => "configure_iroh",
+      "id" => request_id || UUID.uuid4(),
+      "enabled" => enabled
+    }
+  end
+
+  @doc """
   Parse an iroh_ready message from the guest.
 
   The guest agent sends this proactively when its Iroh endpoint connects to relay.

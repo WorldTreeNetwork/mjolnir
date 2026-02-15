@@ -13,8 +13,8 @@ config :mjolnir,
   vm_storage_subdir: "@vms-dev",
   socket_dir: "/tmp/mjolnir-dev"
 
-  # Serial console wrapper - disabled for now, use VM.exec/2 instead
-  # console_wrapper_script: Path.expand("../scripts/firecracker-console.sh", __DIR__)
+# Serial console wrapper - disabled for now, use VM.exec/2 instead
+# console_wrapper_script: Path.expand("../scripts/firecracker-console.sh", __DIR__)
 
 config :mjolnir, :auth,
   bypass_localhost: true,

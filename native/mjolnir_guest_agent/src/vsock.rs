@@ -12,17 +12,25 @@ use tracing::{error, info, warn};
 const VMADDR_CID_ANY: u32 = 0xFFFFFFFF;
 
 /// Shared state for Iroh readiness
-pub type IrohState = Arc<RwLock<Option<IrohReady>>>;
+#[derive(Debug, Clone)]
+pub enum IrohStatus {
+    Disabled,
+    Pending,
+    Ready(IrohReady),
+}
+
+pub type IrohState = Arc<RwLock<IrohStatus>>;
 
 pub async fn run_vsock_listener(
     port: u32,
     iroh_ready_rx: oneshot::Receiver<IrohReady>,
+    iroh_start_tx: oneshot::Sender<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = VsockListener::bind(VMADDR_CID_ANY, port)?;
     info!("Vsock listener started on port {}", port);
 
-    // Shared state for iroh readiness - can be queried by multiple connections
-    let iroh_state: IrohState = Arc::new(RwLock::new(None));
+    // Shared state for iroh status - starts as Pending
+    let iroh_state: IrohState = Arc::new(RwLock::new(IrohStatus::Pending));
 
     // Spawn task to receive iroh_ready and update shared state
     let iroh_state_clone = iroh_state.clone();
@@ -30,7 +38,7 @@ pub async fn run_vsock_listener(
         match iroh_ready_rx.await {
             Ok(ready) => {
                 info!("Iroh ready received, updating shared state");
-                *iroh_state_clone.write().await = Some(ready);
+                *iroh_state_clone.write().await = IrohStatus::Ready(ready);
             }
             Err(_) => {
                 warn!("Iroh ready channel closed without sending");
@@ -38,19 +46,27 @@ pub async fn run_vsock_listener(
         }
     });
 
+    // Accept connections, passing both state and the start trigger
+    let iroh_start_tx = Arc::new(tokio::sync::Mutex::new(Some(iroh_start_tx)));
+
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
                 info!("Vsock connection from {:?}", addr);
                 let state = iroh_state.clone();
-                tokio::spawn(handle_vsock_connection(stream, state));
+                let start_tx = iroh_start_tx.clone();
+                tokio::spawn(handle_vsock_connection(stream, state, start_tx));
             }
             Err(e) => error!("Failed to accept vsock connection: {}", e),
         }
     }
 }
 
-async fn handle_vsock_connection(mut stream: VsockStream, iroh_state: IrohState) {
+async fn handle_vsock_connection(
+    mut stream: VsockStream,
+    iroh_state: IrohState,
+    iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+) {
     let mut buf = vec![0u8; 65536];
 
     loop {
@@ -74,7 +90,7 @@ async fn handle_vsock_connection(mut stream: VsockStream, iroh_state: IrohState)
         }
 
         let response = match serde_json::from_slice::<VsockRequest>(&buf[..length]) {
-            Ok(request) => handle_request(request, &iroh_state).await,
+            Ok(request) => handle_request(request, &iroh_state, &iroh_start_tx).await,
             Err(e) => {
                 warn!("Failed to parse request: {}", e);
                 continue;
@@ -88,7 +104,11 @@ async fn handle_vsock_connection(mut stream: VsockStream, iroh_state: IrohState)
     }
 }
 
-async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockResponse {
+async fn handle_request(
+    request: VsockRequest,
+    iroh_state: &IrohState,
+    iroh_start_tx: &Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+) -> VsockResponse {
     match request {
         VsockRequest::Exec { id, command } => {
             info!("Exec: {}", command);
@@ -135,14 +155,20 @@ async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockR
         VsockRequest::GetIrohStatus { id } => {
             info!("GetIrohStatus");
             let state = iroh_state.read().await;
-            match state.as_ref() {
-                Some(ready) => VsockResponse::IrohStatus {
+            match &*state {
+                IrohStatus::Ready(ready) => VsockResponse::IrohStatus {
                     id,
                     ready: true,
                     node_id: Some(ready.node_id.clone()),
                     ticket: Some(ready.ticket.clone()),
                 },
-                None => VsockResponse::IrohStatus {
+                IrohStatus::Pending => VsockResponse::IrohStatus {
+                    id,
+                    ready: false,
+                    node_id: None,
+                    ticket: None,
+                },
+                IrohStatus::Disabled => VsockResponse::IrohStatus {
                     id,
                     ready: false,
                     node_id: None,
@@ -209,6 +235,28 @@ async fn handle_request(request: VsockRequest, iroh_state: &IrohState) -> VsockR
                     stdout: String::new(),
                     stderr: format!("Failed to configure identity: {}", e),
                 },
+            }
+        }
+        VsockRequest::ConfigureIroh { id, enabled } => {
+            info!("ConfigureIroh: enabled={}", enabled);
+            let mut tx_guard = iroh_start_tx.lock().await;
+            if let Some(tx) = tx_guard.take() {
+                // Send the start signal to main
+                if tx.send(enabled).is_ok() {
+                    if enabled {
+                        info!("Iroh startup triggered");
+                    } else {
+                        info!("Iroh disabled");
+                        *iroh_state.write().await = IrohStatus::Disabled;
+                    }
+                    VsockResponse::ConfigureIrohResponse { id, ok: true }
+                } else {
+                    warn!("Failed to send iroh start signal - channel closed");
+                    VsockResponse::ConfigureIrohResponse { id, ok: false }
+                }
+            } else {
+                warn!("ConfigureIroh called more than once");
+                VsockResponse::ConfigureIrohResponse { id, ok: false }
             }
         }
     }

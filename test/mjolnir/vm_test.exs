@@ -107,7 +107,12 @@ defmodule Mjolnir.VMTest do
     @tag :network
     test "VM can resolve DNS", %{vm: vm} do
       # DNS test: curl a domain name. If DNS works, we get content. If not, curl exits 6.
-      {:ok, _output} = Mjolnir.VM.exec(vm.id, "curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://example.com")
+      {:ok, _output} =
+        Mjolnir.VM.exec(
+          vm.id,
+          "curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://example.com"
+        )
+
       # If we get here without error, DNS resolution worked
     end
 

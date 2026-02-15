@@ -65,6 +65,11 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
           else: opts
 
+      opts =
+        if Map.has_key?(conn.body_params, "enable_iroh"),
+          do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
+          else: opts
+
       case Mjolnir.VM.spawn(opts) do
         {:ok, vm} ->
           json(conn, 201, Views.render_vm(vm))

@@ -22,6 +22,8 @@ pub enum VsockRequest {
         vm_id: String,
         api_url: String,
     },
+    #[serde(rename = "configure_iroh")]
+    ConfigureIroh { id: String, enabled: bool },
 }
 
 /// Messages from guest to host (vsock)
@@ -46,10 +48,12 @@ pub enum VsockResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         ticket: Option<String>,
     },
+    #[serde(rename = "configure_iroh_response")]
+    ConfigureIrohResponse { id: String, ok: bool },
 }
 
 /// Notification sent when Iroh is ready
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IrohReady {
     #[serde(rename = "type")]
     pub msg_type: &'static str,

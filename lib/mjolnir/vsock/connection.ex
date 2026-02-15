@@ -106,7 +106,8 @@ defmodule Mjolnir.Vsock.Connection do
     {:stop, {:tcp_error, reason}, state}
   end
 
-  defp process_buffer(<<length::big-32, rest::binary>> = _buffer, state) when byte_size(rest) >= length do
+  defp process_buffer(<<length::big-32, rest::binary>> = _buffer, state)
+       when byte_size(rest) >= length do
     <<json::binary-size(length), remaining::binary>> = rest
     state = handle_message(json, state)
     process_buffer(remaining, state)
@@ -141,6 +142,17 @@ defmodule Mjolnir.Vsock.Connection do
 
           {from, pending} ->
             GenServer.reply(from, :pong)
+            %{state | pending_requests: pending}
+        end
+
+      {:ok, %{"type" => "configure_iroh_response", "id" => id} = response} ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _} ->
+            Logger.debug("Received configure_iroh_response for unknown request: #{id}")
+            state
+
+          {from, pending} ->
+            GenServer.reply(from, {:ok, response})
             %{state | pending_requests: pending}
         end
 

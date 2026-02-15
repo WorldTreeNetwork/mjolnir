@@ -19,6 +19,7 @@ defmodule Mjolnir.VM do
     :firecracker_port,
     :socket_path,
     :vsock_path,
+    :vsock_conn,
     :serial_path,
     :rootfs_path,
     :net_config,
@@ -30,7 +31,9 @@ defmodule Mjolnir.VM do
     :ticket,
     :shell_ready,
     # SSH key injection
-    :ssh_public_key
+    :ssh_public_key,
+    # Iroh networking toggle
+    enable_iroh: false
   ]
 
   @type t :: %__MODULE__{}
@@ -42,7 +45,8 @@ defmodule Mjolnir.VM do
           optional(:ssh_public_key) => String.t(),
           optional(:snapshot) => String.t(),
           optional(:rootfs_size_mb) => pos_integer(),
-          optional(:preserve_iroh_key) => boolean()
+          optional(:preserve_iroh_key) => boolean(),
+          optional(:enable_iroh) => boolean()
         }
 
   # ============================================================================
@@ -332,11 +336,19 @@ defmodule Mjolnir.VM do
     # Resolve SSH public key: spawn opts > app config > nil
     ssh_key = opts[:ssh_public_key] || Application.get_env(:mjolnir, :default_ssh_public_key)
 
+    # Resolve enable_iroh: spawn opts > app config > true
+    enable_iroh =
+      case opts[:enable_iroh] do
+        nil -> Application.get_env(:mjolnir, :enable_iroh, false)
+        val -> val
+      end
+
     state = %__MODULE__{
       id: opts.id,
       state: :booting,
       config: build_config(opts),
-      ssh_public_key: ssh_key
+      ssh_public_key: ssh_key,
+      enable_iroh: enable_iroh
     }
 
     {:ok, state, {:continue, :boot}}
@@ -500,15 +512,36 @@ defmodule Mjolnir.VM do
         {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
       end
 
-      # Try to get iroh shell info (short timeout, VM works without it)
-      # Keep this short - old agents won't send iroh_ready
-      iroh_info = await_iroh_ready(vsock_path, 5_000)
+      # Tell guest agent whether to start Iroh
+      case configure_iroh(vsock_path, state.enable_iroh) do
+        :ok ->
+          Logger.info("Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}")
+
+        {:error, reason} ->
+          Logger.warning("configure_iroh failed: #{inspect(reason)}")
+      end
+
+      # Only wait for Iroh if enabled
+      iroh_info =
+        if state.enable_iroh do
+          await_iroh_ready(vsock_path, 5_000)
+        else
+          nil
+        end
+
+      # Start persistent vsock connection for command execution
+      {:ok, vsock_conn} =
+        Mjolnir.Vsock.Connection.start_link(%{
+          vm_id: state.id,
+          socket_path: vsock_path
+        })
 
       {:ok,
        %{
          state
          | socket_path: socket_path,
            vsock_path: vsock_path,
+           vsock_conn: vsock_conn,
            serial_path: serial_path,
            rootfs_path: rootfs_path,
            net_config: net_config,
@@ -681,235 +714,155 @@ defmodule Mjolnir.VM do
   end
 
   defp query_iroh_status(vsock_path) do
-    opts = [:binary, active: false, packet: :raw]
+    request = Mjolnir.Vsock.Protocol.get_iroh_status_request()
 
-    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-         {:ok, response} <- :gen_tcp.recv(sock, 0, 2000),
-         true <- String.starts_with?(response, "OK") do
-      # Send get_iroh_status request
-      request = Mjolnir.Vsock.Protocol.get_iroh_status_request()
-      message = Mjolnir.Vsock.Protocol.encode(request)
-      :ok = :gen_tcp.send(sock, message)
-
-      # Read response
-      case :gen_tcp.recv(sock, 4, 5000) do
-        {:ok, <<length::big-32>>} ->
-          case :gen_tcp.recv(sock, length, 5000) do
-            {:ok, body} ->
-              :gen_tcp.close(sock)
-              parse_iroh_status_response(body)
-
-            {:error, reason} ->
-              :gen_tcp.close(sock)
-              {:error, {:recv_body_failed, reason}}
-          end
-
-        {:error, reason} ->
-          :gen_tcp.close(sock)
-          {:error, {:recv_length_failed, reason}}
-      end
-    else
-      false -> {:error, :vsock_connect_rejected}
-      {:error, reason} -> {:error, {:vsock_connect_failed, reason}}
+    case vsock_request(vsock_path, request, 5000) do
+      {:ok, response} -> parse_iroh_status_response(response)
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp parse_iroh_status_response(body) do
-    case Jason.decode(body) do
-      {:ok, %{"type" => "iroh_status", "ready" => true, "node_id" => node_id, "ticket" => ticket}} ->
-        {:ok, %{ready: true, node_id: node_id, ticket: ticket}}
+  defp parse_iroh_status_response(%{
+         "type" => "iroh_status",
+         "ready" => true,
+         "node_id" => node_id,
+         "ticket" => ticket
+       }) do
+    {:ok, %{ready: true, node_id: node_id, ticket: ticket}}
+  end
 
-      {:ok, %{"type" => "iroh_status", "ready" => false}} ->
-        {:ok, %{ready: false}}
+  defp parse_iroh_status_response(%{"type" => "iroh_status", "ready" => false}) do
+    {:ok, %{ready: false}}
+  end
 
-      {:ok, other} ->
-        {:error, {:unexpected_response, other}}
-
-      {:error, reason} ->
-        {:error, {:json_decode_failed, reason}}
-    end
+  defp parse_iroh_status_response(other) do
+    {:error, {:unexpected_response, other}}
   end
 
   defp configure_guest_network(vsock_path, guest_ip) do
-    # Send configure_network command to guest agent
-    opts = [:binary, active: false, packet: :raw]
+    request = Mjolnir.Vsock.Protocol.configure_network_request(guest_ip)
 
-    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
-         true <- String.starts_with?(connect_response, "OK") do
-      # Send the configure_network message
-      request = Mjolnir.Vsock.Protocol.configure_network_request(guest_ip)
-      message = Mjolnir.Vsock.Protocol.encode(request)
+    case vsock_request(vsock_path, request) do
+      {:ok, %{"exit_code" => 0}} ->
+        Logger.info("Guest network configured: #{guest_ip}")
+        :ok
 
-      :ok = :gen_tcp.send(sock, message)
-
-      # Wait for response (4 byte length prefix + body)
-      case :gen_tcp.recv(sock, 4, 10_000) do
-        {:ok, <<length::big-32>>} ->
-          case :gen_tcp.recv(sock, length, 5000) do
-            {:ok, body} ->
-              :gen_tcp.close(sock)
-
-              case Jason.decode(body) do
-                {:ok, %{"exit_code" => 0}} ->
-                  Logger.info("Guest network configured: #{guest_ip}")
-                  :ok
-
-                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
-                  Logger.error("Guest network config failed (exit #{code}): #{stderr}")
-                  {:error, {:network_config_failed, code, stderr}}
-
-                {:error, _} = err ->
-                  err
-              end
-
-            {:error, reason} ->
-              :gen_tcp.close(sock)
-              {:error, {:recv_body_failed, reason}}
-          end
-
-        {:error, reason} ->
-          :gen_tcp.close(sock)
-          {:error, {:recv_length_failed, reason}}
-      end
-    else
-      false ->
-        {:error, :vsock_connect_rejected}
+      {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+        Logger.error("Guest network config failed (exit #{code}): #{stderr}")
+        {:error, {:network_config_failed, code, stderr}}
 
       {:error, reason} ->
-        {:error, {:vsock_connect_failed, reason}}
+        {:error, reason}
     end
   end
 
   defp configure_ssh(vsock_path, ssh_public_key) do
-    opts = [:binary, active: false, packet: :raw]
+    request = Mjolnir.Vsock.Protocol.configure_ssh_request(ssh_public_key)
 
-    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
-         true <- String.starts_with?(connect_response, "OK") do
-      request = Mjolnir.Vsock.Protocol.configure_ssh_request(ssh_public_key)
-      message = Mjolnir.Vsock.Protocol.encode(request)
+    case vsock_request(vsock_path, request) do
+      {:ok, %{"exit_code" => 0}} ->
+        :ok
 
-      :ok = :gen_tcp.send(sock, message)
-
-      case :gen_tcp.recv(sock, 4, 10_000) do
-        {:ok, <<length::big-32>>} ->
-          case :gen_tcp.recv(sock, length, 5000) do
-            {:ok, body} ->
-              :gen_tcp.close(sock)
-
-              case Jason.decode(body) do
-                {:ok, %{"exit_code" => 0}} ->
-                  :ok
-
-                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
-                  {:error, {:ssh_config_failed, code, stderr}}
-
-                {:error, _} = err ->
-                  err
-              end
-
-            {:error, reason} ->
-              :gen_tcp.close(sock)
-              {:error, {:recv_body_failed, reason}}
-          end
-
-        {:error, reason} ->
-          :gen_tcp.close(sock)
-          {:error, {:recv_length_failed, reason}}
-      end
-    else
-      false ->
-        {:error, :vsock_connect_rejected}
+      {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+        {:error, {:ssh_config_failed, code, stderr}}
 
       {:error, reason} ->
-        {:error, {:vsock_connect_failed, reason}}
+        {:error, reason}
     end
   end
 
   defp configure_identity(vsock_path, vm_id, api_url) do
-    opts = [:binary, active: false, packet: :raw]
+    request = Mjolnir.Vsock.Protocol.configure_identity_request(vm_id, api_url)
 
-    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 5000),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-         {:ok, connect_response} <- :gen_tcp.recv(sock, 0, 2000),
-         true <- String.starts_with?(connect_response, "OK") do
-      request = Mjolnir.Vsock.Protocol.configure_identity_request(vm_id, api_url)
-      message = Mjolnir.Vsock.Protocol.encode(request)
+    case vsock_request(vsock_path, request) do
+      {:ok, %{"exit_code" => 0}} ->
+        :ok
 
-      :ok = :gen_tcp.send(sock, message)
-
-      case :gen_tcp.recv(sock, 4, 10_000) do
-        {:ok, <<length::big-32>>} ->
-          case :gen_tcp.recv(sock, length, 5000) do
-            {:ok, body} ->
-              :gen_tcp.close(sock)
-
-              case Jason.decode(body) do
-                {:ok, %{"exit_code" => 0}} ->
-                  :ok
-
-                {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
-                  {:error, {:identity_config_failed, code, stderr}}
-
-                {:error, _} = err ->
-                  err
-              end
-
-            {:error, reason} ->
-              :gen_tcp.close(sock)
-              {:error, {:recv_body_failed, reason}}
-          end
-
-        {:error, reason} ->
-          :gen_tcp.close(sock)
-          {:error, {:recv_length_failed, reason}}
-      end
-    else
-      false ->
-        {:error, :vsock_connect_rejected}
+      {:ok, %{"exit_code" => code, "stderr" => stderr}} ->
+        {:error, {:identity_config_failed, code, stderr}}
 
       {:error, reason} ->
-        {:error, {:vsock_connect_failed, reason}}
+        {:error, reason}
+    end
+  end
+
+  defp configure_iroh(vsock_path, enabled) do
+    request = Mjolnir.Vsock.Protocol.configure_iroh_request(enabled)
+
+    case vsock_request(vsock_path, request) do
+      {:ok, %{"type" => "configure_iroh_response", "ok" => true}} ->
+        :ok
+
+      {:ok, %{"type" => "configure_iroh_response", "ok" => false}} ->
+        {:error, :configure_iroh_rejected}
+
+      {:ok, other} ->
+        # Old agent that doesn't understand configure_iroh — treat as ok
+        Logger.debug("Unexpected configure_iroh response: #{inspect(other)}")
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # ============================================================================
+  # Vsock Helpers - Synchronous request/response pattern
+  # ============================================================================
+
+  defp vsock_connect(vsock_path, timeout) do
+    opts = [:binary, active: false, packet: :raw]
+
+    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, timeout),
+         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+         {:ok, response} <- :gen_tcp.recv(sock, 0, timeout) do
+      if String.starts_with?(response, "OK") do
+        {:ok, sock}
+      else
+        :gen_tcp.close(sock)
+        {:error, {:vsock_connect_rejected, response}}
+      end
+    else
+      {:error, reason} -> {:error, {:vsock_connect_failed, reason}}
+    end
+  end
+
+  defp vsock_request(vsock_path, request_map, timeout \\ 10_000) do
+    with {:ok, sock} <- vsock_connect(vsock_path, timeout) do
+      message = Mjolnir.Vsock.Protocol.encode(request_map)
+      :ok = :gen_tcp.send(sock, message)
+
+      # Read response (4 byte length prefix + body)
+      result =
+        with {:ok, <<length::big-32>>} <- :gen_tcp.recv(sock, 4, timeout),
+             {:ok, body} <- :gen_tcp.recv(sock, length, timeout),
+             {:ok, parsed} <- Jason.decode(body) do
+          {:ok, parsed}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+
+      :gen_tcp.close(sock)
+      result
     end
   end
 
   defp try_ping_agent(vsock_path) do
-    # Try to connect and send a ping
-    opts = [:binary, active: false, packet: :raw]
-
-    with {:ok, sock} <- :gen_tcp.connect({:local, vsock_path}, 0, opts, 2000),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
-         {:ok, response} <- :gen_tcp.recv(sock, 0, 2000) do
-      :gen_tcp.close(sock)
-
-      if String.starts_with?(response, "OK") do
+    case vsock_connect(vsock_path, 2000) do
+      {:ok, sock} ->
+        :gen_tcp.close(sock)
         :ok
-      else
-        {:error, {:bad_response, response}}
-      end
-    else
-      error ->
-        # Clean up socket if it was opened
-        {:error, error}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
   defp execute_command(state, command) do
-    case Mjolnir.Vsock.Connection.start_link(%{
-           vm_id: state.id,
-           socket_path: state.vsock_path
-         }) do
-      {:ok, conn} ->
-        result = Mjolnir.Vsock.Connection.exec(conn, command)
-        GenServer.stop(conn, :normal)
-        result
-
-      {:error, reason} ->
-        {:error, {:vsock_connect_failed, reason}}
+    if state.vsock_conn do
+      Mjolnir.Vsock.Connection.exec(state.vsock_conn, command)
+    else
+      {:error, :no_vsock_connection}
     end
   end
 
@@ -966,6 +919,11 @@ defmodule Mjolnir.VM do
   end
 
   defp cleanup(state) do
+    # Stop persistent vsock connection
+    if state.vsock_conn do
+      GenServer.stop(state.vsock_conn, :normal)
+    end
+
     # Kill Firecracker if still running
     if state.firecracker_port do
       # Get the OS PID before closing the port

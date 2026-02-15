@@ -19,4 +19,3 @@ end
 if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
 end
-
