@@ -29,7 +29,7 @@ defmodule Mjolnir.VM do
     :iroh_node_id,
     :iroh_json,
     :ticket,
-    :shell_ready,
+    :pty_ready,
     # SSH key injection
     :ssh_public_key,
     # Iroh networking toggle
@@ -257,7 +257,7 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Wait for shell to be ready, with timeout.
+  Wait for PTY to be ready, with timeout.
 
   Actively polls the guest agent for Iroh status via vsock rather than
   relying on cached boot-time values, so this works even if Iroh took
@@ -267,14 +267,14 @@ defmodule Mjolnir.VM do
 
   ## Examples
 
-      {:ok, vm} = Mjolnir.VM.spawn()
-      {:ok, ticket} = Mjolnir.VM.await_shell(vm.id)
+      {:ok, vm} = Mjolnir.VM.spawn(%{enable_iroh: true})
+      {:ok, ticket} = Mjolnir.VM.await_pty(vm.id)
   """
-  @spec await_shell(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
-  def await_shell(vm_id, timeout \\ 30_000) do
+  @spec await_pty(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
+  def await_pty(vm_id, timeout \\ 30_000) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
       [{pid, _}] ->
-        GenServer.call(pid, {:await_shell, timeout}, timeout + 5_000)
+        GenServer.call(pid, {:await_pty, timeout}, timeout + 5_000)
 
       [] ->
         {:error, :not_found}
@@ -394,7 +394,7 @@ defmodule Mjolnir.VM do
     {:reply, result, state}
   end
 
-  def handle_call({:await_shell, timeout}, _from, state) do
+  def handle_call({:await_pty, timeout}, _from, state) do
     # If we already have a ticket cached, return it immediately
     if state.ticket do
       {:reply, {:ok, state.ticket}, state}
@@ -409,7 +409,7 @@ defmodule Mjolnir.VM do
             | iroh_node_id: info[:node_id],
               iroh_json: ticket,
               ticket: z32,
-              shell_ready: true
+              pty_ready: true
           }
 
           {:reply, {:ok, z32}, updated}
@@ -549,7 +549,7 @@ defmodule Mjolnir.VM do
            iroh_node_id: iroh_info[:node_id],
            iroh_json: iroh_info[:ticket],
            ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-           shell_ready: iroh_info != nil
+           pty_ready: iroh_info != nil
        }}
     end
   rescue
@@ -697,7 +697,7 @@ defmodule Mjolnir.VM do
     else
       case query_iroh_status(vsock_path) do
         {:ok, %{ready: true} = info} ->
-          Logger.info("VM shell ready: node_id=#{info.node_id}")
+          Logger.info("VM PTY ready: node_id=#{info.node_id}")
           info
 
         {:ok, %{ready: false}} ->

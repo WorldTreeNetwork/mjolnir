@@ -11,7 +11,7 @@ defmodule Mjolnir.API.Views do
       id: vm.id,
       state: vm.state,
       guest_ip: get_in_net(vm, :guest_ip),
-      shell_ready: vm.shell_ready || false,
+      pty_ready: vm.pty_ready || false,
       ticket: vm.ticket,
       iroh_addr: vm.iroh_json,
       enable_iroh: vm.enable_iroh,
@@ -28,7 +28,7 @@ defmodule Mjolnir.API.Views do
       id: vm.id,
       state: vm.state,
       guest_ip: get_in_net(vm, :guest_ip),
-      shell_ready: vm.shell_ready || false,
+      pty_ready: vm.pty_ready || false,
       ticket: vm.ticket
     }
   end

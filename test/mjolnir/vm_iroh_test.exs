@@ -1,6 +1,6 @@
 defmodule Mjolnir.VMIrohTest do
   @moduledoc """
-  Integration tests for Iroh shell support.
+  Integration tests for Iroh PTY support.
 
   These tests require:
   - A running VM with the new guest agent (includes Iroh)
@@ -11,15 +11,15 @@ defmodule Mjolnir.VMIrohTest do
   use Mjolnir.VMCase
   @moduletag :integration
 
-  describe "Iroh shell readiness" do
+  describe "Iroh PTY readiness" do
     @tag timeout: 60_000
-    test "VM reports shell ready after boot" do
+    test "VM reports PTY ready after boot" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
       # Shell may not be ready immediately (needs relay connection)
-      assert vm.shell_ready == true or vm.shell_ready == false
+      assert vm.pty_ready == true or vm.pty_ready == false
 
-      if vm.shell_ready do
+      if vm.pty_ready do
         assert is_binary(vm.iroh_node_id)
         assert is_binary(vm.iroh_json)
         # Node IDs are hex-encoded 32-byte public keys (64 chars)
@@ -27,7 +27,7 @@ defmodule Mjolnir.VMIrohTest do
         # Tickets are longer (include address info)
         assert String.length(vm.iroh_json) > 50
       else
-        # If shell not ready, iroh fields should be nil
+        # If PTY not ready, iroh fields should be nil
         assert is_nil(vm.iroh_node_id)
         assert is_nil(vm.iroh_json)
       end
@@ -76,13 +76,13 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "await_shell returns z32 ticket" do
+    test "await_pty returns z32 ticket" do
       {:ok, vm} = Mjolnir.VM.spawn()
 
-      if vm.shell_ready do
+      if vm.pty_ready do
         {time, result} =
           :timer.tc(fn ->
-            Mjolnir.VM.await_shell(vm.id, 5000)
+            Mjolnir.VM.await_pty(vm.id, 5000)
           end)
 
         assert {:ok, ticket} = result
@@ -110,9 +110,9 @@ defmodule Mjolnir.VMIrohTest do
     end
 
     @tag timeout: 60_000
-    test "await_shell returns not_found for unknown VM" do
+    test "await_pty returns not_found for unknown VM" do
       fake_id = UUID.uuid4()
-      assert {:error, :not_found} = Mjolnir.VM.await_shell(fake_id, 1000)
+      assert {:error, :not_found} = Mjolnir.VM.await_pty(fake_id, 1000)
     end
   end
 end

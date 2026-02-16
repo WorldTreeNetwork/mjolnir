@@ -159,7 +159,7 @@ defmodule Mjolnir.API.Router do
 
   # Get connection ticket (compact z32 + full iroh JSON for interop)
   get "/api/vms/:id/ticket" do
-    conn = require_scope(conn, "shell:connect")
+    conn = require_scope(conn, "pty:connect")
 
     unless conn.halted do
       case Mjolnir.VM.connection_info(id) do
@@ -177,14 +177,14 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Await shell readiness, returns compact ticket
-  post "/api/vms/:id/await-shell" do
-    conn = require_scope(conn, "shell:connect")
+  # Await PTY readiness, returns compact ticket
+  post "/api/vms/:id/await-pty" do
+    conn = require_scope(conn, "pty:connect")
 
     unless conn.halted do
       timeout = conn.body_params["timeout"] || 30_000
 
-      case Mjolnir.VM.await_shell(id, timeout) do
+      case Mjolnir.VM.await_pty(id, timeout) do
         {:ok, ticket} ->
           json(conn, 200, %{ticket: ticket})
 

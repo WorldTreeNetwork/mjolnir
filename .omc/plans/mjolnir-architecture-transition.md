@@ -193,92 +193,229 @@ Implementation sequence in `do_boot/1`:
 
 ---
 
-## Phase 2: In-VM Agent Protocol
+## Phase 2: Vsock PTY + Channel Multiplexing + Agent Protocol
 
 ### Objective
-Enable VMs to act as agents that can spawn sub-agents, snapshot themselves, and emit events back to the host. Extend the vsock protocol with new message types.
+Replace Iroh QUIC as the PTY transport with vsock channels through BEAM. Add channel multiplexing to the vsock wire protocol so a single connection per VM carries both JSON control messages and binary PTY streams. Enable VMs to act as agents (spawn sub-agents, snapshot, emit events). The BEAM node becomes the terminal gateway — authenticated, observable, zero extra dependencies.
 
-### Spike Gate: None needed (protocol extension, low risk)
+### Spike Gate: None needed (protocol extension + WebSocket, low risk)
 
 ### Dependencies
-- Phase 1 complete (persistent vsock connection is the transport for all new protocol messages)
+- Phase 1 complete (persistent vsock connection is the transport)
 
-### Task 2.1: Define extended protocol message types
-**Files:** `lib/mjolnir/vsock/protocol.ex`, `native/mjolnir_guest_agent/src/protocol.rs`
-**What:** Add new message types to the wire protocol:
+### Design Decision: Vsock Channel Multiplexing
 
-Guest-to-host (agent capabilities):
+The current vsock protocol (4-byte length + JSON) is request/response only. PTY streaming requires binary channels. Solution: add a 1-byte channel prefix to every frame.
+
+**Wire format change:**
+```
+BEFORE: [4 bytes: length] [N bytes: JSON payload]
+AFTER:  [1 byte: channel] [4 bytes: length] [N bytes: payload]
+```
+
+- **Channel 0**: JSON control messages (backward compat — all existing messages)
+- **Channels 1-255**: Binary PTY streams using `mjolnir_protocol` frame types (Data/Resize/Exit)
+
+Channel 0 `0x00` prefix is safe because it's not a valid first byte of a JSON `{` object, so we can version-detect: if first byte is `0x00`, it's the new protocol; if `{`, it's legacy.
+
+PTY session lifecycle managed via channel 0 control messages:
+```json
+{"type": "pty_open", "id": "uuid", "rows": 24, "cols": 80}
+→ {"type": "pty_opened", "id": "uuid", "channel": 3}
+
+{"type": "pty_resize", "id": "uuid", "channel": 3, "rows": 40, "cols": 120}
+→ (no response needed)
+
+{"type": "pty_close", "channel": 3}
+→ {"type": "pty_closed", "channel": 3}
+```
+
+### Design Decision: WebSocket PTY Endpoint
+
+Client access via WebSocket at `GET /api/vms/:id/pty` (upgrade). Auth via JWT bearer token on the upgrade request. Binary WebSocket frames carry the same `mjolnir_protocol` frame types (Data/Resize/Exit). This enables:
+- CLI clients (any WebSocket library)
+- Browser-based xterm.js frontend (future)
+- `websocat` for ad-hoc access
+
+### Task 2.1: Vsock channel multiplexing (wire protocol)
+**Files:** `lib/mjolnir/vsock/protocol.ex`, `lib/mjolnir/vsock/connection.ex`, `native/mjolnir_guest_agent/src/protocol.rs`, `native/mjolnir_guest_agent/src/vsock.rs`
+**What:** Add the 1-byte channel prefix to the vsock wire protocol on both host and guest.
+
+Host side:
+- `Protocol.encode/2` gains a `channel` parameter (default 0)
+- `Protocol.decode_frame/1` returns `{channel, payload}`
+- `Vsock.Connection` dispatches channel 0 to JSON handler (existing), channels 1+ to registered stream handlers
+
+Guest side:
+- `vsock.rs` frame reader reads 5 bytes (channel + length) instead of 4
+- Channel 0 dispatched to existing JSON handler
+- Channels 1+ dispatched to PTY session handlers (Task 2.3)
+
+**Acceptance criteria:**
+- All existing JSON messages work unchanged on channel 0
+- Frame encoder/decoder handles channel byte correctly
+- Round-trip test for channel 0 JSON and channel N binary
+
+**Test impact:**
+- New test file: `test/mjolnir/vsock/protocol_test.exs` with channel multiplexing tests
+
+### Task 2.2: PTY session management in guest agent
+**Files:** `native/mjolnir_guest_agent/src/vsock.rs`, `native/mjolnir_guest_agent/src/pty.rs`, `native/mjolnir_guest_agent/src/protocol.rs`
+**What:** Handle `pty_open` control message by spawning a PTY session (reusing existing `pty.rs`) and routing I/O bidirectionally on the assigned channel.
+
+- `pty_open` → allocate PTY via `pty.rs`, assign channel ID, spawn read/write tasks
+- PTY stdout → channel N binary frames to host
+- Channel N binary frames from host → PTY stdin
+- `pty_resize` → `ioctl(TIOCSWINSZ)` on the PTY fd
+- `pty_close` or PTY process exit → clean up, send `pty_closed`
+- Multiple concurrent PTY sessions supported (one channel each)
+
+**Dependencies:** Task 2.1 (channel multiplexing)
+**Acceptance criteria:**
+- Guest agent opens PTY on `pty_open`, assigns channel
+- Typing on the channel produces output on the PTY
+- PTY output streams back on the channel
+- Resize works
+- Session cleanup on close or process exit
+- 3 concurrent PTY sessions to same VM work independently
+
+### Task 2.3: Host-side PTY channel routing
+**Files:** `lib/mjolnir/vsock/connection.ex`, new `lib/mjolnir/vsock/pty_channel.ex`
+**What:** Evolve `Vsock.Connection` to manage PTY channels alongside request/response:
+
+- New `open_pty/3` function: sends `pty_open`, waits for `pty_opened`, returns channel ID
+- Channel-to-PID registry: maps channel numbers to subscriber processes (WebSocket handlers)
+- Incoming data on channel N → forward to registered PID
+- Data from subscriber PID → encode on channel N → send to guest
+- Channel cleanup on subscriber disconnect or `pty_closed`
+
+**Dependencies:** Task 2.1, Task 2.2
+**Acceptance criteria:**
+- `Vsock.Connection.open_pty(conn, rows, cols)` returns `{:ok, channel_id}`
+- Binary data flows bidirectionally between subscriber process and guest PTY
+- Multiple channels active simultaneously
+- Clean shutdown when subscriber disconnects
+
+### Task 2.4: WebSocket PTY endpoint
+**Files:** `lib/mjolnir/api/router.ex`, new `lib/mjolnir/api/pty_handler.ex`
+**What:** WebSocket endpoint at `/api/vms/:id/pty` that bridges a client WebSocket to a vsock PTY channel.
+
+- Upgrade request authenticated via JWT (same as existing API auth)
+- On connect: look up VM, call `Vsock.Connection.open_pty/3`
+- WebSocket binary frames → vsock channel (PTY stdin)
+- Vsock channel data → WebSocket binary frames (PTY stdout)
+- Resize messages via a text WebSocket frame: `{"type": "resize", "rows": N, "cols": N}`
+- On disconnect: close PTY channel
+
+**Dependencies:** Task 2.3
+**Acceptance criteria:**
+- `websocat -H "Authorization: Bearer <jwt>" ws://host:4000/api/vms/<id>/pty` opens interactive PTY
+- Typing produces output, interactive programs (vim, top) work
+- Window resize propagates
+- Auth failure returns 401 on upgrade
+- Session ends cleanly on WebSocket close
+
+**Test impact:**
+- New test: WebSocket upgrade + echo command + disconnect
+- New test: auth rejection on upgrade
+
+### Task 2.5: CLI `pty` command
+**Files:** `native/mjolnir_client/src/main.rs`
+**What:** Replace `mjolnir shell <ticket>` with `mjolnir pty <vm_id>`. The client:
+- Connects to the Mjolnir API via WebSocket (`/api/vms/:id/pty`)
+- Puts terminal in raw mode (existing code in `main.rs`)
+- Relays stdin/stdout between local terminal and WebSocket
+- Sends resize on SIGWINCH
+
+The `shell` subcommand is removed. The `pty` command connects via BEAM, not Iroh.
+
+**Dependencies:** Task 2.4
+**Acceptance criteria:**
+- `mjolnir pty <vm_id> --api http://host:4000 --token <jwt>` opens interactive PTY
+- Raw mode, resize, ctrl-c all work
+- Clean exit on disconnect
+
+### Task 2.6: Agent protocol (guest-to-host messages)
+**Files:** `lib/mjolnir/vsock/protocol.ex`, `lib/mjolnir/vsock/connection.ex`, `native/mjolnir_guest_agent/src/protocol.rs`, `native/mjolnir_guest_agent/src/vsock.rs`
+**What:** Add agent capability messages to channel 0 (JSON control):
+
+Guest-to-host:
 - `spawn_sub_agent`: `{type: "spawn_sub_agent", id: "uuid", opts: {base_image, memory_mb, ...}}`
 - `snapshot_self`: `{type: "snapshot_self", id: "uuid", name: "string"}`
 - `emit_event`: `{type: "emit_event", id: "uuid", event: "string", payload: {}}`
 
-Host-to-guest (responses):
-- `spawn_sub_agent_response`: `{type: "spawn_sub_agent_response", id: "uuid", vm_id: "string", ticket: "string"}`
+Host-to-guest responses:
+- `spawn_sub_agent_response`: `{type: "spawn_sub_agent_response", id: "uuid", vm_id: "string"}`
 - `snapshot_self_response`: `{type: "snapshot_self_response", id: "uuid", ok: bool, metadata: {}}`
 - `event_ack`: `{type: "event_ack", id: "uuid"}`
 
+Host-side handler in `Vsock.Connection`:
+- `spawn_sub_agent` → `VM.spawn/1`, return new VM ID
+- `snapshot_self` → `VM.snapshot/3` on requesting VM
+- `emit_event` → publish to EventBus
+
+**Dependencies:** Task 2.1 (channel protocol)
 **Acceptance criteria:**
-- Protocol module has encoder/decoder for all new types
-- Guest agent protocol.rs has matching Rust structs with serde derive
-- Round-trip encode/decode test for each message type
+- VM can trigger sub-agent spawn via vsock
+- VM can snapshot itself via vsock
+- Error responses sent back on failure
 
-**Test impact:**
-- New test file: `test/mjolnir/vsock/protocol_test.exs` with round-trip tests for all new message types
-
-### Task 2.2: Host-side agent request handler
-**Files:** `lib/mjolnir/vm.ex` (or new `lib/mjolnir/agent_handler.ex`), `lib/mjolnir/vsock/connection.ex`
-**What:** The persistent vsock connection receives guest-initiated messages. Route them:
-- `spawn_sub_agent` -> calls `VM.spawn/1` with the provided opts, returns new VM's ID and ticket
-- `snapshot_self` -> calls `VM.snapshot/3` on the requesting VM
-- `emit_event` -> publishes to a local PubSub (preparation for Phase 4's :pg)
-**Dependencies:** Task 2.1 (protocol types must exist), Phase 1 Task 1.2 (persistent connection)
-**Acceptance criteria:**
-- A running VM can trigger sub-agent spawn via vsock message
-- A running VM can trigger self-snapshot via vsock message
-- Events are published to a local EventBus (GenServer or :pg local)
-- Error responses sent back to guest on failure
-
-**Test impact:**
-- New integration test: VM sends spawn_sub_agent via vsock, verify new VM created
-- New integration test: VM sends snapshot_self via vsock, verify snapshot exists
-
-### Task 2.3: Guest-side agent SDK
+### Task 2.7: Guest-side agent SDK
 **Files:** `native/mjolnir_guest_agent/src/vsock.rs`, new `native/mjolnir_guest_agent/src/agent.rs`
-**What:** Expose agent capabilities inside the VM. The guest agent provides a local Unix socket or HTTP endpoint that in-VM processes can call:
-- `POST /spawn` -> sends `spawn_sub_agent` over vsock
-- `POST /snapshot` -> sends `snapshot_self` over vsock
-- `POST /emit` -> sends `emit_event` over vsock
-**Dependencies:** Task 2.1, Task 2.2
+**What:** Local HTTP endpoint inside VM for in-VM processes:
+- `POST /spawn` → sends `spawn_sub_agent` over vsock channel 0
+- `POST /snapshot` → sends `snapshot_self` over vsock channel 0
+- `POST /emit` → sends `emit_event` over vsock channel 0
+**Dependencies:** Task 2.6
 **Acceptance criteria:**
-- In-VM process can `curl localhost:5001/spawn` to create a sub-agent
-- In-VM process can `curl localhost:5001/snapshot` to checkpoint itself
-- Responses include new VM's connection info
+- `curl localhost:5001/spawn` creates a sub-agent
+- `curl localhost:5001/snapshot` checkpoints the VM
+- Responses include new VM info
 
-### Task 2.4: Event bus foundation
+### Task 2.8: Event bus foundation
 **Files:** new `lib/mjolnir/event_bus.ex`
-**What:** Simple local pub/sub for VM events. Uses `:pg` process groups locally (will extend to distributed in Phase 4).
-- Subscribe: `EventBus.subscribe(vm_id)` or `EventBus.subscribe(:all)`
-- Publish: `EventBus.publish(vm_id, event_type, payload)`
+**What:** Local pub/sub using `:pg` process groups (distributed in Phase 4).
+- `EventBus.subscribe(vm_id)` or `EventBus.subscribe(:all)`
+- `EventBus.publish(vm_id, event_type, payload)`
 **Dependencies:** None (can start in parallel with 2.1)
 **Acceptance criteria:**
-- Local subscribers receive events from VMs
-- Events include: `:vm_spawned`, `:vm_stopped`, `:snapshot_created`, `:agent_event`
+- Subscribers receive events: `:vm_spawned`, `:vm_stopped`, `:snapshot_created`, `:agent_event`
 
 **Test impact:**
-- New test file: `test/mjolnir/event_bus_test.exs` with subscribe/publish tests
+- New test file: `test/mjolnir/event_bus_test.exs`
+
+### Task 2.9: Remove Iroh from guest agent (optional, can defer)
+**Files:** `native/mjolnir_guest_agent/src/main.rs`, `native/mjolnir_guest_agent/src/iroh.rs`, `native/mjolnir_guest_agent/Cargo.toml`
+**What:** Remove `iroh.rs`, the `configure_iroh` handler, and all Iroh dependencies from the guest agent. The guest agent becomes a pure vsock listener. This significantly reduces binary size and compile time.
+
+Also remove from host side: `configure_iroh/2` in `vm.ex`, `configure_iroh_request` in `protocol.ex`, `enable_iroh` spawn option and config.
+
+**Dependencies:** Task 2.4 working (WebSocket PTY replaces Iroh shell)
+**Acceptance criteria:**
+- Guest agent binary has zero Iroh dependencies
+- `cargo build --release` completes faster, binary is smaller
+- All PTY access works via WebSocket
+- `await_pty` removed (PTY is always available if vsock is up)
 
 ### Definition of Done (Phase 2)
-- VMs can spawn sub-agents via vsock protocol
-- VMs can snapshot themselves
-- VMs can emit events consumed by host
+- Vsock protocol supports channel multiplexing (control + N binary streams)
+- PTY sessions work via WebSocket through BEAM
+- `mjolnir pty <vm_id>` replaces `mjolnir shell <ticket>`
+- VMs can spawn sub-agents and snapshot themselves via vsock
 - Event bus operational locally
+- Iroh removed from guest agent (or feature-flagged for NAT use case)
 - All new protocol messages have round-trip tests
 
 ### Commit Strategy
-1. `feat: extend vsock protocol with agent message types`
-2. `feat: host-side agent request handler for spawn/snapshot/emit`
-3. `feat: guest-side agent SDK with local HTTP endpoint`
-4. `feat: local event bus with :pg process groups`
+1. `feat: vsock channel multiplexing with binary stream support`
+2. `feat: guest agent PTY sessions over vsock channels`
+3. `feat: host-side PTY channel routing in Vsock.Connection`
+4. `feat: WebSocket PTY endpoint at /api/vms/:id/pty`
+5. `feat: CLI pty command replacing shell`
+6. `feat: agent protocol — spawn sub-agent, snapshot self, emit events`
+7. `feat: guest-side agent SDK with local HTTP endpoint`
+8. `feat: local event bus with :pg process groups`
+9. `refactor: remove Iroh from guest agent`
 
 ---
 
@@ -677,10 +814,15 @@ Enable VM snapshots to be available on multiple nodes for fast restore anywhere 
 Task 1.1 (vsock helper)
   └─> Task 1.2 (persistent vsock)
         ├─> Task 1.3 (Iroh optional)
-        └─> Task 2.1 (protocol types)
-              ├─> Task 2.2 (host agent handler)
-              │     └─> Task 2.3 (guest agent SDK)
-              └─> [parallel] Task 2.4 (event bus)
+        └─> Task 2.1 (channel multiplexing)
+              ├─> Task 2.2 (guest PTY sessions)
+              │     └─> Task 2.3 (host PTY routing)
+              │           └─> Task 2.4 (WebSocket endpoint)
+              │                 └─> Task 2.5 (CLI pty command)
+              │                 └─> Task 2.9 (remove Iroh)
+              ├─> Task 2.6 (agent protocol)
+              │     └─> Task 2.7 (guest agent SDK)
+              └─> [parallel] Task 2.8 (event bus)
 
         Spike 3.0 (CH feasibility) ─── pass/fail gate
           │
@@ -768,15 +910,22 @@ These items have no hard dependencies on prior phases and can be timeboxed as ea
 - `test/mjolnir/vm_iroh_test.exs` -- backward compat tests
 
 ### Phase 2
-- `lib/mjolnir/vsock/protocol.ex` -- new message types
-- `lib/mjolnir/vsock/connection.ex` -- handle guest-initiated messages
-- `lib/mjolnir/vm.ex` -- route agent requests
-- `native/mjolnir_guest_agent/src/protocol.rs` -- new message types
-- `native/mjolnir_guest_agent/src/vsock.rs` -- handle new messages
+- `lib/mjolnir/vsock/protocol.ex` -- channel multiplexing, PTY control messages, agent messages
+- `lib/mjolnir/vsock/connection.ex` -- channel dispatch, PTY stream routing, agent request handling
+- `lib/mjolnir/vm.ex` -- remove Iroh-specific code (await_pty, iroh fields)
+- `lib/mjolnir/api/router.ex` -- WebSocket upgrade endpoint `/api/vms/:id/pty`
+- `native/mjolnir_guest_agent/src/protocol.rs` -- channel framing, PTY + agent messages
+- `native/mjolnir_guest_agent/src/vsock.rs` -- channel dispatch, PTY session management
+- `native/mjolnir_guest_agent/src/pty.rs` -- reused for vsock PTY sessions
+- `native/mjolnir_guest_agent/src/main.rs` -- remove Iroh (or feature-flag)
+- `native/mjolnir_client/src/main.rs` -- `pty` command replaces `shell`
+- NEW: `lib/mjolnir/api/pty_handler.ex` -- WebSocket handler
+- NEW: `lib/mjolnir/vsock/pty_channel.ex` -- per-session GenServer
 - NEW: `lib/mjolnir/event_bus.ex`
 - NEW: `native/mjolnir_guest_agent/src/agent.rs`
 - NEW: `test/mjolnir/vsock/protocol_test.exs`
 - NEW: `test/mjolnir/event_bus_test.exs`
+- REMOVED: `native/mjolnir_guest_agent/src/iroh.rs` (or feature-flagged)
 
 ### Phase 3
 - NEW: `lib/mjolnir/hypervisor.ex` (behaviour)
