@@ -94,6 +94,17 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # WebSocket PTY endpoint (must be before /api/vms/:id to avoid being captured)
+  get "/api/vms/:id/pty" do
+    conn = require_scope(conn, "pty:connect")
+
+    unless conn.halted do
+      Mjolnir.API.PtyHandler.call(conn, id)
+    else
+      conn
+    end
+  end
+
   # Get VM details
   get "/api/vms/:id" do
     conn = require_scope(conn, "vms:read")

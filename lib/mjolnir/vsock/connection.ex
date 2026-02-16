@@ -11,7 +11,14 @@ defmodule Mjolnir.Vsock.Connection do
 
   alias Mjolnir.Vsock.Protocol
 
-  defstruct [:vm_id, :socket_path, :socket, :pending_requests, buffer: <<>>]
+  defstruct [
+    :vm_id,
+    :socket_path,
+    :socket,
+    :pending_requests,
+    buffer: <<>>,
+    channel_handlers: %{}
+  ]
 
   # Port the guest agent listens on
   @vsock_port 5000
@@ -36,6 +43,50 @@ defmodule Mjolnir.Vsock.Connection do
   """
   def ping(pid, timeout \\ 5_000) do
     GenServer.call(pid, :ping, timeout)
+  end
+
+  @doc """
+  Open a new PTY session in the guest.
+  Returns {:ok, channel_id} on success.
+  """
+  def open_pty(pid, rows \\ 24, cols \\ 80, timeout \\ 10_000) do
+    GenServer.call(pid, {:open_pty, rows, cols}, timeout)
+  end
+
+  @doc """
+  Close a PTY session.
+  """
+  def close_pty(pid, channel) do
+    GenServer.cast(pid, {:close_pty, channel})
+  end
+
+  @doc """
+  Send binary data on a specific channel.
+  """
+  def send_data(pid, channel, data) do
+    GenServer.cast(pid, {:send_data, channel, data})
+  end
+
+  @doc """
+  Send a control message (JSON) on channel 0.
+  """
+  def send_control_message(pid, message) do
+    GenServer.cast(pid, {:send_control_message, message})
+  end
+
+  @doc """
+  Register a process to receive data for a specific channel.
+  The handler will receive messages of the form {:vsock_data, channel, data}.
+  """
+  def register_channel_handler(pid, channel, handler_pid) do
+    GenServer.call(pid, {:register_channel_handler, channel, handler_pid})
+  end
+
+  @doc """
+  Unregister a channel handler.
+  """
+  def unregister_channel_handler(pid, channel) do
+    GenServer.call(pid, {:unregister_channel_handler, channel})
   end
 
   # ============================================================================
@@ -64,7 +115,7 @@ defmodule Mjolnir.Vsock.Connection do
     request = Protocol.exec_request(command)
     request_id = request["id"]
 
-    case send_message(state.socket, request) do
+    case send_message(state.socket, request, 0) do
       :ok ->
         # Store pending request to match response
         pending = Map.put(state.pending_requests, request_id, from)
@@ -78,7 +129,7 @@ defmodule Mjolnir.Vsock.Connection do
   def handle_call(:ping, from, state) do
     request_id = UUID.uuid4()
 
-    case send_message(state.socket, Map.put(Protocol.ping(), "id", request_id)) do
+    case send_message(state.socket, Map.put(Protocol.ping(), "id", request_id), 0) do
       :ok ->
         pending = Map.put(state.pending_requests, request_id, from)
         {:noreply, %{state | pending_requests: pending}}
@@ -86,6 +137,50 @@ defmodule Mjolnir.Vsock.Connection do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:open_pty, rows, cols}, from, state) do
+    request = Protocol.pty_open_request(rows, cols)
+    request_id = request["id"]
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:register_channel_handler, channel, handler_pid}, _from, state) do
+    handlers = Map.put(state.channel_handlers, channel, handler_pid)
+    {:reply, :ok, %{state | channel_handlers: handlers}}
+  end
+
+  def handle_call({:unregister_channel_handler, channel}, _from, state) do
+    handlers = Map.delete(state.channel_handlers, channel)
+    {:reply, :ok, %{state | channel_handlers: handlers}}
+  end
+
+  @impl true
+  def handle_cast({:close_pty, channel}, state) do
+    request = Protocol.pty_close_request(channel)
+    send_message(state.socket, request, 0)
+    {:noreply, state}
+  end
+
+  def handle_cast({:send_data, channel, data}, state) do
+    # Send binary data on the specified channel
+    frame = Protocol.encode(data, channel)
+    :gen_tcp.send(state.socket, frame)
+    {:noreply, state}
+  end
+
+  def handle_cast({:send_control_message, message}, state) do
+    # Send a control message on channel 0 (used by pty_channel for resize)
+    send_message(state.socket, message, 0)
+    {:noreply, state}
   end
 
   @impl true
@@ -106,16 +201,36 @@ defmodule Mjolnir.Vsock.Connection do
     {:stop, {:tcp_error, reason}, state}
   end
 
-  defp process_buffer(<<length::big-32, rest::binary>> = _buffer, state)
-       when byte_size(rest) >= length do
-    <<json::binary-size(length), remaining::binary>> = rest
-    state = handle_message(json, state)
-    process_buffer(remaining, state)
+  defp process_buffer(buffer, state) do
+    case Protocol.decode_frame(buffer) do
+      {:ok, channel, payload, remaining} ->
+        state =
+          if channel == 0 do
+            handle_control_message(payload, state)
+          else
+            handle_channel_data(channel, payload, state)
+          end
+
+        process_buffer(remaining, state)
+
+      {:incomplete, buffer} ->
+        {buffer, state}
+    end
   end
 
-  defp process_buffer(buffer, state), do: {buffer, state}
+  defp handle_channel_data(channel, data, state) do
+    case Map.get(state.channel_handlers, channel) do
+      nil ->
+        Logger.warning("Data on unregistered channel #{channel}")
+        state
 
-  defp handle_message(json, state) do
+      pid ->
+        send(pid, {:vsock_data, channel, data})
+        state
+    end
+  end
+
+  defp handle_control_message(json, state) do
     case Jason.decode(json) do
       {:ok, %{"type" => "exec_response", "id" => id} = response} ->
         case Map.pop(state.pending_requests, id) do
@@ -149,6 +264,60 @@ defmodule Mjolnir.Vsock.Connection do
         case Map.pop(state.pending_requests, id) do
           {nil, _} ->
             Logger.debug("Received configure_iroh_response for unknown request: #{id}")
+            state
+
+          {from, pending} ->
+            GenServer.reply(from, {:ok, response})
+            %{state | pending_requests: pending}
+        end
+
+      {:ok, %{"type" => "pty_opened", "id" => id, "channel" => channel}} ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _} ->
+            Logger.warning("Received pty_opened for unknown request: #{id}")
+            state
+
+          {from, pending} ->
+            GenServer.reply(from, {:ok, channel})
+            %{state | pending_requests: pending}
+        end
+
+      {:ok, %{"type" => "pty_closed", "channel" => channel}} ->
+        # Notify handler and clean up
+        case Map.get(state.channel_handlers, channel) do
+          nil -> :ok
+          pid -> send(pid, {:pty_closed, channel})
+        end
+
+        handlers = Map.delete(state.channel_handlers, channel)
+        %{state | channel_handlers: handlers}
+
+      {:ok, %{"type" => "spawn_sub_agent_response", "id" => id} = response} ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _} ->
+            Logger.warning("Received spawn_sub_agent_response for unknown request: #{id}")
+            state
+
+          {from, pending} ->
+            GenServer.reply(from, {:ok, response})
+            %{state | pending_requests: pending}
+        end
+
+      {:ok, %{"type" => "snapshot_self_response", "id" => id} = response} ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _} ->
+            Logger.warning("Received snapshot_self_response for unknown request: #{id}")
+            state
+
+          {from, pending} ->
+            GenServer.reply(from, {:ok, response})
+            %{state | pending_requests: pending}
+        end
+
+      {:ok, %{"type" => "event_ack", "id" => id} = response} ->
+        case Map.pop(state.pending_requests, id) do
+          {nil, _} ->
+            Logger.warning("Received event_ack for unknown request: #{id}")
             state
 
           {from, pending} ->
@@ -221,8 +390,8 @@ defmodule Mjolnir.Vsock.Connection do
     end
   end
 
-  defp send_message(socket, message) do
-    data = Protocol.encode(message)
+  defp send_message(socket, message, channel) do
+    data = Protocol.encode(message, channel)
     :gen_tcp.send(socket, data)
   end
 end

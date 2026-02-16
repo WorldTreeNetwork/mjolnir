@@ -1,10 +1,12 @@
 //! Mjolnir Guest Agent
 //!
 //! Runs inside the Firecracker VM:
-//! - Listens on vsock for host commands (exec, ping, configure_network)
+//! - Listens on vsock for host commands (exec, ping, configure_network, pty)
 //! - Optionally runs Iroh endpoint for remote shell access (if configured by host)
 //! - Sends iroh_ready notification to host when shell is available
+//! - Provides agent SDK HTTP server for in-VM agent applications
 
+mod agent;
 mod iroh;
 mod protocol;
 mod pty;
@@ -28,6 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Channel to signal when to start Iroh (after configure_iroh message)
     let (iroh_start_tx, iroh_start_rx) = oneshot::channel();
+
+    // Spawn agent SDK HTTP server
+    if let Err(e) = agent::run_agent_sdk().await {
+        error!("Failed to start agent SDK: {}", e);
+    }
 
     // Spawn vsock listener (handles all commands, waits for configure_iroh to start Iroh)
     let vsock_handle = tokio::spawn(vsock::run_vsock_listener(

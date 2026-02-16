@@ -19,6 +19,8 @@ dirs = "6"
 open = "5"
 sha2 = "0.10"
 rand = "0.8"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["term", "signal"] }

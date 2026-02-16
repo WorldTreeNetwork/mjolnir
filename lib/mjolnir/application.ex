@@ -21,7 +21,10 @@ defmodule Mjolnir.Application do
         {Registry, keys: :unique, name: Mjolnir.VMRegistry},
 
         # Dynamic supervisor for VM processes
-        {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.VMSupervisor}
+        {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.VMSupervisor},
+
+        # Event bus for VM lifecycle events
+        Mjolnir.EventBus
       ] ++
         maybe_jwks_strategy() ++
         [
@@ -41,7 +44,7 @@ defmodule Mjolnir.Application do
     auth_config = Application.get_env(:mjolnir, :auth, [])
 
     if Keyword.get(auth_config, :issuer) do
-      [{Mjolnir.Auth.KeycloakStrategy, issuer: auth_config[:issuer]}]
+      [{Mjolnir.Auth.KeycloakStrategy, issuer: auth_config[:issuer], first_fetch_sync: true}]
     else
       []
     end

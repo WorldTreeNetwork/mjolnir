@@ -395,27 +395,32 @@ defmodule Mjolnir.VM do
   end
 
   def handle_call({:await_pty, timeout}, _from, state) do
-    # If we already have a ticket cached, return it immediately
-    if state.ticket do
-      {:reply, {:ok, state.ticket}, state}
+    # If iroh is disabled, PTY is available over vsock immediately
+    unless state.enable_iroh do
+      {:reply, {:ok, state.id}, %{state | pty_ready: true}}
     else
-      # Poll the guest agent for live Iroh status via vsock
-      case await_iroh_ready(state.vsock_path, timeout) do
-        %{ticket: ticket} = info ->
-          z32 = Mjolnir.Ticket.from_hex(info[:node_id])
+      # If we already have a ticket cached, return it immediately
+      if state.ticket do
+        {:reply, {:ok, state.ticket}, state}
+      else
+        # Poll the guest agent for live Iroh status via vsock
+        case await_iroh_ready(state.vsock_path, timeout) do
+          %{ticket: ticket} = info ->
+            z32 = Mjolnir.Ticket.from_hex(info[:node_id])
 
-          updated = %{
-            state
-            | iroh_node_id: info[:node_id],
-              iroh_json: ticket,
-              ticket: z32,
-              pty_ready: true
-          }
+            updated = %{
+              state
+              | iroh_node_id: info[:node_id],
+                iroh_json: ticket,
+                ticket: z32,
+                pty_ready: true
+            }
 
-          {:reply, {:ok, z32}, updated}
+            {:reply, {:ok, z32}, updated}
 
-        nil ->
-          {:reply, {:error, :timeout}, state}
+          nil ->
+            {:reply, {:error, :timeout}, state}
+        end
       end
     end
   end
@@ -515,7 +520,9 @@ defmodule Mjolnir.VM do
       # Tell guest agent whether to start Iroh
       case configure_iroh(vsock_path, state.enable_iroh) do
         :ok ->
-          Logger.info("Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}")
+          Logger.info(
+            "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
+          )
 
         {:error, reason} ->
           Logger.warning("configure_iroh failed: #{inspect(reason)}")
@@ -832,9 +839,9 @@ defmodule Mjolnir.VM do
       message = Mjolnir.Vsock.Protocol.encode(request_map)
       :ok = :gen_tcp.send(sock, message)
 
-      # Read response (4 byte length prefix + body)
+      # Read response (1 byte channel + 4 byte length prefix + body)
       result =
-        with {:ok, <<length::big-32>>} <- :gen_tcp.recv(sock, 4, timeout),
+        with {:ok, <<_channel::8, length::big-32>>} <- :gen_tcp.recv(sock, 5, timeout),
              {:ok, body} <- :gen_tcp.recv(sock, length, timeout),
              {:ok, parsed} <- Jason.decode(body) do
           {:ok, parsed}

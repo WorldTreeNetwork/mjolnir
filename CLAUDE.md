@@ -4,7 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Mjolnir is a distributed computational fabric for spawning checkpointable Linux shells in Firecracker microVMs. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication. The project is in early development (Phase 1).
+Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs via Firecracker. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
+
+## Architecture Transition Plan
+
+See `.omc/plans/mjolnir-architecture-transition.md` for the full 5-phase transition plan.
+
+### Deployment
+
+- Server: `ssh root@45.76.77.97`
+- Deploy: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
+- Guest agent cross-compile target: `x86_64-unknown-linux-musl`
+- `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
 
 ## Build & Development Commands
 
@@ -57,7 +68,7 @@ Mjolnir.Supervisor (one_for_one)
 
 - **`Mjolnir.Vsock.Connection`** — GenServer managing a single vsock connection to a guest VM. Connects to Firecracker's vsock proxy UDS, sends `CONNECT 5000\n`, then switches to async mode for request/response matching by UUID.
 
-- **`Mjolnir.Vsock.Protocol`** — Wire protocol: 4-byte big-endian length prefix + JSON body. Message types: `exec`/`exec_response`, `ping`/`pong`.
+- **`Mjolnir.Vsock.Protocol`** — Wire protocol with channel multiplexing: 1-byte channel ID + 4-byte big-endian length prefix + payload. Channel 0 carries JSON control messages, channels 1-255 carry binary PTY streams.
 
 ### Guest Agent (Rust, `native/mjolnir_guest_agent/`)
 
@@ -77,7 +88,7 @@ Test environment uses separate paths (`/var/lib/mjolnir/btrfs-test`, `/tmp/mjoln
 
 1. `VM.spawn/1` → UUID generated → GenServer started under DynamicSupervisor
 2. GenServer `init` → `handle_continue(:boot)` → BTRFS reflink clone → Port.open firecracker binary → Req HTTP calls to configure VM → start instance → poll vsock for guest agent readiness
-3. `VM.exec/3` → creates ephemeral `Vsock.Connection` GenServer → sends length-prefixed JSON over UDS → matches response by request UUID → returns stdout or error tuple
+3. `VM.exec/3` → uses persistent `Vsock.Connection` GenServer (`:vsock_conn` in VM state) → sends length-prefixed JSON over UDS → matches response by request UUID → returns stdout or error tuple
 4. `VM.stop/1` → GenServer.stop → `terminate/2` → Port.close firecracker, cleanup sockets and rootfs files
 
 ### Key Patterns

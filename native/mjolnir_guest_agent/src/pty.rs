@@ -10,7 +10,9 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct PtySession {
-    master: File,
+    master_read: File,
+    master_write: File,
+    master_fd: i32,
     child_pid: Pid,
     exit_code: Option<i32>,
 }
@@ -38,17 +40,23 @@ impl PtySession {
                 // Close slave in parent
                 drop(slave);
 
-                // Convert master OwnedFd to async File
-                let master_fd = master.as_raw_fd();
-                // Set non-blocking for async
-                unsafe {
-                    let flags = libc::fcntl(master_fd, libc::F_GETFL);
-                    libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                let raw_fd = master.as_raw_fd();
+
+                // Dup the master fd so we have separate read/write handles.
+                // This avoids deadlocks when reading output and writing input
+                // happen concurrently from different tasks.
+                let write_fd = unsafe { libc::dup(raw_fd) };
+                if write_fd < 0 {
+                    return Err(std::io::Error::last_os_error().into());
                 }
-                let master_file = unsafe { File::from_raw_fd(master.into_raw_fd()) };
+
+                let master_read = unsafe { File::from_raw_fd(master.into_raw_fd()) };
+                let master_write = unsafe { File::from_raw_fd(write_fd) };
 
                 Ok(Self {
-                    master: master_file,
+                    master_fd: raw_fd,
+                    master_read,
+                    master_write,
                     child_pid: child,
                     exit_code: None,
                 })
@@ -86,14 +94,34 @@ impl PtySession {
         }
     }
 
+    /// Split the session into a reader (for output) and the rest (for input/resize).
+    /// The reader can be used independently without holding any lock on the session.
+    /// Uses ManuallyDrop to suppress PtySession's Drop (PtyWriter's Drop handles cleanup).
+    pub fn into_split(self) -> (PtyReader, PtyWriter) {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        unsafe {
+            let master_read = std::ptr::read(&this.master_read);
+            let master_write = std::ptr::read(&this.master_write);
+            (
+                PtyReader { master_read },
+                PtyWriter {
+                    master_write,
+                    master_fd: this.master_fd,
+                    child_pid: this.child_pid,
+                    exit_code: this.exit_code,
+                },
+            )
+        }
+    }
+
     /// Write data to PTY stdin.
     pub async fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.master.write_all(data).await
+        self.master_write.write_all(data).await
     }
 
     /// Read data from PTY stdout.
     pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.master.read(buf).await
+        self.master_read.read(buf).await
     }
 
     /// Resize the PTY window.
@@ -109,11 +137,10 @@ impl PtySession {
             ws_ypixel: 0,
         };
         unsafe {
-            if libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize) < 0 {
+            if libc::ioctl(self.master_fd, libc::TIOCSWINSZ, &winsize) < 0 {
                 return Err("ioctl TIOCSWINSZ failed".into());
             }
         }
-        // Send SIGWINCH to child process group
         kill(self.child_pid, Signal::SIGWINCH).ok();
         Ok(())
     }
@@ -135,6 +162,7 @@ impl PtySession {
     }
 
     /// Get exit code if process has exited.
+    #[allow(dead_code)]
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code
     }
@@ -150,8 +178,61 @@ impl PtySession {
     }
 
     /// Get the child PID.
+    #[allow(dead_code)]
     pub fn pid(&self) -> Pid {
         self.child_pid
+    }
+}
+
+/// Read half of a PTY session — owns the master read fd.
+/// Can be used independently from a separate task without locks.
+pub struct PtyReader {
+    master_read: File,
+}
+
+impl PtyReader {
+    pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.master_read.read(buf).await
+    }
+}
+
+/// Write half of a PTY session — owns the master write fd, child PID, and resize.
+pub struct PtyWriter {
+    master_write: File,
+    master_fd: i32,
+    child_pid: Pid,
+    exit_code: Option<i32>,
+}
+
+impl PtyWriter {
+    pub async fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.master_write.write_all(data).await
+    }
+
+    pub fn resize(
+        &self,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let winsize = Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            if libc::ioctl(self.master_fd, libc::TIOCSWINSZ, &winsize) < 0 {
+                return Err("ioctl TIOCSWINSZ failed".into());
+            }
+        }
+        kill(self.child_pid, Signal::SIGWINCH).ok();
+        Ok(())
+    }
+}
+
+impl Drop for PtyWriter {
+    fn drop(&mut self) {
+        let _ = kill(self.child_pid, Signal::SIGTERM);
     }
 }
 

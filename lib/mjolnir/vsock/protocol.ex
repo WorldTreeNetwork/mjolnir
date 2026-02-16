@@ -2,34 +2,53 @@ defmodule Mjolnir.Vsock.Protocol do
   @moduledoc """
   Wire protocol for host↔guest communication over vsock.
 
-  Message format:
-  - 4 bytes: message length (big-endian uint32)
-  - N bytes: JSON-encoded message body
+  Message format (with channel multiplexing):
+  - 1 byte: channel ID (0 = JSON control, 1-255 = binary PTY streams)
+  - 4 bytes: payload length (big-endian uint32)
+  - N bytes: payload (JSON for channel 0, binary for others)
 
-  Message types:
-  - exec_request: {type: "exec", id: "uuid", command: "string"}
-  - exec_response: {type: "exec_response", id: "uuid", exit_code: int, stdout: "string", stderr: "string"}
-  - ping: {type: "ping"}
-  - pong: {type: "pong"}
+  Channel 0 message types:
+  - exec_request/exec_response: Command execution
+  - ping/pong: Connectivity check
+  - configure_network/configure_ssh/configure_identity: Boot-time config
+  - configure_iroh/get_iroh_status: Iroh networking control
+  - pty_open/pty_opened/pty_resize/pty_close: PTY lifecycle
+  - spawn_sub_agent/snapshot_self/emit_event: Agent protocol
   """
 
   @doc """
-  Encode a message for transmission.
+  Encode a message for transmission with channel multiplexing.
+
+  For maps (JSON control messages), encodes to JSON on the specified channel.
+  For binary data, sends raw binary on the specified channel.
   """
-  def encode(message) when is_map(message) do
+  def encode(message, channel \\ 0)
+
+  def encode(message, channel) when is_map(message) do
     json = Jason.encode!(message)
     length = byte_size(json)
-    <<length::big-32, json::binary>>
+    <<channel::8, length::big-32, json::binary>>
+  end
+
+  def encode(data, channel) when is_binary(data) do
+    length = byte_size(data)
+    <<channel::8, length::big-32, data::binary>>
   end
 
   @doc """
-  Decode a message from wire format.
+  Decode a frame from the wire, returning channel, payload, and remaining buffer.
+
+  Returns:
+  - `{:ok, channel, payload, rest}` - Successfully decoded a complete frame
+  - `{:incomplete, buffer}` - Need more data to complete frame
   """
-  def decode(<<length::big-32, json::binary-size(length)>>) do
-    Jason.decode(json)
+  def decode_frame(<<channel::8, length::big-32, rest::binary>>)
+      when byte_size(rest) >= length do
+    <<payload::binary-size(length), remaining::binary>> = rest
+    {:ok, channel, payload, remaining}
   end
 
-  def decode(_), do: {:error, :invalid_message}
+  def decode_frame(buffer), do: {:incomplete, buffer}
 
   @doc """
   Build an exec request message.
@@ -104,6 +123,81 @@ defmodule Mjolnir.Vsock.Protocol do
       "type" => "configure_iroh",
       "id" => request_id || UUID.uuid4(),
       "enabled" => enabled
+    }
+  end
+
+  @doc """
+  Build a pty_open request message.
+  Opens a new PTY session with the specified dimensions.
+  """
+  def pty_open_request(rows \\ 24, cols \\ 80, request_id \\ nil) do
+    %{
+      "type" => "pty_open",
+      "id" => request_id || UUID.uuid4(),
+      "rows" => rows,
+      "cols" => cols
+    }
+  end
+
+  @doc """
+  Build a pty_resize request message.
+  Resizes an existing PTY session.
+  """
+  def pty_resize_request(channel, rows, cols, request_id \\ nil) do
+    %{
+      "type" => "pty_resize",
+      "id" => request_id || UUID.uuid4(),
+      "channel" => channel,
+      "rows" => rows,
+      "cols" => cols
+    }
+  end
+
+  @doc """
+  Build a pty_close request message.
+  Closes an existing PTY session.
+  """
+  def pty_close_request(channel) do
+    %{
+      "type" => "pty_close",
+      "channel" => channel
+    }
+  end
+
+  @doc """
+  Build a spawn_sub_agent request message.
+  Requests the guest to spawn a new sub-agent process.
+  """
+  def spawn_sub_agent_request(opts, request_id \\ nil) do
+    %{
+      "type" => "spawn_sub_agent",
+      "id" => request_id || UUID.uuid4(),
+      "opts" => opts
+    }
+  end
+
+  @doc """
+  Build a snapshot_self request message.
+  Requests the guest to create a filesystem snapshot.
+  """
+  def snapshot_self_request(name, request_id \\ nil) do
+    %{
+      "type" => "snapshot_self",
+      "id" => request_id || UUID.uuid4(),
+      "name" => name
+    }
+  end
+
+  @doc """
+  Build an emit_event request message.
+  Sends an event from the host to the guest.
+  """
+  def emit_event_request(event, payload, request_id \\ nil) do
+    %{
+      "type" => "emit_event",
+      "id" => request_id || UUID.uuid4(),
+      "event" => event,
+      "payload" => payload
     }
   end
 

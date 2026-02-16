@@ -6,7 +6,7 @@ use iroh::endpoint::{Endpoint, Incoming};
 use iroh::SecretKey;
 use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
 use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};

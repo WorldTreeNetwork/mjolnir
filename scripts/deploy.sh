@@ -53,13 +53,8 @@ echo "=== Deploying to $HOST ==="
 echo ""
 echo "--- Syncing code ---"
 rsync -avz --delete \
-    --exclude='_build' \
-    --exclude='deps' \
+    --filter=':- .gitignore' \
     --exclude='.git' \
-    --exclude='native/target' \
-    --exclude='native/*/target' \
-    --exclude='.DS_Store' \
-    --exclude='.claude' \
     "$PROJECT_ROOT/" "$HOST:$REMOTE_CODE/"
 
 # --- Rebuild Elixir ---

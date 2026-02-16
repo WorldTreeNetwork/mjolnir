@@ -21,6 +21,8 @@ use serde::Deserialize;
 use std::io::Write;
 use std::net::SocketAddr;
 use tokio::io::AsyncReadExt;
+use tokio_tungstenite::tungstenite::Message;
+use futures_util::{SinkExt, StreamExt};
 
 #[derive(Parser)]
 #[command(name = "mjolnir", about = "Mjolnir — VM shells over Iroh")]
@@ -41,6 +43,17 @@ enum Command {
         /// Direct IP hint(s) for faster hole-punching (ip:port, repeatable)
         #[arg(long)]
         ip: Vec<String>,
+    },
+    /// Connect to a VM PTY via WebSocket
+    Pty {
+        /// VM ID (UUID)
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
     },
     /// TCP proxy over Iroh QUIC (for use as SSH ProxyCommand)
     Proxy {
@@ -616,7 +629,7 @@ async fn cmd_spawn(
     } else {
         eprintln!("Waiting for shell...");
         let await_resp: AwaitShellResponse = client
-            .post(format!("{}/api/vms/{}/await-shell", base, resp.id))
+            .post(format!("{}/api/vms/{}/await-pty", base, resp.id))
             .json(&serde_json::json!({"timeout": 30000}))
             .send()
             .await?
@@ -994,6 +1007,164 @@ fn cmd_ssh(
     }
 }
 
+// --- PTY WebSocket connection ---
+
+async fn cmd_pty(
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    vm_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let api = config::resolve_api(api_flag);
+    let base = api.trim_end_matches('/');
+
+    // Build WebSocket URL: convert http(s) to ws(s)
+    let ws_url = if base.starts_with("https") {
+        base.replacen("https", "wss", 1)
+    } else {
+        base.replacen("http", "ws", 1)
+    };
+    let url = format!("{}/api/vms/{}/pty", ws_url, vm_id);
+
+    // Build request with auth header
+    let effective_token = auth::resolve_token(token).await;
+    let mut request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url.as_str())?;
+    if let Some(t) = effective_token {
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", t).parse()?,
+        );
+    }
+
+    eprintln!("Connecting to VM {}...", vm_id);
+
+    let (ws_stream, _response) = tokio_tungstenite::connect_async(request).await?;
+
+    eprintln!("Connected. PTY session active.");
+
+    // Set raw mode
+    let original_termios = set_raw_mode()?;
+    let orig_for_guard = original_termios.clone();
+    let _guard = scopeguard::guard((), move |_| {
+        restore_terminal(&orig_for_guard);
+    });
+
+    let result = run_pty_loop(ws_stream).await;
+
+    restore_terminal(&original_termios);
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            eprintln!("Connection error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn run_pty_loop<S>(ws_stream: S) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let (mut ws_write, mut ws_read) = ws_stream.split();
+    let mut stdin = tokio::io::stdin();
+    let mut stdin_buf = vec![0u8; 4096];
+
+    // Send initial resize
+    let (rows, cols) = get_terminal_size();
+    let resize_msg = serde_json::json!({"type": "resize", "rows": rows, "cols": cols});
+    ws_write.send(Message::Text(resize_msg.to_string())).await?;
+
+    // Set up SIGWINCH handler
+    let mut sigwinch = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::window_change()
+    )?;
+
+    loop {
+        tokio::select! {
+            msg = ws_read.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        let mut stdout = std::io::stdout().lock();
+                        stdout.write_all(&data)?;
+                        stdout.flush()?;
+                    }
+                    Some(Ok(Message::Close(_))) | None => return Ok(()),
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => return Err(e.into()),
+                }
+            }
+            result = stdin.read(&mut stdin_buf) => {
+                match result {
+                    Ok(0) => return Ok(()),
+                    Ok(n) => {
+                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            _ = sigwinch.recv() => {
+                let (rows, cols) = get_terminal_size();
+                let resize_msg = serde_json::json!({"type": "resize", "rows": rows, "cols": cols});
+                ws_write.send(Message::Text(resize_msg.to_string())).await?;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_pty_loop<S>(ws_stream: S) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let (mut ws_write, mut ws_read) = ws_stream.split();
+    let mut stdin = tokio::io::stdin();
+    let mut stdin_buf = vec![0u8; 4096];
+
+    // Send initial resize
+    let (rows, cols) = get_terminal_size();
+    let resize_msg = serde_json::json!({
+        "type": "resize",
+        "rows": rows,
+        "cols": cols
+    });
+    ws_write.send(Message::Text(resize_msg.to_string())).await?;
+
+    loop {
+        tokio::select! {
+            // Data from server (PTY output)
+            msg = ws_read.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        let mut stdout = std::io::stdout().lock();
+                        stdout.write_all(&data)?;
+                        stdout.flush()?;
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        return Ok(());
+                    }
+                    Some(Ok(_)) => {} // ignore text, ping, pong
+                    Some(Err(e)) => return Err(e.into()),
+                }
+            }
+            // Stdin (user typing)
+            result = stdin.read(&mut stdin_buf) => {
+                match result {
+                    Ok(0) => return Ok(()), // EOF
+                    Ok(n) => {
+                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+    }
+}
+
 // --- Main ---
 
 #[tokio::main]
@@ -1008,6 +1179,7 @@ async fn main() {
                 std::process::exit(1);
             }
         },
+        Command::Pty { id, api, token } => cmd_pty(&api, &token, &id).await,
         Command::Proxy {
             ticket,
             port,

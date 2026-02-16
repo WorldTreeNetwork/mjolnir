@@ -1,11 +1,13 @@
 //! Vsock listener for host communication.
 
 use crate::protocol::{IrohReady, VsockRequest, VsockResponse};
+use crate::pty::{PtySession, PtyWriter};
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio_vsock::{VsockListener, VsockStream};
 use tracing::{error, info, warn};
 
@@ -20,6 +22,73 @@ pub enum IrohStatus {
 }
 
 pub type IrohState = Arc<RwLock<IrohStatus>>;
+
+/// Manages PTY write halves and channel allocation.
+/// The read halves are owned by their respective output-forwarding tasks.
+struct PtyManager {
+    writers: HashMap<u8, Arc<Mutex<PtyWriter>>>,
+    next_channel: u8,
+}
+
+impl PtyManager {
+    fn new() -> Self {
+        Self {
+            writers: HashMap::new(),
+            next_channel: 1,
+        }
+    }
+
+    fn allocate_channel(&mut self) -> Option<u8> {
+        for _ in 0..255 {
+            let ch = self.next_channel;
+            self.next_channel = self.next_channel.wrapping_add(1);
+            if self.next_channel == 0 {
+                self.next_channel = 1;
+            }
+            if !self.writers.contains_key(&ch) {
+                return Some(ch);
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, channel: u8, writer: Arc<Mutex<PtyWriter>>) {
+        self.writers.insert(channel, writer);
+    }
+
+    fn remove(&mut self, channel: u8) -> Option<Arc<Mutex<PtyWriter>>> {
+        self.writers.remove(&channel)
+    }
+
+    fn get(&self, channel: u8) -> Option<Arc<Mutex<PtyWriter>>> {
+        self.writers.get(&channel).cloned()
+    }
+}
+
+/// A pre-framed message ready to write to the vsock stream.
+/// Contains the full wire format: [channel:u8][length:u32 BE][payload].
+type FramedMsg = Vec<u8>;
+
+/// Encode a serializable message into a framed wire message on a given channel.
+fn frame_message<T: serde::Serialize>(channel: u8, msg: &T) -> FramedMsg {
+    let json = serde_json::to_vec(msg).expect("JSON serialization failed");
+    let length = json.len() as u32;
+    let mut frame = Vec::with_capacity(5 + json.len());
+    frame.push(channel);
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(&json);
+    frame
+}
+
+/// Encode raw binary data into a framed wire message on a given channel.
+fn frame_binary(channel: u8, data: &[u8]) -> FramedMsg {
+    let length = data.len() as u32;
+    let mut frame = Vec::with_capacity(5 + data.len());
+    frame.push(channel);
+    frame.extend_from_slice(&length.to_be_bytes());
+    frame.extend_from_slice(data);
+    frame
+}
 
 pub async fn run_vsock_listener(
     port: u32,
@@ -67,39 +136,109 @@ async fn handle_vsock_connection(
     iroh_state: IrohState,
     iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
 ) {
-    let mut buf = vec![0u8; 65536];
+    // Channel for outgoing writes. PTY output tasks and the reader loop
+    // send pre-framed messages here; the writer half drains them.
+    let (write_tx, mut write_rx) = mpsc::channel::<FramedMsg>(64);
+
+    let pty_manager = Arc::new(Mutex::new(PtyManager::new()));
+
+    // We need to multiplex reading from the stream and writing queued
+    // frames. We can't use tokio::io::split (shared internal mutex), so
+    // we buffer incoming data and use select! to interleave read/write.
+    let mut read_buf = vec![0u8; 65536];
+    // Accumulator for incomplete frames
+    let mut acc: Vec<u8> = Vec::new();
 
     loop {
-        // Read length prefix (4 bytes, big-endian)
-        if let Err(e) = stream.read_exact(&mut buf[..4]).await {
-            if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                error!("Failed to read length: {}", e);
+        tokio::select! {
+            // --- Read bytes from vsock ---
+            result = stream.read(&mut read_buf) => {
+                match result {
+                    Ok(0) => {
+                        info!("Vsock connection closed");
+                        return;
+                    }
+                    Ok(n) => {
+                        acc.extend_from_slice(&read_buf[..n]);
+
+                        // Process all complete frames in the accumulator
+                        while acc.len() >= 5 {
+                            let channel = acc[0];
+                            let length = u32::from_be_bytes([acc[1], acc[2], acc[3], acc[4]]) as usize;
+
+                            if length > 65536 {
+                                error!("Message too large: {}", length);
+                                return;
+                            }
+
+                            if acc.len() < 5 + length {
+                                break; // need more data
+                            }
+
+                            let payload = acc[5..5 + length].to_vec();
+                            acc.drain(..5 + length);
+
+                            if channel == 0 {
+                                // JSON control message
+                                match serde_json::from_slice::<VsockRequest>(&payload) {
+                                    Ok(request) => {
+                                        let response = handle_request(
+                                            request,
+                                            &iroh_state,
+                                            &iroh_start_tx,
+                                            &pty_manager,
+                                            &write_tx,
+                                        ).await;
+                                        let frame = frame_message(0, &response);
+                                        if write_tx.send(frame).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to parse request: {}", e);
+                                    }
+                                }
+                            } else {
+                                // Binary PTY data (input to PTY stdin)
+                                let manager = pty_manager.lock().await;
+                                if let Some(writer) = manager.get(channel) {
+                                    drop(manager);
+                                    let mut w = writer.lock().await;
+                                    if let Err(e) = w.write_all(&payload).await {
+                                        warn!("Failed to write to PTY channel {}: {}", channel, e);
+                                    }
+                                } else {
+                                    warn!("Received data for unknown PTY channel: {}", channel);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                            error!("Failed to read from vsock: {}", e);
+                        }
+                        return;
+                    }
+                }
             }
-            return;
-        }
-
-        let length = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if length > buf.len() {
-            error!("Message too large: {}", length);
-            return;
-        }
-
-        if let Err(e) = stream.read_exact(&mut buf[..length]).await {
-            error!("Failed to read message: {}", e);
-            return;
-        }
-
-        let response = match serde_json::from_slice::<VsockRequest>(&buf[..length]) {
-            Ok(request) => handle_request(request, &iroh_state, &iroh_start_tx).await,
-            Err(e) => {
-                warn!("Failed to parse request: {}", e);
-                continue;
+            // --- Write queued frames to vsock ---
+            Some(frame) = write_rx.recv() => {
+                if let Err(e) = stream.write_all(&frame).await {
+                    error!("Failed to write to vsock: {}", e);
+                    return;
+                }
+                // Drain any additional queued frames before flushing
+                while let Ok(frame) = write_rx.try_recv() {
+                    if let Err(e) = stream.write_all(&frame).await {
+                        error!("Failed to write to vsock: {}", e);
+                        return;
+                    }
+                }
+                if let Err(e) = stream.flush().await {
+                    error!("Failed to flush vsock: {}", e);
+                    return;
+                }
             }
-        };
-
-        if let Err(e) = send_message(&mut stream, &response).await {
-            error!("Failed to send response: {}", e);
-            return;
         }
     }
 }
@@ -108,6 +247,8 @@ async fn handle_request(
     request: VsockRequest,
     iroh_state: &IrohState,
     iroh_start_tx: &Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+    pty_manager: &Arc<Mutex<PtyManager>>,
+    write_tx: &mpsc::Sender<FramedMsg>,
 ) -> VsockResponse {
     match request {
         VsockRequest::Exec { id, command } => {
@@ -259,17 +400,128 @@ async fn handle_request(
                 VsockResponse::ConfigureIrohResponse { id, ok: false }
             }
         }
-    }
-}
+        VsockRequest::PtyOpen { id, rows, cols } => {
+            info!("PtyOpen: rows={}, cols={}", rows, cols);
+            let mut manager = pty_manager.lock().await;
 
-async fn send_message<T: serde::Serialize>(
-    stream: &mut VsockStream,
-    msg: &T,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let json = serde_json::to_vec(msg)?;
-    let length = json.len() as u32;
-    stream.write_all(&length.to_be_bytes()).await?;
-    stream.write_all(&json).await?;
-    stream.flush().await?;
-    Ok(())
+            match manager.allocate_channel() {
+                Some(channel) => {
+                    // Spawn PTY session with /bin/bash
+                    match PtySession::spawn("/bin/bash", cols, rows) {
+                        Ok(session) => {
+                            // Split into reader (for output task) and writer (for input/resize).
+                            // No shared mutex — reader and writer use separate dup'd fds.
+                            let (mut pty_reader, pty_writer) = session.into_split();
+                            manager.insert(channel, Arc::new(Mutex::new(pty_writer)));
+                            drop(manager);
+
+                            // Spawn task to forward PTY output to vsock via the write channel.
+                            // The reader is owned exclusively by this task — no locking needed.
+                            let tx = write_tx.clone();
+                            let pty_manager_clone = pty_manager.clone();
+                            tokio::spawn(async move {
+                                let mut buf = vec![0u8; 4096];
+                                loop {
+                                    match pty_reader.read(&mut buf).await {
+                                        Ok(0) => {
+                                            info!("PTY channel {} closed", channel);
+                                            break;
+                                        }
+                                        Ok(n) => {
+                                            let frame = frame_binary(channel, &buf[..n]);
+                                            if tx.send(frame).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("PTY read error on channel {}: {}", channel, e);
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Clean up
+                                pty_manager_clone.lock().await.remove(channel);
+
+                                // Send pty_closed notification
+                                let closed = frame_message(0, &VsockResponse::PtyClosed { channel });
+                                let _ = tx.send(closed).await;
+                            });
+
+                            VsockResponse::PtyOpened { id, channel }
+                        }
+                        Err(e) => {
+                            error!("Failed to spawn PTY: {}", e);
+                            VsockResponse::ExecResponse {
+                                id,
+                                exit_code: -1,
+                                stdout: String::new(),
+                                stderr: format!("Failed to spawn PTY: {}", e),
+                            }
+                        }
+                    }
+                }
+                None => {
+                    error!("No available PTY channels");
+                    VsockResponse::ExecResponse {
+                        id,
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stderr: "No available PTY channels".to_string(),
+                    }
+                }
+            }
+        }
+        VsockRequest::PtyResize { id, channel, rows, cols } => {
+            info!("PtyResize: channel={}, rows={}, cols={}", channel, rows, cols);
+            let manager = pty_manager.lock().await;
+            match manager.get(channel) {
+                Some(writer) => {
+                    drop(manager);
+                    let w = writer.lock().await;
+                    match w.resize(rows, cols) {
+                        Ok(()) => VsockResponse::ExecResponse {
+                            id,
+                            exit_code: 0,
+                            stdout: "Resized".to_string(),
+                            stderr: String::new(),
+                        },
+                        Err(e) => VsockResponse::ExecResponse {
+                            id,
+                            exit_code: -1,
+                            stdout: String::new(),
+                            stderr: format!("Resize failed: {}", e),
+                        },
+                    }
+                }
+                None => VsockResponse::ExecResponse {
+                    id,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Unknown PTY channel: {}", channel),
+                },
+            }
+        }
+        VsockRequest::PtyClose { channel } => {
+            info!("PtyClose: channel={}", channel);
+            let mut manager = pty_manager.lock().await;
+            manager.remove(channel);
+            VsockResponse::PtyClosed { channel }
+        }
+        VsockRequest::SpawnSubAgent { id, opts } => {
+            info!("SpawnSubAgent: opts={:?}", opts);
+            VsockResponse::SpawnSubAgentResponse {
+                id,
+                vm_id: "pending".to_string(),
+            }
+        }
+        VsockRequest::SnapshotSelf { id, name } => {
+            info!("SnapshotSelf: name={}", name);
+            VsockResponse::SnapshotSelfResponse { id, ok: true }
+        }
+        VsockRequest::EmitEvent { id, event, payload } => {
+            info!("EmitEvent: event={}, payload={:?}", event, payload);
+            VsockResponse::EventAck { id }
+        }
+    }
 }

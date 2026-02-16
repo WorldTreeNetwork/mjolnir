@@ -1,0 +1,319 @@
+defmodule Mjolnir.Vsock.ProtocolTest do
+  use ExUnit.Case, async: true
+
+  alias Mjolnir.Vsock.Protocol
+
+  describe "encode/2 with channel multiplexing" do
+    test "encodes JSON message on channel 0" do
+      message = %{"type" => "ping", "id" => "test-123"}
+      encoded = Protocol.encode(message, 0)
+
+      # Check format: 1 byte channel + 4 bytes length + JSON payload
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 0
+      assert byte_size(payload) == length
+      assert Jason.decode!(payload) == message
+    end
+
+    test "encodes JSON message on default channel (0)" do
+      message = %{"type" => "exec", "command" => "ls"}
+      encoded = Protocol.encode(message)
+
+      <<channel::8, _length::big-32, _payload::binary>> = encoded
+      assert channel == 0
+    end
+
+    test "encodes binary data on channel 5" do
+      data = "Hello, PTY!"
+      encoded = Protocol.encode(data, 5)
+
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 5
+      assert length == byte_size(data)
+      assert payload == data
+    end
+
+    test "encodes binary data on channel 255" do
+      data = <<1, 2, 3, 4, 5>>
+      encoded = Protocol.encode(data, 255)
+
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 255
+      assert length == byte_size(data)
+      assert payload == data
+    end
+
+    test "handles empty binary data" do
+      encoded = Protocol.encode(<<>>, 10)
+
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 10
+      assert length == 0
+      assert payload == <<>>
+    end
+
+    test "handles large binary payloads" do
+      data = :crypto.strong_rand_bytes(10_000)
+      encoded = Protocol.encode(data, 42)
+
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 42
+      assert length == 10_000
+      assert payload == data
+    end
+  end
+
+  describe "decode_frame/1" do
+    test "decodes complete frame on channel 0" do
+      message = %{"type" => "pong"}
+      encoded = Protocol.encode(message, 0)
+
+      assert {:ok, channel, payload, rest} = Protocol.decode_frame(encoded)
+      assert channel == 0
+      assert Jason.decode!(payload) == message
+      assert rest == <<>>
+    end
+
+    test "decodes complete frame on channel 7" do
+      data = "test data"
+      encoded = Protocol.encode(data, 7)
+
+      assert {:ok, channel, payload, rest} = Protocol.decode_frame(encoded)
+      assert channel == 7
+      assert payload == data
+      assert rest == <<>>
+    end
+
+    test "returns incomplete for partial header" do
+      partial = <<5, 0, 0>>
+      assert {:incomplete, ^partial} = Protocol.decode_frame(partial)
+    end
+
+    test "returns incomplete when payload is incomplete" do
+      # Channel 3, length 100, but only 50 bytes of payload
+      partial = <<3, 0, 0, 0, 100>> <> :crypto.strong_rand_bytes(50)
+      assert {:incomplete, ^partial} = Protocol.decode_frame(partial)
+    end
+
+    test "decodes frame and returns remaining data" do
+      frame1 = Protocol.encode(%{"type" => "ping"}, 0)
+      frame2 = Protocol.encode("data", 1)
+      buffer = frame1 <> frame2
+
+      assert {:ok, 0, payload1, rest1} = Protocol.decode_frame(buffer)
+      assert Jason.decode!(payload1) == %{"type" => "ping"}
+
+      assert {:ok, 1, payload2, rest2} = Protocol.decode_frame(rest1)
+      assert payload2 == "data"
+      assert rest2 == <<>>
+    end
+
+    test "handles empty buffer" do
+      assert {:incomplete, <<>>} = Protocol.decode_frame(<<>>)
+    end
+  end
+
+  describe "PTY control message builders" do
+    test "pty_open_request/3 builds correct message" do
+      request = Protocol.pty_open_request(30, 120)
+
+      assert request["type"] == "pty_open"
+      assert request["rows"] == 30
+      assert request["cols"] == 120
+      assert is_binary(request["id"])
+    end
+
+    test "pty_open_request/3 uses defaults" do
+      request = Protocol.pty_open_request()
+
+      assert request["rows"] == 24
+      assert request["cols"] == 80
+    end
+
+    test "pty_open_request/3 accepts custom request_id" do
+      request = Protocol.pty_open_request(24, 80, "custom-id")
+
+      assert request["id"] == "custom-id"
+    end
+
+    test "pty_resize_request/3 builds correct message" do
+      request = Protocol.pty_resize_request(5, 40, 100)
+
+      assert request["type"] == "pty_resize"
+      assert request["channel"] == 5
+      assert request["rows"] == 40
+      assert request["cols"] == 100
+    end
+
+    test "pty_close_request/1 builds correct message" do
+      request = Protocol.pty_close_request(7)
+
+      assert request["type"] == "pty_close"
+      assert request["channel"] == 7
+    end
+  end
+
+  describe "agent protocol message builders" do
+    test "spawn_sub_agent_request/2 builds correct message" do
+      opts = %{"image" => "alpine", "command" => "/bin/sh"}
+      request = Protocol.spawn_sub_agent_request(opts)
+
+      assert request["type"] == "spawn_sub_agent"
+      assert request["opts"] == opts
+      assert is_binary(request["id"])
+    end
+
+    test "spawn_sub_agent_request/2 accepts custom request_id" do
+      request = Protocol.spawn_sub_agent_request(%{}, "custom-id")
+
+      assert request["id"] == "custom-id"
+    end
+
+    test "snapshot_self_request/2 builds correct message" do
+      request = Protocol.snapshot_self_request("my-snapshot")
+
+      assert request["type"] == "snapshot_self"
+      assert request["name"] == "my-snapshot"
+      assert is_binary(request["id"])
+    end
+
+    test "snapshot_self_request/2 accepts custom request_id" do
+      request = Protocol.snapshot_self_request("snap", "custom-id")
+
+      assert request["id"] == "custom-id"
+    end
+
+    test "emit_event_request/3 builds correct message" do
+      request = Protocol.emit_event_request("user_action", %{"key" => "value"})
+
+      assert request["type"] == "emit_event"
+      assert request["event"] == "user_action"
+      assert request["payload"] == %{"key" => "value"}
+      assert is_binary(request["id"])
+    end
+
+    test "emit_event_request/3 accepts custom request_id" do
+      request = Protocol.emit_event_request("event", %{}, "custom-id")
+
+      assert request["id"] == "custom-id"
+    end
+  end
+
+  describe "existing message builders" do
+    test "exec_request/2 still works" do
+      request = Protocol.exec_request("ls -la")
+
+      assert request["type"] == "exec"
+      assert request["command"] == "ls -la"
+      assert is_binary(request["id"])
+    end
+
+    test "ping/0 still works" do
+      ping = Protocol.ping()
+      assert ping["type"] == "ping"
+    end
+
+    test "configure_network_request/2 still works" do
+      request = Protocol.configure_network_request("10.0.0.5")
+
+      assert request["type"] == "configure_network"
+      assert request["ip"] == "10.0.0.5"
+      assert is_binary(request["id"])
+    end
+
+    test "configure_ssh_request/2 still works" do
+      keys = "ssh-rsa AAAA..."
+      request = Protocol.configure_ssh_request(keys)
+
+      assert request["type"] == "configure_ssh"
+      assert request["authorized_keys"] == keys
+      assert is_binary(request["id"])
+    end
+
+    test "configure_identity_request/3 still works" do
+      request = Protocol.configure_identity_request("vm-123", "http://api.example.com")
+
+      assert request["type"] == "configure_identity"
+      assert request["vm_id"] == "vm-123"
+      assert request["api_url"] == "http://api.example.com"
+      assert is_binary(request["id"])
+    end
+
+    test "get_iroh_status_request/1 still works" do
+      request = Protocol.get_iroh_status_request()
+
+      assert request["type"] == "get_iroh_status"
+      assert is_binary(request["id"])
+    end
+
+    test "configure_iroh_request/2 still works" do
+      request = Protocol.configure_iroh_request(true)
+
+      assert request["type"] == "configure_iroh"
+      assert request["enabled"] == true
+      assert is_binary(request["id"])
+    end
+  end
+
+  describe "parse_iroh_ready/1" do
+    test "parses valid iroh_ready message" do
+      msg = %{
+        "type" => "iroh_ready",
+        "node_id" => "abc123",
+        "ticket" => "ticket456",
+        "generated_key" => false
+      }
+
+      assert {:ok, result} = Protocol.parse_iroh_ready(msg)
+      assert result.node_id == "abc123"
+      assert result.ticket == "ticket456"
+      assert result.generated_key == false
+    end
+
+    test "defaults generated_key to true" do
+      msg = %{
+        "type" => "iroh_ready",
+        "node_id" => "abc123",
+        "ticket" => "ticket456"
+      }
+
+      assert {:ok, result} = Protocol.parse_iroh_ready(msg)
+      assert result.generated_key == true
+    end
+
+    test "returns error for invalid message" do
+      assert {:error, :invalid_iroh_ready} = Protocol.parse_iroh_ready(%{})
+    end
+  end
+
+  describe "multiple frames in buffer" do
+    test "processes multiple complete frames" do
+      frame1 = Protocol.encode(%{"type" => "ping"}, 0)
+      frame2 = Protocol.encode("hello", 5)
+      frame3 = Protocol.encode(%{"type" => "pong"}, 0)
+      buffer = frame1 <> frame2 <> frame3
+
+      assert {:ok, 0, payload1, rest1} = Protocol.decode_frame(buffer)
+      assert Jason.decode!(payload1) == %{"type" => "ping"}
+
+      assert {:ok, 5, payload2, rest2} = Protocol.decode_frame(rest1)
+      assert payload2 == "hello"
+
+      assert {:ok, 0, payload3, rest3} = Protocol.decode_frame(rest2)
+      assert Jason.decode!(payload3) == %{"type" => "pong"}
+
+      assert rest3 == <<>>
+    end
+
+    test "handles partial frame at end of buffer" do
+      complete = Protocol.encode(%{"type" => "ping"}, 0)
+      partial = <<7, 0, 0, 0, 50, "incomplete"::binary>>
+      buffer = complete <> partial
+
+      assert {:ok, 0, payload, rest} = Protocol.decode_frame(buffer)
+      assert Jason.decode!(payload) == %{"type" => "ping"}
+
+      assert {:incomplete, ^partial} = Protocol.decode_frame(rest)
+    end
+  end
+end

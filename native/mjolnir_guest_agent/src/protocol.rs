@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Messages from host to guest (vsock)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum VsockRequest {
     #[serde(rename = "exec")]
@@ -24,10 +24,22 @@ pub enum VsockRequest {
     },
     #[serde(rename = "configure_iroh")]
     ConfigureIroh { id: String, enabled: bool },
+    #[serde(rename = "pty_open")]
+    PtyOpen { id: String, rows: u16, cols: u16 },
+    #[serde(rename = "pty_resize")]
+    PtyResize { id: String, channel: u8, rows: u16, cols: u16 },
+    #[serde(rename = "pty_close")]
+    PtyClose { channel: u8 },
+    #[serde(rename = "spawn_sub_agent")]
+    SpawnSubAgent { id: String, opts: serde_json::Value },
+    #[serde(rename = "snapshot_self")]
+    SnapshotSelf { id: String, name: String },
+    #[serde(rename = "emit_event")]
+    EmitEvent { id: String, event: String, payload: serde_json::Value },
 }
 
 /// Messages from guest to host (vsock)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum VsockResponse {
     #[serde(rename = "exec_response")]
@@ -50,6 +62,16 @@ pub enum VsockResponse {
     },
     #[serde(rename = "configure_iroh_response")]
     ConfigureIrohResponse { id: String, ok: bool },
+    #[serde(rename = "pty_opened")]
+    PtyOpened { id: String, channel: u8 },
+    #[serde(rename = "pty_closed")]
+    PtyClosed { channel: u8 },
+    #[serde(rename = "spawn_sub_agent_response")]
+    SpawnSubAgentResponse { id: String, vm_id: String },
+    #[serde(rename = "snapshot_self_response")]
+    SnapshotSelfResponse { id: String, ok: bool },
+    #[serde(rename = "event_ack")]
+    EventAck { id: String },
 }
 
 /// Notification sent when Iroh is ready

@@ -32,7 +32,8 @@ defmodule Mjolnir.MixProject do
       {:plug, "~> 1.16"},
       {:req, "~> 0.4"},
       {:typed_struct, "~> 0.3"},
-      {:uuid, "~> 1.1"}
+      {:uuid, "~> 1.1"},
+      {:websock_adapter, "~> 0.5"}
     ]
   end
 end
