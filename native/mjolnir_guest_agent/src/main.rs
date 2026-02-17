@@ -31,8 +31,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Channel to signal when to start Iroh (after configure_iroh message)
     let (iroh_start_tx, iroh_start_rx) = oneshot::channel();
 
+    // Shared bridge holder for agent SDK ↔ vsock communication
+    let bridge_holder = vsock::new_bridge_holder();
+
     // Spawn agent SDK HTTP server
-    if let Err(e) = agent::run_agent_sdk().await {
+    if let Err(e) = agent::run_agent_sdk(bridge_holder.clone()).await {
         error!("Failed to start agent SDK: {}", e);
     }
 
@@ -41,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         VSOCK_PORT,
         iroh_ready_rx,
         iroh_start_tx,
+        bridge_holder,
     ));
 
     // Wait for configure_iroh message from host

@@ -233,54 +233,23 @@ defmodule Mjolnir.Vsock.Connection do
   defp handle_control_message(json, state) do
     case Jason.decode(json) do
       {:ok, %{"type" => "exec_response", "id" => id} = response} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.warning("Received response for unknown request: #{id}")
-            state
+        result =
+          if response["exit_code"] == 0 do
+            {:ok, response["stdout"]}
+          else
+            {:error, {:exit_code, response["exit_code"], response["stderr"]}}
+          end
 
-          {from, pending} ->
-            result =
-              if response["exit_code"] == 0 do
-                {:ok, response["stdout"]}
-              else
-                {:error, {:exit_code, response["exit_code"], response["stderr"]}}
-              end
-
-            GenServer.reply(from, result)
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, result)
 
       {:ok, %{"type" => "pong", "id" => id}} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            state
-
-          {from, pending} ->
-            GenServer.reply(from, :pong)
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, :pong)
 
       {:ok, %{"type" => "configure_iroh_response", "id" => id} = response} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.debug("Received configure_iroh_response for unknown request: #{id}")
-            state
-
-          {from, pending} ->
-            GenServer.reply(from, {:ok, response})
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, {:ok, response})
 
       {:ok, %{"type" => "pty_opened", "id" => id, "channel" => channel}} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.warning("Received pty_opened for unknown request: #{id}")
-            state
-
-          {from, pending} ->
-            GenServer.reply(from, {:ok, channel})
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, {:ok, channel})
 
       {:ok, %{"type" => "pty_closed", "channel" => channel}} ->
         # Notify handler and clean up
@@ -293,37 +262,86 @@ defmodule Mjolnir.Vsock.Connection do
         %{state | channel_handlers: handlers}
 
       {:ok, %{"type" => "spawn_sub_agent_response", "id" => id} = response} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.warning("Received spawn_sub_agent_response for unknown request: #{id}")
-            state
-
-          {from, pending} ->
-            GenServer.reply(from, {:ok, response})
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, {:ok, response})
 
       {:ok, %{"type" => "snapshot_self_response", "id" => id} = response} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.warning("Received snapshot_self_response for unknown request: #{id}")
-            state
-
-          {from, pending} ->
-            GenServer.reply(from, {:ok, response})
-            %{state | pending_requests: pending}
-        end
+        reply_to_pending(state, id, {:ok, response})
 
       {:ok, %{"type" => "event_ack", "id" => id} = response} ->
-        case Map.pop(state.pending_requests, id) do
-          {nil, _} ->
-            Logger.warning("Received event_ack for unknown request: #{id}")
-            state
+        reply_to_pending(state, id, {:ok, response})
 
-          {from, pending} ->
-            GenServer.reply(from, {:ok, response})
-            %{state | pending_requests: pending}
-        end
+      {:ok, %{"type" => "spawn_sub_agent", "id" => id, "opts" => opts}} ->
+        Logger.info("Guest requesting sub-agent spawn: #{id}")
+        conn_pid = self()
+
+        Task.start(fn ->
+          response =
+            try do
+              case Mjolnir.VM.spawn(atomize_opts(opts)) do
+                {:ok, %{id: new_vm_id}} ->
+                  %{"type" => "spawn_sub_agent_response", "id" => id, "vm_id" => new_vm_id}
+
+                {:error, reason} ->
+                  %{
+                    "type" => "spawn_sub_agent_response",
+                    "id" => id,
+                    "vm_id" => "",
+                    "error" => inspect(reason)
+                  }
+              end
+            catch
+              kind, reason ->
+                Logger.error("Sub-agent spawn crashed: #{inspect(kind)}: #{inspect(reason)}")
+
+                %{
+                  "type" => "spawn_sub_agent_response",
+                  "id" => id,
+                  "vm_id" => "",
+                  "error" => inspect(reason)
+                }
+            end
+
+          Mjolnir.Vsock.Connection.send_control_message(conn_pid, response)
+        end)
+
+        state
+
+      {:ok, %{"type" => "snapshot_self", "id" => id, "name" => name}} ->
+        Logger.info("Guest requesting self-snapshot: #{name}")
+        conn_pid = self()
+        vm_id = state.vm_id
+
+        Task.start(fn ->
+          response =
+            try do
+              case Mjolnir.VM.snapshot(vm_id, name) do
+                {:ok, _} ->
+                  %{"type" => "snapshot_self_response", "id" => id, "ok" => true}
+
+                {:error, _} ->
+                  %{"type" => "snapshot_self_response", "id" => id, "ok" => false}
+              end
+            catch
+              kind, reason ->
+                Logger.error("Snapshot crashed: #{inspect(kind)}: #{inspect(reason)}")
+                %{"type" => "snapshot_self_response", "id" => id, "ok" => false}
+            end
+
+          Mjolnir.Vsock.Connection.send_control_message(conn_pid, response)
+        end)
+
+        state
+
+      {:ok, %{"type" => "emit_event", "id" => id, "event" => event, "payload" => payload}} ->
+        Logger.debug("Guest emitting event: #{event}")
+
+        Mjolnir.EventBus.publish(state.vm_id, :agent_event, %{
+          "event" => event,
+          "payload" => payload
+        })
+
+        send_message(state.socket, %{"type" => "event_ack", "id" => id}, 0)
+        state
 
       {:ok, %{"type" => "iroh_ready"} = msg} ->
         # Guest proactively sends this when Iroh is ready - just log and ignore
@@ -344,6 +362,18 @@ defmodule Mjolnir.Vsock.Connection do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  defp reply_to_pending(state, id, result) do
+    case Map.pop(state.pending_requests, id) do
+      {nil, _} ->
+        Logger.warning("Received response for unknown request: #{id}")
+        state
+
+      {from, pending} ->
+        GenServer.reply(from, result)
+        %{state | pending_requests: pending}
+    end
+  end
 
   defp connect(state) do
     # Connect to Firecracker's vsock proxy socket
@@ -394,4 +424,14 @@ defmodule Mjolnir.Vsock.Connection do
     data = Protocol.encode(message, channel)
     :gen_tcp.send(socket, data)
   end
+
+  defp atomize_opts(opts) when is_map(opts) do
+    for {k, v} <- opts, into: %{} do
+      {String.to_existing_atom(k), v}
+    end
+  rescue
+    ArgumentError -> opts
+  end
+
+  defp atomize_opts(opts), do: opts
 end

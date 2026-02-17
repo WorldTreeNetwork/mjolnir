@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::time::timeout;
 use tokio_vsock::{VsockListener, VsockStream};
 use tracing::{error, info, warn};
 
@@ -22,6 +23,66 @@ pub enum IrohStatus {
 }
 
 pub type IrohState = Arc<RwLock<IrohStatus>>;
+
+/// Shared bridge allowing the agent SDK to send requests on the active vsock connection.
+pub struct AgentBridge {
+    write_tx: mpsc::Sender<FramedMsg>,
+    pending_responses: Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>,
+}
+
+impl AgentBridge {
+    /// Send a request over the vsock connection and wait for the response.
+    /// The request JSON must contain an "id" field used to match the response.
+    pub async fn send_request(
+        &self,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        let id = request
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or("Request must contain an 'id' field")?
+            .to_string();
+
+        let (tx, rx) = oneshot::channel();
+
+        // Register the pending response
+        {
+            let mut pending = self.pending_responses.lock().await;
+            pending.insert(id.clone(), tx);
+        }
+
+        // Frame and send the request on channel 0
+        let frame = frame_message(0, &request);
+        if let Err(e) = self.write_tx.send(frame).await {
+            // Clean up on send failure
+            let mut pending = self.pending_responses.lock().await;
+            pending.remove(&id);
+            return Err(format!("Failed to send frame: {}", e).into());
+        }
+
+        // Wait for response with 30-second timeout
+        match timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) => {
+                // Sender was dropped (connection closed)
+                Err("Connection closed while waiting for response".into())
+            }
+            Err(_) => {
+                // Timeout — clean up pending entry
+                let mut pending = self.pending_responses.lock().await;
+                pending.remove(&id);
+                Err("Request timed out after 30 seconds".into())
+            }
+        }
+    }
+}
+
+/// Shared holder — set when host connection is established, cleared on disconnect.
+pub type BridgeHolder = Arc<RwLock<Option<Arc<AgentBridge>>>>;
+
+pub fn new_bridge_holder() -> BridgeHolder {
+    Arc::new(RwLock::new(None))
+}
 
 /// Manages PTY write halves and channel allocation.
 /// The read halves are owned by their respective output-forwarding tasks.
@@ -94,6 +155,7 @@ pub async fn run_vsock_listener(
     port: u32,
     iroh_ready_rx: oneshot::Receiver<IrohReady>,
     iroh_start_tx: oneshot::Sender<bool>,
+    bridge_holder: BridgeHolder,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = VsockListener::bind(VMADDR_CID_ANY, port)?;
     info!("Vsock listener started on port {}", port);
@@ -124,7 +186,8 @@ pub async fn run_vsock_listener(
                 info!("Vsock connection from {:?}", addr);
                 let state = iroh_state.clone();
                 let start_tx = iroh_start_tx.clone();
-                tokio::spawn(handle_vsock_connection(stream, state, start_tx));
+                let bridge = bridge_holder.clone();
+                tokio::spawn(handle_vsock_connection(stream, state, start_tx, bridge));
             }
             Err(e) => error!("Failed to accept vsock connection: {}", e),
         }
@@ -135,12 +198,20 @@ async fn handle_vsock_connection(
     mut stream: VsockStream,
     iroh_state: IrohState,
     iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+    bridge_holder: BridgeHolder,
 ) {
     // Channel for outgoing writes. PTY output tasks and the reader loop
     // send pre-framed messages here; the writer half drains them.
     let (write_tx, mut write_rx) = mpsc::channel::<FramedMsg>(64);
 
     let pty_manager = Arc::new(Mutex::new(PtyManager::new()));
+
+    // Set up the agent bridge so the SDK can send requests on this connection
+    let bridge = Arc::new(AgentBridge {
+        write_tx: write_tx.clone(),
+        pending_responses: Mutex::new(HashMap::new()),
+    });
+    *bridge_holder.write().await = Some(bridge.clone());
 
     // We need to multiplex reading from the stream and writing queued
     // frames. We can't use tokio::io::split (shared internal mutex), so
@@ -149,14 +220,14 @@ async fn handle_vsock_connection(
     // Accumulator for incomplete frames
     let mut acc: Vec<u8> = Vec::new();
 
-    loop {
+    'conn: loop {
         tokio::select! {
             // --- Read bytes from vsock ---
             result = stream.read(&mut read_buf) => {
                 match result {
                     Ok(0) => {
                         info!("Vsock connection closed");
-                        return;
+                        break 'conn;
                     }
                     Ok(n) => {
                         acc.extend_from_slice(&read_buf[..n]);
@@ -168,7 +239,7 @@ async fn handle_vsock_connection(
 
                             if length > 65536 {
                                 error!("Message too large: {}", length);
-                                return;
+                                break 'conn;
                             }
 
                             if acc.len() < 5 + length {
@@ -179,8 +250,28 @@ async fn handle_vsock_connection(
                             acc.drain(..5 + length);
 
                             if channel == 0 {
-                                // JSON control message
-                                match serde_json::from_slice::<VsockRequest>(&payload) {
+                                // JSON control message — first check if it's a response
+                                // to a pending agent SDK request
+                                let json_value: serde_json::Value = match serde_json::from_slice(&payload) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        warn!("Failed to parse JSON: {}", e);
+                                        continue;
+                                    }
+                                };
+
+                                // Check if this is a response to a pending agent SDK request
+                                if let Some(id) = json_value.get("id").and_then(|v| v.as_str()) {
+                                    let id = id.to_string();
+                                    let mut pending = bridge.pending_responses.lock().await;
+                                    if let Some(sender) = pending.remove(&id) {
+                                        let _ = sender.send(json_value);
+                                        continue; // response routed, skip normal handling
+                                    }
+                                }
+
+                                // Not a pending response — handle as normal VsockRequest
+                                match serde_json::from_value::<VsockRequest>(json_value) {
                                     Ok(request) => {
                                         let response = handle_request(
                                             request,
@@ -191,7 +282,7 @@ async fn handle_vsock_connection(
                                         ).await;
                                         let frame = frame_message(0, &response);
                                         if write_tx.send(frame).await.is_err() {
-                                            return;
+                                            break 'conn;
                                         }
                                     }
                                     Err(e) => {
@@ -217,7 +308,7 @@ async fn handle_vsock_connection(
                         if e.kind() != std::io::ErrorKind::UnexpectedEof {
                             error!("Failed to read from vsock: {}", e);
                         }
-                        return;
+                        break 'conn;
                     }
                 }
             }
@@ -225,22 +316,26 @@ async fn handle_vsock_connection(
             Some(frame) = write_rx.recv() => {
                 if let Err(e) = stream.write_all(&frame).await {
                     error!("Failed to write to vsock: {}", e);
-                    return;
+                    break 'conn;
                 }
                 // Drain any additional queued frames before flushing
                 while let Ok(frame) = write_rx.try_recv() {
                     if let Err(e) = stream.write_all(&frame).await {
                         error!("Failed to write to vsock: {}", e);
-                        return;
+                        break 'conn;
                     }
                 }
                 if let Err(e) = stream.flush().await {
                     error!("Failed to flush vsock: {}", e);
-                    return;
+                    break 'conn;
                 }
             }
         }
     }
+
+    // Clear bridge on disconnect — pending requests will fail via dropped oneshot senders
+    info!("Clearing agent bridge");
+    *bridge_holder.write().await = None;
 }
 
 async fn handle_request(
@@ -508,20 +603,16 @@ async fn handle_request(
             manager.remove(channel);
             VsockResponse::PtyClosed { channel }
         }
-        VsockRequest::SpawnSubAgent { id, opts } => {
-            info!("SpawnSubAgent: opts={:?}", opts);
-            VsockResponse::SpawnSubAgentResponse {
+        VsockRequest::SpawnSubAgent { id, .. }
+        | VsockRequest::SnapshotSelf { id, .. }
+        | VsockRequest::EmitEvent { id, .. } => {
+            warn!("Received guest-to-host message type as incoming request (unexpected)");
+            VsockResponse::ExecResponse {
                 id,
-                vm_id: "pending".to_string(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: "This message type is guest-to-host only".to_string(),
             }
-        }
-        VsockRequest::SnapshotSelf { id, name } => {
-            info!("SnapshotSelf: name={}", name);
-            VsockResponse::SnapshotSelfResponse { id, ok: true }
-        }
-        VsockRequest::EmitEvent { id, event, payload } => {
-            info!("EmitEvent: event={}, payload={:?}", event, payload);
-            VsockResponse::EventAck { id }
         }
     }
 }

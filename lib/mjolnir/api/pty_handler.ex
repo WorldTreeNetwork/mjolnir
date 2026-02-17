@@ -71,6 +71,7 @@ defmodule Mjolnir.API.PtyHandler do
     # Text frame = control message
     case Jason.decode(data) do
       {:ok, %{"type" => "resize", "rows" => rows, "cols" => cols}} ->
+        {rows, cols} = clamp_dimensions(rows, cols)
         resize_msg = Mjolnir.Vsock.Protocol.pty_resize_request(state.channel, rows, cols)
         Mjolnir.Vsock.Connection.send_control_message(state.conn_pid, resize_msg)
         {:ok, state}
@@ -107,4 +108,11 @@ defmodule Mjolnir.API.PtyHandler do
 
     :ok
   end
+
+  defp clamp_dimensions(rows, cols) do
+    {clamp(rows, 1, 500), clamp(cols, 1, 500)}
+  end
+
+  defp clamp(val, min_val, max_val) when is_integer(val), do: val |> max(min_val) |> min(max_val)
+  defp clamp(_val, min_val, _max_val), do: min_val
 end
