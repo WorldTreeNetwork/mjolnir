@@ -1,10 +1,15 @@
 import Config
 
 config :mjolnir,
+  # Hypervisor
+  hypervisor: Mjolnir.Hypervisor.Firecracker,
+
   # Paths
   btrfs_root: "/var/lib/mjolnir/btrfs",
   kernel_path: "/var/lib/mjolnir/vmlinux",
+  ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",
   firecracker_bin: "/usr/local/bin/firecracker",
+  cloud_hypervisor_bin: "/usr/local/bin/cloud-hypervisor",
   vm_storage_subdir: "@vms",
 
   # Defaults

@@ -23,6 +23,9 @@ defmodule Mjolnir.Application do
         # Dynamic supervisor for VM processes
         {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.VMSupervisor},
 
+        # Task supervisor for fire-and-forget operations (sub-agent spawn, snapshots)
+        {Task.Supervisor, name: Mjolnir.TaskSupervisor},
+
         # Event bus for VM lifecycle events
         Mjolnir.EventBus
       ] ++

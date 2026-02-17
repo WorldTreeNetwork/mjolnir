@@ -109,8 +109,11 @@ defmodule Mjolnir.API.PtyHandler do
     :ok
   end
 
+  # Max terminal dimensions - prevents unreasonable allocations in the guest PTY
+  @max_pty_dimension 500
+
   defp clamp_dimensions(rows, cols) do
-    {clamp(rows, 1, 500), clamp(cols, 1, 500)}
+    {clamp(rows, 1, @max_pty_dimension), clamp(cols, 1, @max_pty_dimension)}
   end
 
   defp clamp(val, min_val, max_val) when is_integer(val), do: val |> max(min_val) |> min(max_val)

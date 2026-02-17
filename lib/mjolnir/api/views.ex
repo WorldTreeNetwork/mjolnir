@@ -10,6 +10,7 @@ defmodule Mjolnir.API.Views do
     %{
       id: vm.id,
       state: vm.state,
+      hypervisor: hypervisor_name(vm.hypervisor),
       guest_ip: get_in_net(vm, :guest_ip),
       pty_ready: vm.pty_ready || false,
       ticket: vm.ticket,
@@ -27,6 +28,7 @@ defmodule Mjolnir.API.Views do
     %{
       id: vm.id,
       state: vm.state,
+      hypervisor: hypervisor_name(vm.hypervisor),
       guest_ip: get_in_net(vm, :guest_ip),
       pty_ready: vm.pty_ready || false,
       ticket: vm.ticket
@@ -38,6 +40,12 @@ defmodule Mjolnir.API.Views do
       %{^key => val} -> val
       _ -> nil
     end
+  end
+
+  defp hypervisor_name(nil), do: nil
+
+  defp hypervisor_name(hypervisor_module) when is_atom(hypervisor_module) do
+    hypervisor_module.process_name()
   end
 
   defp render_config(nil), do: nil

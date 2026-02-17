@@ -9,14 +9,14 @@ defmodule Mjolnir.VM do
   use GenServer, restart: :transient
   require Logger
 
-  alias Mjolnir.Firecracker.{Client, Config}
   alias Mjolnir.BTRFS
 
   defstruct [
     :id,
     :config,
-    :firecracker_pid,
-    :firecracker_port,
+    :hypervisor,
+    :hypervisor_pid,
+    :hypervisor_port,
     :socket_path,
     :vsock_path,
     :vsock_conn,
@@ -343,10 +343,14 @@ defmodule Mjolnir.VM do
         val -> val
       end
 
+    # Resolve hypervisor: spawn opts > app config > default
+    hypervisor = opts[:hypervisor] || Mjolnir.Hypervisor.impl()
+
     state = %__MODULE__{
       id: opts.id,
       state: :booting,
       config: build_config(opts),
+      hypervisor: hypervisor,
       ssh_public_key: ssh_key,
       enable_iroh: enable_iroh
     }
@@ -426,19 +430,19 @@ defmodule Mjolnir.VM do
   end
 
   @impl true
-  def handle_info({:EXIT, pid, reason}, %{firecracker_pid: pid} = state) do
-    Logger.warning("Firecracker process exited: #{inspect(reason)}")
-    {:stop, {:firecracker_exit, reason}, %{state | state: :stopped}}
+  def handle_info({:EXIT, pid, reason}, %{hypervisor_pid: pid} = state) do
+    Logger.warning("Hypervisor process exited: #{inspect(reason)}")
+    {:stop, {:hypervisor_exit, reason}, %{state | state: :stopped}}
   end
 
-  def handle_info({port, {:data, data}}, %{firecracker_port: port} = state) do
-    Logger.debug("Firecracker output: #{data}")
+  def handle_info({port, {:data, data}}, %{hypervisor_port: port} = state) do
+    Logger.debug("Hypervisor output: #{data}")
     {:noreply, state}
   end
 
-  def handle_info({port, {:exit_status, status}}, %{firecracker_port: port} = state) do
-    Logger.info("Firecracker exited with status: #{status}")
-    {:stop, {:firecracker_exit, status}, %{state | state: :stopped}}
+  def handle_info({port, {:exit_status, status}}, %{hypervisor_port: port} = state) do
+    Logger.info("Hypervisor exited with status: #{status}")
+    {:stop, {:hypervisor_exit, status}, %{state | state: :stopped}}
   end
 
   def handle_info(msg, state) do
@@ -462,7 +466,7 @@ defmodule Mjolnir.VM do
   end
 
   defp build_config(opts) do
-    %Config{
+    %{
       vm_id: opts.id,
       kernel_path: Application.get_env(:mjolnir, :kernel_path),
       # Set during boot
@@ -479,9 +483,10 @@ defmodule Mjolnir.VM do
   defp do_boot(state) do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
     base_image = state.config.base_image
+    hypervisor = state.hypervisor
 
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
-    vsock_path = Path.join(socket_dir, "#{state.id}_vsock.sock")
+    vsock_path = hypervisor.vsock_path(socket_dir, state.id)
     serial_path = Path.join(socket_dir, "#{state.id}_serial.sock")
 
     # Remove stale sockets if they exist (ignore if missing)
@@ -492,11 +497,12 @@ defmodule Mjolnir.VM do
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
          {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
-         {:ok, fc_port} <- start_firecracker(state.id, socket_path, serial_path),
+         {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
          :ok <- wait_for_socket(socket_path),
-         config <- %{state.config | rootfs_path: rootfs_path, network_interface: net_config},
-         :ok <- configure_vm(socket_path, vsock_path, config),
-         :ok <- Client.start_instance(socket_path),
+         config <-
+           Map.merge(state.config, %{rootfs_path: rootfs_path, network_interface: net_config}),
+         :ok <- configure_vm(hypervisor, socket_path, config),
+         :ok <- hypervisor.start_instance(socket_path),
          :ok <- wait_for_boot(vsock_path),
          :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
       # Inject SSH public key if provided
@@ -552,7 +558,7 @@ defmodule Mjolnir.VM do
            serial_path: serial_path,
            rootfs_path: rootfs_path,
            net_config: net_config,
-           firecracker_port: fc_port,
+           hypervisor_port: hv_port,
            iroh_node_id: iroh_info[:node_id],
            iroh_json: iroh_info[:ticket],
            ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
@@ -595,26 +601,14 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp start_firecracker(vm_id, socket_path, serial_path) do
-    firecracker_bin = Application.get_env(:mjolnir, :firecracker_bin)
-    wrapper_script = Application.get_env(:mjolnir, :console_wrapper_script)
+  defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path) do
+    config = %{
+      vm_id: vm_id,
+      socket_path: socket_path,
+      serial_path: serial_path
+    }
 
-    # Use wrapper script that exposes serial console on a Unix socket
-    {executable, args} =
-      if wrapper_script && File.exists?(wrapper_script) do
-        {wrapper_script, [serial_path, socket_path, vm_id, firecracker_bin]}
-      else
-        # Direct Firecracker (no serial console socket)
-        {firecracker_bin, ["--api-sock", socket_path, "--id", vm_id, "--level", "Warning"]}
-      end
-
-    port =
-      Port.open(
-        {:spawn_executable, executable},
-        [:binary, :exit_status, :stderr_to_stdout, args: args]
-      )
-
-    {:ok, port}
+    hypervisor.start_vm(config)
   end
 
   defp wait_for_socket(socket_path, timeout \\ 5000) do
@@ -636,33 +630,8 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp configure_vm(socket_path, vsock_path, config) do
-    with :ok <- Client.put_boot_source(socket_path, Config.boot_source(config)),
-         :ok <- put_drives(socket_path, config),
-         :ok <- Client.put_machine_config(socket_path, Config.machine_config(config)),
-         :ok <- put_network_interface(socket_path, config),
-         :ok <- Client.put_vsock(socket_path, Config.vsock(config, vsock_path)) do
-      :ok
-    end
-  end
-
-  defp put_network_interface(socket_path, config) do
-    case Config.network_interface(config) do
-      nil ->
-        :ok
-
-      net_config ->
-        Client.put_network_interface(socket_path, "eth0", net_config)
-    end
-  end
-
-  defp put_drives(socket_path, config) do
-    Enum.reduce_while(Config.drives(config), :ok, fn drive, :ok ->
-      case Client.put_drive(socket_path, drive["drive_id"], drive) do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
-      end
-    end)
+  defp configure_vm(hypervisor, socket_path, config) do
+    hypervisor.configure_vm(socket_path, config)
   end
 
   defp wait_for_boot(vsock_path, timeout \\ 30_000) do
@@ -881,7 +850,7 @@ defmodule Mjolnir.VM do
     end
 
     # Step 2: Pause VM to stop writes
-    case Client.pause_instance(state.socket_path) do
+    case state.hypervisor.pause_instance(state.socket_path) do
       :ok ->
         :ok
 
@@ -911,7 +880,7 @@ defmodule Mjolnir.VM do
           BTRFS.create_snapshot(state.id, name, source_vm_id: state.id)
         after
           # Step 6: Always resume
-          case Client.resume_instance(state.socket_path) do
+          case state.hypervisor.resume_instance(state.socket_path) do
             :ok ->
               Logger.debug("VM #{state.id} resumed after snapshot")
 
@@ -926,44 +895,10 @@ defmodule Mjolnir.VM do
   end
 
   defp cleanup(state) do
-    # Stop persistent vsock connection
-    if state.vsock_conn do
-      GenServer.stop(state.vsock_conn, :normal)
-    end
-
-    # Kill Firecracker if still running
-    if state.firecracker_port do
-      # Get the OS PID before closing the port
-      case Port.info(state.firecracker_port, :os_pid) do
-        {:os_pid, os_pid} ->
-          Port.close(state.firecracker_port)
-          System.cmd("kill", ["-9", to_string(os_pid)])
-
-        nil ->
-          # Port already closed / process already exited
-          :ok
-      end
-    end
-
-    # Remove TAP interface and route
-    if state.net_config do
-      Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
-      Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
-    end
-
-    # Remove sockets
-    if state.socket_path, do: File.rm(state.socket_path)
-    if state.vsock_path, do: File.rm(state.vsock_path)
-    if state.serial_path, do: File.rm(state.serial_path)
-
-    # Remove PTY link created by console wrapper
-    File.rm("/tmp/mjolnir-pty-#{state.id}")
-
-    # Delete rootfs file and VM directory
-    if state.rootfs_path do
-      File.rm(state.rootfs_path)
-      # Also remove the parent VM directory
-      state.rootfs_path |> Path.dirname() |> File.rm_rf()
+    if state.hypervisor do
+      state.hypervisor.cleanup(state)
+    else
+      Logger.warning("No hypervisor set for VM #{state.id}, skipping cleanup")
     end
 
     :ok

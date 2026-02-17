@@ -240,16 +240,16 @@ defmodule Mjolnir.Vsock.Connection do
             {:error, {:exit_code, response["exit_code"], response["stderr"]}}
           end
 
-        reply_to_pending(state, id, result)
+        reply_to_pending(state, id, result, "exec_response")
 
       {:ok, %{"type" => "pong", "id" => id}} ->
-        reply_to_pending(state, id, :pong)
+        reply_to_pending(state, id, :pong, "pong")
 
       {:ok, %{"type" => "configure_iroh_response", "id" => id} = response} ->
-        reply_to_pending(state, id, {:ok, response})
+        reply_to_pending(state, id, {:ok, response}, "configure_iroh_response")
 
       {:ok, %{"type" => "pty_opened", "id" => id, "channel" => channel}} ->
-        reply_to_pending(state, id, {:ok, channel})
+        reply_to_pending(state, id, {:ok, channel}, "pty_opened")
 
       {:ok, %{"type" => "pty_closed", "channel" => channel}} ->
         # Notify handler and clean up
@@ -262,19 +262,19 @@ defmodule Mjolnir.Vsock.Connection do
         %{state | channel_handlers: handlers}
 
       {:ok, %{"type" => "spawn_sub_agent_response", "id" => id} = response} ->
-        reply_to_pending(state, id, {:ok, response})
+        reply_to_pending(state, id, {:ok, response}, "spawn_sub_agent_response")
 
       {:ok, %{"type" => "snapshot_self_response", "id" => id} = response} ->
-        reply_to_pending(state, id, {:ok, response})
+        reply_to_pending(state, id, {:ok, response}, "snapshot_self_response")
 
       {:ok, %{"type" => "event_ack", "id" => id} = response} ->
-        reply_to_pending(state, id, {:ok, response})
+        reply_to_pending(state, id, {:ok, response}, "event_ack")
 
       {:ok, %{"type" => "spawn_sub_agent", "id" => id, "opts" => opts}} ->
         Logger.info("Guest requesting sub-agent spawn: #{id}")
         conn_pid = self()
 
-        Task.start(fn ->
+        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           response =
             try do
               case Mjolnir.VM.spawn(atomize_opts(opts)) do
@@ -311,7 +311,7 @@ defmodule Mjolnir.Vsock.Connection do
         conn_pid = self()
         vm_id = state.vm_id
 
-        Task.start(fn ->
+        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           response =
             try do
               case Mjolnir.VM.snapshot(vm_id, name) do
@@ -332,7 +332,8 @@ defmodule Mjolnir.Vsock.Connection do
 
         state
 
-      {:ok, %{"type" => "emit_event", "id" => id, "event" => event, "payload" => payload}} ->
+      {:ok, %{"type" => "emit_event", "id" => id, "event" => event, "payload" => payload}}
+      when is_binary(event) and event != "" ->
         Logger.debug("Guest emitting event: #{event}")
 
         Mjolnir.EventBus.publish(state.vm_id, :agent_event, %{
@@ -340,6 +341,11 @@ defmodule Mjolnir.Vsock.Connection do
           "payload" => payload
         })
 
+        send_message(state.socket, %{"type" => "event_ack", "id" => id}, 0)
+        state
+
+      {:ok, %{"type" => "emit_event", "id" => id, "event" => event}} ->
+        Logger.warning("Guest emitted event with invalid name: #{inspect(event)}")
         send_message(state.socket, %{"type" => "event_ack", "id" => id}, 0)
         state
 
@@ -363,10 +369,10 @@ defmodule Mjolnir.Vsock.Connection do
   # Private Functions
   # ============================================================================
 
-  defp reply_to_pending(state, id, result) do
+  defp reply_to_pending(state, id, result, type_name) do
     case Map.pop(state.pending_requests, id) do
       {nil, _} ->
-        Logger.warning("Received response for unknown request: #{id}")
+        Logger.warning("Received #{type_name} for unknown request: #{id}")
         state
 
       {from, pending} ->
@@ -426,11 +432,17 @@ defmodule Mjolnir.Vsock.Connection do
   end
 
   defp atomize_opts(opts) when is_map(opts) do
-    for {k, v} <- opts, into: %{} do
-      {String.to_existing_atom(k), v}
-    end
-  rescue
-    ArgumentError -> opts
+    opts
+    |> Enum.flat_map(fn {k, v} ->
+      try do
+        [{String.to_existing_atom(k), v}]
+      rescue
+        ArgumentError ->
+          Logger.warning("Dropping unknown option key from guest: #{k}")
+          []
+      end
+    end)
+    |> Map.new()
   end
 
   defp atomize_opts(opts), do: opts

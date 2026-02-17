@@ -11,12 +11,15 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::vsock::BridgeHolder;
 
 const AGENT_SDK_PORT: u16 = 5001;
+const MAX_BODY_SIZE: usize = 1_048_576; // 1MB
+const MAX_CONNECTIONS: usize = 16;
 
 /// Minimal HTTP request parser
 struct HttpRequest {
@@ -62,6 +65,11 @@ fn parse_http_request(stream: &mut std::net::TcpStream) -> Option<HttpRequest> {
                 content_length = len_str.trim().parse().unwrap_or(0);
             }
         }
+    }
+
+    // Reject oversized bodies
+    if content_length > MAX_BODY_SIZE {
+        return None;
     }
 
     // Read body
@@ -113,7 +121,8 @@ async fn send_bridge_request(
 
     bridge.send_request(request).await.map_err(|e| {
         error!("Bridge request failed: {}", e);
-        (502, format!(r#"{{"error":"{}"}}"#, e))
+        let body = serde_json::json!({"error": e.to_string()});
+        (502, body.to_string())
     })
 }
 
@@ -147,14 +156,23 @@ fn run_agent_sdk_blocking(
     );
 
     let runtime = tokio::runtime::Handle::current();
+    let active = Arc::new(AtomicUsize::new(0));
 
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                let current = active.fetch_add(1, Ordering::AcqRel);
+                if current >= MAX_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    send_http_response(&mut stream, 503, r#"{"error":"Too many connections"}"#);
+                    continue;
+                }
                 let bridge = bridge_holder.clone();
                 let rt = runtime.clone();
+                let active = active.clone();
                 std::thread::spawn(move || {
                     handle_connection(stream, &bridge, &rt);
+                    active.fetch_sub(1, Ordering::AcqRel);
                 });
             }
             Err(e) => {
@@ -224,11 +242,11 @@ async fn handle_spawn(
 
     match send_bridge_request(bridge_holder, req).await {
         Ok(response) => {
-            let vm_id = response.get("vm_id").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
                 let body = serde_json::json!({"error": err});
                 send_http_response(stream, 500, &body.to_string());
             } else {
+                let vm_id = response.get("vm_id").and_then(|v| v.as_str()).unwrap_or("");
                 let body = serde_json::json!({"status": "ok", "vm_id": vm_id});
                 send_http_response(stream, 200, &body.to_string());
             }

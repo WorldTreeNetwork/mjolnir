@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # This script:
 # 1. Checks system suitability (KVM, architecture, etc.)
-# 2. Installs all dependencies (Erlang, Elixir, Rust, Firecracker)
+# 2. Installs all dependencies (Erlang, Elixir, Rust, Firecracker, Cloud Hypervisor)
 # 3. Clones and compiles Mjolnir
 # 4. Sets up BTRFS storage
 # 5. Builds guest agent and rootfs
@@ -34,6 +34,7 @@ set -euo pipefail
 MJOLNIR_ROOT="/var/lib/mjolnir"
 MJOLNIR_CODE="/opt/mjolnir"
 FC_VERSION="1.5.0"
+CH_VERSION="50.0"
 # Minimum versions (used for validation)
 MIN_ELIXIR_VERSION="1.15"
 
@@ -364,6 +365,58 @@ install_firecracker() {
     log_success "Firecracker installed: $(firecracker --version)"
 }
 
+install_cloud_hypervisor() {
+    log_section "Installing Cloud Hypervisor"
+
+    # Check if already installed with correct version
+    if command -v cloud-hypervisor &>/dev/null; then
+        local current_ch
+        current_ch=$(cloud-hypervisor --version 2>/dev/null | grep -oP '[0-9]+\.[0-9]+' || echo "0")
+        if [[ "$current_ch" == "$CH_VERSION" ]]; then
+            log_success "Cloud Hypervisor v$current_ch already installed"
+            return 0
+        else
+            log_info "Cloud Hypervisor v$current_ch found, upgrading to v$CH_VERSION"
+        fi
+    fi
+
+    local arch
+    arch=$(uname -m)
+
+    # Cloud Hypervisor provides a static binary (x86_64 and aarch64)
+    local binary_suffix="cloud-hypervisor-static"
+    if [[ "$arch" == "aarch64" ]]; then
+        binary_suffix="cloud-hypervisor-static-aarch64"
+    fi
+
+    local url="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/${binary_suffix}"
+
+    log_info "Downloading Cloud Hypervisor v${CH_VERSION}..."
+    curl -fsSL "$url" -o /usr/local/bin/cloud-hypervisor
+    chmod +x /usr/local/bin/cloud-hypervisor
+
+    # Verify download integrity (warn if checksum unavailable)
+    log_info "Verifying checksum..."
+    if curl -fsSL "${url}.sha256" -o /tmp/ch-sha256 2>/dev/null; then
+        echo "$(cat /tmp/ch-sha256)  /usr/local/bin/cloud-hypervisor" | sha256sum -c - || \
+            log_error "Checksum verification FAILED for cloud-hypervisor binary"
+        rm -f /tmp/ch-sha256
+    else
+        log_warn "SHA256 checksum file not available — skipping verification"
+    fi
+
+    # Also install virtiofsd if available (needed for virtio-fs shared directories)
+    if ! command -v virtiofsd &>/dev/null; then
+        log_info "Installing virtiofsd..."
+        apt-get install -y virtiofsd 2>/dev/null || \
+            log_warn "virtiofsd not available in package manager — virtio-fs will not work until installed manually"
+    else
+        log_success "virtiofsd already installed"
+    fi
+
+    log_success "Cloud Hypervisor installed: $(cloud-hypervisor --version 2>/dev/null || echo "v${CH_VERSION}")"
+}
+
 # =============================================================================
 # Code Deployment
 # =============================================================================
@@ -611,35 +664,83 @@ EOF
 }
 
 download_kernel() {
-    log_section "Downloading Firecracker Kernel"
+    log_section "Downloading VM Kernels"
 
     mkdir -p "$MJOLNIR_ROOT"
 
+    # --- Firecracker kernel (Fireactions, vsock built-in, MMIO) ---
     if [[ -f "$MJOLNIR_ROOT/vmlinux" ]]; then
-        log_info "Kernel already exists at $MJOLNIR_ROOT/vmlinux"
-        return 0
+        log_info "Firecracker kernel already exists at $MJOLNIR_ROOT/vmlinux"
+    else
+        local arch
+        arch=$(uname -m)
+
+        # Fireactions kernel has vsock support built-in and is well-tested with Firecracker
+        # https://hostinger.github.io/fireactions/user-guide/kernels/
+        local kernel_url
+        if [[ "$arch" == "x86_64" ]]; then
+            kernel_url="https://storage.googleapis.com/fireactions/kernels/amd64/5.10/vmlinux"
+        else
+            kernel_url="https://storage.googleapis.com/fireactions/kernels/arm64/5.10/vmlinux"
+        fi
+
+        log_info "Downloading Firecracker kernel 5.10 from Fireactions..."
+        if curl -fsSL "$kernel_url" -o "$MJOLNIR_ROOT/vmlinux"; then
+            chmod 644 "$MJOLNIR_ROOT/vmlinux"
+            log_success "Firecracker kernel downloaded to $MJOLNIR_ROOT/vmlinux"
+        else
+            log_error "Failed to download Firecracker kernel"
+            log_error "URL: $kernel_url"
+            exit 1
+        fi
     fi
 
-    local arch
-    arch=$(uname -m)
-
-    # Use Fireactions kernel which has vsock support and is well-tested
-    # https://hostinger.github.io/fireactions/user-guide/kernels/
-    local kernel_url
-    if [[ "$arch" == "x86_64" ]]; then
-        kernel_url="https://storage.googleapis.com/fireactions/kernels/amd64/5.10/vmlinux"
+    # --- Cloud Hypervisor kernel (PVH boot, vsock built-in, PCI virtio) ---
+    if [[ -f "$MJOLNIR_ROOT/vmlinux-ch" ]]; then
+        log_info "Cloud Hypervisor kernel already exists at $MJOLNIR_ROOT/vmlinux-ch"
     else
-        kernel_url="https://storage.googleapis.com/fireactions/kernels/arm64/5.10/vmlinux"
+        build_ch_kernel
+    fi
+}
+
+build_ch_kernel() {
+    log_info "Building Cloud Hypervisor kernel (requires PVH + vsock built-in)..."
+
+    # Install kernel build deps
+    apt-get install -y --no-install-recommends flex bison libelf-dev bc 2>/dev/null || true
+
+    local ch_linux_dir="/tmp/linux-cloud-hypervisor"
+    local ch_kernel_branch="ch-6.12.8"
+
+    if [[ -d "$ch_linux_dir" ]]; then
+        log_info "Cloud Hypervisor linux source already cloned"
+    else
+        log_info "Cloning Cloud Hypervisor linux branch ($ch_kernel_branch)..."
+        git clone --depth 1 "https://github.com/cloud-hypervisor/linux.git" \
+            -b "$ch_kernel_branch" "$ch_linux_dir"
     fi
 
-    log_info "Downloading kernel 5.10 from Fireactions..."
-    if curl -fsSL "$kernel_url" -o "$MJOLNIR_ROOT/vmlinux"; then
-        chmod 644 "$MJOLNIR_ROOT/vmlinux"
-        log_success "Kernel downloaded to $MJOLNIR_ROOT/vmlinux"
+    cd "$ch_linux_dir"
+
+    log_info "Configuring with ch_defconfig (vsock=y, PVH=y)..."
+    make ch_defconfig
+
+    log_info "Building kernel (this takes a few minutes)..."
+    KCFLAGS="-Wa,-mx86-used-note=no" make -j"$(nproc)" bzImage
+
+    local vmlinux_bin="arch/x86/boot/compressed/vmlinux.bin"
+    if [[ -f "$vmlinux_bin" ]]; then
+        cp "$vmlinux_bin" "$MJOLNIR_ROOT/vmlinux-ch"
+        chmod 644 "$MJOLNIR_ROOT/vmlinux-ch"
+        log_success "Cloud Hypervisor kernel built: $MJOLNIR_ROOT/vmlinux-ch ($(du -h "$MJOLNIR_ROOT/vmlinux-ch" | cut -f1))"
     else
-        log_error "Failed to download kernel"
-        log_error "URL: $kernel_url"
+        log_error "Cloud Hypervisor kernel build failed"
         exit 1
+    fi
+
+    # Clean up source to save disk (keep it if DEV_MODE)
+    if [[ "${DEV_MODE:-0}" != "1" ]]; then
+        rm -rf "$ch_linux_dir"
     fi
 }
 
@@ -846,6 +947,7 @@ main() {
     install_erlang_elixir
     install_rust
     install_firecracker
+    install_cloud_hypervisor
 
     # Dev mode: use workspace directly; Prod mode: deploy to /opt/mjolnir
     if [[ "${DEV_MODE:-0}" == "1" ]]; then

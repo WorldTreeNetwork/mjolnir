@@ -260,13 +260,26 @@ async fn handle_vsock_connection(
                                     }
                                 };
 
-                                // Check if this is a response to a pending agent SDK request
-                                if let Some(id) = json_value.get("id").and_then(|v| v.as_str()) {
-                                    let id = id.to_string();
-                                    let mut pending = bridge.pending_responses.lock().await;
-                                    if let Some(sender) = pending.remove(&id) {
-                                        let _ = sender.send(json_value);
-                                        continue; // response routed, skip normal handling
+                                // Only check bridge for known response types to avoid
+                                // consuming host-initiated requests (exec, ping, etc.)
+                                let is_response = json_value
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .map(|t| {
+                                        t.ends_with("_response")
+                                            || t == "event_ack"
+                                            || t == "pong"
+                                    })
+                                    .unwrap_or(false);
+
+                                if is_response {
+                                    if let Some(id) = json_value.get("id").and_then(|v| v.as_str()) {
+                                        let id = id.to_string();
+                                        let mut pending = bridge.pending_responses.lock().await;
+                                        if let Some(sender) = pending.remove(&id) {
+                                            let _ = sender.send(json_value);
+                                            continue; // response routed, skip normal handling
+                                        }
                                     }
                                 }
 
