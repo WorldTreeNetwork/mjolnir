@@ -198,9 +198,13 @@ defmodule Mjolnir.Hypervisor.Firecracker do
 
     # Delete rootfs file and VM directory
     if state[:rootfs_path] do
-      File.rm(state.rootfs_path)
-      # Also remove the parent VM directory
-      state.rootfs_path |> Path.dirname() |> File.rm_rf()
+      vm_dir = Path.dirname(state.rootfs_path)
+
+      if Regex.match?(~r/^[0-9a-f]{8}-/, Path.basename(vm_dir)) do
+        File.rm_rf(vm_dir)
+      else
+        File.rm(state.rootfs_path)
+      end
     end
 
     :ok

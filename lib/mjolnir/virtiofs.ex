@@ -79,13 +79,20 @@ defmodule Mjolnir.VirtioFS do
     # Remove stale socket if it exists
     File.rm(socket_path)
 
-    virtiofsd_bin = Keyword.get(opts, :virtiofsd_bin, "virtiofsd")
+    virtiofsd_bin =
+      Keyword.get(
+        opts,
+        :virtiofsd_bin,
+        Application.get_env(:mjolnir, :virtiofsd_bin, "virtiofsd")
+      )
+
     thread_pool_size = Keyword.get(opts, :thread_pool_size, @default_thread_pool_size)
 
     args = [
       "--socket-path=#{socket_path}",
       "--shared-dir=#{shared_dir}",
       "--cache=auto",
+      "--sandbox=none",
       "--thread-pool-size=#{thread_pool_size}"
     ]
 

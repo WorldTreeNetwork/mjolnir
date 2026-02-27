@@ -728,6 +728,20 @@ build_ch_kernel() {
     log_info "Configuring with ch_defconfig (vsock=y, PVH=y)..."
     make ch_defconfig
 
+    # Enable virtio-fs and related configs (must be =y built-in, not =m module)
+    ./scripts/config --enable CONFIG_VIRTIO_FS
+    ./scripts/config --enable CONFIG_FUSE_FS
+
+    # Verify critical configs are built-in
+    for opt in CONFIG_VIRTIO_FS CONFIG_FUSE_FS CONFIG_PVH; do
+        val=$(grep "^${opt}=" .config | cut -d= -f2)
+        if [ "$val" != "y" ]; then
+            log_error "FATAL: $opt is '$val', must be 'y' (built-in, not module)"
+            exit 1
+        fi
+    done
+    log_info "Kernel config verified: VIRTIO_FS=y, FUSE_FS=y, PVH=y"
+
     log_info "Building kernel (this takes a few minutes)..."
     KCFLAGS="-Wa,-mx86-used-note=no" make -j"$(nproc)" bzImage
 
@@ -755,27 +769,25 @@ build_rootfs() {
         return 0
     fi
 
-    # Firecracker uses ext4 file images, not directories
-    local rootfs_ext4="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4"
+    local rootfs_path="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04"
     local agent_bin="$MJOLNIR_CODE/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
-    if [[ -f "$rootfs_ext4" ]]; then
-        log_info "Rootfs already exists at $rootfs_ext4"
+    if [[ -d "$rootfs_path" ]]; then
+        log_info "Rootfs already exists at $rootfs_path"
         return 0
     fi
 
-    # Build ext4 image using build-rootfs.sh
-    log_info "Building rootfs ext4 image (this takes a few minutes)..."
+    # Build BTRFS subvolume using build-rootfs.sh
+    log_info "Building rootfs BTRFS subvolume (this takes a few minutes)..."
 
     # Set agent binary path for build script
     export AGENT_BIN="$agent_bin"
 
     # Run the build script directly to the target location on BTRFS
-    # This allows CoW cloning to work for instant VM creation
     cd "$MJOLNIR_CODE"
-    bash scripts/build-rootfs.sh "$rootfs_ext4" 2048
+    bash scripts/build-rootfs.sh "$rootfs_path"
 
-    log_success "Rootfs built: $rootfs_ext4 ($(du -h "$rootfs_ext4" | cut -f1))"
+    log_success "Rootfs built: $rootfs_path ($(du -sh "$rootfs_path" | cut -f1))"
 }
 
 # =============================================================================
@@ -798,10 +810,10 @@ setup_directories() {
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-test"
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-dev"
 
-        # Copy base image to test directory for test isolation
-        if [[ -f "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4" ]]; then
-            cp --reflink=auto "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4" \
-                "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04.ext4"
+        # Snapshot base subvolume to test directory for test isolation
+        if [[ -d "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" ]]; then
+            btrfs subvolume snapshot "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" \
+                "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04"
         fi
 
         # Create symlinks for test config paths

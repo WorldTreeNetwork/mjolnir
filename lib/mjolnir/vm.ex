@@ -2,8 +2,8 @@ defmodule Mjolnir.VM do
   @moduledoc """
   MicroVM lifecycle management.
 
-  Spawns Firecracker VMs with BTRFS-backed filesystems and provides
-  command execution via serial console.
+  Spawns microVMs via pluggable hypervisor backends (Cloud Hypervisor default)
+  with BTRFS-backed filesystems and provides command execution via vsock.
   """
 
   use GenServer, restart: :transient
@@ -22,6 +22,7 @@ defmodule Mjolnir.VM do
     :vsock_conn,
     :serial_path,
     :rootfs_path,
+    :virtiofsd_port,
     :net_config,
     :state,
     :boot_time,
@@ -46,7 +47,6 @@ defmodule Mjolnir.VM do
           optional(:memory_mb) => pos_integer(),
           optional(:ssh_public_key) => String.t(),
           optional(:snapshot) => String.t(),
-          optional(:rootfs_size_mb) => pos_integer(),
           optional(:preserve_iroh_key) => boolean(),
           optional(:enable_iroh) => boolean()
         }
@@ -154,10 +154,6 @@ defmodule Mjolnir.VM do
 
   Quiesces the VM (sync + pause), takes a consistent reflink copy,
   then resumes the VM. The VM is always resumed even if the snapshot fails.
-
-  ## Options
-
-  - `:compact` - Run `fallocate --dig-holes` before snapshotting to reclaim freed blocks
 
   ## Examples
 
@@ -564,6 +560,17 @@ defmodule Mjolnir.VM do
     {:stop, {:hypervisor_exit, status}, %{state | state: :stopped}}
   end
 
+  def handle_info({port, {:data, data}}, %{virtiofsd_port: port} = state) when is_port(port) do
+    Logger.debug("virtiofsd output: #{data}")
+    {:noreply, state}
+  end
+
+  def handle_info({port, {:exit_status, status}}, %{virtiofsd_port: port} = state)
+      when is_port(port) do
+    Logger.warning("virtiofsd exited with status #{status} for VM #{state.id}")
+    {:noreply, %{state | virtiofsd_port: nil}}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -601,7 +608,6 @@ defmodule Mjolnir.VM do
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
       vsock_cid: generate_vsock_cid(opts.id),
       snapshot: opts[:snapshot],
-      rootfs_size_mb: opts[:rootfs_size_mb],
       preserve_iroh_key: opts[:preserve_iroh_key] || false
     }
   end
@@ -638,13 +644,20 @@ defmodule Mjolnir.VM do
            {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
            _ = boot_partial_put(:rootfs_path, rootfs_path),
            _ = inject_guest_agent(rootfs_path),
+           virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id),
+           {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.start(rootfs_path, virtiofsd_socket),
+           _ = boot_partial_put(:virtiofsd_port, virtiofsd_port),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
            {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
            _ = boot_partial_put(:hv_port, hv_port),
            :ok <- wait_for_socket(socket_path),
            config <-
-             Map.merge(state.config, %{rootfs_path: rootfs_path, network_interface: net_config}),
+             Map.merge(state.config, %{
+               rootfs_path: rootfs_path,
+               network_interface: net_config,
+               virtiofsd_socket: virtiofsd_socket
+             }),
            :ok <- configure_vm(hypervisor, socket_path, config),
            :ok <- hypervisor.start_instance(socket_path),
            :ok <- wait_for_boot(vsock_path),
@@ -705,6 +718,7 @@ defmodule Mjolnir.VM do
              rootfs_path: rootfs_path,
              net_config: net_config,
              hypervisor_port: hv_port,
+             virtiofsd_port: virtiofsd_port,
              iroh_node_id: iroh_info[:node_id],
              iroh_json: iroh_info[:ticket],
              ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
@@ -750,6 +764,15 @@ defmodule Mjolnir.VM do
       end
     end
 
+    # Stop virtiofsd if started
+    if partial[:virtiofsd_port] do
+      try do
+        Mjolnir.VirtioFS.stop(partial.virtiofsd_port)
+      rescue
+        _ -> :ok
+      end
+    end
+
     # Delete TAP if created
     if partial[:net_config] do
       try do
@@ -761,8 +784,12 @@ defmodule Mjolnir.VM do
 
     # Remove rootfs if cloned
     if partial[:rootfs_path] do
-      File.rm(partial.rootfs_path)
-      partial.rootfs_path |> Path.dirname() |> File.rm_rf()
+      try do
+        Mjolnir.BTRFS.delete_subvolume(partial.rootfs_path)
+      rescue
+        # May fail on macOS (no btrfs) -- that's OK for tests
+        _ -> File.rm_rf(partial.rootfs_path)
+      end
     end
 
     # Remove sockets
@@ -775,39 +802,15 @@ defmodule Mjolnir.VM do
     _ -> :ok
   end
 
-  defp inject_guest_agent(rootfs_path) do
+  defp inject_guest_agent(rootfs_dir) do
     agent_bin = Application.get_env(:mjolnir, :guest_agent_bin)
 
     if agent_bin && File.exists?(agent_bin) do
-      mount_point =
-        Path.join(
-          System.tmp_dir!(),
-          "mjolnir-agent-inject-#{:erlang.unique_integer([:positive])}"
-        )
-
-      with :ok <- File.mkdir_p(mount_point),
-           {_, 0} <-
-             System.cmd("mount", ["-o", "loop", rootfs_path, mount_point], stderr_to_stdout: true) do
-        dest = Path.join(mount_point, "usr/local/bin/mjolnir-agent")
-        File.mkdir_p!(Path.dirname(dest))
-        File.cp!(agent_bin, dest)
-        # Ensure the binary is executable
-        System.cmd("chmod", ["+x", dest])
-        Logger.info("Injected current guest agent into rootfs")
-
-        case System.cmd("umount", [mount_point], stderr_to_stdout: true) do
-          {_, 0} -> File.rmdir(mount_point)
-          {output, _} -> Logger.warning("Failed to unmount after agent injection: #{output}")
-        end
-      else
-        {:error, reason} ->
-          Logger.warning("Guest agent injection failed: #{inspect(reason)}")
-
-        {output, code} ->
-          Logger.warning("Guest agent injection failed (mount exit #{code}): #{output}")
-
-          _ = File.rmdir(mount_point)
-      end
+      dest = Path.join(rootfs_dir, "usr/local/bin/mjolnir-agent")
+      File.mkdir_p!(Path.dirname(dest))
+      File.cp!(agent_bin, dest)
+      File.chmod!(dest, 0o755)
+      Logger.info("Injected current guest agent into rootfs")
     end
 
     :ok
@@ -828,7 +831,6 @@ defmodule Mjolnir.VM do
 
     with {:ok, rootfs_path} <- result do
       # Delete iroh key from snapshot clones to ensure unique network identity
-      # (unless preserve_iroh_key is set)
       if config.snapshot && !config.preserve_iroh_key do
         case BTRFS.delete_iroh_key(rootfs_path) do
           :ok -> :ok
@@ -836,15 +838,7 @@ defmodule Mjolnir.VM do
         end
       end
 
-      # Optionally resize the rootfs
-      if config.rootfs_size_mb do
-        case BTRFS.resize_rootfs(rootfs_path, config.rootfs_size_mb) do
-          :ok -> {:ok, rootfs_path}
-          error -> error
-        end
-      else
-        {:ok, rootfs_path}
-      end
+      {:ok, rootfs_path}
     end
   end
 
@@ -1089,7 +1083,7 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp do_snapshot(state, name, opts) do
+  defp do_snapshot(state, name, _opts) do
     # Step 1: Flush guest caches
     case execute_command(state, "sync") do
       {:ok, _} -> :ok
@@ -1108,22 +1102,10 @@ defmodule Mjolnir.VM do
     |> case do
       :ok ->
         try do
-          # Step 3: Host-side fsync
-          case File.open(state.rootfs_path, [:read]) do
-            {:ok, fd} ->
-              :file.sync(fd)
-              File.close(fd)
+          # No host-side fsync needed: guest sync is performed above, and
+          # btrfs subvolume snapshot is atomic at the filesystem level.
 
-            {:error, reason} ->
-              Logger.warning("Host fsync failed: #{inspect(reason)}")
-          end
-
-          # Step 4: Optional compaction
-          if opts[:compact] do
-            BTRFS.compact_rootfs(state.rootfs_path)
-          end
-
-          # Step 5: Create the snapshot (reflink copy + metadata)
+          # Create the snapshot (subvolume snapshot + metadata)
           BTRFS.create_snapshot(state.id, name, source_vm_id: state.id)
         after
           # Step 6: Always resume

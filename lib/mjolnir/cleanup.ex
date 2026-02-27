@@ -9,7 +9,7 @@ defmodule Mjolnir.Cleanup do
 
   require Logger
 
-  @hypervisor_process_names ["firecracker", "cloud-hypervisor"]
+  @hypervisor_process_names ["firecracker", "cloud-hypervisor", "virtiofsd"]
 
   def sweep do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
@@ -32,6 +32,9 @@ defmodule Mjolnir.Cleanup do
 
     :ok
   end
+
+  @doc false
+  def hypervisor_process_names, do: @hypervisor_process_names
 
   defp find_orphan_hypervisors(socket_dir) do
     case System.cmd("ps", ["-eo", "pid,ppid,args"], stderr_to_stdout: true) do
@@ -136,7 +139,11 @@ defmodule Mjolnir.Cleanup do
         Enum.each(entries, fn entry ->
           path = Path.join(vms_dir, entry)
           Logger.info("Removing stale VM directory: #{path}")
-          File.rm_rf(path)
+
+          case Mjolnir.BTRFS.delete_subvolume(path) do
+            :ok -> :ok
+            {:error, _} -> File.rm_rf(path)
+          end
         end)
 
       {:error, :enoent} ->

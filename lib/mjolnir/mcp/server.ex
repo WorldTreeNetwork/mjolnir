@@ -41,11 +41,6 @@ defmodule Mjolnir.MCP.Server do
           type: "string",
           description: "Restore from named snapshot instead of fresh base."
         },
-        rootfs_size_mb: %{
-          type: "integer",
-          minimum: 256,
-          description: "Root filesystem size in MB."
-        },
         enable_iroh: %{type: "boolean", description: "Enable Iroh P2P networking."}
       }
     })
@@ -121,8 +116,7 @@ defmodule Mjolnir.MCP.Server do
       type: "object",
       properties: %{
         vm_id: %{type: "string", description: "UUID of the VM to snapshot."},
-        name: %{type: "string", description: "Unique name for this snapshot."},
-        compact: %{type: "boolean", description: "Compact snapshot (slower)."}
+        name: %{type: "string", description: "Unique name for this snapshot."}
       },
       required: ["vm_id", "name"]
     })
@@ -308,10 +302,8 @@ defmodule Mjolnir.MCP.Server do
     end
   end
 
-  def handle_tool_call("create_snapshot", %{"vm_id" => id, "name" => name} = args, state) do
-    compact = Map.get(args, "compact", false)
-
-    case Mjolnir.VM.snapshot(id, name, compact: compact) do
+  def handle_tool_call("create_snapshot", %{"vm_id" => id, "name" => name}, state) do
+    case Mjolnir.VM.snapshot(id, name) do
       {:ok, metadata} ->
         {:ok, %{content: [text(Jason.encode!(metadata))]}, state}
 
@@ -455,7 +447,7 @@ defmodule Mjolnir.MCP.Server do
 
   # ── Helpers ────────────────────────────────────────────
 
-  @spawn_keys ~w(base_image memory_mb vcpus ssh_public_key snapshot rootfs_size_mb enable_iroh)
+  @spawn_keys ~w(base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
 
   defp args_to_spawn_opts(args) do
     args

@@ -8,12 +8,14 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
       config = %Config{
         vm_id: "test-vm-id",
         kernel_path: "/path/to/vmlinux",
-        rootfs_path: "/path/to/rootfs.ext4"
+        rootfs_path: "/path/to/rootfs",
+        virtiofsd_socket: "/tmp/test_virtiofs.sock"
       }
 
       payload = Config.vm_create_payload(config, "/tmp/vsock.sock")
 
-      assert %{"payload" => _, "cpus" => _, "memory" => _, "disks" => _, "vsock" => _} = payload
+      assert %{"payload" => _, "cpus" => _, "memory" => _, "fs" => _, "vsock" => _} = payload
+      refute Map.has_key?(payload, "disks"), "disks should not be present (replaced by fs)"
       refute Map.has_key?(payload, "net"), "net should be absent when no network configured"
     end
 
@@ -21,7 +23,8 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
       config = %Config{
         vm_id: "test-vm-id",
         kernel_path: "/path/to/vmlinux",
-        rootfs_path: "/path/to/rootfs.ext4",
+        rootfs_path: "/path/to/rootfs",
+        virtiofsd_socket: "/tmp/test_virtiofs.sock",
         network_interface: %{tap_name: "mj-abc123", guest_mac: "02:FC:00:00:00:01"}
       }
 
@@ -34,34 +37,37 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
   end
 
   describe "kernel_payload/1" do
-    test "includes root=/dev/vda rw in default boot_args" do
+    test "includes root=myfs rootfstype=virtiofs in default boot_args" do
       config = %Config{
         vm_id: "test",
         kernel_path: "/path/to/vmlinux",
-        rootfs_path: "/path/to/rootfs.ext4"
+        rootfs_path: "/path/to/rootfs"
       }
 
       payload = Config.kernel_payload(config)
 
-      assert payload["cmdline"] =~ "root=/dev/vda"
+      assert payload["cmdline"] =~ "root=myfs"
+      assert payload["cmdline"] =~ "rootfstype=virtiofs"
       assert payload["cmdline"] =~ "rw"
       assert payload["cmdline"] =~ "console=ttyS0"
+      refute payload["cmdline"] =~ "root=/dev/vda"
     end
 
     test "allows custom boot_args" do
       config = %Config{
         vm_id: "test",
         kernel_path: "/path/to/vmlinux",
-        rootfs_path: "/path/to/rootfs.ext4",
-        boot_args: "custom=args root=/dev/vda rw"
+        rootfs_path: "/path/to/rootfs",
+        boot_args: "root=myfs rootfstype=virtiofs rw custom=arg"
       }
 
-      assert Config.kernel_payload(config)["cmdline"] == "custom=args root=/dev/vda rw"
+      assert Config.kernel_payload(config)["cmdline"] ==
+               "root=myfs rootfstype=virtiofs rw custom=arg"
     end
   end
 
   describe "memory_config/1" do
-    test "converts MiB to bytes" do
+    test "converts MiB to bytes with shared memory" do
       config = %Config{
         vm_id: "test",
         kernel_path: "/path",
@@ -69,7 +75,7 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
         mem_size_mib: 512
       }
 
-      assert Config.memory_config(config) == %{"size" => 512 * 1024 * 1024}
+      assert Config.memory_config(config) == %{"size" => 512 * 1024 * 1024, "shared" => true}
     end
 
     test "handles large memory sizes" do
@@ -80,7 +86,9 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
         mem_size_mib: 8192
       }
 
-      assert Config.memory_config(config)["size"] == 8_589_934_592
+      result = Config.memory_config(config)
+      assert result["size"] == 8_589_934_592
+      assert result["shared"] == true
     end
   end
 
@@ -117,15 +125,31 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
     end
   end
 
-  describe "disks_config/1" do
-    test "returns array with rootfs path" do
+  describe "fs_config/1" do
+    test "raises when virtiofsd_socket is nil" do
+      config = %Config{vm_id: "test-vm", kernel_path: "/vmlinux", rootfs_path: "/rootfs"}
+
+      assert_raise ArgumentError, ~r/virtiofsd_socket/, fn ->
+        Config.fs_config(config)
+      end
+    end
+
+    test "returns array with virtiofs config" do
       config = %Config{
         vm_id: "test",
         kernel_path: "/path",
-        rootfs_path: "/data/vms/rootfs.ext4"
+        rootfs_path: "/data/vms/test-id",
+        virtiofsd_socket: "/tmp/test_virtiofs.sock"
       }
 
-      assert [%{"path" => "/data/vms/rootfs.ext4"}] = Config.disks_config(config)
+      assert [
+               %{
+                 "tag" => "myfs",
+                 "socket" => "/tmp/test_virtiofs.sock",
+                 "num_queues" => 1,
+                 "queue_size" => 1024
+               }
+             ] = Config.fs_config(config)
     end
   end
 

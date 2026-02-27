@@ -80,7 +80,7 @@ fi
 if $BUILD_ROOTFS; then
     echo ""
     echo "--- Rebuilding rootfs ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/ubuntu-24.04.ext4"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/ubuntu-24.04"
 fi
 
 # --- Build Elixir release ---

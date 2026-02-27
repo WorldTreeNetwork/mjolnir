@@ -55,8 +55,7 @@ defmodule Mjolnir.API.Views do
       vcpu_count: config.vcpu_count,
       mem_size_mib: config.mem_size_mib,
       base_image: config.base_image,
-      snapshot: config.snapshot,
-      rootfs_size_mb: config.rootfs_size_mb
+      snapshot: config.snapshot
     }
   end
 end

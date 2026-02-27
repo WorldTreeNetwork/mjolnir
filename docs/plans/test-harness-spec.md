@@ -19,7 +19,7 @@
 | `vsock/protocol_test.exs` | `ProtocolTest` | 40+ | Wire format encode/decode, all message builders, parse_iroh_ready, multi-frame |
 | `network_test.exs` | `NetworkTest` | 12 | IP allocation range, .0/.255 avoidance, MAC generation, tap naming |
 | `event_bus_test.exs` | `EventBusTest` | 9 | Subscribe/publish/unsubscribe, :all wildcard, multi-subscriber |
-| `cloud_hypervisor/config_test.exs` | `ConfigTest` | 12 | Payload structure, boot_args root=/dev/vda, memory MiB→bytes, CID |
+| `cloud_hypervisor/config_test.exs` | `ConfigTest` | 13 | Payload structure, boot_args root=myfs virtiofs, memory MiB→bytes, CID, fs_config |
 | `vm_unit_test.exs` | `VMUnitTest` | 8 | CID generation bounds, determinism, struct defaults |
 | `ticket_test.exs` | `TicketTest` | 7 | z32 encoding, nil handling, alphabet validation |
 | `cleanup_test.exs` | `CleanupTest` | 1 | sweep/0 safety |

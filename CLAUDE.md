@@ -170,7 +170,7 @@ Mjolnir.Supervisor (one_for_one)
 
 - **`Mjolnir.CloudHypervisor.Client`** — HTTP client for CH's REST API over Unix socket via `Req`. Endpoints: `vm.create`, `vm.boot`, `vm.pause`, `vm.resume`, `vm.shutdown`, `vm.delete`, `vm.info`.
 
-- **`Mjolnir.CloudHypervisor.Config`** — TypedStruct that builds the CH `vm.create` payload. Key fields: `kernel_path`, `boot_args` (includes `root=/dev/vda rw`), `vsock_cid` (unique per VM from MD5 of UUID), `mem_size_mib` (converted to bytes for CH API).
+- **`Mjolnir.CloudHypervisor.Config`** — TypedStruct that builds the CH `vm.create` payload. Key fields: `kernel_path`, `boot_args` (includes `root=myfs rootfstype=virtiofs rw`), `vsock_cid` (unique per VM from MD5 of UUID), `mem_size_mib` (converted to bytes for CH API), `virtiofsd_socket` (vhost-user socket path).
 
 - **`Mjolnir.Cleanup`** — Runs at startup. Finds orphan hypervisor processes via `ps`, kills them. Cleans stale sockets, TAP devices in DOWN state (`mj-*`), and VM directories without running GenServers.
 

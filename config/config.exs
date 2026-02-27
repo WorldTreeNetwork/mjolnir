@@ -10,6 +10,7 @@ config :mjolnir,
   ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",
   firecracker_bin: "/usr/local/bin/firecracker",
   cloud_hypervisor_bin: "/usr/local/bin/cloud-hypervisor",
+  virtiofsd_bin: "/usr/libexec/virtiofsd",
   vm_storage_subdir: "@vms",
 
   # Defaults

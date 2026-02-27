@@ -209,9 +209,55 @@ server-build-agent: _require-host
 
 # Build rootfs on the server
 server-build-rootfs: _require-host
-    ssh {{host}} "cd /opt/mjolnir && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512"
+    ssh {{host}} "cd /opt/mjolnir && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04"
 
 # Bootstrap a fresh server (rsync code, trust mise, run bootstrap)
 bootstrap: _require-host
     rsync -avz --delete --filter=':- .gitignore' --exclude='.git' . {{host}}:/opt/mjolnir/ && \
         ssh {{host}} 'export PATH="$HOME/.local/bin:$PATH" && command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host.sh'
+
+# ═══════════════════════════════════════════════════════════════════════
+# MCP Smoke Tests (JSON-RPC over HTTP)
+# ═══════════════════════════════════════════════════════════════════════
+
+# MCP: Initialize handshake
+mcp-init: _require-host
+    ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"smoke-test\",\"version\":\"0.1\"}}}"' | jq .
+
+# MCP: List all available tools
+mcp-tools: _require-host
+    ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}"' | jq '.result.tools[] | .name'
+
+# MCP: Call list_vms tool
+mcp-list-vms: _require-host
+    ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_vms\",\"arguments\":{}}}"' | jq .
+
+# MCP: Run full smoke test (init + tools + list_vms)
+mcp-smoke: _require-host
+    #!/usr/bin/env bash
+    echo "=== MCP Initialize ==="
+    INIT=$(ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"smoke-test\",\"version\":\"0.1\"}}}"')
+    if echo "$INIT" | jq -e '.result.serverInfo' > /dev/null 2>&1; then
+        echo "PASS: $(echo "$INIT" | jq -r '.result.serverInfo.name') v$(echo "$INIT" | jq -r '.result.serverInfo.version')"
+    else
+        echo "FAIL: $INIT"; exit 1
+    fi
+    echo ""
+    echo "=== MCP Tools List ==="
+    TOOLS=$(ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}"')
+    COUNT=$(echo "$TOOLS" | jq '.result.tools | length')
+    if [ "$COUNT" = "13" ]; then
+        echo "PASS: $COUNT tools registered"
+    else
+        echo "FAIL: expected 13 tools, got $COUNT"; exit 1
+    fi
+    echo ""
+    echo "=== MCP tools/call list_vms ==="
+    VMS=$(ssh {{host}} 'curl -s -X POST http://localhost:4000/mcp -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_vms\",\"arguments\":{}}}"')
+    if echo "$VMS" | jq -e '.result.content' > /dev/null 2>&1; then
+        echo "PASS: $(echo "$VMS" | jq -r '.result.content[0].text')"
+    else
+        echo "FAIL: $VMS"; exit 1
+    fi
+    echo ""
+    echo "=== All MCP smoke tests passed ==="

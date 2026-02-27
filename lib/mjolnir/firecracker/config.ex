@@ -19,8 +19,7 @@ defmodule Mjolnir.Firecracker.Config do
     field(:network_interface, map(), default: nil)
     # Snapshot name to spawn from (instead of base_image)
     field(:snapshot, String.t(), default: nil)
-    # Optional rootfs size override in MB
-    field(:rootfs_size_mb, pos_integer(), default: nil)
+
     # Preserve iroh key from snapshot (default: false, generates unique key)
     field(:preserve_iroh_key, boolean(), default: false)
   end

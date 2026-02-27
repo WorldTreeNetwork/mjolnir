@@ -56,11 +56,6 @@ defmodule Mjolnir.API.Router do
           else: opts
 
       opts =
-        if conn.body_params["rootfs_size_mb"],
-          do: Map.put(opts, :rootfs_size_mb, conn.body_params["rootfs_size_mb"]),
-          else: opts
-
-      opts =
         if conn.body_params["preserve_iroh_key"],
           do: Map.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
           else: opts
@@ -248,9 +243,7 @@ defmodule Mjolnir.API.Router do
       if is_nil(name) or name == "" do
         json(conn, 400, %{error: "name is required"})
       else
-        compact = conn.body_params["compact"] || false
-
-        case Mjolnir.VM.snapshot(id, name, compact: compact) do
+        case Mjolnir.VM.snapshot(id, name) do
           {:ok, metadata} ->
             json(conn, 201, metadata)
 

@@ -1,15 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build a minimal Ubuntu 24.04 ext4 rootfs image for Firecracker microVMs
-# Includes mise (universal version manager) for Node.js, Python, Rust, etc.
+# Build a minimal Ubuntu 24.04 BTRFS subvolume rootfs for Cloud Hypervisor VMs
+# with virtio-fs. The output is a directory (BTRFS subvolume), not an ext4 file.
 #
-# Usage: ./build-rootfs.sh [output-path] [size-mb]
-# Example: ./build-rootfs.sh /tmp/ubuntu-24.04.ext4 512
-# sudo ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4
+# Usage: sudo ./scripts/build-rootfs.sh [output-path]
+# Example: sudo ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04
 
-OUTPUT="${1:-ubuntu-24.04.ext4}"
-SIZE_MB="${2:-8192}"
+OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/ubuntu-24.04}"
 AGENT_BIN="${AGENT_BIN:-}"
 
 # Find agent binary
@@ -27,35 +25,36 @@ if [[ -z "$AGENT_BIN" ]]; then
     done
 fi
 
-echo "=== Building Ubuntu 24.04 Rootfs ==="
+echo "=== Building Ubuntu 24.04 Rootfs (BTRFS subvolume) ==="
 echo "Output: $OUTPUT"
-echo "Size: ${SIZE_MB}MB"
 echo "Agent: ${AGENT_BIN:-NOT FOUND}"
 echo ""
 
 # Must be root
 if [[ $EUID -ne 0 ]]; then
-    echo "Error: Must run as root (need mount, debootstrap)"
+    echo "Error: Must run as root (need debootstrap, btrfs)"
     exit 1
 fi
 
-# Ensure output directory exists
+# Ensure parent directory exists
 mkdir -p "$(dirname "$OUTPUT")"
 
-# Create sparse ext4 image
-echo "Creating ext4 image..."
-rm -f "$OUTPUT"
-dd if=/dev/zero of="$OUTPUT" bs=1M count=0 seek="$SIZE_MB" 2>/dev/null
-mkfs.ext4 -q "$OUTPUT"
+# Remove existing subvolume if present
+if [[ -d "$OUTPUT" ]]; then
+    echo "Removing existing subvolume..."
+    btrfs subvolume delete "$OUTPUT" 2>/dev/null || rm -rf "$OUTPUT"
+fi
 
-# Mount
-MOUNT_DIR=$(mktemp -d)
-mount -o loop "$OUTPUT" "$MOUNT_DIR"
+# Create BTRFS subvolume (the subvolume IS the rootfs directory)
+echo "Creating BTRFS subvolume..."
+btrfs subvolume create "$OUTPUT"
+
+# The subvolume is our mount/work directory — no mount needed
+MOUNT_DIR="$OUTPUT"
 
 cleanup() {
     echo "Cleaning up..."
-    umount "$MOUNT_DIR" 2>/dev/null || true
-    rmdir "$MOUNT_DIR" 2>/dev/null || true
+    # No umount needed — subvolume is a directory, not a mounted image
 }
 trap cleanup EXIT
 
@@ -72,8 +71,9 @@ cat > "$MOUNT_DIR/etc/hosts" << 'EOF'
 ::1 localhost
 EOF
 
+# Fstab for virtio-fs: tag "myfs" must match CH fs_config and boot_args
 cat > "$MOUNT_DIR/etc/fstab" << 'EOF'
-/dev/vda / ext4 defaults 0 1
+myfs / virtiofs rw 0 0
 EOF
 
 # Serial console
@@ -85,8 +85,8 @@ ExecStart=-/sbin/agetty --autologin root --noclear %I 115200 linux
 EOF
 chroot "$MOUNT_DIR" systemctl enable serial-getty@ttyS0.service
 
-# Root password
-echo "root:mjolnir" | chroot "$MOUNT_DIR" chpasswd
+# Lock root password (serial console uses autologin, SSH uses key auth)
+chroot "$MOUNT_DIR" passwd -l root
 
 # Guest agent
 if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
@@ -94,13 +94,9 @@ if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
     cp "$AGENT_BIN" "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
     chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
 
-    # Create mjolnir config directory (for optional pre-generated Iroh keys)
     mkdir -p "$MOUNT_DIR/etc/mjolnir"
     chmod 700 "$MOUNT_DIR/etc/mjolnir"
 
-    # Create service file - start early in boot (after sysinit.target)
-    # This ensures the agent is available before multi-user.target which
-    # can wait on serial-getty and other services that delay boot
     cat > "$MOUNT_DIR/etc/systemd/system/mjolnir-agent.service" << 'EOF'
 [Unit]
 Description=Mjolnir Guest Agent
@@ -116,7 +112,6 @@ RestartSec=1
 [Install]
 WantedBy=basic.target
 EOF
-    # Enable in basic.target.wants so it starts early
     mkdir -p "$MOUNT_DIR/etc/systemd/system/basic.target.wants"
     chroot "$MOUNT_DIR" ln -sf /etc/systemd/system/mjolnir-agent.service /etc/systemd/system/basic.target.wants/mjolnir-agent.service
 else
@@ -124,12 +119,10 @@ else
 fi
 
 # Network setup script (called by guest agent)
-# Uses point-to-point routing - no gateway IP needed
 echo "Installing network setup script..."
 cat > "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup" << 'NETEOF'
 #!/bin/bash
 # Called by guest agent with: $1=ip (e.g., 10.200.45.123)
-# Point-to-point link - default route goes directly via eth0
 set -e
 IP="$1"
 
@@ -138,14 +131,10 @@ if [[ -z "$IP" ]]; then
     exit 1
 fi
 
-# Configure IP on eth0 (point-to-point, /32)
 /sbin/ip addr add "${IP}/32" dev eth0 2>/dev/null || true
 /sbin/ip link set eth0 up
-
-# Point-to-point default route (no gateway needed)
 /sbin/ip route add default dev eth0 2>/dev/null || true
 
-# DNS
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
@@ -153,23 +142,16 @@ echo "Network configured: $IP"
 NETEOF
 chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-network-setup"
 
-# Snapshot trigger helper (calls host API to create snapshot)
+# Snapshot trigger helper
 echo "Installing mjolnir-snapshot helper..."
 cat > "$MOUNT_DIR/usr/local/bin/mjolnir-snapshot" << 'SNAPEOF'
 #!/bin/bash
-# Create a snapshot of this VM from inside the guest.
-# Usage: mjolnir-snapshot <name>
-#
-# Reads VM identity from /etc/mjolnir/vm.json (injected by host during boot)
-# and calls the host API to trigger a consistent snapshot.
-
 set -euo pipefail
 
 VM_INFO_FILE="/etc/mjolnir/vm.json"
 
 if [[ ! -f "$VM_INFO_FILE" ]]; then
     echo "Error: VM identity not configured ($VM_INFO_FILE not found)" >&2
-    echo "This VM may not have been started by Mjolnir." >&2
     exit 1
 fi
 
@@ -196,7 +178,7 @@ fi
 SNAPEOF
 chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-snapshot"
 
-# Enable universe repo for broader package availability
+# Enable universe repo
 echo "Configuring apt repositories..."
 cat > "$MOUNT_DIR/etc/apt/sources.list.d/ubuntu.sources" << 'EOF'
 Types: deb
@@ -206,7 +188,7 @@ Components: main universe
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 EOF
 
-# Install essential packages
+# Install packages
 echo "Installing system packages..."
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -214,43 +196,34 @@ chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install
     libbz2-dev libreadline-dev libsqlite3-dev libncurses-dev \
     pkg-config"
 
-# Install mise — universal version manager for Node, Python, Rust, Go, etc.
-# Runs as root here; users interact via `mise install node@22` etc.
+# Install mise
 echo "Installing mise version manager..."
 chroot "$MOUNT_DIR" /bin/bash -c "curl -fsSL https://mise.run | sh"
-# Activate mise for all bash sessions
 cat >> "$MOUNT_DIR/root/.bashrc" << 'EOF'
 
 # mise — version manager for dev toolchains
 eval "$(/root/.local/bin/mise activate bash)"
 EOF
-# Also put it on PATH for non-interactive shells (e.g. exec via agent)
 cat > "$MOUNT_DIR/etc/profile.d/mise.sh" << 'EOF'
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 EOF
 
-# Disable IPv6 system-wide
-# Iroh tries IPv6 first, but we don't have routable IPv6, causing hangs
+# Disable IPv6
 echo "Disabling IPv6..."
 cat > "$MOUNT_DIR/etc/sysctl.d/99-disable-ipv6.conf" << 'EOF'
-# Disable IPv6 - we use IPv4 with NAT for simplicity
-# Without this, Iroh hangs trying IPv6 relay connections
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 EOF
 
-# Configure sshd for key-only authentication
+# Configure sshd
 echo "Configuring sshd..."
 cat > "$MOUNT_DIR/etc/ssh/sshd_config.d/mjolnir.conf" << 'EOF'
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 EOF
 
-# Create /root/.ssh directory (keys injected at runtime by guest agent)
 mkdir -p "$MOUNT_DIR/root/.ssh"
 chmod 700 "$MOUNT_DIR/root/.ssh"
-
-# Enable sshd (starts on boot, but rejects connections until keys are injected)
 chroot "$MOUNT_DIR" systemctl enable ssh
 
 # Cleanup apt cache
@@ -258,12 +231,11 @@ chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get clean"
 rm -rf "$MOUNT_DIR/var/lib/apt/lists/"*
 rm -rf "$MOUNT_DIR/var/cache/apt/"*
 
-# Done
+# Done — no umount needed
 trap - EXIT
-umount "$MOUNT_DIR"
-rmdir "$MOUNT_DIR"
 
 echo ""
 echo "=== Rootfs Built ==="
-echo "File: $OUTPUT"
-echo "Size: $(du -h "$OUTPUT" | cut -f1)"
+echo "Subvolume: $OUTPUT"
+echo "Size: $(du -sh "$OUTPUT" | cut -f1)"
+echo "Verify: btrfs subvolume show $OUTPUT"

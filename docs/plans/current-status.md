@@ -23,7 +23,7 @@
 - **`lib/mjolnir/dormant_registry.ex`** — ETS registry for dormant VM metadata (snapshot + config for wake-on-message)
 
 ### 4. Config Fixes
-- `boot_args` in `CloudHypervisor.Config` now includes `root=/dev/vda rw` (CH needs this; Firecracker uses `is_root_device` flag instead)
+- `boot_args` in `CloudHypervisor.Config` now includes `root=myfs rootfstype=virtiofs rw` (virtio-fs rootfs; Firecracker uses `is_root_device` flag with virtio-blk)
 - `vsock_cid` now generated per-VM from UUID via MD5 hash (was hardcoded to 3, causing CID collisions)
 - CID range: [3, 0xFFFFFFFF), derived from first 4 bytes of `MD5(vm_uuid)`
 

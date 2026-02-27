@@ -76,13 +76,6 @@ defmodule Mjolnir.CloudHypervisor.Client do
   end
 
   @doc """
-  Add a disk to a running VM.
-  """
-  def add_disk(socket_path, disk_config) do
-    put(socket_path, "/api/v1/vm.add-disk", disk_config)
-  end
-
-  @doc """
   Resize VM resources (CPU, memory, or both).
   """
   def resize(socket_path, resize_config) do

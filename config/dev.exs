@@ -14,8 +14,7 @@ config :mjolnir,
   socket_dir: "/tmp/mjolnir-dev",
 
   # Auto-inject current guest agent into restored snapshots
-  guest_agent_bin:
-    "/opt/mjolnir/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
+  guest_agent_bin: "/opt/mjolnir/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
 config :mjolnir, :auth,
   bypass_localhost: true,

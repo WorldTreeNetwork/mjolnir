@@ -122,6 +122,18 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       end
     end
 
+    # Stop virtiofsd if running
+    if state[:virtiofsd_port] do
+      Mjolnir.VirtioFS.stop(state.virtiofsd_port)
+    end
+
+    # Clean up virtiofsd socket
+    if state[:id] do
+      socket_dir = Application.get_env(:mjolnir, :socket_dir)
+      virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id)
+      Mjolnir.VirtioFS.cleanup(virtiofsd_socket)
+    end
+
     # Remove TAP interface and route
     if state[:net_config] do
       try do
@@ -146,11 +158,13 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       File.rm("/tmp/cloud-hypervisor-#{state.id}.log")
     end
 
-    # Delete rootfs file and VM directory
+    # Delete rootfs subvolume
     if state[:rootfs_path] do
-      File.rm(state.rootfs_path)
-      # Also remove the parent VM directory
-      state.rootfs_path |> Path.dirname() |> File.rm_rf()
+      try do
+        Mjolnir.BTRFS.delete_subvolume(state.rootfs_path)
+      rescue
+        e -> Logger.warning("Rootfs subvolume cleanup failed: #{inspect(e)}")
+      end
     end
 
     :ok
