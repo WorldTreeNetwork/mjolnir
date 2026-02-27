@@ -8,7 +8,17 @@ defmodule Mjolnir.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      releases: releases()
+    ]
+  end
+
+  defp releases do
+    [
+      mjolnir: [
+        include_executables_for: [:unix],
+        applications: [runtime_tools: :permanent]
+      ]
     ]
   end
 
@@ -33,7 +43,8 @@ defmodule Mjolnir.MixProject do
       {:req, "~> 0.4"},
       {:typed_struct, "~> 0.3"},
       {:uuid, "~> 1.1"},
-      {:websock_adapter, "~> 0.5"}
+      {:websock_adapter, "~> 0.5"},
+      {:ex_mcp, "~> 0.7"}
     ]
   end
 end

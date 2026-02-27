@@ -13,7 +13,7 @@ defmodule Mjolnir.API.Router do
   alias Mjolnir.API.Views
 
   plug(Plug.Logger)
-  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
+  plug(:maybe_parse_body)
   plug(Mjolnir.API.Auth)
   plug(:match)
   plug(:dispatch)
@@ -349,9 +349,16 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # MCP endpoint — Model Context Protocol for AI agent access
+  forward("/mcp", to: Mjolnir.MCP.Plug)
+
   match _ do
     json(conn, 404, %{error: "not_found"})
   end
+
+  @parsers_opts Plug.Parsers.init(parsers: [:json], json_decoder: Jason)
+  defp maybe_parse_body(%{path_info: ["mcp" | _]} = conn, _opts), do: conn
+  defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
 
   defp json(conn, status, body) do
     conn
