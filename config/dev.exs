@@ -11,7 +11,10 @@ config :mjolnir,
 
   # Dev-specific paths (isolated from prod)
   vm_storage_subdir: "@vms-dev",
-  socket_dir: "/tmp/mjolnir-dev"
+  socket_dir: "/tmp/mjolnir-dev",
+
+  # Auto-inject current guest agent into restored snapshots
+  guest_agent_bin: "/opt/mjolnir/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
 # Serial console wrapper - disabled for now, use VM.exec/2 instead
 # console_wrapper_script: Path.expand("../scripts/firecracker-console.sh", __DIR__)

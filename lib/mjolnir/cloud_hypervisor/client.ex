@@ -29,6 +29,7 @@ defmodule Mjolnir.CloudHypervisor.Client do
   memory, CPUs, disks, network, and vsock.
   """
   def create_vm(socket_path, vm_config) do
+    Logger.info("vm.create payload: #{Jason.encode!(vm_config, pretty: true)}")
     put(socket_path, "/api/v1/vm.create", vm_config)
   end
 

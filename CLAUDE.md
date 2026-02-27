@@ -4,16 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs via Firecracker. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
+Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
 
-## Architecture Transition Plan
+**Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Firecracker support is retained behind the `Mjolnir.Hypervisor` behaviour but Cloud Hypervisor is the active default.
 
-See `.omc/plans/mjolnir-architecture-transition.md` for the full 5-phase transition plan.
+## Current Status & Known Issues
+
+See `docs/plans/current-status.md` for detailed handoff notes including open bugs.
+
+**Open issue**: Cloud Hypervisor `vm.create` returns 400 Bad Request. The payload structure appears correct per the CH v50 OpenAPI spec, but CH rejects it. A debug `Logger.info` line has been added to `lib/mjolnir/cloud_hypervisor/client.ex:create_vm/2` to print the payload — deploy and test to see the exact JSON being sent. The rootfs clone, TAP creation, and CH process startup all succeed; only the API call to configure the VM fails.
 
 ### Deployment
 
 - Server: `ssh root@45.76.77.97`
 - Deploy: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
+- Server runs `iex -S mix` in tmux session 0 (MIX_ENV=dev)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
 - `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
 
@@ -22,7 +27,8 @@ See `.omc/plans/mjolnir-architecture-transition.md` for the full 5-phase transit
 ```bash
 mix deps.get          # Fetch dependencies
 mix compile           # Build the project
-mix test              # Run all tests
+mix test              # Run unit tests (101 tests, 0 failures as of 2026-02-26)
+mix test --include integration   # Run with real VMs (needs KVM + root on server)
 mix test test/mjolnir_test.exs           # Run a single test file
 mix test test/mjolnir_test.exs:5         # Run a specific test by line number
 mix format            # Format all Elixir code
@@ -41,59 +47,93 @@ The guest agent binary is `mjolnir-agent` and must be cross-compiled for the VM'
 ### Host Setup (Linux only, requires root)
 
 ```bash
-sudo BTRFS_DEVICE=/dev/sdb ./scripts/setup-host.sh
+sudo ./scripts/bootstrap-host.sh
 ```
 
-Requires Linux with KVM (`/dev/kvm`), a spare disk for BTRFS, Firecracker 1.5+, Elixir 1.15+, and Erlang 26+.
+Requires Linux with KVM (`/dev/kvm`), a BTRFS filesystem, Cloud Hypervisor v50+, Elixir 1.15+, and Erlang 26+.
 
 ## Architecture
+
+### Hypervisor Abstraction
+
+Both hypervisors implement `Mjolnir.Hypervisor` behaviour (8 callbacks: `start_vm`, `configure_vm`, `start_instance`, `pause_instance`, `resume_instance`, `stop_instance`, `cleanup`, `vsock_path`, `process_name`):
+
+- **`Mjolnir.Hypervisor.CloudHypervisor`** (default) — Single `vm.create` PUT with full JSON payload, then `vm.boot`. Uses Unix socket API. Needs PVH-capable kernel (`ch_kernel_path` config).
+- **`Mjolnir.Hypervisor.Firecracker`** — Multi-step PUT sequence (boot-source, drives, machine-config, vsock, network, then InstanceStart). Uses Unix socket API.
+
+Config key: `hypervisor: Mjolnir.Hypervisor.CloudHypervisor` in `config/config.exs`.
 
 ### Supervision Tree
 
 ```
 Mjolnir.Supervisor (one_for_one)
-├── Mjolnir.VMRegistry    — Registry mapping vm_id (UUID) → GenServer PID
-└── Mjolnir.VMSupervisor  — DynamicSupervisor spawning VM GenServers on demand
+├── Mjolnir.Cleanup          — Sweeps orphan hypervisor processes, stale TAPs, sockets on startup
+├── Mjolnir.EventBus          — Pub/sub for VM lifecycle events (:vm_started, :vm_stopped, :vm_dormant)
+├── Mjolnir.VMRegistry         — Registry mapping vm_id (UUID) → GenServer PID
+├── Mjolnir.DormantRegistry    — ETS table for dormant VM metadata (snapshot name, original config)
+├── Mjolnir.VMSupervisor       — DynamicSupervisor spawning VM GenServers on demand
+└── Bandit HTTP Server         — Serves Mjolnir.API.Router on port 4000
 ```
 
 ### Core Modules
 
-- **`Mjolnir.VM`** — GenServer managing a single VM's lifecycle (spawn → boot → running → stop). Each VM is a transient process under the DynamicSupervisor. Public API: `spawn/1`, `exec/3`, `status/1`, `stop/1`, `list/0`. Boot sequence: clone rootfs → start firecracker binary → configure via REST API → start instance → wait for guest agent ping.
+- **`Mjolnir.VM`** — GenServer managing a single VM's lifecycle (spawn → boot → running → stop/dormant). Each VM is a `:transient` process under the DynamicSupervisor (exits `:normal` on boot failure to prevent restart loops). Public API: `spawn/1`, `exec/3`, `status/1`, `stop/1`, `list/0`, `snapshot/2`, `deliver_message/3`, `handle_done/1`. Boot sequence: clone rootfs → inject guest agent → create TAP → start hypervisor binary → configure via API → boot → wait for guest agent ping → configure guest network → configure identity/SSH/Iroh.
 
-- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `cp --reflink=auto` for instant CoW cloning of ext4 images stored on a BTRFS partition. Storage layout: `@base/` (template images), `@vms/<uuid>/` (per-VM rootfs), `@snapshots/` (future).
+- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `cp --reflink=auto` for instant CoW cloning of ext4 images on BTRFS. Storage layout: `@base/` (template images), `@vms/<uuid>/` (per-VM rootfs), `@snapshots/<name>/` (named snapshots).
 
-- **`Mjolnir.Firecracker.Client`** — HTTP client talking to Firecracker's REST API over Unix domain sockets via `Req`. Configures boot source, drives, machine config, vsock, and controls instance lifecycle (start/pause/resume).
+- **`Mjolnir.CloudHypervisor.Client`** — HTTP client for CH's REST API over Unix socket via `Req`. Endpoints: `vm.create`, `vm.boot`, `vm.pause`, `vm.resume`, `vm.shutdown`, `vm.delete`, `vm.info`.
 
-- **`Mjolnir.Firecracker.Config`** — TypedStruct that builds Firecracker API payloads from VM configuration.
+- **`Mjolnir.CloudHypervisor.Config`** — TypedStruct that builds the CH `vm.create` payload. Key fields: `kernel_path`, `boot_args` (includes `root=/dev/vda rw`), `vsock_cid` (unique per VM from MD5 of UUID), `mem_size_mib` (converted to bytes for CH API).
 
-- **`Mjolnir.Vsock.Connection`** — GenServer managing a single vsock connection to a guest VM. Connects to Firecracker's vsock proxy UDS, sends `CONNECT 5000\n`, then switches to async mode for request/response matching by UUID.
+- **`Mjolnir.Cleanup`** — Runs at startup. Finds orphan hypervisor processes via `ps`, kills them. Cleans stale sockets, TAP devices in DOWN state (`mj-*`), and VM directories without running GenServers.
 
-- **`Mjolnir.Vsock.Protocol`** — Wire protocol with channel multiplexing: 1-byte channel ID + 4-byte big-endian length prefix + payload. Channel 0 carries JSON control messages, channels 1-255 carry binary PTY streams.
+- **`Mjolnir.DormantRegistry`** — ETS-backed registry for VMs that have called `handle_done/1`. Stores snapshot name and original config so dormant VMs can be restored on incoming message.
+
+- **`Mjolnir.EventBus`** — GenServer-based pub/sub. Subscribe to specific VM events or `:all`. Used for lifecycle notifications.
+
+- **`Mjolnir.Network`** — TAP device creation/deletion, IP allocation (hash-based, deterministic), MAC generation, route management. Subnet: 10.0.0.0/8 range.
+
+- **`Mjolnir.Vsock.Connection`** — GenServer managing a persistent vsock connection to a guest VM. Connects via `CONNECT <port>\n` handshake over UDS.
+
+- **`Mjolnir.Vsock.Protocol`** — Wire protocol with channel multiplexing: 1-byte channel ID + 4-byte big-endian length prefix + payload. Channel 0 = JSON control, channels 1-255 = binary PTY streams.
 
 ### Guest Agent (Rust, `native/mjolnir_guest_agent/`)
 
-Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Receives length-prefixed JSON commands, executes them via `sh -c`, and returns stdout/stderr/exit_code. Uses tokio for async I/O with tokio-vsock.
+Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC.
 
 ### Configuration
 
 Config cascades: `config/config.exs` → `config/{dev,test,prod}.exs` → `config/runtime.exs` (env vars).
 
-Key settings: `btrfs_root`, `kernel_path`, `firecracker_bin`, `socket_dir`, `default_vcpus`, `default_memory_mb`, `default_base_image`.
+Key settings: `hypervisor`, `btrfs_root`, `kernel_path`, `ch_kernel_path`, `cloud_hypervisor_bin`, `socket_dir`, `default_vcpus`, `default_memory_mb`, `default_base_image`, `guest_agent_bin`.
 
-Runtime env overrides: `MJOLNIR_BTRFS_ROOT`, `MJOLNIR_SOCKET_DIR`.
+Runtime env overrides: `MJOLNIR_BTRFS_ROOT`, `MJOLNIR_SOCKET_DIR`, `MJOLNIR_AUTH_ISSUER`, `MJOLNIR_API_PORT`.
 
-Test environment uses separate paths (`/var/lib/mjolnir/btrfs-test`, `/tmp/mjolnir-test`).
+Server kernel paths: `/var/lib/mjolnir/vmlinux` (Firecracker), `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH).
 
 ### Data Flow
 
-1. `VM.spawn/1` → UUID generated → GenServer started under DynamicSupervisor
-2. GenServer `init` → `handle_continue(:boot)` → BTRFS reflink clone → Port.open firecracker binary → Req HTTP calls to configure VM → start instance → poll vsock for guest agent readiness
-3. `VM.exec/3` → uses persistent `Vsock.Connection` GenServer (`:vsock_conn` in VM state) → sends length-prefixed JSON over UDS → matches response by request UUID → returns stdout or error tuple
-4. `VM.stop/1` → GenServer.stop → `terminate/2` → Port.close firecracker, cleanup sockets and rootfs files
+1. `VM.spawn/1` → UUID generated → CID generated (MD5 hash of UUID, range [3, 0xFFFFFFFF)) → GenServer started under DynamicSupervisor
+2. `handle_continue(:boot)` → BTRFS reflink clone → inject guest agent binary → create TAP → Port.open hypervisor binary → wait for API socket → configure VM → boot instance → poll vsock for guest agent → configure guest network/identity/Iroh
+3. `VM.exec/3` → persistent `Vsock.Connection` → length-prefixed JSON over UDS → match response by UUID → return stdout or error
+4. `VM.stop/1` → GenServer.stop → `terminate/2` → cleanup (kill hypervisor, delete TAP, remove sockets/rootfs)
+5. `VM.handle_done/1` → snapshot VM → register in DormantRegistry → stop with `:normal`
 
 ### Key Patterns
 
-- VMs are looked up via `Registry` with `{:via, Registry, {Mjolnir.VMRegistry, vm_id}}` tuples
-- Firecracker is managed as a Port (OS process), not an NIF — crash isolation is a feature
-- `test/support/vm_case.ex` provides a test case template that cleans up orphan VMs after each test
+- VMs looked up via `Registry` with `{:via, Registry, {Mjolnir.VMRegistry, vm_id}}`
+- Hypervisor managed as a Port (OS process) — crash isolation is a feature
+- Boot failure → `{:stop, :normal, state}` so `:transient` DynamicSupervisor does NOT restart
+- Partial boot cleanup via Process dictionary tracking (`Process.put(:boot_partial, ...)`)
+- Guest agent auto-injected into rootfs at boot (`inject_guest_agent/1`) when `guest_agent_bin` config is set
+- `test/support/vm_case.ex` provides test case template that cleans up orphan VMs
 - `elixirc_paths` includes `test/support` only in test env
+
+### Test Harness
+
+See `docs/plans/test-harness-spec.md` for the full specification.
+
+- **Unit tests** (`mix test`): 101 tests, async, no infrastructure needed, run on macOS
+- **Integration tests** (`mix test --include integration`): Need KVM + root on server
+- **E2E tests** (`mix test --include e2e`): Future — full API lifecycle
+- Tags: `:integration`, `:cloud_hypervisor`, `:snapshot`, `:network`, `:slow`

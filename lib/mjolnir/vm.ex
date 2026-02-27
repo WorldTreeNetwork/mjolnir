@@ -33,7 +33,9 @@ defmodule Mjolnir.VM do
     # SSH key injection
     :ssh_public_key,
     # Iroh networking toggle
-    enable_iroh: false
+    enable_iroh: false,
+    # Inter-VM message queue (buffered during boot)
+    message_queue: []
   ]
 
   @type t :: %__MODULE__{}
@@ -313,6 +315,81 @@ defmodule Mjolnir.VM do
     end
   end
 
+  @doc """
+  Deliver a message from one VM to another.
+
+  Routes through the VMRegistry for running VMs, or through the
+  DormantRegistry for checkpointed VMs (triggering a restore).
+  """
+  @spec deliver_message(vm_id(), String.t(), term()) :: :ok | {:error, term()}
+  def deliver_message(target_vm_id, from_vm_id, payload) do
+    case Registry.lookup(Mjolnir.VMRegistry, target_vm_id) do
+      [{pid, _}] ->
+        GenServer.call(pid, {:deliver_message, from_vm_id, payload})
+
+      [] ->
+        # Check if the VM is dormant
+        case Mjolnir.DormantRegistry.lookup(target_vm_id) do
+          {:ok, _entry} ->
+            case Mjolnir.DormantRegistry.queue_message(target_vm_id, from_vm_id, payload) do
+              :ok ->
+                restore_dormant_vm(target_vm_id)
+
+              {:error, :restoring} ->
+                # VM is being restored — retry delivery via VMRegistry
+                # (it may be booting, in which case the message gets queued in the VM GenServer)
+                retry_deliver_message(target_vm_id, from_vm_id, payload)
+
+              {:error, :not_found} ->
+                {:error, :not_found}
+            end
+
+          :not_found ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
+  Handle a VM signaling "done" — snapshot and go dormant.
+
+  Called by the vsock connection handler when the guest sends signal_done.
+  """
+  @spec handle_done(vm_id()) :: :ok | {:error, term()}
+  def handle_done(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        GenServer.call(pid, :handle_done, 60_000)
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Spawn a VM with a pre-assigned ID (used for restoring dormant VMs).
+
+  Like `spawn/1` but uses the given `:id` from opts instead of generating a new UUID.
+  """
+  @spec spawn_with_id(spawn_opts()) :: {:ok, t()} | {:error, term()}
+  def spawn_with_id(opts) do
+    vm_id = opts[:id] || raise ArgumentError, ":id is required for spawn_with_id"
+
+    case DynamicSupervisor.start_child(
+           Mjolnir.VMSupervisor,
+           {__MODULE__, Map.put(opts, :id, vm_id)}
+         ) do
+      {:ok, pid} ->
+        case GenServer.call(pid, :await_boot, 30_000) do
+          {:ok, vm} -> {:ok, vm}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ============================================================================
   # GenServer Implementation
   # ============================================================================
@@ -362,11 +439,24 @@ defmodule Mjolnir.VM do
   def handle_continue(:boot, state) do
     case do_boot(state) do
       {:ok, new_state} ->
-        {:noreply, %{new_state | state: :running, boot_time: System.monotonic_time(:millisecond)}}
+        # Drain any messages queued during boot
+        for {from_vm_id, payload} <- new_state.message_queue do
+          Mjolnir.Vsock.Connection.deliver_message(new_state.vsock_conn, from_vm_id, payload)
+        end
+
+        {:noreply,
+         %{
+           new_state
+           | state: :running,
+             boot_time: System.system_time(:millisecond),
+             message_queue: []
+         }}
 
       {:error, reason} ->
         Logger.error("VM #{state.id} failed to boot: #{inspect(reason)}")
-        {:stop, reason, %{state | state: :failed}}
+        # Return :normal so the :transient DynamicSupervisor does NOT restart
+        # (transient processes only restart on abnormal termination)
+        {:stop, :normal, %{state | state: :failed}}
     end
   end
 
@@ -386,6 +476,35 @@ defmodule Mjolnir.VM do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_call({:deliver_message, from_vm_id, payload}, _from, %{state: :running} = state) do
+    Mjolnir.Vsock.Connection.deliver_message(state.vsock_conn, from_vm_id, payload)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:deliver_message, from_vm_id, payload}, _from, %{state: :booting} = state) do
+    {:reply, :ok, %{state | message_queue: state.message_queue ++ [{from_vm_id, payload}]}}
+  end
+
+  def handle_call({:deliver_message, _from_vm_id, _payload}, _from, state) do
+    {:reply, {:error, {:not_available, state.state}}, state}
+  end
+
+  def handle_call(:handle_done, _from, state) do
+    snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
+
+    case do_snapshot(state, snapshot_name, []) do
+      {:ok, _metadata} ->
+        original_config = restore_config(state)
+        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config)
+        Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
+        {:stop, :normal, :ok, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to snapshot VM #{state.id} for done: #{inspect(reason)}")
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:exec, command}, _from, state) do
@@ -453,7 +572,13 @@ defmodule Mjolnir.VM do
   @impl true
   def terminate(reason, state) do
     Logger.info("VM #{state.id} terminating: #{inspect(reason)}")
-    cleanup(state)
+
+    # Only run cleanup if we have resources to clean up (hypervisor_port or net_config set).
+    # Partial boot failures clean up their own resources via cleanup_partial_boot.
+    if state.hypervisor_port || state.net_config || state.rootfs_path do
+      cleanup(state)
+    end
+
     :ok
   end
 
@@ -474,10 +599,21 @@ defmodule Mjolnir.VM do
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
+      vsock_cid: generate_vsock_cid(opts.id),
       snapshot: opts[:snapshot],
       rootfs_size_mb: opts[:rootfs_size_mb],
       preserve_iroh_key: opts[:preserve_iroh_key] || false
     }
+  end
+
+  # Generate a unique vsock CID from the VM's UUID.
+  # CIDs 0-2 are reserved by the kernel, so we map into the range [3, 0xFFFFFFFF).
+  # Uses the first 4 bytes of the UUID's MD5 hash to produce a deterministic,
+  # collision-resistant 32-bit CID.
+  defp generate_vsock_cid(vm_id) do
+    <<cid_raw::unsigned-32, _rest::binary>> = :crypto.hash(:md5, vm_id)
+    # Ensure CID >= 3 (0-2 are reserved) and avoid 0xFFFFFFFF (VMADDR_CID_ANY)
+    rem(cid_raw, 0xFFFFFFFF - 3) + 3
   end
 
   defp do_boot(state) do
@@ -494,80 +630,191 @@ defmodule Mjolnir.VM do
     _ = File.rm(vsock_path)
     _ = File.rm(serial_path)
 
-    with :ok <- File.mkdir_p(socket_dir),
-         {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
-         {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
-         {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
-         :ok <- wait_for_socket(socket_path),
-         config <-
-           Map.merge(state.config, %{rootfs_path: rootfs_path, network_interface: net_config}),
-         :ok <- configure_vm(hypervisor, socket_path, config),
-         :ok <- hypervisor.start_instance(socket_path),
-         :ok <- wait_for_boot(vsock_path),
-         :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
-      # Inject SSH public key if provided
-      if state.ssh_public_key do
-        case configure_ssh(vsock_path, state.ssh_public_key) do
-          :ok -> Logger.info("SSH key injected for VM #{state.id}")
-          {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
-        end
-      end
+    # Use Process dictionary to track partially-created resources for cleanup
+    Process.put(:boot_partial, %{})
 
-      # Inject VM identity (vm_id + API URL for in-VM snapshot trigger)
-      api_port = Application.get_env(:mjolnir, :api_port, 4000)
-      host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
-      api_url = "http://#{host_ip}:#{api_port}"
-
-      case configure_identity(vsock_path, state.id, api_url) do
-        :ok -> Logger.info("VM identity injected for VM #{state.id}")
-        {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
-      end
-
-      # Tell guest agent whether to start Iroh
-      case configure_iroh(vsock_path, state.enable_iroh) do
-        :ok ->
-          Logger.info(
-            "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
-          )
-
-        {:error, reason} ->
-          Logger.warning("configure_iroh failed: #{inspect(reason)}")
-      end
-
-      # Only wait for Iroh if enabled
-      iroh_info =
-        if state.enable_iroh do
-          await_iroh_ready(vsock_path, 5_000)
-        else
-          nil
+    result =
+      with :ok <- File.mkdir_p(socket_dir),
+           {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
+           _ = boot_partial_put(:rootfs_path, rootfs_path),
+           _ = inject_guest_agent(rootfs_path),
+           {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
+           _ = boot_partial_put(:net_config, net_config),
+           {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
+           _ = boot_partial_put(:hv_port, hv_port),
+           :ok <- wait_for_socket(socket_path),
+           config <-
+             Map.merge(state.config, %{rootfs_path: rootfs_path, network_interface: net_config}),
+           :ok <- configure_vm(hypervisor, socket_path, config),
+           :ok <- hypervisor.start_instance(socket_path),
+           :ok <- wait_for_boot(vsock_path),
+           :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
+        # Inject SSH public key if provided
+        if state.ssh_public_key do
+          case configure_ssh(vsock_path, state.ssh_public_key) do
+            :ok -> Logger.info("SSH key injected for VM #{state.id}")
+            {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
+          end
         end
 
-      # Start persistent vsock connection for command execution
-      {:ok, vsock_conn} =
-        Mjolnir.Vsock.Connection.start_link(%{
-          vm_id: state.id,
-          socket_path: vsock_path
-        })
+        # Inject VM identity (vm_id + API URL for in-VM snapshot trigger)
+        api_port = Application.get_env(:mjolnir, :api_port, 4000)
+        host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+        api_url = "http://#{host_ip}:#{api_port}"
 
-      {:ok,
-       %{
-         state
-         | socket_path: socket_path,
-           vsock_path: vsock_path,
-           vsock_conn: vsock_conn,
-           serial_path: serial_path,
-           rootfs_path: rootfs_path,
-           net_config: net_config,
-           hypervisor_port: hv_port,
-           iroh_node_id: iroh_info[:node_id],
-           iroh_json: iroh_info[:ticket],
-           ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-           pty_ready: iroh_info != nil
-       }}
-    end
+        case configure_identity(vsock_path, state.id, api_url) do
+          :ok -> Logger.info("VM identity injected for VM #{state.id}")
+          {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
+        end
+
+        # Tell guest agent whether to start Iroh
+        case configure_iroh(vsock_path, state.enable_iroh) do
+          :ok ->
+            Logger.info(
+              "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
+            )
+
+          {:error, reason} ->
+            Logger.warning("configure_iroh failed: #{inspect(reason)}")
+        end
+
+        # Only wait for Iroh if enabled
+        iroh_info =
+          if state.enable_iroh do
+            await_iroh_ready(vsock_path, 5_000)
+          else
+            nil
+          end
+
+        # Start persistent vsock connection for command execution
+        {:ok, vsock_conn} =
+          Mjolnir.Vsock.Connection.start_link(%{
+            vm_id: state.id,
+            socket_path: vsock_path
+          })
+
+        Process.delete(:boot_partial)
+
+        {:ok,
+         %{
+           state
+           | socket_path: socket_path,
+             vsock_path: vsock_path,
+             vsock_conn: vsock_conn,
+             serial_path: serial_path,
+             rootfs_path: rootfs_path,
+             net_config: net_config,
+             hypervisor_port: hv_port,
+             iroh_node_id: iroh_info[:node_id],
+             iroh_json: iroh_info[:ticket],
+             ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
+             pty_ready: iroh_info != nil
+         }}
+      else
+        error ->
+          cleanup_partial_boot(state.hypervisor, socket_path, vsock_path, serial_path)
+          error
+      end
+
+    result
   rescue
     e ->
+      cleanup_partial_boot(state.hypervisor, nil, nil, nil)
       {:error, {:boot_exception, e}}
+  end
+
+  defp boot_partial_put(key, value) do
+    partial = Process.get(:boot_partial, %{})
+    Process.put(:boot_partial, Map.put(partial, key, value))
+  end
+
+  defp cleanup_partial_boot(_hypervisor, socket_path, vsock_path, serial_path) do
+    partial = Process.get(:boot_partial, %{})
+    Process.delete(:boot_partial)
+
+    Logger.debug("Cleaning up partially-created boot resources: #{inspect(Map.keys(partial))}")
+
+    # Kill hypervisor port if started
+    if partial[:hv_port] do
+      try do
+        case Port.info(partial.hv_port, :os_pid) do
+          {:os_pid, os_pid} ->
+            Port.close(partial.hv_port)
+            System.cmd("kill", ["-9", to_string(os_pid)])
+
+          nil ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
+
+    # Delete TAP if created
+    if partial[:net_config] do
+      try do
+        Mjolnir.Network.delete_tap(partial.net_config.tap_name, partial.net_config.guest_ip)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    # Remove rootfs if cloned
+    if partial[:rootfs_path] do
+      File.rm(partial.rootfs_path)
+      partial.rootfs_path |> Path.dirname() |> File.rm_rf()
+    end
+
+    # Remove sockets
+    if socket_path, do: File.rm(socket_path)
+    if vsock_path, do: File.rm(vsock_path)
+    if serial_path, do: File.rm(serial_path)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp inject_guest_agent(rootfs_path) do
+    agent_bin = Application.get_env(:mjolnir, :guest_agent_bin)
+
+    if agent_bin && File.exists?(agent_bin) do
+      mount_point =
+        Path.join(
+          System.tmp_dir!(),
+          "mjolnir-agent-inject-#{:erlang.unique_integer([:positive])}"
+        )
+
+      with :ok <- File.mkdir_p(mount_point),
+           {_, 0} <-
+             System.cmd("mount", ["-o", "loop", rootfs_path, mount_point], stderr_to_stdout: true) do
+        dest = Path.join(mount_point, "usr/local/bin/mjolnir-agent")
+        File.mkdir_p!(Path.dirname(dest))
+        File.cp!(agent_bin, dest)
+        # Ensure the binary is executable
+        System.cmd("chmod", ["+x", dest])
+        Logger.info("Injected current guest agent into rootfs")
+
+        case System.cmd("umount", [mount_point], stderr_to_stdout: true) do
+          {_, 0} -> File.rmdir(mount_point)
+          {output, _} -> Logger.warning("Failed to unmount after agent injection: #{output}")
+        end
+      else
+        {:error, reason} ->
+          Logger.warning("Guest agent injection failed: #{inspect(reason)}")
+
+        {output, code} ->
+          Logger.warning("Guest agent injection failed (mount exit #{code}): #{output}")
+
+          _ = File.rmdir(mount_point)
+      end
+    end
+
+    :ok
+  rescue
+    e ->
+      Logger.warning("Guest agent injection failed: #{inspect(e)}")
+      :ok
   end
 
   defp clone_rootfs(vm_id, base_image, config) do
@@ -904,5 +1151,101 @@ defmodule Mjolnir.VM do
     :ok
   rescue
     _ -> :ok
+  end
+
+  # ============================================================================
+  # Dormant VM Helpers
+  # ============================================================================
+
+  # Retry delivering a message when the DormantRegistry is in :restoring state.
+  # The VM should already be in VMRegistry (booting or running).
+  defp retry_deliver_message(target_vm_id, from_vm_id, payload, retries \\ 5) do
+    case Registry.lookup(Mjolnir.VMRegistry, target_vm_id) do
+      [{pid, _}] ->
+        GenServer.call(pid, {:deliver_message, from_vm_id, payload})
+
+      [] when retries > 0 ->
+        Process.sleep(200)
+        retry_deliver_message(target_vm_id, from_vm_id, payload, retries - 1)
+
+      [] ->
+        Logger.warning(
+          "Failed to deliver message to restoring VM #{target_vm_id}: not in registry"
+        )
+
+        {:error, :not_found}
+    end
+  end
+
+  defp restore_config(state) do
+    %{
+      base_image: state.config.base_image,
+      vcpus: state.config.vcpu_count,
+      memory_mb: state.config.mem_size_mib,
+      enable_iroh: state.enable_iroh,
+      ssh_public_key: state.ssh_public_key
+    }
+  end
+
+  defp restore_dormant_vm(vm_id) do
+    case Mjolnir.DormantRegistry.begin_restore(vm_id) do
+      :ok ->
+        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
+          do_restore_dormant_vm(vm_id)
+        end)
+
+        :ok
+
+      :already_restoring ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_restore_dormant_vm(vm_id) do
+    case Mjolnir.DormantRegistry.lookup(vm_id) do
+      {:ok, entry} ->
+        # Spawn the VM from its dormant snapshot, reusing the same VM ID
+        opts =
+          Map.merge(entry.original_config, %{
+            id: vm_id,
+            snapshot: entry.snapshot_name,
+            preserve_iroh_key: false
+          })
+
+        case spawn_with_id(opts) do
+          {:ok, _vm} ->
+            # Atomically take pending messages and unregister in one sequence.
+            # Unregister first so new deliver_message calls route via VMRegistry
+            # (the VM is already registered there after spawn_with_id).
+            pending = Mjolnir.DormantRegistry.take_pending_messages(vm_id)
+            Mjolnir.DormantRegistry.unregister(vm_id)
+
+            for {from_vm_id, payload} <- pending do
+              # The VM is now running, deliver via registry
+              case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+                [{pid, _}] ->
+                  GenServer.call(pid, {:deliver_message, from_vm_id, payload})
+
+                [] ->
+                  Logger.warning(
+                    "Restored VM #{vm_id} not found in registry for message delivery"
+                  )
+              end
+            end
+
+            Mjolnir.EventBus.publish(vm_id, :vm_restored, %{from_snapshot: entry.snapshot_name})
+            Logger.info("Successfully restored dormant VM #{vm_id}")
+
+          {:error, reason} ->
+            Logger.error("Failed to restore dormant VM #{vm_id}: #{inspect(reason)}")
+            Mjolnir.DormantRegistry.cancel_restore(vm_id)
+        end
+
+      :not_found ->
+        Logger.warning("Dormant VM #{vm_id} not found during restore")
+    end
   end
 end

@@ -34,8 +34,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shared bridge holder for agent SDK ↔ vsock communication
     let bridge_holder = vsock::new_bridge_holder();
 
-    // Spawn agent SDK HTTP server
-    if let Err(e) = agent::run_agent_sdk(bridge_holder.clone()).await {
+    // Shared message inbox for inter-VM messaging
+    let (message_inbox, message_notify) = vsock::new_message_inbox();
+
+    // Spawn agent SDK HTTP server (with inbox for /recv and /messages endpoints)
+    if let Err(e) = agent::run_agent_sdk(
+        bridge_holder.clone(),
+        message_inbox.clone(),
+        message_notify.clone(),
+    )
+    .await
+    {
         error!("Failed to start agent SDK: {}", e);
     }
 
@@ -45,6 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         iroh_ready_rx,
         iroh_start_tx,
         bridge_holder,
+        message_inbox,
+        message_notify,
     ));
 
     // Wait for configure_iroh message from host

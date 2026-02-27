@@ -70,12 +70,17 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
 
-      case Mjolnir.VM.spawn(opts) do
-        {:ok, vm} ->
-          json(conn, 201, Views.render_vm(vm))
+      try do
+        case Mjolnir.VM.spawn(opts) do
+          {:ok, vm} ->
+            json(conn, 201, Views.render_vm(vm))
 
-        {:error, reason} ->
-          json(conn, 500, %{error: inspect(reason)})
+          {:error, reason} ->
+            json(conn, 500, %{error: "spawn_failed", reason: inspect(reason)})
+        end
+      catch
+        :exit, reason ->
+          json(conn, 500, %{error: "spawn_failed", reason: inspect(reason)})
       end
     else
       conn
@@ -136,6 +141,29 @@ defmodule Mjolnir.API.Router do
 
         {:error, {:exit_code, code, stderr}} ->
           json(conn, 200, %{exit_code: code, stderr: stderr})
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_found"})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: inspect(reason)})
+      end
+    else
+      conn
+    end
+  end
+
+  # Send message to a VM (inter-VM messaging / coroutine wake-up)
+  post "/api/vms/:id/messages" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      from_vm_id = conn.body_params["from_vm_id"] || "external"
+      payload = conn.body_params["payload"] || %{}
+
+      case Mjolnir.VM.deliver_message(id, from_vm_id, payload) do
+        :ok ->
+          json(conn, 200, %{ok: true})
 
         {:error, :not_found} ->
           json(conn, 404, %{error: "not_found"})
@@ -273,6 +301,29 @@ defmodule Mjolnir.API.Router do
         {:error, reason} ->
           json(conn, 500, %{error: inspect(reason)})
       end
+    else
+      conn
+    end
+  end
+
+  # List dormant VMs
+  get "/api/dormant" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      dormant =
+        Mjolnir.DormantRegistry.list()
+        |> Enum.map(fn entry ->
+          %{
+            vm_id: entry.vm_id,
+            snapshot_name: entry.snapshot_name,
+            dormant_since: DateTime.to_iso8601(entry.dormant_since),
+            pending_messages: length(entry.pending_messages),
+            state: entry.state
+          }
+        end)
+
+      json(conn, 200, %{dormant: dormant})
     else
       conn
     end

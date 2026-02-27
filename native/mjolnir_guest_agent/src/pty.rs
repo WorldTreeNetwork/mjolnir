@@ -262,7 +262,11 @@ mod tests {
         let n = pty.read(&mut buf).await.unwrap();
         let output = String::from_utf8_lossy(&buf[..n]);
 
-        assert!(output.contains("hello"), "Expected 'hello' in output: {}", output);
+        assert!(
+            output.contains("hello"),
+            "Expected 'hello' in output: {}",
+            output
+        );
     }
 
     #[tokio::test]

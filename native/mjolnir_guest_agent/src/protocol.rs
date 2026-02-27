@@ -27,7 +27,12 @@ pub enum VsockRequest {
     #[serde(rename = "pty_open")]
     PtyOpen { id: String, rows: u16, cols: u16 },
     #[serde(rename = "pty_resize")]
-    PtyResize { id: String, channel: u8, rows: u16, cols: u16 },
+    PtyResize {
+        id: String,
+        channel: u8,
+        rows: u16,
+        cols: u16,
+    },
     #[serde(rename = "pty_close")]
     PtyClose { channel: u8 },
     #[serde(rename = "spawn_sub_agent")]
@@ -35,7 +40,27 @@ pub enum VsockRequest {
     #[serde(rename = "snapshot_self")]
     SnapshotSelf { id: String, name: String },
     #[serde(rename = "emit_event")]
-    EmitEvent { id: String, event: String, payload: serde_json::Value },
+    EmitEvent {
+        id: String,
+        event: String,
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "send_message")]
+    SendMessage {
+        id: String,
+        target_vm_id: String,
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "deliver_message")]
+    DeliverMessage {
+        id: String,
+        from_vm_id: String,
+        payload: serde_json::Value,
+    },
+    #[serde(rename = "signal_done")]
+    SignalDone { id: String },
+    #[serde(rename = "signal_done_ack")]
+    SignalDoneAck { id: String, ok: bool },
 }
 
 /// Messages from guest to host (vsock)
@@ -72,6 +97,15 @@ pub enum VsockResponse {
     SnapshotSelfResponse { id: String, ok: bool },
     #[serde(rename = "event_ack")]
     EventAck { id: String },
+    #[serde(rename = "send_message_response")]
+    SendMessageResponse {
+        id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "deliver_message_ack")]
+    DeliverMessageAck { id: String },
 }
 
 /// Notification sent when Iroh is ready
@@ -94,4 +128,3 @@ impl IrohReady {
         }
     }
 }
-

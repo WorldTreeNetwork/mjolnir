@@ -28,6 +28,7 @@ defmodule Mjolnir.Cleanup do
 
     clean_stale_sockets(socket_dir)
     clean_stale_vms(btrfs_root)
+    clean_orphan_taps()
 
     :ok
   end
@@ -98,6 +99,33 @@ defmodule Mjolnir.Cleanup do
       {:error, :enoent} ->
         :ok
     end
+  end
+
+  defp clean_orphan_taps do
+    # Find any mj-* TAP interfaces with state DOWN and delete them
+    case System.cmd("ip", ["-o", "link", "show"], stderr_to_stdout: true) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.filter(fn line ->
+          String.contains?(line, "mj-") and String.contains?(line, "state DOWN")
+        end)
+        |> Enum.each(fn line ->
+          case Regex.run(~r/(mj-[a-f0-9]+)/, line) do
+            [_, tap_name] ->
+              Logger.info("Removing orphan TAP interface: #{tap_name}")
+              System.cmd("ip", ["link", "del", tap_name], stderr_to_stdout: true)
+
+            _ ->
+              :ok
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   defp clean_stale_vms(btrfs_root) do

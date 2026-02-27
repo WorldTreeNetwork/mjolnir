@@ -388,7 +388,7 @@ install_cloud_hypervisor() {
     if [[ "$arch" == "aarch64" ]]; then
         binary_suffix="cloud-hypervisor-static-aarch64"
     fi
-
+   
     local url="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/${binary_suffix}"
 
     log_info "Downloading Cloud Hypervisor v${CH_VERSION}..."

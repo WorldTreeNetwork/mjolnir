@@ -124,8 +124,12 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
 
     # Remove TAP interface and route
     if state[:net_config] do
-      Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
-      Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
+      try do
+        Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
+        Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
+      rescue
+        e -> Logger.warning("TAP cleanup failed for #{state[:id]}: #{inspect(e)}")
+      end
     end
 
     # Remove socket files

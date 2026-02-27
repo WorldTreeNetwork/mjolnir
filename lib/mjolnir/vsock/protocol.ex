@@ -218,4 +218,43 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   def parse_iroh_ready(_), do: {:error, :invalid_iroh_ready}
+
+  @doc """
+  Build a deliver_message message (host → guest push).
+  Delivers a message from another VM into the guest's inbox.
+  """
+  def deliver_message(from_vm_id, payload, request_id \\ nil) do
+    %{
+      "type" => "deliver_message",
+      "id" => request_id || UUID.uuid4(),
+      "from_vm_id" => from_vm_id,
+      "payload" => payload
+    }
+  end
+
+  @doc """
+  Build a send_message_response message (host → guest).
+  Response to a guest's send_message request.
+  """
+  def send_message_response(id, ok, error \\ nil) do
+    msg = %{
+      "type" => "send_message_response",
+      "id" => id,
+      "ok" => ok
+    }
+
+    if error, do: Map.put(msg, "error", error), else: msg
+  end
+
+  @doc """
+  Build a signal_done_ack message (host → guest).
+  Acknowledges the guest's signal_done request.
+  """
+  def signal_done_ack(id, ok) do
+    %{
+      "type" => "signal_done_ack",
+      "id" => id,
+      "ok" => ok
+    }
+  end
 end

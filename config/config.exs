@@ -2,7 +2,7 @@ import Config
 
 config :mjolnir,
   # Hypervisor
-  hypervisor: Mjolnir.Hypervisor.Firecracker,
+  hypervisor: Mjolnir.Hypervisor.CloudHypervisor,
 
   # Paths
   btrfs_root: "/var/lib/mjolnir/btrfs",
@@ -22,6 +22,9 @@ config :mjolnir,
 
   # HTTP API
   api_port: 4000,
+
+  # Guest agent binary to inject into rootfs on boot (nil = skip injection)
+  guest_agent_bin: nil,
 
   # SSH (nil = no default key injection; can be a path or inline key string)
   default_ssh_public_key: nil

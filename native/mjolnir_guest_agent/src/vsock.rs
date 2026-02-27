@@ -2,12 +2,12 @@
 
 use crate::protocol::{IrohReady, VsockRequest, VsockResponse};
 use crate::pty::{PtySession, PtyWriter};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
 use tokio::time::timeout;
 use tokio_vsock::{VsockListener, VsockStream};
 use tracing::{error, info, warn};
@@ -84,6 +84,27 @@ pub fn new_bridge_holder() -> BridgeHolder {
     Arc::new(RwLock::new(None))
 }
 
+/// A message delivered from another VM via the host.
+#[derive(Debug, Clone)]
+pub struct IncomingMessage {
+    pub id: String,
+    pub from_vm_id: String,
+    pub payload: serde_json::Value,
+}
+
+/// Thread-safe inbox for messages delivered to this VM.
+pub type MessageInbox = Arc<Mutex<VecDeque<IncomingMessage>>>;
+
+/// Notification signal for when a new message arrives in the inbox.
+pub type MessageNotify = Arc<Notify>;
+
+pub fn new_message_inbox() -> (MessageInbox, MessageNotify) {
+    (
+        Arc::new(Mutex::new(VecDeque::new())),
+        Arc::new(Notify::new()),
+    )
+}
+
 /// Manages PTY write halves and channel allocation.
 /// The read halves are owned by their respective output-forwarding tasks.
 struct PtyManager {
@@ -156,6 +177,8 @@ pub async fn run_vsock_listener(
     iroh_ready_rx: oneshot::Receiver<IrohReady>,
     iroh_start_tx: oneshot::Sender<bool>,
     bridge_holder: BridgeHolder,
+    message_inbox: MessageInbox,
+    message_notify: MessageNotify,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = VsockListener::bind(VMADDR_CID_ANY, port)?;
     info!("Vsock listener started on port {}", port);
@@ -187,7 +210,11 @@ pub async fn run_vsock_listener(
                 let state = iroh_state.clone();
                 let start_tx = iroh_start_tx.clone();
                 let bridge = bridge_holder.clone();
-                tokio::spawn(handle_vsock_connection(stream, state, start_tx, bridge));
+                let inbox = message_inbox.clone();
+                let notify = message_notify.clone();
+                tokio::spawn(handle_vsock_connection(
+                    stream, state, start_tx, bridge, inbox, notify,
+                ));
             }
             Err(e) => error!("Failed to accept vsock connection: {}", e),
         }
@@ -199,6 +226,8 @@ async fn handle_vsock_connection(
     iroh_state: IrohState,
     iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
     bridge_holder: BridgeHolder,
+    message_inbox: MessageInbox,
+    message_notify: MessageNotify,
 ) {
     // Channel for outgoing writes. PTY output tasks and the reader loop
     // send pre-framed messages here; the writer half drains them.
@@ -269,6 +298,8 @@ async fn handle_vsock_connection(
                                         t.ends_with("_response")
                                             || t == "event_ack"
                                             || t == "pong"
+                                            || t == "deliver_message_ack"
+                                            || t == "signal_done_ack"
                                     })
                                     .unwrap_or(false);
 
@@ -292,6 +323,8 @@ async fn handle_vsock_connection(
                                             &iroh_start_tx,
                                             &pty_manager,
                                             &write_tx,
+                                            &message_inbox,
+                                            &message_notify,
                                         ).await;
                                         let frame = frame_message(0, &response);
                                         if write_tx.send(frame).await.is_err() {
@@ -357,6 +390,8 @@ async fn handle_request(
     iroh_start_tx: &Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
     pty_manager: &Arc<Mutex<PtyManager>>,
     write_tx: &mpsc::Sender<FramedMsg>,
+    message_inbox: &MessageInbox,
+    message_notify: &MessageNotify,
 ) -> VsockResponse {
     match request {
         VsockRequest::Exec { id, command } => {
@@ -425,7 +460,10 @@ async fn handle_request(
                 },
             }
         }
-        VsockRequest::ConfigureSsh { id, authorized_keys } => {
+        VsockRequest::ConfigureSsh {
+            id,
+            authorized_keys,
+        } => {
             info!("ConfigureSsh");
             let result = (|| -> std::io::Result<()> {
                 std::fs::create_dir_all("/root/.ssh")?;
@@ -552,7 +590,8 @@ async fn handle_request(
                                 pty_manager_clone.lock().await.remove(channel);
 
                                 // Send pty_closed notification
-                                let closed = frame_message(0, &VsockResponse::PtyClosed { channel });
+                                let closed =
+                                    frame_message(0, &VsockResponse::PtyClosed { channel });
                                 let _ = tx.send(closed).await;
                             });
 
@@ -580,8 +619,16 @@ async fn handle_request(
                 }
             }
         }
-        VsockRequest::PtyResize { id, channel, rows, cols } => {
-            info!("PtyResize: channel={}, rows={}, cols={}", channel, rows, cols);
+        VsockRequest::PtyResize {
+            id,
+            channel,
+            rows,
+            cols,
+        } => {
+            info!(
+                "PtyResize: channel={}, rows={}, cols={}",
+                channel, rows, cols
+            );
             let manager = pty_manager.lock().await;
             match manager.get(channel) {
                 Some(writer) => {
@@ -616,15 +663,41 @@ async fn handle_request(
             manager.remove(channel);
             VsockResponse::PtyClosed { channel }
         }
+        VsockRequest::DeliverMessage {
+            id,
+            from_vm_id,
+            payload,
+        } => {
+            info!("DeliverMessage from {}", from_vm_id);
+            let msg = IncomingMessage {
+                id: id.clone(),
+                from_vm_id,
+                payload,
+            };
+            message_inbox.lock().await.push_back(msg);
+            message_notify.notify_waiters();
+            VsockResponse::DeliverMessageAck { id }
+        }
         VsockRequest::SpawnSubAgent { id, .. }
         | VsockRequest::SnapshotSelf { id, .. }
-        | VsockRequest::EmitEvent { id, .. } => {
+        | VsockRequest::EmitEvent { id, .. }
+        | VsockRequest::SendMessage { id, .. }
+        | VsockRequest::SignalDone { id, .. } => {
             warn!("Received guest-to-host message type as incoming request (unexpected)");
             VsockResponse::ExecResponse {
                 id,
                 exit_code: -1,
                 stdout: String::new(),
                 stderr: "This message type is guest-to-host only".to_string(),
+            }
+        }
+        VsockRequest::SignalDoneAck { id, .. } => {
+            // Host→guest response, handled via bridge pending_responses
+            VsockResponse::ExecResponse {
+                id,
+                exit_code: 0,
+                stdout: "ack received".to_string(),
+                stderr: String::new(),
             }
         }
     }

@@ -2,7 +2,9 @@
 
 ## What Mjolnir Is
 
-Mjolnir is a distributed computational fabric for spawning lightweight Linux shells as isolated Firecracker microVMs. Each VM boots in under a second, gets its own filesystem via instant copy-on-write cloning, and is reachable from anywhere in the world through NAT-traversing encrypted connections.
+Mjolnir is a distributed computational fabric for spawning lightweight Linux shells as isolated microVMs. Each VM boots in under a second, gets its own filesystem via instant copy-on-write cloning, and is reachable from anywhere in the world through NAT-traversing encrypted connections.
+
+**Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Both hypervisors are supported behind the `Mjolnir.Hypervisor` behaviour.
 
 The goal: lightweight micro-VMs that spin up fast, have snapshotted filesystems, synchronize across devices, rehydrate easily, work behind any NAT, and can communicate with each other.
 
@@ -66,10 +68,11 @@ Mjolnir has four major layers, each implemented in the language best suited to i
 +---------------------------------------------------------------+
         |  Firecracker REST API over Unix socket
 +---------------------------------------------------------------+
-|  HYPERVISOR LAYER (Firecracker)                               |
+|  HYPERVISOR LAYER (Cloud Hypervisor / Firecracker)            |
 |  - KVM-based microVM isolation                                |
 |  - ~5MB memory overhead per VM                                |
 |  - ext4 rootfs from BTRFS reflink clone                       |
+|  - Mjolnir.Hypervisor behaviour abstracts both backends       |
 +---------------------------------------------------------------+
 ```
 
@@ -242,16 +245,25 @@ HTTP POST /api/vms/:id/exec {"command": "apt install -y nginx"}
 ```
 Mjolnir.Application (one_for_one)
 |
++-- Mjolnir.Cleanup
+|   Sweeps orphan hypervisor processes, stale TAPs, sockets on startup
+|
++-- Mjolnir.EventBus
+|   Pub/sub for VM lifecycle events (:vm_started, :vm_stopped, :vm_dormant)
+|
 +-- Mjolnir.VMRegistry
 |   Registry mapping vm_id (UUID) -> GenServer PID
 |   Enables {:via, Registry, {VMRegistry, id}} lookups
+|
++-- Mjolnir.DormantRegistry
+|   ETS table for dormant VM metadata (snapshot name, original config)
 |
 +-- Mjolnir.VMSupervisor (DynamicSupervisor)
 |   Spawns VM GenServers on demand
 |   |
 |   +-- Mjolnir.VM (transient, per-VM GenServer)
-|   |   Owns: firecracker Port, sockets, rootfs, TAP device
-|   |   States: :booting -> :running -> :stopped (:failed on boot error)
+|   |   Owns: hypervisor Port, sockets, rootfs, TAP device
+|   |   States: :booting -> :running -> :stopped/:dormant (:failed on boot error)
 |   |
 |   +-- Mjolnir.VM (another VM...)
 |   +-- ...
@@ -264,9 +276,9 @@ Mjolnir.Application (one_for_one)
     Serves Mjolnir.API.Router on configured port (default 4000)
 ```
 
-`Mjolnir.Cleanup.sweep()` runs at application startup (before the supervisor tree starts) to kill orphaned Firecracker processes and clean stale sockets/directories from previous crashes.
+`Mjolnir.Cleanup` is a supervised process that runs `sweep/0` at startup to kill orphaned hypervisor processes (both Cloud Hypervisor and Firecracker), clean stale TAP devices, and remove leftover sockets/directories from previous crashes.
 
-Each VM is a GenServer that owns its Firecracker process as a Port. If Firecracker crashes, the Port sends an exit signal, and the GenServer cleans up (TAP device, routes, sockets, rootfs). Transient restart means VMs don't auto-restart on failure — they're intentionally ephemeral.
+Each VM is a GenServer that owns its hypervisor process as a Port. If the hypervisor crashes, the Port sends an exit signal, and the GenServer cleans up (TAP device, routes, sockets, rootfs). Transient restart means VMs exit `:normal` on boot failure (preventing restart loops) — they're intentionally ephemeral.
 
 ### Rust Guest Agent
 
@@ -715,13 +727,16 @@ iex> Mjolnir.VM.stop(vm.id)
 ```
 /var/lib/mjolnir/
   vmlinux                           Firecracker kernel
+  vmlinux-ch                        Cloud Hypervisor PVH kernel
   btrfs/
-    @base/debian-12.ext4            Base rootfs image
+    @base/ubuntu-24.04.ext4         Base rootfs image (913MB)
     @vms/{uuid}/rootfs.ext4         Per-VM rootfs (CoW clone)
+    @snapshots/{name}/              Named snapshots
 
 /tmp/mjolnir/
-  {uuid}.sock                       Firecracker API socket
-  {uuid}.vsock                      vsock proxy socket
+  {uuid}.sock                       Hypervisor API socket (Unix domain)
+  {uuid}_vsock                      Cloud Hypervisor vsock socket
+  {uuid}.vsock                      Firecracker vsock proxy socket
 
 /etc/mjolnir/
   iroh.key                          Per-VM Iroh identity (32 bytes)
@@ -740,11 +755,18 @@ lib/mjolnir/
   vm.ex                             VM lifecycle GenServer
   btrfs.ex                          Filesystem operations
   network.ex                        TAP + routing
+  event_bus.ex                      Pub/sub for VM lifecycle events
+  cleanup.ex                        Orphan process/TAP cleanup on startup
+  dormant_registry.ex               ETS registry for dormant VM metadata
+  ticket.ex                         z-base-32 ticket encoding
+  hypervisor/cloud_hypervisor.ex    CH backend (default)
+  hypervisor/firecracker.ex         Firecracker backend
+  cloud_hypervisor/client.ex        CH REST client (vm.create, vm.boot, etc.)
+  cloud_hypervisor/config.ex        CH vm.create payload builder
   firecracker/client.ex             Firecracker REST client
-  firecracker/config.ex             VM configuration
-  vsock/protocol.ex                 Vsock wire protocol
-  vsock/connection.ex               Vsock connection GenServer
-  api/router.ex                     HTTP API
-  api/auth.ex                       JWT authentication
-  cleanup.ex                        Orphan process cleanup
+  firecracker/config.ex             Firecracker VM configuration
+  vsock/protocol.ex                 Vsock wire protocol (channel mux)
+  vsock/connection.ex               Persistent vsock connection GenServer
+  api/router.ex                     HTTP API (health, CRUD, exec, messages, dormant)
+  api/auth.ex                       JWT authentication + scope enforcement
 ```

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::vsock::BridgeHolder;
+use crate::vsock::{BridgeHolder, MessageInbox, MessageNotify};
 
 const AGENT_SDK_PORT: u16 = 5001;
 const MAX_BODY_SIZE: usize = 1_048_576; // 1MB
@@ -88,6 +88,7 @@ fn parse_http_request(stream: &mut std::net::TcpStream) -> Option<HttpRequest> {
 fn send_http_response(stream: &mut std::net::TcpStream, status: u16, body: &str) {
     let status_text = match status {
         200 => "OK",
+        204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
         500 => "Internal Server Error",
@@ -113,10 +114,11 @@ async fn send_bridge_request(
 ) -> Result<serde_json::Value, (u16, String)> {
     let bridge = {
         let guard = bridge_holder.read().await;
-        Arc::clone(guard.as_ref().ok_or((
-            503,
-            r#"{"error":"No active vsock connection"}"#.to_string(),
-        ))?)
+        Arc::clone(
+            guard
+                .as_ref()
+                .ok_or((503, r#"{"error":"No active vsock connection"}"#.to_string()))?,
+        )
     };
 
     bridge.send_request(request).await.map_err(|e| {
@@ -132,10 +134,12 @@ async fn send_bridge_request(
 /// to interact with the host orchestrator.
 pub async fn run_agent_sdk(
     bridge_holder: BridgeHolder,
+    message_inbox: MessageInbox,
+    message_notify: MessageNotify,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Spawn a background task to run the HTTP server
     tokio::task::spawn_blocking(move || {
-        match run_agent_sdk_blocking(bridge_holder) {
+        match run_agent_sdk_blocking(bridge_holder, message_inbox, message_notify) {
             Ok(_) => info!("Agent SDK server exited"),
             Err(e) => error!("Agent SDK server error: {}", e),
         }
@@ -146,6 +150,8 @@ pub async fn run_agent_sdk(
 
 fn run_agent_sdk_blocking(
     bridge_holder: BridgeHolder,
+    message_inbox: MessageInbox,
+    message_notify: MessageNotify,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(("127.0.0.1", AGENT_SDK_PORT))?;
     listener.set_nonblocking(false)?;
@@ -168,10 +174,12 @@ fn run_agent_sdk_blocking(
                     continue;
                 }
                 let bridge = bridge_holder.clone();
+                let inbox = message_inbox.clone();
+                let notify = message_notify.clone();
                 let rt = runtime.clone();
                 let active = active.clone();
                 std::thread::spawn(move || {
-                    handle_connection(stream, &bridge, &rt);
+                    handle_connection(stream, &bridge, &inbox, &notify, &rt);
                     active.fetch_sub(1, Ordering::AcqRel);
                 });
             }
@@ -187,6 +195,8 @@ fn run_agent_sdk_blocking(
 fn handle_connection(
     mut stream: std::net::TcpStream,
     bridge_holder: &BridgeHolder,
+    message_inbox: &MessageInbox,
+    message_notify: &MessageNotify,
     runtime: &tokio::runtime::Handle,
 ) {
     let request = match parse_http_request(&mut stream) {
@@ -200,7 +210,10 @@ fn handle_connection(
 
     info!("Agent SDK request: {} {}", request.method, request.path);
 
-    match (request.method.as_str(), request.path.as_str()) {
+    // Extract path without query string for routing
+    let path = request.path.split('?').next().unwrap_or(&request.path);
+
+    match (request.method.as_str(), path) {
         ("POST", "/spawn") => {
             runtime.block_on(handle_spawn(&mut stream, &request, bridge_holder));
         }
@@ -209,6 +222,23 @@ fn handle_connection(
         }
         ("POST", "/emit") => {
             runtime.block_on(handle_emit(&mut stream, &request, bridge_holder));
+        }
+        ("POST", "/send") => {
+            runtime.block_on(handle_send(&mut stream, &request, bridge_holder));
+        }
+        ("GET", "/recv") => {
+            runtime.block_on(handle_recv(
+                &mut stream,
+                &request,
+                message_inbox,
+                message_notify,
+            ));
+        }
+        ("GET", "/messages") => {
+            runtime.block_on(handle_messages(&mut stream, message_inbox));
+        }
+        ("POST", "/done") => {
+            runtime.block_on(handle_done(&mut stream, bridge_holder));
         }
         ("GET", "/health") => {
             send_http_response(&mut stream, 200, r#"{"status":"ok"}"#);
@@ -286,7 +316,10 @@ async fn handle_snapshot(
 
     match send_bridge_request(bridge_holder, req).await {
         Ok(response) => {
-            let ok = response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            let ok = response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let body = serde_json::json!({"status": if ok { "ok" } else { "failed" }});
             send_http_response(stream, 200, &body.to_string());
         }
@@ -333,6 +366,178 @@ async fn handle_emit(
         Ok(_) => {
             let body = serde_json::json!({"status": "ok"});
             send_http_response(stream, 200, &body.to_string());
+        }
+        Err((status, body)) => {
+            send_http_response(stream, status, &body);
+        }
+    }
+}
+
+async fn handle_send(
+    stream: &mut std::net::TcpStream,
+    request: &HttpRequest,
+    bridge_holder: &BridgeHolder,
+) {
+    let body: serde_json::Value = match serde_json::from_str(&request.body) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Invalid JSON in send request: {}", e);
+            send_http_response(stream, 400, r#"{"error":"Invalid JSON"}"#);
+            return;
+        }
+    };
+
+    let target_vm_id = match body.get("target_vm_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            send_http_response(stream, 400, r#"{"error":"target_vm_id is required"}"#);
+            return;
+        }
+    };
+
+    let payload = body
+        .get("payload")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let req = serde_json::json!({
+        "type": "send_message",
+        "id": id,
+        "target_vm_id": target_vm_id,
+        "payload": payload
+    });
+
+    match send_bridge_request(bridge_holder, req).await {
+        Ok(response) => {
+            let ok = response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if ok {
+                let body = serde_json::json!({"status": "ok"});
+                send_http_response(stream, 200, &body.to_string());
+            } else {
+                let error = response
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                let body = serde_json::json!({"error": error});
+                send_http_response(stream, 500, &body.to_string());
+            }
+        }
+        Err((status, body)) => {
+            send_http_response(stream, status, &body);
+        }
+    }
+}
+
+async fn handle_recv(
+    stream: &mut std::net::TcpStream,
+    request: &HttpRequest,
+    message_inbox: &MessageInbox,
+    message_notify: &MessageNotify,
+) {
+    // Parse timeout from query string (default 30s)
+    let timeout_secs = request
+        .path
+        .split('?')
+        .nth(1)
+        .and_then(|qs| {
+            qs.split('&')
+                .find(|p| p.starts_with("timeout="))
+                .and_then(|p| p.strip_prefix("timeout="))
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .unwrap_or(30);
+
+    // Register the notification future BEFORE checking the inbox to avoid
+    // the lost-wakeup race: if a message arrives between dropping the lock
+    // and awaiting notified(), the notification would be lost otherwise.
+    let notified = message_notify.notified();
+    tokio::pin!(notified);
+
+    // Check inbox first (under lock)
+    {
+        let mut inbox = message_inbox.lock().await;
+        if let Some(msg) = inbox.pop_front() {
+            let body = serde_json::json!({
+                "id": msg.id,
+                "from_vm_id": msg.from_vm_id,
+                "payload": msg.payload
+            });
+            send_http_response(stream, 200, &body.to_string());
+            return;
+        }
+    }
+    // Lock dropped — but notified future was registered before check,
+    // so any notify_waiters() call between here and the select! is captured.
+
+    // Block waiting for a message with timeout
+    let result = tokio::select! {
+        _ = &mut notified => {
+            let mut inbox = message_inbox.lock().await;
+            inbox.pop_front()
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
+            None
+        }
+    };
+
+    match result {
+        Some(msg) => {
+            let body = serde_json::json!({
+                "id": msg.id,
+                "from_vm_id": msg.from_vm_id,
+                "payload": msg.payload
+            });
+            send_http_response(stream, 200, &body.to_string());
+        }
+        None => {
+            send_http_response(stream, 204, "");
+        }
+    }
+}
+
+async fn handle_messages(stream: &mut std::net::TcpStream, message_inbox: &MessageInbox) {
+    let messages: Vec<serde_json::Value> = {
+        let mut inbox = message_inbox.lock().await;
+        inbox
+            .drain(..)
+            .map(|msg| {
+                serde_json::json!({
+                    "id": msg.id,
+                    "from_vm_id": msg.from_vm_id,
+                    "payload": msg.payload
+                })
+            })
+            .collect()
+    };
+
+    let body = serde_json::json!(messages);
+    send_http_response(stream, 200, &body.to_string());
+}
+
+async fn handle_done(stream: &mut std::net::TcpStream, bridge_holder: &BridgeHolder) {
+    let id = uuid::Uuid::new_v4().to_string();
+    let req = serde_json::json!({
+        "type": "signal_done",
+        "id": id
+    });
+
+    match send_bridge_request(bridge_holder, req).await {
+        Ok(response) => {
+            let ok = response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if ok {
+                let body = serde_json::json!({"status": "ok"});
+                send_http_response(stream, 200, &body.to_string());
+            } else {
+                let body = serde_json::json!({"error": "done signal rejected"});
+                send_http_response(stream, 500, &body.to_string());
+            }
         }
         Err((status, body)) => {
             send_http_response(stream, status, &body);

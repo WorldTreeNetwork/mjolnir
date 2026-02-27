@@ -17,7 +17,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
     field(:base_image, String.t(), default: "ubuntu-24.04")
     field(:vcpu_count, pos_integer(), default: 2)
     field(:mem_size_mib, pos_integer(), default: 512)
-    field(:boot_args, String.t(), default: "console=ttyS0 reboot=k panic=1")
+    field(:boot_args, String.t(), default: "console=ttyS0 reboot=k panic=1 root=/dev/vda rw")
     # CID must be unique per concurrent VM. CID 0-2 are reserved by the kernel.
     # When running multiple VMs, callers must set a unique CID per VM.
     field(:vsock_cid, pos_integer(), default: 3)

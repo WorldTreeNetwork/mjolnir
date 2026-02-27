@@ -27,7 +27,10 @@ defmodule Mjolnir.Application do
         {Task.Supervisor, name: Mjolnir.TaskSupervisor},
 
         # Event bus for VM lifecycle events
-        Mjolnir.EventBus
+        Mjolnir.EventBus,
+
+        # Dormant VM registry for coroutine lifecycle
+        Mjolnir.DormantRegistry
       ] ++
         maybe_jwks_strategy() ++
         [

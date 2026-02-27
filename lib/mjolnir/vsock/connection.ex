@@ -75,6 +75,13 @@ defmodule Mjolnir.Vsock.Connection do
   end
 
   @doc """
+  Deliver a message from another VM into the guest's inbox.
+  """
+  def deliver_message(pid, from_vm_id, payload) do
+    GenServer.cast(pid, {:send_control_message, Protocol.deliver_message(from_vm_id, payload)})
+  end
+
+  @doc """
   Register a process to receive data for a specific channel.
   The handler will receive messages of the form {:vsock_data, channel, data}.
   """
@@ -348,6 +355,46 @@ defmodule Mjolnir.Vsock.Connection do
         Logger.warning("Guest emitted event with invalid name: #{inspect(event)}")
         send_message(state.socket, %{"type" => "event_ack", "id" => id}, 0)
         state
+
+      {:ok,
+       %{"type" => "send_message", "id" => id, "target_vm_id" => target, "payload" => payload}} ->
+        Logger.info("Guest requesting message send to #{target}")
+        conn_pid = self()
+        source_vm_id = state.vm_id
+
+        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
+          {ok, error} =
+            case Mjolnir.VM.deliver_message(target, source_vm_id, payload) do
+              :ok -> {true, nil}
+              {:error, reason} -> {false, inspect(reason)}
+            end
+
+          resp = Protocol.send_message_response(id, ok, error)
+          Mjolnir.Vsock.Connection.send_control_message(conn_pid, resp)
+        end)
+
+        state
+
+      {:ok, %{"type" => "signal_done", "id" => id}} ->
+        Logger.info("Guest signaling done for VM #{state.vm_id}")
+        send_message(state.socket, Protocol.signal_done_ack(id, true), 0)
+        vm_id = state.vm_id
+
+        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
+          Mjolnir.VM.handle_done(vm_id)
+        end)
+
+        state
+
+      {:ok, %{"type" => "deliver_message_ack", "id" => _id}} ->
+        # No-op, just confirmation the guest buffered the message
+        state
+
+      {:ok, %{"type" => "send_message_response", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "send_message_response")
+
+      {:ok, %{"type" => "signal_done_ack", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "signal_done_ack")
 
       {:ok, %{"type" => "iroh_ready"} = msg} ->
         # Guest proactively sends this when Iroh is ready - just log and ignore

@@ -4,7 +4,9 @@ use crate::protocol::IrohReady;
 use crate::pty::PtySession;
 use iroh::endpoint::{Endpoint, Incoming};
 use iroh::SecretKey;
-use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
+use mjolnir_protocol::{
+    read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN,
+};
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -45,8 +47,8 @@ pub async fn run_iroh_server(
     let endpoint_id = endpoint.id();
 
     // Serialize EndpointAddr as JSON so clients can parse and connect
-    let ticket = serde_json::to_string(&endpoint_addr)
-        .expect("EndpointAddr serialization should not fail");
+    let ticket =
+        serde_json::to_string(&endpoint_addr).expect("EndpointAddr serialization should not fail");
 
     info!("Shell ready. Endpoint ID: {}", endpoint_id);
     info!("Shell ticket: {}", ticket);
@@ -134,11 +136,12 @@ async fn handle_shell_connection(
 
     // Read Hello frame from client to get terminal size
     let (rows, cols) = match read_frame(&mut recv).await? {
-        Some(Frame::Hello { rows, cols, version }) => {
-            info!(
-                "Client hello: {}x{}, protocol v{}",
-                cols, rows, version
-            );
+        Some(Frame::Hello {
+            rows,
+            cols,
+            version,
+        }) => {
+            info!("Client hello: {}x{}, protocol v{}", cols, rows, version);
             if version != PROTOCOL_VERSION {
                 warn!(
                     "Protocol version mismatch: client v{}, server v{}",
