@@ -17,12 +17,99 @@ See `docs/plans/current-status.md` for detailed handoff notes including open bug
 ### Deployment
 
 - Server: `ssh root@45.76.77.97`
-- Deploy: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
-- Server runs `iex -S mix` in tmux session 0 (MIX_ENV=dev)
+- Deploy via Justfile (preferred): `just deploy`, `just deploy-full`, `just deploy-rootfs`
+- Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
 - `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
 
+## Local Control Plane (Justfile)
+
+The Justfile is the primary interface for operating Mjolnir from your Mac. All commands are run locally — VM operations are tunneled through SSH to the server's localhost API.
+
+### Setup
+
+```bash
+# 1. Install just (if needed)
+brew install just          # macOS
+cargo install just         # or via cargo
+
+# 2. Configure your server connection
+cp .env.example .env
+# Edit .env and set MJOLNIR_HOST=root@45.76.77.97
+
+# 3. Verify
+just health                # Should return {"status":"ok"}
+```
+
+You can also pass the host inline: `just host=root@1.2.3.4 health`
+
+### Command Reference
+
+Run `just --list` for the full list. Commands are grouped into four sections:
+
+**Local Dev** — run directly on Mac, no SSH:
+
+```bash
+just compile          # mix compile
+just test             # mix test
+just format           # mix format
+just iex              # iex -S mix
+just deps             # mix deps.get
+just build-client     # Build TypeScript client
+```
+
+**Deploy** — rsync code to server, build release, restart service:
+
+```bash
+just deploy           # Code only
+just deploy-full      # Code + rebuild guest agent
+just deploy-rootfs    # Code + rebuild rootfs disk image
+```
+
+**VM Operations** — manage VMs via the HTTP API (SSH-tunneled):
+
+```bash
+just vm-spawn                          # Spawn a new VM
+just vm-spawn-from my-snapshot         # Spawn from a snapshot
+just vm-list                           # List running VMs
+just vm-info <id>                      # Get VM details
+just vm-exec <id> "uname -a"          # Execute a command in a VM
+just vm-stop <id>                      # Stop a VM
+just vm-stop-all                       # Stop all running VMs
+just vm-ticket <id>                    # Get Iroh connection ticket
+just vm-await-pty <id>                 # Wait for PTY readiness
+just vm-message <id> '{"key":"val"}'   # Send a message to a VM
+just snap-create <id> my-snap          # Snapshot a VM
+just snap-list                         # List all snapshots
+just snap-info my-snap                 # Get snapshot metadata
+just snap-delete my-snap               # Delete a snapshot
+just dormant                           # List dormant VMs
+```
+
+**Server Management** — SSH into the server:
+
+```bash
+just ssh              # Interactive SSH session
+just status           # systemctl status mjolnir
+just logs             # Follow journald logs (live)
+just logs-recent      # Last 100 log lines (configurable: just logs-recent n=500)
+just restart          # Restart mjolnir service
+just remote-shell     # Attach to remote IEx shell
+just debug-vm <id>    # Show TAP interface + routes for a VM
+just cleanup-taps     # Remove orphaned TAP interfaces
+just server-networking  # Show IP forwarding, NAT rules, TAP interfaces
+just bootstrap        # Bootstrap a fresh server
+```
+
+### How It Works
+
+All VM/snapshot commands use **SSH-wrapped curl**: `ssh host "curl localhost:4000/..."`. This is required because the API auth bypass only works for connections from `127.0.0.1` — direct curl from your Mac would get `401`. The SSH tunnel makes curl appear as localhost on the server.
+
+For commands that need JSON request bodies (`vm-exec`, `vm-spawn-from`, `snap-create`, `vm-message`), local `jq` constructs the JSON safely and pipes it through SSH to curl's stdin (`-d @-`), avoiding shell quoting issues.
+
 ## Build & Development Commands
+
+These are the raw mix/cargo commands (the Justfile wraps most of these):
 
 ```bash
 mix deps.get          # Fetch dependencies

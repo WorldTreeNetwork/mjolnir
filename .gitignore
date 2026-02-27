@@ -31,3 +31,4 @@ Thumbs.db
 erl_crash.dump
 .lattice
 .omc
+.env

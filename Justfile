@@ -1,149 +1,35 @@
-# Mjolnir development commands
-# Install just: cargo install just
-# Run: just <recipe>  or  just --list
+# Mjolnir — Local Control Plane
+# Sit on your Mac, operate everything: local dev runs locally,
+# VM operations go through the HTTP API via SSH, server management via SSH.
+#
+# Setup: cp .env.example .env && edit .env
+# Usage: just --list
 
-# Default recipe - show available commands
+set dotenv-load
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+host := env("MJOLNIR_HOST", "")
+
+# Default recipe — show available commands
 default:
     @just --list
 
-# ============================================================================
-# Guest Agent
-# ============================================================================
+# ─── Guard ────────────────────────────────────────────────────────────
 
-# Build the guest agent (static musl binary for any Linux)
-build-agent:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd native/mjolnir_guest_agent
-    echo "Building guest agent (musl static binary)..."
-    cargo build --release --target x86_64-unknown-linux-musl
-    ls -lh target/x86_64-unknown-linux-musl/release/mjolnir-agent
-    echo "✓ Agent built: target/x86_64-unknown-linux-musl/release/mjolnir-agent"
-
-# Why musl? Creates a fully static binary (~1.5MB) that runs on ANY Linux
-# regardless of libc version. No runtime dependencies, fast startup.
-# If you get "target not found": rustup target add x86_64-unknown-linux-musl
-
-# ============================================================================
-# Rootfs
-# ============================================================================
-
-# Build the Debian 12 rootfs (requires sudo)
-build-rootfs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    AGENT="native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
-    if [[ ! -f "$AGENT" ]]; then
-        echo "Error: Guest agent not built. Run: just build-agent"
-        exit 1
-    fi
-    echo "Building Debian 12 rootfs (requires sudo)..."
-    sudo AGENT_BIN="$AGENT" ./scripts/build-rootfs.sh \
-        /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512
-    echo "✓ Rootfs built"
-
-    # Also sync to test environment
-    if [[ -d "/var/lib/mjolnir/btrfs/@base-test" ]]; then
-        echo "Syncing to test environment..."
-        sudo cp --reflink=auto /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 \
-            /var/lib/mjolnir/btrfs/@base-test/ubuntu-24.04.ext4
-        echo "✓ Test rootfs synced"
+[private]
+_require-host:
+    @if [ -z "{{host}}" ]; then \
+        echo "Error: No host configured."; \
+        echo ""; \
+        echo "  cp .env.example .env && edit .env"; \
+        echo "  OR: export MJOLNIR_HOST=root@1.2.3.4"; \
+        echo "  OR: just host=root@1.2.3.4 <recipe>"; \
+        exit 1; \
     fi
 
-# Build both agent and rootfs
-build-all: build-agent build-rootfs
-
-# Sync base image to test environment (after rebuilding rootfs)
-sync-test-rootfs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    SRC="/var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4"
-    DST="/var/lib/mjolnir/btrfs/@base-test/ubuntu-24.04.ext4"
-    if [[ -f "$SRC" ]]; then
-        echo "Syncing base image to test environment..."
-        sudo cp --reflink=auto "$SRC" "$DST"
-        echo "✓ Test rootfs updated"
-    else
-        echo "Error: Base image not found at $SRC"
-        exit 1
-    fi
-
-# ============================================================================
-# Networking
-# ============================================================================
-
-# Set up host networking for VM internet access (requires sudo)
-setup-networking:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "Setting up VM networking..."
-
-    # IP forwarding
-    sudo sysctl -w net.ipv4.ip_forward=1
-
-    # NAT for VM subnet (10.200.0.0/10 = ~4M VMs)
-    sudo iptables -t nat -C POSTROUTING -s 10.200.0.0/10 -j MASQUERADE 2>/dev/null || \
-        sudo iptables -t nat -A POSTROUTING -s 10.200.0.0/10 -j MASQUERADE
-
-    # Allow forwarding
-    sudo iptables -C FORWARD -s 10.200.0.0/10 -j ACCEPT 2>/dev/null || \
-        sudo iptables -A FORWARD -s 10.200.0.0/10 -j ACCEPT
-    sudo iptables -C FORWARD -d 10.200.0.0/10 -j ACCEPT 2>/dev/null || \
-        sudo iptables -A FORWARD -d 10.200.0.0/10 -j ACCEPT
-
-    echo "✓ Networking configured"
-    echo "  NAT: 10.200.0.0/10 → MASQUERADE"
-    echo "  Forwarding: enabled"
-
-# Show current networking status
-networking-status:
-    #!/usr/bin/env bash
-    echo "=== IP Forwarding ==="
-    cat /proc/sys/net/ipv4/ip_forward
-    echo ""
-    echo "=== NAT Rules ==="
-    sudo iptables -t nat -L POSTROUTING -v | grep -E "10.200|Chain" || echo "(none)"
-    echo ""
-    echo "=== Forward Rules ==="
-    sudo iptables -L FORWARD -v | grep -E "10.200|Chain" || echo "(none)"
-    echo ""
-    echo "=== TAP Interfaces ==="
-    ip link show | grep "mj-" || echo "(none running)"
-
-# ============================================================================
-# Testing
-# ============================================================================
-
-# Run unit tests (no root required)
-test:
-    mix test --exclude integration
-
-# Run integration tests (requires sudo + built rootfs)
-test-integration:
-    #!/usr/bin/env bash
-    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration"
-
-# Run network-specific tests only
-test-network:
-    mix test test/mjolnir/network_test.exs
-
-# Run VM tests only (requires sudo)
-test-vm:
-    #!/usr/bin/env bash
-    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && mix test --include integration test/mjolnir/vm_test.exs test/mjolnir/vm_iroh_test.exs"
-
-# ============================================================================
-# Development
-# ============================================================================
-
-# Start IEx with Mjolnir loaded
-iex:
-    iex -S mix
-
-# Start IEx as root (required for VM operations)
-iex-root:
-    #!/usr/bin/env bash
-    sudo bash -c "eval \"\$(mise activate bash)\" && cd {{justfile_directory()}} && iex -S mix"
+# ═══════════════════════════════════════════════════════════════════════
+# Local Dev (no SSH needed)
+# ═══════════════════════════════════════════════════════════════════════
 
 # Compile the project
 compile:
@@ -153,103 +39,179 @@ compile:
 format:
     mix format
 
+# Check formatting without modifying
+format-check:
+    mix format --check-formatted
+
+# Run unit tests
+test:
+    mix test
+
+# Start IEx with Mjolnir loaded
+iex:
+    iex -S mix
+
+# Fetch dependencies
+deps:
+    mix deps.get
+
 # Clean build artifacts
 clean:
     mix clean
-    cd native/mjolnir_guest_agent && cargo clean
 
-# ============================================================================
-# Quick Start
-# ============================================================================
+# Build the TypeScript client
+build-client:
+    ./scripts/build-client.sh
 
-# Full setup from scratch (run once on new machine)
-bootstrap:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== Mjolnir Bootstrap ==="
-    echo ""
-    echo "This will:"
-    echo "  1. Build the guest agent"
-    echo "  2. Build the rootfs (requires sudo)"
-    echo "  3. Set up networking (requires sudo)"
-    echo ""
-    read -p "Continue? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-    just build-agent
-    just build-rootfs
-    just setup-networking
-    echo ""
-    echo "✓ Bootstrap complete!"
-    echo ""
-    echo "Test with:"
-    echo "  just iex-root"
-    echo "  {:ok, vm} = Mjolnir.VM.spawn()"
-    echo "  Mjolnir.VM.exec(vm.id, \"curl -s https://example.com | head -3\")"
+# ═══════════════════════════════════════════════════════════════════════
+# Deploy
+# ═══════════════════════════════════════════════════════════════════════
 
-# ============================================================================
-# Debugging
-# ============================================================================
+# Deploy code to server (rsync + build release + restart)
+deploy: _require-host
+    ./scripts/deploy.sh {{host}}
 
-# Show VM's network config and test connectivity
-[no-exit-message]
-debug-vm vm_id:
-    #!/usr/bin/env bash
-    echo "=== VM Network Debug ==="
-    echo "Checking TAP interface..."
-    ip link show mj-{{vm_id}} 2>/dev/null || echo "TAP not found: mj-{{vm_id}}"
-    echo ""
-    echo "Checking route..."
-    ip route | grep "mj-{{vm_id}}" || echo "No route via mj-{{vm_id}}"
+# Deploy code + rebuild guest agent
+deploy-full: _require-host
+    ./scripts/deploy.sh {{host}} --agent
 
-# Capture packets on a VM's TAP interface
-tcpdump-vm vm_id:
-    sudo tcpdump -i mj-{{vm_id}} -n
+# Deploy code + rebuild rootfs
+deploy-rootfs: _require-host
+    ./scripts/deploy.sh {{host}} --rootfs
 
-# Clean up orphaned TAP interfaces
-cleanup-taps:
-    #!/usr/bin/env bash
-    echo "Cleaning up orphaned TAP interfaces..."
-    for tap in $(ip link show | grep -oP 'mj-\w+' | sort -u); do
-        echo "Removing $tap"
-        sudo ip link del "$tap" 2>/dev/null || true
-    done
-    echo "✓ Cleanup complete"
+# ═══════════════════════════════════════════════════════════════════════
+# VM Operations (SSH + curl localhost:4000)
+# ═══════════════════════════════════════════════════════════════════════
 
-# ============================================================================
-# Control Server Commands (TCP on localhost:9999)
-# ============================================================================
-# The Mjolnir Orchestrator exposes a control server for managing VMs.
-# These commands require the orchestrator to be running: just iex-root
-#
-# All commands return JSON: {"ok": true, ...} or {"ok": false, "error": "..."}
+# Check API health
+health: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/health" | jq .
 
 # Spawn a new VM
-vm-spawn:
-    echo '{"cmd":"spawn"}' | nc -q1 localhost 9999 | jq .
+vm-spawn: _require-host
+    ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms -H 'Content-Type: application/json' -d '{}'" | jq .
+
+# Spawn a VM from a snapshot
+vm-spawn-from snapshot: _require-host
+    jq -n --arg s '{{snapshot}}' '{snapshot: $s}' | \
+        ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms -H 'Content-Type: application/json' -d @-" | jq .
 
 # List all running VMs
-vm-list:
-    echo '{"cmd":"list"}' | nc -q1 localhost 9999 | jq .
+vm-list: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/vms" | jq .
 
-# Execute command in a VM: just vm-exec <vm_id> <command>
-vm-exec vm_id cmd:
-    echo '{"cmd":"exec","vm_id":"{{vm_id}}","command":"{{cmd}}"}' | nc -q1 localhost 9999 | jq .
+# Get VM details
+vm-info id: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/vms/{{id}}" | jq .
 
-# Stop a VM: just vm-stop <vm_id>
-vm-stop vm_id:
-    echo '{"cmd":"stop","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
+# Execute a command in a VM
+vm-exec id cmd: _require-host
+    jq -n --arg cmd '{{cmd}}' '{command: $cmd}' | \
+        ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms/{{id}}/exec -H 'Content-Type: application/json' -d @-" | jq .
 
-# Wait for Iroh shell to be ready: just vm-await-shell <vm_id> [timeout_ms]
-vm-await-shell vm_id timeout="30000":
-    echo '{"cmd":"await_shell","vm_id":"{{vm_id}}","timeout":{{timeout}}}' | nc -q1 localhost 9999 | jq .
+# Stop a VM
+vm-stop id: _require-host
+    ssh {{host}} "curl -s --fail-with-body -X DELETE http://localhost:4000/api/vms/{{id}}" | jq .
 
-# Get VM status
-vm-status vm_id:
-    echo '{"cmd":"status","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
+# Stop all running VMs
+vm-stop-all: _require-host
+    ssh {{host}} 'for id in $(curl -s http://localhost:4000/api/vms | jq -r ".vms[].id"); do echo "Stopping $id..."; curl -s -X DELETE "http://localhost:4000/api/vms/$id" | jq .; done'
 
-# Get Iroh connection ticket for a VM
-vm-ticket vm_id:
-    echo '{"cmd":"get_ticket","vm_id":"{{vm_id}}"}' | nc -q1 localhost 9999 | jq .
+# Get connection ticket for a VM
+vm-ticket id: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/vms/{{id}}/ticket" | jq .
+
+# Await PTY readiness for a VM
+vm-await-pty id: _require-host
+    ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms/{{id}}/await-pty -H 'Content-Type: application/json' -d '{}'" | jq .
+
+# Send a message to a VM (payload is JSON, e.g. '{"key":"val"}')
+vm-message id payload: _require-host
+    jq -n --argjson p '{{payload}}' '{payload: $p}' | \
+        ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms/{{id}}/messages -H 'Content-Type: application/json' -d @-" | jq .
+
+# ═══════════════════════════════════════════════════════════════════════
+# Snapshots
+# ═══════════════════════════════════════════════════════════════════════
+
+# Create a snapshot of a VM
+snap-create id name: _require-host
+    jq -n --arg n '{{name}}' '{name: $n}' | \
+        ssh {{host}} "curl -s --fail-with-body -X POST http://localhost:4000/api/vms/{{id}}/snapshots -H 'Content-Type: application/json' -d @-" | jq .
+
+# List all snapshots
+snap-list: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/snapshots" | jq .
+
+# Get snapshot details
+snap-info name: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/snapshots/{{name}}" | jq .
+
+# Delete a snapshot
+snap-delete name: _require-host
+    ssh {{host}} "curl -s --fail-with-body -X DELETE http://localhost:4000/api/snapshots/{{name}}" | jq .
+
+# List dormant VMs
+dormant: _require-host
+    ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/dormant" | jq .
+
+# ═══════════════════════════════════════════════════════════════════════
+# Server Management (SSH)
+# ═══════════════════════════════════════════════════════════════════════
+
+# SSH into the server
+ssh: _require-host
+    ssh {{host}}
+
+# Show mjolnir service status
+status: _require-host
+    ssh {{host}} "systemctl status mjolnir --no-pager"
+
+# Follow mjolnir service logs
+logs: _require-host
+    ssh -t {{host}} "journalctl -u mjolnir -f"
+
+# Show recent mjolnir service logs
+logs-recent n="100": _require-host
+    ssh {{host}} "journalctl -u mjolnir -n {{n}} --no-pager"
+
+# Restart mjolnir service
+restart: _require-host
+    ssh {{host}} "systemctl restart mjolnir"
+
+# Stop mjolnir service
+stop-service: _require-host
+    ssh {{host}} "systemctl stop mjolnir"
+
+# Start mjolnir service
+start-service: _require-host
+    ssh {{host}} "systemctl start mjolnir"
+
+# Attach to remote IEx shell
+remote-shell: _require-host
+    ssh -t {{host}} "/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"
+
+# Debug a VM's network config (TAP + routes)
+debug-vm id: _require-host
+    ssh {{host}} "echo '=== TAP Interface ===' && ip link show mj-{{id}} 2>/dev/null || echo 'TAP not found: mj-{{id}}' && echo '' && echo '=== Routes ===' && ip route | grep mj-{{id}} || echo 'No routes for mj-{{id}}'"
+
+# Clean up orphaned TAP interfaces
+cleanup-taps: _require-host
+    ssh {{host}} 'for tap in $(ip link show | grep -oP "mj-\w+" | sort -u); do echo "Removing $tap"; ip link del "$tap" 2>/dev/null || true; done && echo "Done"'
+
+# Show server networking status (IP forwarding, NAT, TAPs)
+server-networking: _require-host
+    ssh {{host}} "echo '=== IP Forwarding ===' && cat /proc/sys/net/ipv4/ip_forward && echo '' && echo '=== NAT Rules ===' && iptables -t nat -L POSTROUTING -v 2>/dev/null | head -5 || echo '(none)' && echo '' && echo '=== TAP Interfaces ===' && ip link show | grep mj- || echo '(none)'"
+
+# Build guest agent on the server
+server-build-agent: _require-host
+    ssh {{host}} "cd /opt/mjolnir && ./scripts/build-guest-agent.sh"
+
+# Build rootfs on the server
+server-build-rootfs: _require-host
+    ssh {{host}} "cd /opt/mjolnir && AGENT_BIN=native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512"
+
+# Bootstrap a fresh server (upload + run bootstrap script)
+bootstrap: _require-host
+    scp scripts/bootstrap-host.sh {{host}}:/tmp/bootstrap-host.sh && \
+        ssh {{host}} "chmod +x /tmp/bootstrap-host.sh && /tmp/bootstrap-host.sh"
