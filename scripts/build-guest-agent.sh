@@ -4,7 +4,7 @@ set -euo pipefail
 # Build the guest agent for musl (static binary that works in minimal rootfs)
 # Run from project root
 
-cd "$(dirname "$0")/../native"
+cd "$(dirname "$0")/../native/mjolnir_guest_agent"
 
 echo "=== Building Mjolnir Guest Agent ==="
 
@@ -14,11 +14,12 @@ if ! rustup target list --installed | grep -q x86_64-unknown-linux-musl; then
     rustup target add x86_64-unknown-linux-musl
 fi
 
-# Build static binary from workspace
+# Build static binary
 echo "Building release binary..."
-cargo build --release --target x86_64-unknown-linux-musl -p mjolnir-guest-agent
+cargo build --release --target x86_64-unknown-linux-musl
 
-BINARY="target/x86_64-unknown-linux-musl/release/mjolnir-agent"
+# Cargo workspace puts the binary in the workspace root's target dir
+BINARY="../target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
 if [[ -f "$BINARY" ]]; then
     echo ""

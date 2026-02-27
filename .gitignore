@@ -13,6 +13,7 @@ native/target/
 .vscode/
 .claude/
 .cursor/
+.elixir_ls/
 *.swp
 *.swo
 

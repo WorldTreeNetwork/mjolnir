@@ -26,6 +26,7 @@ set -euo pipefail
 #   MJOLNIR_BRANCH       - Git branch (default: main)
 #   SKIP_BTRFS           - Set to 1 to skip BTRFS setup (use existing)
 #   SKIP_ROOTFS          - Set to 1 to skip rootfs build
+#   SKIP_FIRECRACKER     - Set to 1 to skip Firecracker installation (CH-only setup)
 
 # =============================================================================
 # Configuration
@@ -455,14 +456,17 @@ deploy_mjolnir_code() {
 
     cd "$MJOLNIR_CODE"
 
-    # Compile Elixir project
+    # Compile Elixir project and build release
     log_info "Fetching dependencies..."
-    mix deps.get
+    MIX_ENV=prod mix deps.get
 
     log_info "Compiling Mjolnir..."
     MIX_ENV=prod mix compile
 
-    log_success "Mjolnir code deployed to $MJOLNIR_CODE"
+    log_info "Building release..."
+    MIX_ENV=prod mix release mjolnir --overwrite
+
+    log_success "Mjolnir release built at $MJOLNIR_CODE/_build/prod/rel/mjolnir/"
 }
 
 setup_dev_workspace() {
@@ -493,7 +497,7 @@ setup_dev_workspace() {
 build_guest_agent() {
     log_section "Building Guest Agent"
 
-    cd "$MJOLNIR_CODE/native/mjolnir_guest_agent"
+    cd "$MJOLNIR_CODE"
 
     # Ensure cargo is available
     if [[ -f "$HOME/.cargo/env" ]]; then
@@ -501,10 +505,9 @@ build_guest_agent() {
         source "$HOME/.cargo/env"
     fi
 
-    log_info "Building static musl binary..."
-    cargo build --release --target x86_64-unknown-linux-musl
+    bash scripts/build-guest-agent.sh
 
-    local binary="target/x86_64-unknown-linux-musl/release/mjolnir-agent"
+    local binary="native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
     if [[ -f "$binary" ]]; then
         log_success "Guest agent built: $(du -h "$binary" | cut -f1)"
     else
@@ -754,7 +757,7 @@ build_rootfs() {
 
     # Firecracker uses ext4 file images, not directories
     local rootfs_ext4="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04.ext4"
-    local agent_bin="$MJOLNIR_CODE/native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
+    local agent_bin="$MJOLNIR_CODE/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
     if [[ -f "$rootfs_ext4" ]]; then
         log_info "Rootfs already exists at $rootfs_ext4"
@@ -770,7 +773,7 @@ build_rootfs() {
     # Run the build script directly to the target location on BTRFS
     # This allows CoW cloning to work for instant VM creation
     cd "$MJOLNIR_CODE"
-    bash scripts/build-rootfs.sh "$rootfs_ext4" 512
+    bash scripts/build-rootfs.sh "$rootfs_ext4" 2048
 
     log_success "Rootfs built: $rootfs_ext4 ($(du -h "$rootfs_ext4" | cut -f1))"
 }
@@ -860,6 +863,38 @@ setup_networking() {
     log_success "VM networking configured (subnet: $vm_subnet)"
 }
 
+setup_systemd_service() {
+    log_section "Setting Up Systemd Service"
+
+    # Install service file (always update — may have changed)
+    cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
+
+    # Install environment file (only if not already present — preserve operator customizations)
+    mkdir -p /etc/mjolnir
+    if [[ ! -f /etc/mjolnir/env ]]; then
+        cp "$MJOLNIR_CODE/systemd/mjolnir.env" /etc/mjolnir/env
+
+        # Generate a random release cookie
+        local cookie
+        cookie=$(openssl rand -hex 32)
+        sed -i "s/mjolnir_prod_changeme/$cookie/" /etc/mjolnir/env
+        chmod 600 /etc/mjolnir/env
+
+        log_info "Generated random RELEASE_COOKIE in /etc/mjolnir/env"
+    else
+        log_info "/etc/mjolnir/env already exists — preserving existing config"
+    fi
+
+    # Reload and enable
+    systemctl daemon-reload
+    systemctl enable mjolnir.service
+
+    log_success "Systemd service installed and enabled"
+    log_info "Start with: systemctl start mjolnir"
+    log_info "Remote shell: /opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"
+    log_info "Logs: journalctl -u mjolnir -f"
+}
+
 run_verification() {
     log_section "Running Verification"
 
@@ -907,23 +942,26 @@ print_summary() {
         echo "Mjolnir has been installed and configured:"
         echo ""
         echo "  Code:           $MJOLNIR_CODE"
+        echo "  Release:        $MJOLNIR_CODE/_build/prod/rel/mjolnir/"
         echo "  Data:           $MJOLNIR_ROOT"
         echo "  BTRFS:          $MJOLNIR_ROOT/btrfs"
-        echo "  Kernel:         $MJOLNIR_ROOT/vmlinux"
+        echo "  Kernel (CH):    $MJOLNIR_ROOT/vmlinux-ch"
         echo "  Base images:    $MJOLNIR_ROOT/btrfs/@base/"
         echo "  Socket dir:     /tmp/mjolnir"
+        echo "  Service:        mjolnir.service"
+        echo "  Config:         /etc/mjolnir/env"
         echo ""
-        echo "To start Mjolnir:"
+        echo "Service management:"
         echo ""
-        echo "  cd $MJOLNIR_CODE"
-        echo "  iex -S mix"
+        echo "  systemctl start mjolnir     # Start the service"
+        echo "  systemctl stop mjolnir      # Stop the service"
+        echo "  systemctl status mjolnir    # Check status"
+        echo "  journalctl -u mjolnir -f    # Follow logs"
+        echo ""
+        echo "Remote IEx shell:"
+        echo ""
+        echo "  $MJOLNIR_CODE/_build/prod/rel/mjolnir/bin/mjolnir remote"
     fi
-    echo ""
-    echo "Then in IEx:"
-    echo ""
-    echo "  {:ok, vm} = Mjolnir.VM.spawn()"
-    echo "  {:ok, output} = Mjolnir.VM.exec(vm.id, \"uname -a\")"
-    echo "  Mjolnir.VM.stop(vm.id)"
     echo ""
 }
 
@@ -946,7 +984,13 @@ main() {
     install_base_packages
     install_erlang_elixir
     install_rust
-    install_firecracker
+
+    if [[ "${SKIP_FIRECRACKER:-0}" != "1" ]]; then
+        install_firecracker
+    else
+        log_info "Skipping Firecracker installation (SKIP_FIRECRACKER=1)"
+    fi
+
     install_cloud_hypervisor
 
     # Dev mode: use workspace directly; Prod mode: deploy to /opt/mjolnir
@@ -963,9 +1007,9 @@ main() {
     setup_directories
     setup_networking
 
-    # Skip verification in dev mode (user will run tests manually)
     if [[ "${DEV_MODE:-0}" != "1" ]]; then
         run_verification
+        setup_systemd_service
     fi
 
     print_summary

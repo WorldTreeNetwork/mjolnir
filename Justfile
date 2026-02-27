@@ -209,9 +209,9 @@ server-build-agent: _require-host
 
 # Build rootfs on the server
 server-build-rootfs: _require-host
-    ssh {{host}} "cd /opt/mjolnir && AGENT_BIN=native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512"
+    ssh {{host}} "cd /opt/mjolnir && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04.ext4 512"
 
-# Bootstrap a fresh server (upload + run bootstrap script)
+# Bootstrap a fresh server (rsync code, trust mise, run bootstrap)
 bootstrap: _require-host
-    scp scripts/bootstrap-host.sh {{host}}:/tmp/bootstrap-host.sh && \
-        ssh {{host}} "chmod +x /tmp/bootstrap-host.sh && /tmp/bootstrap-host.sh"
+    rsync -avz --delete --filter=':- .gitignore' --exclude='.git' . {{host}}:/opt/mjolnir/ && \
+        ssh {{host}} 'export PATH="$HOME/.local/bin:$PATH" && command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host.sh'
