@@ -12,6 +12,7 @@ pub enum VsockRequest {
     Ping { id: String },
     #[serde(rename = "configure_network")]
     ConfigureNetwork { id: String, ip: String },
+    #[cfg(feature = "iroh")]
     #[serde(rename = "get_iroh_status")]
     GetIrohStatus { id: String },
     #[serde(rename = "configure_ssh")]
@@ -22,6 +23,7 @@ pub enum VsockRequest {
         vm_id: String,
         api_url: String,
     },
+    #[cfg(feature = "iroh")]
     #[serde(rename = "configure_iroh")]
     ConfigureIroh { id: String, enabled: bool },
     #[serde(rename = "pty_open")]
@@ -76,6 +78,7 @@ pub enum VsockResponse {
     },
     #[serde(rename = "pong")]
     Pong { id: String },
+    #[cfg(feature = "iroh")]
     #[serde(rename = "iroh_status")]
     IrohStatus {
         id: String,
@@ -85,6 +88,7 @@ pub enum VsockResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         ticket: Option<String>,
     },
+    #[cfg(feature = "iroh")]
     #[serde(rename = "configure_iroh_response")]
     ConfigureIrohResponse { id: String, ok: bool },
     #[serde(rename = "pty_opened")]
@@ -109,6 +113,7 @@ pub enum VsockResponse {
 }
 
 /// Notification sent when Iroh is ready
+#[cfg(feature = "iroh")]
 #[derive(Debug, Clone, Serialize)]
 pub struct IrohReady {
     #[serde(rename = "type")]
@@ -118,6 +123,7 @@ pub struct IrohReady {
     pub generated_key: bool,
 }
 
+#[cfg(feature = "iroh")]
 impl IrohReady {
     pub fn new(node_id: String, ticket: String, generated_key: bool) -> Self {
         Self {

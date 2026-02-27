@@ -1,4 +1,5 @@
 //! Iroh endpoint for NAT-traversing shell access.
+#![cfg(feature = "iroh")]
 
 use crate::protocol::IrohReady;
 use crate::pty::PtySession;

@@ -3,6 +3,13 @@ name = "mjolnir-guest-agent"
 version = "0.1.0"
 edition = "2021"
 
+# Feature flags:
+# - `iroh`: enables the Iroh P2P endpoint for NAT-traversing shell access.
+#   When disabled (the default), the agent runs in vsock-only mode with zero
+#   Iroh code compiled in.  Enable with: cargo build --features iroh
+[features]
+iroh = ["dep:iroh", "dep:futures-lite", "dep:rand"]
+
 [dependencies]
 mjolnir-protocol = { path = "../mjolnir_protocol" }
 serde = { version = "1.0", features = ["derive"] }
@@ -13,11 +20,11 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 uuid = { version = "1.0", features = ["v4"] }
 
-# Phase 2: Iroh shell
-iroh = "0.96"
-futures-lite = "2"
+# Phase 2: Iroh shell (optional — enabled by the `iroh` feature flag)
+iroh = { version = "0.96", optional = true }
+futures-lite = { version = "2", optional = true }
 nix = { version = "0.29", features = ["term", "signal", "process", "fs"] }
-rand = "0.9"
+rand = { version = "0.9", optional = true }
 libc = "0.2"
 
 [[bin]]

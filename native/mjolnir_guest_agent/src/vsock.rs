@@ -1,6 +1,8 @@
 //! Vsock listener for host communication.
 
-use crate::protocol::{IrohReady, VsockRequest, VsockResponse};
+#[cfg(feature = "iroh")]
+use crate::protocol::IrohReady;
+use crate::protocol::{VsockRequest, VsockResponse};
 use crate::pty::{PtySession, PtyWriter};
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
@@ -15,6 +17,7 @@ use tracing::{error, info, warn};
 const VMADDR_CID_ANY: u32 = 0xFFFFFFFF;
 
 /// Shared state for Iroh readiness
+#[cfg(feature = "iroh")]
 #[derive(Debug, Clone)]
 pub enum IrohStatus {
     Disabled,
@@ -22,6 +25,7 @@ pub enum IrohStatus {
     Ready(IrohReady),
 }
 
+#[cfg(feature = "iroh")]
 pub type IrohState = Arc<RwLock<IrohStatus>>;
 
 /// Shared bridge allowing the agent SDK to send requests on the active vsock connection.
@@ -174,8 +178,8 @@ fn frame_binary(channel: u8, data: &[u8]) -> FramedMsg {
 
 pub async fn run_vsock_listener(
     port: u32,
-    iroh_ready_rx: oneshot::Receiver<IrohReady>,
-    iroh_start_tx: oneshot::Sender<bool>,
+    #[cfg(feature = "iroh")] iroh_ready_rx: oneshot::Receiver<IrohReady>,
+    #[cfg(feature = "iroh")] iroh_start_tx: oneshot::Sender<bool>,
     bridge_holder: BridgeHolder,
     message_inbox: MessageInbox,
     message_notify: MessageNotify,
@@ -184,36 +188,50 @@ pub async fn run_vsock_listener(
     info!("Vsock listener started on port {}", port);
 
     // Shared state for iroh status - starts as Pending
+    #[cfg(feature = "iroh")]
     let iroh_state: IrohState = Arc::new(RwLock::new(IrohStatus::Pending));
 
     // Spawn task to receive iroh_ready and update shared state
-    let iroh_state_clone = iroh_state.clone();
-    tokio::spawn(async move {
-        match iroh_ready_rx.await {
-            Ok(ready) => {
-                info!("Iroh ready received, updating shared state");
-                *iroh_state_clone.write().await = IrohStatus::Ready(ready);
+    #[cfg(feature = "iroh")]
+    {
+        let iroh_state_clone = iroh_state.clone();
+        tokio::spawn(async move {
+            match iroh_ready_rx.await {
+                Ok(ready) => {
+                    info!("Iroh ready received, updating shared state");
+                    *iroh_state_clone.write().await = IrohStatus::Ready(ready);
+                }
+                Err(_) => {
+                    warn!("Iroh ready channel closed without sending");
+                }
             }
-            Err(_) => {
-                warn!("Iroh ready channel closed without sending");
-            }
-        }
-    });
+        });
+    }
 
     // Accept connections, passing both state and the start trigger
+    #[cfg(feature = "iroh")]
     let iroh_start_tx = Arc::new(tokio::sync::Mutex::new(Some(iroh_start_tx)));
 
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
                 info!("Vsock connection from {:?}", addr);
+                #[cfg(feature = "iroh")]
                 let state = iroh_state.clone();
+                #[cfg(feature = "iroh")]
                 let start_tx = iroh_start_tx.clone();
                 let bridge = bridge_holder.clone();
                 let inbox = message_inbox.clone();
                 let notify = message_notify.clone();
                 tokio::spawn(handle_vsock_connection(
-                    stream, state, start_tx, bridge, inbox, notify,
+                    stream,
+                    #[cfg(feature = "iroh")]
+                    state,
+                    #[cfg(feature = "iroh")]
+                    start_tx,
+                    bridge,
+                    inbox,
+                    notify,
                 ));
             }
             Err(e) => error!("Failed to accept vsock connection: {}", e),
@@ -223,8 +241,8 @@ pub async fn run_vsock_listener(
 
 async fn handle_vsock_connection(
     mut stream: VsockStream,
-    iroh_state: IrohState,
-    iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+    #[cfg(feature = "iroh")] iroh_state: IrohState,
+    #[cfg(feature = "iroh")] iroh_start_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
     bridge_holder: BridgeHolder,
     message_inbox: MessageInbox,
     message_notify: MessageNotify,
@@ -319,7 +337,9 @@ async fn handle_vsock_connection(
                                     Ok(request) => {
                                         let response = handle_request(
                                             request,
+                                            #[cfg(feature = "iroh")]
                                             &iroh_state,
+                                            #[cfg(feature = "iroh")]
                                             &iroh_start_tx,
                                             &pty_manager,
                                             &write_tx,
@@ -386,8 +406,8 @@ async fn handle_vsock_connection(
 
 async fn handle_request(
     request: VsockRequest,
-    iroh_state: &IrohState,
-    iroh_start_tx: &Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
+    #[cfg(feature = "iroh")] iroh_state: &IrohState,
+    #[cfg(feature = "iroh")] iroh_start_tx: &Arc<tokio::sync::Mutex<Option<oneshot::Sender<bool>>>>,
     pty_manager: &Arc<Mutex<PtyManager>>,
     write_tx: &mpsc::Sender<FramedMsg>,
     message_inbox: &MessageInbox,
@@ -436,6 +456,7 @@ async fn handle_request(
                 },
             }
         }
+        #[cfg(feature = "iroh")]
         VsockRequest::GetIrohStatus { id } => {
             info!("GetIrohStatus");
             let state = iroh_state.read().await;
@@ -524,6 +545,7 @@ async fn handle_request(
                 },
             }
         }
+        #[cfg(feature = "iroh")]
         VsockRequest::ConfigureIroh { id, enabled } => {
             info!("ConfigureIroh: enabled={}", enabled);
             let mut tx_guard = iroh_start_tx.lock().await;

@@ -2,11 +2,30 @@
 set -euo pipefail
 
 # Build the guest agent for musl (static binary that works in minimal rootfs)
+#
+# Usage:
+#   ./scripts/build-guest-agent.sh            # default: vsock-only (2MB, fast)
+#   ./scripts/build-guest-agent.sh --iroh     # include Iroh P2P shell (23MB)
+#
 # Run from project root
 
 cd "$(dirname "$0")/../native/mjolnir_guest_agent"
 
+# Parse args
+FEATURES=""
+for arg in "$@"; do
+    case "$arg" in
+        --iroh) FEATURES="--features iroh" ;;
+        *) echo "Unknown flag: $arg (use --iroh to enable Iroh P2P)"; exit 1 ;;
+    esac
+done
+
 echo "=== Building Mjolnir Guest Agent ==="
+if [[ -n "$FEATURES" ]]; then
+    echo "Features: iroh (P2P shell enabled)"
+else
+    echo "Features: none (vsock-only mode)"
+fi
 
 # Ensure musl target is installed
 if ! rustup target list --installed | grep -q x86_64-unknown-linux-musl; then
@@ -16,7 +35,7 @@ fi
 
 # Build static binary
 echo "Building release binary..."
-cargo build --release --target x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl $FEATURES
 
 # Cargo workspace puts the binary in the workspace root's target dir
 BINARY="../target/x86_64-unknown-linux-musl/release/mjolnir-agent"
