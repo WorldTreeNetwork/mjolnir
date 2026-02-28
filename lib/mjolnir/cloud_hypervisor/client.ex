@@ -29,43 +29,45 @@ defmodule Mjolnir.CloudHypervisor.Client do
   memory, CPUs, disks, network, and vsock.
   """
   def create_vm(socket_path, vm_config) do
-    Logger.info("vm.create payload: #{Jason.encode!(vm_config, pretty: true)}")
+    Logger.debug("vm.create payload: #{Jason.encode!(vm_config, pretty: true)}")
     put(socket_path, "/api/v1/vm.create", vm_config)
   end
 
   @doc """
   Boot the VM (start instance).
+
+  CH v50 rejects requests with a body on this endpoint.
   """
   def boot_vm(socket_path) do
-    put(socket_path, "/api/v1/vm.boot", %{})
+    put(socket_path, "/api/v1/vm.boot", nil)
   end
 
   @doc """
   Pause the VM.
   """
   def pause_vm(socket_path) do
-    put(socket_path, "/api/v1/vm.pause", %{})
+    put(socket_path, "/api/v1/vm.pause", nil)
   end
 
   @doc """
   Resume the VM.
   """
   def resume_vm(socket_path) do
-    put(socket_path, "/api/v1/vm.resume", %{})
+    put(socket_path, "/api/v1/vm.resume", nil)
   end
 
   @doc """
   Shutdown the VM gracefully.
   """
   def shutdown_vm(socket_path) do
-    put(socket_path, "/api/v1/vm.shutdown", %{})
+    put(socket_path, "/api/v1/vm.shutdown", nil)
   end
 
   @doc """
   Delete VM resources.
   """
   def delete_vm(socket_path) do
-    put(socket_path, "/api/v1/vm.delete", %{})
+    put(socket_path, "/api/v1/vm.delete", nil)
   end
 
   @doc """
@@ -93,35 +95,58 @@ defmodule Mjolnir.CloudHypervisor.Client do
   end
 
   defp request(method, socket_path, path, body) do
-    # Req supports Unix sockets via the unix_socket option
-    opts = [
-      unix_socket: socket_path,
-      base_url: "http://localhost",
-      receive_timeout: 30_000
+    case method do
+      :get ->
+        curl_request("GET", socket_path, path, nil)
+
+      :put ->
+        json_body = if body, do: Jason.encode!(body), else: nil
+        curl_request("PUT", socket_path, path, json_body)
+    end
+  end
+
+  # Use curl for Unix socket requests — Req/Finch has an issue with CH's responses
+  defp curl_request(method, socket_path, path, body) do
+    url = "http://localhost#{path}"
+    args = [
+      "-s",
+      "-o", "/dev/null",
+      "-w", "%{http_code}",
+      "--unix-socket", socket_path,
+      "-X", method,
+      url
     ]
 
-    req = Req.new(opts)
-
-    result =
-      case method do
-        :get ->
-          Req.get(req, url: path)
-
-        :put ->
-          Req.put(req, url: path, json: body)
+    args =
+      if body do
+        args ++ ["-H", "Content-Type: application/json", "-d", body]
+      else
+        args
       end
 
-    case result do
-      {:ok, %Req.Response{status: status}} when status in 200..299 ->
-        :ok
+    case System.cmd("curl", args, stderr_to_stdout: true) do
+      {status_str, 0} ->
+        status = String.trim(status_str) |> String.to_integer()
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        Logger.error("Cloud Hypervisor API error: #{status} - #{inspect(body)}")
-        {:error, {:api_error, status, body}}
+        if status in 200..299 do
+          :ok
+        else
+          # Re-run to capture body for error reporting
+          body_args = [
+            "-s",
+            "--unix-socket", socket_path,
+            "-X", method,
+            url
+          ] ++ if(body, do: ["-H", "Content-Type: application/json", "-d", body], else: [])
 
-      {:error, reason} ->
-        Logger.error("Cloud Hypervisor request failed: #{inspect(reason)}")
-        {:error, reason}
+          {error_body, _} = System.cmd("curl", body_args, stderr_to_stdout: true)
+          Logger.error("Cloud Hypervisor API error: #{status} - #{String.trim(error_body)}")
+          {:error, {:api_error, status, String.trim(error_body)}}
+        end
+
+      {output, code} ->
+        Logger.error("curl failed (exit #{code}): #{output}")
+        {:error, {:curl_failed, code, output}}
     end
   end
 end

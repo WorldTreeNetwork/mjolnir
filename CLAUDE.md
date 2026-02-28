@@ -8,11 +8,11 @@ Mjolnir is a distributed computational fabric for spawning checkpointable Linux 
 
 **Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Firecracker support is retained behind the `Mjolnir.Hypervisor` behaviour but Cloud Hypervisor is the active default.
 
-## Current Status & Known Issues
+## Current Status
 
-See `docs/plans/current-status.md` for detailed handoff notes including open bugs.
+See `docs/plans/current-status.md` for detailed handoff notes.
 
-**Open issue**: Cloud Hypervisor `vm.create` returns 400 Bad Request. The payload structure appears correct per the CH v50 OpenAPI spec, but CH rejects it. A debug `Logger.info` line has been added to `lib/mjolnir/cloud_hypervisor/client.ex:create_vm/2` to print the payload — deploy and test to see the exact JSON being sent. The rootfs clone, TAP creation, and CH process startup all succeed; only the API call to configure the VM fails.
+VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cloud Hypervisor v50 + virtio-fs.
 
 ### Deployment
 
