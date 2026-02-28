@@ -1,5 +1,6 @@
 //! OAuth 2.0 Device Authorization Grant flow + token storage.
 
+use anyhow::{bail, Result};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,7 +20,7 @@ struct OidcConfig {
     device_authorization_endpoint: String,
 }
 
-async fn discover(issuer: &str) -> Result<OidcConfig, Box<dyn std::error::Error>> {
+async fn discover(issuer: &str) -> Result<OidcConfig> {
     let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
     let config: OidcConfig = reqwest::get(&url).await?.json().await?;
     Ok(config)
@@ -85,7 +86,7 @@ impl StoredToken {
         }
     }
 
-    fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn save(&self) -> Result<()> {
         let path = token_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -130,7 +131,7 @@ pub async fn load_token() -> Option<String> {
 async fn refresh_token(
     issuer: &str,
     refresh: &str,
-) -> Result<TokenResponse, Box<dyn std::error::Error>> {
+) -> Result<TokenResponse> {
     let config = discover(issuer).await?;
     let client = reqwest::Client::new();
     let resp = client
@@ -158,7 +159,7 @@ pub async fn resolve_token(explicit: &Option<String>) -> Option<String> {
 
 // --- Login command ---
 
-pub async fn login(issuer: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn login(issuer: Option<String>) -> Result<()> {
     let issuer = issuer.as_deref().unwrap_or(DEFAULT_ISSUER);
 
     // Check if already logged in with a valid token
@@ -207,7 +208,7 @@ pub async fn login(issuer: Option<String>) -> Result<(), Box<dyn std::error::Err
     let status = resp.status();
     let body = resp.text().await?;
     if !status.is_success() {
-        return Err(format!("Device auth failed: {}", body).into());
+        bail!("Device auth failed: {}", body);
     }
 
     let device_resp: DeviceAuthResponse = serde_json::from_str(&body)?;
@@ -244,7 +245,7 @@ pub async fn login(issuer: Option<String>) -> Result<(), Box<dyn std::error::Err
         tokio::time::sleep(interval).await;
 
         if now_secs() >= deadline {
-            return Err("Device code expired. Run `mjolnir login` again.".into());
+            bail!("Device code expired. Run `mjolnir login` again.");
         }
 
         let mut params = HashMap::new();
@@ -285,15 +286,15 @@ pub async fn login(issuer: Option<String>) -> Result<(), Box<dyn std::error::Err
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             }
-            "access_denied" => return Err("Authorization denied.".into()),
-            "expired_token" => return Err("Device code expired. Run `mjolnir login` again.".into()),
-            other => return Err(format!("Auth error: {}", other).into()),
+            "access_denied" => bail!("Authorization denied."),
+            "expired_token" => bail!("Device code expired. Run `mjolnir login` again."),
+            other => bail!("Auth error: {}", other),
         }
     }
 }
 
 /// Remove stored token.
-pub fn logout() -> Result<(), Box<dyn std::error::Error>> {
+pub fn logout() -> Result<()> {
     let path = token_path();
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -305,7 +306,7 @@ pub fn logout() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Show current auth status.
-pub fn status() -> Result<(), Box<dyn std::error::Error>> {
+pub fn status() -> Result<()> {
     let path = token_path();
     if !path.exists() {
         println!("Not logged in.");
