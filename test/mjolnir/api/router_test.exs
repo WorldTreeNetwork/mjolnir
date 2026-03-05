@@ -86,6 +86,33 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  describe "GET /api/dormant" do
+    test "returns empty list when no dormant VMs" do
+      conn = request(:get, "/api/dormant")
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["dormant"] == []
+    end
+
+    test "returns dormant VMs with correct shape" do
+      vm_id = "test-dormant-#{:erlang.unique_integer([:positive])}"
+      Mjolnir.DormantRegistry.register(vm_id, "snap-1", %{vcpus: 1})
+
+      on_exit(fn -> Mjolnir.DormantRegistry.unregister(vm_id) end)
+
+      conn = request(:get, "/api/dormant")
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+
+      assert [entry] = body["dormant"]
+      assert entry["vm_id"] == vm_id
+      assert entry["snapshot_name"] == "snap-1"
+      assert entry["pending_messages"] == 0
+      assert entry["state"] == "dormant"
+      assert is_binary(entry["dormant_since"])
+    end
+  end
+
   describe "scope enforcement" do
     setup do
       Application.put_env(:mjolnir, :auth, bypass_localhost: false)

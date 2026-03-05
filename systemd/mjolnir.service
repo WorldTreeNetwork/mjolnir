@@ -1,0 +1,31 @@
+[Unit]
+Description=Mjolnir MicroVM Fabric
+After=network.target local-fs.target mjolnir-loopback.service
+Requires=local-fs.target
+Wants=mjolnir-loopback.service
+
+[Service]
+Type=exec
+User=root
+Group=root
+WorkingDirectory=/opt/mjolnir
+
+ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir start
+ExecStop=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir stop
+
+EnvironmentFile=/etc/mjolnir/env
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mjolnir
+
+LimitNOFILE=65536
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

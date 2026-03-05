@@ -14,6 +14,7 @@ mod api;
 mod auth;
 mod config;
 mod connect;
+mod mcp;
 mod server;
 
 use clap::{Parser, Subcommand};
@@ -229,6 +230,15 @@ enum Command {
     Ticket {
         #[command(subcommand)]
         action: TicketAction,
+    },
+
+    // --- Integrations ---
+    /// Run MCP server over stdio (for Claude Code integration)
+    #[command(name = "mcp-serve", next_help_heading = "Integrations")]
+    McpServe {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
     },
 
     // --- Server admin ---
@@ -456,6 +466,9 @@ async fn main() {
                 }
             }
         },
+
+        // --- MCP server ---
+        Command::McpServe { api } => mcp::run_mcp_server(&profile, &api).await,
 
         // --- Server admin (sync — blocks tokio runtime, which is fine for CLI) ---
         Command::Server { action } => server::run(action, &profile),

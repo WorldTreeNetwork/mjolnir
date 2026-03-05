@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "crates": {
+      "command": "/Users/dukejones/.cargo/bin/crates-mcp",
+      "args": []
+    },
+    "mjolnir": {
+      "command": "/usr/local/bin/mjolnir",
+      "args": ["mcp-serve"]
+    }
+  }
+}
