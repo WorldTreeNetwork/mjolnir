@@ -2,20 +2,14 @@ defmodule Mjolnir.Hypervisor.Firecracker do
   @moduledoc """
   Firecracker hypervisor implementation.
 
+  **DEPRECATED**: Firecracker does not support virtio-fs, which is required for
+  Mjolnir's current storage architecture (BTRFS subvolumes shared via virtio-fs).
+  Use `Mjolnir.Hypervisor.CloudHypervisor` instead. This module is retained for
+  reference but is not actively maintained or tested.
+
   This module implements the `Mjolnir.Hypervisor` behaviour for Firecracker,
   wrapping the existing `Mjolnir.Firecracker.Client` and extracting hypervisor-specific
   logic from `Mjolnir.VM`.
-
-  Firecracker is a lightweight VMM that uses KVM to launch secure, multi-tenant
-  container and function-based services. It exposes a REST API over Unix sockets
-  for configuration and lifecycle management.
-
-  ## Architecture
-
-  - VM process is launched via `Port.open` and managed as an OS process
-  - Configuration happens via REST API over Unix socket
-  - Vsock is used for host-guest communication
-  - Cleanup involves killing the process, removing sockets, and deleting rootfs
   """
 
   @behaviour Mjolnir.Hypervisor

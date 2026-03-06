@@ -3,14 +3,15 @@ defmodule Mjolnir.Hypervisor do
   Behaviour defining the hypervisor abstraction layer for Mjolnir.
 
   This module provides a pluggable interface for different hypervisor backends.
-  Currently, Firecracker is the only implementation, but this abstraction enables
-  future support for other VMMs like Cloud Hypervisor or QEMU.
+  Cloud Hypervisor is the default and actively used implementation. Firecracker
+  support is retained but deprecated (it lacks virtio-fs, which is required for
+  the current BTRFS subvolume + virtio-fs storage architecture).
 
   ## Configuration
 
   Set the hypervisor implementation in config:
 
-      config :mjolnir, :hypervisor, Mjolnir.Hypervisor.Firecracker
+      config :mjolnir, :hypervisor, Mjolnir.Hypervisor.CloudHypervisor
 
   ## Callbacks
 
@@ -38,7 +39,7 @@ defmodule Mjolnir.Hypervisor do
     - `:vm_id` - VM identifier
     - `:socket_path` - API socket path
     - `:serial_path` - Serial console path (optional)
-    - `:firecracker_bin` - Path to hypervisor binary
+    - `:cloud_hypervisor_bin` or `:firecracker_bin` - Path to hypervisor binary
     - `:wrapper_script` - Path to console wrapper script (optional)
 
   ## Returns
@@ -56,7 +57,7 @@ defmodule Mjolnir.Hypervisor do
   ## Parameters
 
   - `socket_path` - Path to the hypervisor's API socket
-  - `config` - `Mjolnir.Firecracker.Config` struct with VM settings
+  - `config` - VM configuration struct (e.g. `Mjolnir.CloudHypervisor.Config`)
 
   ## Returns
 
@@ -176,22 +177,22 @@ defmodule Mjolnir.Hypervisor do
 
   ## Returns
 
-  - Process name string (e.g., "firecracker")
+  - Process name string (e.g., "cloud-hypervisor", "firecracker")
   """
   @callback process_name() :: String.t()
 
   @doc """
   Get the configured hypervisor implementation module.
 
-  Reads from application config or defaults to Firecracker.
+  Reads from application config. Defaults to Cloud Hypervisor.
 
   ## Examples
 
       Mjolnir.Hypervisor.impl()
-      #=> Mjolnir.Hypervisor.Firecracker
+      #=> Mjolnir.Hypervisor.CloudHypervisor
   """
   @spec impl() :: module()
   def impl do
-    Application.get_env(:mjolnir, :hypervisor, Mjolnir.Hypervisor.Firecracker)
+    Application.get_env(:mjolnir, :hypervisor, Mjolnir.Hypervisor.CloudHypervisor)
   end
 end

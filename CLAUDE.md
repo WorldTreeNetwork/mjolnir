@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
 
-**Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Firecracker support is retained behind the `Mjolnir.Hypervisor` behaviour but Cloud Hypervisor is the active default.
+**Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. **Firecracker is deprecated** — it lacks virtio-fs support, which is required for the current storage architecture. The Firecracker modules (`lib/mjolnir/hypervisor/firecracker.ex`, `lib/mjolnir/firecracker/`) are retained for reference but not actively maintained or tested. Do NOT reference Firecracker when describing Mjolnir's current capabilities.
 
 ## Current Status
 
@@ -145,8 +145,8 @@ Requires Linux with KVM (`/dev/kvm`), a BTRFS filesystem, Cloud Hypervisor v50+,
 
 Both hypervisors implement `Mjolnir.Hypervisor` behaviour (8 callbacks: `start_vm`, `configure_vm`, `start_instance`, `pause_instance`, `resume_instance`, `stop_instance`, `cleanup`, `vsock_path`, `process_name`):
 
-- **`Mjolnir.Hypervisor.CloudHypervisor`** (default) — Single `vm.create` PUT with full JSON payload, then `vm.boot`. Uses Unix socket API. Needs PVH-capable kernel (`ch_kernel_path` config).
-- **`Mjolnir.Hypervisor.Firecracker`** — Multi-step PUT sequence (boot-source, drives, machine-config, vsock, network, then InstanceStart). Uses Unix socket API.
+- **`Mjolnir.Hypervisor.CloudHypervisor`** (default, active) — Single `vm.create` PUT with full JSON payload, then `vm.boot`. Uses Unix socket API. Needs PVH-capable kernel (`ch_kernel_path` config). Supports virtio-fs for direct BTRFS subvolume sharing.
+- **`Mjolnir.Hypervisor.Firecracker`** (deprecated) — Multi-step PUT sequence (boot-source, drives, machine-config, vsock, network, then InstanceStart). Does NOT support virtio-fs. Retained for reference only.
 
 Config key: `hypervisor: Mjolnir.Hypervisor.CloudHypervisor` in `config/config.exs`.
 
@@ -196,7 +196,7 @@ Key settings: `hypervisor`, `btrfs_root`, `kernel_path`, `ch_kernel_path`, `clou
 
 Runtime env overrides: `MJOLNIR_BTRFS_ROOT`, `MJOLNIR_SOCKET_DIR`, `MJOLNIR_AUTH_ISSUER`, `MJOLNIR_API_PORT`.
 
-Server kernel paths: `/var/lib/mjolnir/vmlinux` (Firecracker), `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH).
+Server kernel path: `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH). Legacy Firecracker kernel at `/var/lib/mjolnir/vmlinux` (unused).
 
 ### Data Flow
 

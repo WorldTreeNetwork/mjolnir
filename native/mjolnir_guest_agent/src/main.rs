@@ -1,6 +1,6 @@
 //! Mjolnir Guest Agent
 //!
-//! Runs inside the Firecracker VM:
+//! Runs inside the microVM:
 //! - Listens on vsock for host commands (exec, ping, configure_network, pty)
 //! - Optionally runs Iroh endpoint for remote shell access (if compiled with the `iroh` feature)
 //! - Sends iroh_ready notification to host when shell is available

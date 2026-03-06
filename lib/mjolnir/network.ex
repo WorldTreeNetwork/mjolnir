@@ -48,7 +48,7 @@ defmodule Mjolnir.Network do
   1. Creates TAP device (no IP on host side)
   2. Allocates guest IP from pool
   3. Adds /32 route to guest via TAP
-  4. Returns config for Firecracker + guest agent
+  4. Returns config for the hypervisor + guest agent
 
   Returns `{:ok, %{tap_name: String.t(), guest_ip: String.t(), guest_mac: String.t()}}`
   """
@@ -101,7 +101,7 @@ defmodule Mjolnir.Network do
 
   @doc """
   Generate a deterministic MAC address from VM ID.
-  Format: 02:FC:00:xx:xx:xx (locally administered, Firecracker prefix)
+  Format: 02:FC:00:xx:xx:xx (locally administered)
 
   The first byte 02 indicates:
   - Bit 0 = 0: unicast

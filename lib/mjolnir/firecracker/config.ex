@@ -1,6 +1,10 @@
 defmodule Mjolnir.Firecracker.Config do
   @moduledoc """
   Builds Firecracker VM configuration.
+
+  **DEPRECATED**: Use `Mjolnir.CloudHypervisor.Config` instead. Firecracker
+  does not support virtio-fs and is no longer the active hypervisor. This module
+  is retained for reference only.
   """
 
   use TypedStruct

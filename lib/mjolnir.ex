@@ -1,7 +1,6 @@
 defmodule Mjolnir do
   @moduledoc """
-  Mjolnir - Distributed computational fabric for spawning checkpointable Linux shells
-  in Firecracker microVMs.
+  Mjolnir - Distributed computational fabric for spawning checkpointable Linux microVMs.
 
   ## Quick Start
 

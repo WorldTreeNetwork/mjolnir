@@ -2,8 +2,9 @@ defmodule Mjolnir.Firecracker.Client do
   @moduledoc """
   HTTP client for Firecracker's Unix socket API.
 
-  Firecracker exposes a REST API over a Unix domain socket.
-  We configure the VM by making PUT requests to various endpoints.
+  **DEPRECATED**: Use `Mjolnir.CloudHypervisor.Client` instead. Firecracker
+  does not support virtio-fs and is no longer the active hypervisor. This module
+  is retained for reference only.
   """
 
   require Logger

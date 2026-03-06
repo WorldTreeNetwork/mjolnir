@@ -1,6 +1,8 @@
 # Mjolnir Orchestrator
 
-Distributed computational fabric for spawning checkpointable Linux shells in Firecracker microVMs with NAT-traversing remote access via [Iroh](https://iroh.computer).
+Distributed computational fabric for spawning checkpointable Linux microVMs with NAT-traversing remote access via [Iroh](https://iroh.computer).
+
+**Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. Firecracker support is deprecated (lacks virtio-fs).
 
 ## Requirements
 
@@ -19,7 +21,7 @@ Distributed computational fabric for spawning checkpointable Linux shells in Fir
 |-------------|---------|-------|
 | OS | Ubuntu 22.04+, Debian 12+ | Other distros may work but untested |
 | Kernel | 5.10+ | `uname -r` |
-| Firecracker | 1.5+ | Installed by bootstrap script |
+| Cloud Hypervisor | 50.0+ | Installed by bootstrap script |
 | Erlang | 26+ | Installed by bootstrap script via mise |
 | Elixir | 1.15+ | Installed by bootstrap script via mise |
 | Rust | stable | Installed by bootstrap script (for guest agent) |
@@ -79,7 +81,7 @@ sudo BTRFS_DEVICE=/dev/sdb ./scripts/bootstrap-host.sh
 
 ### Option C: Manual Setup (Already Have Deps Installed)
 
-If you already have Erlang 26+, Elixir 1.15+, Rust, and Firecracker:
+If you already have Erlang 26+, Elixir 1.15+, Rust, and Cloud Hypervisor:
 
 ```bash
 # Install mise and project tool versions
@@ -100,7 +102,7 @@ mix deps.get
 ### Running the Orchestrator
 
 ```bash
-# Start with sudo (required for TAP interfaces and Firecracker)
+# Start with sudo (required for TAP interfaces and Cloud Hypervisor)
 just iex-root
 
 # Or manually:
@@ -145,7 +147,7 @@ The orchestrator exposes a TCP control server on `localhost:9999` for managing V
 This enables CLI tools, scripts, and AI agents to interact with Mjolnir without needing Elixir.
 
 ```bash
-# Start the orchestrator (requires sudo for TAP/Firecracker)
+# Start the orchestrator (requires sudo for TAP/Cloud Hypervisor)
 just iex-root
 
 # In another terminal, use the control commands:
@@ -203,7 +205,7 @@ sudo usermod -aG kvm $USER
 newgrp kvm
 ```
 
-### Firecracker fails to start VM
+### Hypervisor fails to start VM
 
 Check if running inside a VM without nested virtualization:
 ```bash

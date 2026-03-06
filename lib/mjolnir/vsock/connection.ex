@@ -2,8 +2,8 @@ defmodule Mjolnir.Vsock.Connection do
   @moduledoc """
   Manages vsock connection to a guest VM.
 
-  vsock uses Unix domain sockets on the host side, where Firecracker
-  acts as a proxy to the guest's vsock device.
+  vsock uses Unix domain sockets on the host side, where the hypervisor
+  (Cloud Hypervisor or Firecracker) acts as a proxy to the guest's vsock device.
   """
 
   use GenServer
@@ -429,9 +429,9 @@ defmodule Mjolnir.Vsock.Connection do
   end
 
   defp connect(state) do
-    # Connect to Firecracker's vsock proxy socket
-    # The socket path is provided by Firecracker's vsock configuration
-    # For Firecracker vsock, we connect to the UDS, then send "CONNECT <port>\n"
+    # Connect to the hypervisor's vsock proxy socket
+    # The socket path is provided by the hypervisor's vsock configuration
+    # We connect to the UDS, then send "CONNECT <port>\n"
     opts = [:binary, active: false, packet: :raw]
 
     case :gen_tcp.connect({:local, state.socket_path}, 0, opts) do
