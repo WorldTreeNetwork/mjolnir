@@ -9,15 +9,16 @@
 //! Supports HTTP/1.1, WebSocket upgrades, SSE, and any TCP-based protocol.
 
 use clap::Parser;
-use iroh::endpoint::Endpoint;
+use dashmap::DashMap;
+use iroh::endpoint::{Connection, Endpoint};
 use iroh_base::{EndpointAddr, PublicKey};
 use mjolnir_protocol::TCP_FWD_ALPN;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Parser, Clone)]
 #[command(name = "mjolnir-gateway", about = "Mjolnir Web Gateway — HTTP to Iroh bridge")]
@@ -42,6 +43,93 @@ struct Config {
     /// first byte from the VM after forwarding the request.
     #[arg(long, default_value = "30", env = "GATEWAY_RESPONSE_TIMEOUT")]
     response_timeout: u64,
+
+    /// Connection pool TTL in seconds. Cached Iroh connections are evicted
+    /// after this idle period.
+    #[arg(long, default_value = "300", env = "GATEWAY_POOL_TTL")]
+    pool_ttl: u64,
+
+    /// Maximum number of cached connections in the pool.
+    #[arg(long, default_value = "256", env = "GATEWAY_POOL_MAX")]
+    pool_max: usize,
+}
+
+/// Cached QUIC connection with last-used timestamp for TTL eviction.
+struct CachedConnection {
+    conn: Connection,
+    last_used: Instant,
+}
+
+/// Connection pool that caches Iroh QUIC connections keyed by PublicKey.
+/// Avoids repeated QUIC handshakes + relay discovery for warm requests.
+struct ConnectionPool {
+    cache: DashMap<PublicKey, CachedConnection>,
+    ttl: Duration,
+    max_size: usize,
+}
+
+impl ConnectionPool {
+    fn new(ttl: Duration, max_size: usize) -> Self {
+        Self {
+            cache: DashMap::new(),
+            ttl,
+            max_size,
+        }
+    }
+
+    /// Get a cached connection if it exists, is not closed, and hasn't expired.
+    fn get(&self, key: &PublicKey) -> Option<Connection> {
+        let entry = self.cache.get(key)?;
+        let elapsed = entry.last_used.elapsed();
+        if elapsed > self.ttl {
+            drop(entry);
+            self.cache.remove(key);
+            debug!("Pool: evicted expired connection for {}", key);
+            return None;
+        }
+        let conn = entry.conn.clone();
+        // Check if the connection is still alive
+        if conn.close_reason().is_some() {
+            drop(entry);
+            self.cache.remove(key);
+            debug!("Pool: evicted closed connection for {}", key);
+            return None;
+        }
+        drop(entry);
+        // Update last_used timestamp
+        if let Some(mut entry) = self.cache.get_mut(key) {
+            entry.last_used = Instant::now();
+        }
+        Some(conn)
+    }
+
+    /// Insert a connection into the pool. Evicts oldest if at capacity.
+    fn insert(&self, key: PublicKey, conn: Connection) {
+        if self.cache.len() >= self.max_size {
+            // Evict the oldest entry
+            if let Some(oldest) = self
+                .cache
+                .iter()
+                .min_by_key(|e| e.last_used)
+                .map(|e| e.key().clone())
+            {
+                self.cache.remove(&oldest);
+                debug!("Pool: evicted LRU connection for {}", oldest);
+            }
+        }
+        self.cache.insert(
+            key,
+            CachedConnection {
+                conn,
+                last_used: Instant::now(),
+            },
+        );
+    }
+
+    /// Remove a connection on error.
+    fn evict(&self, key: &PublicKey) {
+        self.cache.remove(key);
+    }
 }
 
 /// Errors that can occur before the proxy starts bidirectional copying.
@@ -239,6 +327,7 @@ fn extract_host(header_bytes: &[u8]) -> Option<String> {
 async fn setup_proxy(
     stream: &mut TcpStream,
     ep: &Endpoint,
+    pool: &ConnectionPool,
     cfg: &Config,
 ) -> Result<
     (
@@ -260,21 +349,47 @@ async fn setup_proxy(
 
     // Resolve z32 node ID to EndpointAddr
     let addr = resolve_ticket(&info.node_id_z32)?;
+    let pubkey = addr.id;
 
-    // Connect to VM via Iroh with timeout
-    let conn = tokio::time::timeout(
-        Duration::from_secs(cfg.connect_timeout),
-        ep.connect(addr, TCP_FWD_ALPN),
-    )
-    .await
-    .map_err(|_| ProxyError::ConnectTimeout)?
-    .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+    // Try cached connection first, fall back to new connect
+    let conn = if let Some(cached) = pool.get(&pubkey) {
+        debug!("Pool hit for {}", info.node_id_z32);
+        cached
+    } else {
+        debug!("Pool miss for {}, connecting...", info.node_id_z32);
+        let new_conn = tokio::time::timeout(
+            Duration::from_secs(cfg.connect_timeout),
+            ep.connect(addr, TCP_FWD_ALPN),
+        )
+        .await
+        .map_err(|_| ProxyError::ConnectTimeout)?
+        .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+        pool.insert(pubkey, new_conn.clone());
+        new_conn
+    };
 
     // Open bidirectional stream
-    let (mut send, recv) = conn
-        .open_bi()
-        .await
-        .map_err(|e| ProxyError::StreamError(e.to_string()))?;
+    let (mut send, recv) = match conn.open_bi().await {
+        Ok(streams) => streams,
+        Err(e) => {
+            // Connection might be stale — evict and retry once
+            pool.evict(&pubkey);
+            debug!("Stale connection for {}, reconnecting: {}", info.node_id_z32, e);
+            let addr = resolve_ticket(&info.node_id_z32)?;
+            let new_conn = tokio::time::timeout(
+                Duration::from_secs(cfg.connect_timeout),
+                ep.connect(addr, TCP_FWD_ALPN),
+            )
+            .await
+            .map_err(|_| ProxyError::ConnectTimeout)?
+            .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+            pool.insert(pubkey, new_conn.clone());
+            new_conn
+                .open_bi()
+                .await
+                .map_err(|e| ProxyError::StreamError(e.to_string()))?
+        }
+    };
 
     // Send target port as 2-byte big-endian u16 (TCP_FWD protocol)
     send.write_all(&port.to_be_bytes())
@@ -355,10 +470,10 @@ async fn run_proxy(
 }
 
 /// Handle a single incoming TCP connection.
-async fn handle_connection(mut stream: TcpStream, peer: SocketAddr, ep: &Endpoint, cfg: &Config) {
+async fn handle_connection(mut stream: TcpStream, peer: SocketAddr, ep: &Endpoint, pool: &ConnectionPool, cfg: &Config) {
     let response_timeout = Duration::from_secs(cfg.response_timeout);
 
-    match setup_proxy(&mut stream, ep, cfg).await {
+    match setup_proxy(&mut stream, ep, pool, cfg).await {
         Ok((header_buf, quic_send, quic_recv)) => {
             info!("{}: proxying", peer);
             if let Err((e, mut stream)) = run_proxy(stream, header_buf, quic_send, quic_recv, response_timeout).await {
@@ -401,20 +516,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     endpoint.online().await;
     info!("Iroh endpoint ready");
 
+    let pool = Arc::new(ConnectionPool::new(
+        Duration::from_secs(cfg.pool_ttl),
+        cfg.pool_max,
+    ));
+
     let ep = Arc::new(endpoint);
     let cfg = Arc::new(cfg);
 
     let listener = TcpListener::bind(cfg.listen).await?;
-    info!("Listening on {}", cfg.listen);
+    info!("Listening on {} (pool: max={}, ttl={}s)", cfg.listen, cfg.pool_max, cfg.pool_ttl);
 
     loop {
         tokio::select! {
             accept = listener.accept() => {
                 let (stream, peer) = accept?;
                 let ep = Arc::clone(&ep);
+                let pool = Arc::clone(&pool);
                 let cfg = Arc::clone(&cfg);
                 tokio::spawn(async move {
-                    handle_connection(stream, peer, &ep, &cfg).await;
+                    handle_connection(stream, peer, &ep, &pool, &cfg).await;
                 });
             }
             _ = shutdown_signal() => {

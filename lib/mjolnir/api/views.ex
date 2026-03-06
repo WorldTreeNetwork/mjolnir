@@ -6,6 +6,8 @@ defmodule Mjolnir.API.Views do
   @doc """
   Full VM representation including connection details.
   """
+  @gateway_domain Application.compile_env(:mjolnir, :gateway_domain, "vm.worldtree.network")
+
   def render_vm(vm) do
     %{
       id: vm.id,
@@ -16,6 +18,7 @@ defmodule Mjolnir.API.Views do
       ticket: vm.ticket,
       iroh_addr: vm.iroh_json,
       enable_iroh: vm.enable_iroh,
+      web_url: web_url(vm),
       config: render_config(vm.config),
       boot_time: vm.boot_time
     }
@@ -31,7 +34,8 @@ defmodule Mjolnir.API.Views do
       hypervisor: hypervisor_name(vm.hypervisor),
       guest_ip: get_in_net(vm, :guest_ip),
       pty_ready: vm.pty_ready || false,
-      ticket: vm.ticket
+      ticket: vm.ticket,
+      web_url: web_url(vm)
     }
   end
 
@@ -47,6 +51,12 @@ defmodule Mjolnir.API.Views do
   defp hypervisor_name(hypervisor_module) when is_atom(hypervisor_module) do
     hypervisor_module.process_name()
   end
+
+  defp web_url(%{enable_iroh: true, ticket: ticket}) when is_binary(ticket) do
+    "https://#{ticket}.#{@gateway_domain}"
+  end
+
+  defp web_url(_), do: nil
 
   defp render_config(nil), do: nil
 

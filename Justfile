@@ -79,6 +79,10 @@ deploy-full: _require-host
 deploy-rootfs: _require-host
     ./scripts/deploy.sh {{host}} --rootfs
 
+# Deploy code + rebuild gateway binary
+deploy-gateway: _require-host
+    ./scripts/deploy.sh {{host}} --gateway
+
 # ═══════════════════════════════════════════════════════════════════════
 # VM Operations (SSH + curl localhost:4000)
 # ═══════════════════════════════════════════════════════════════════════
@@ -116,6 +120,10 @@ vm-stop id: _require-host
 # Stop all running VMs
 vm-stop-all: _require-host
     ssh {{host}} 'for id in $(curl -s http://localhost:4000/api/vms | jq -r ".vms[].id"); do echo "Stopping $id..."; curl -s -X DELETE "http://localhost:4000/api/vms/$id" | jq .; done'
+
+# Get the web gateway URL for a VM
+vm-url id: _require-host
+    @ssh {{host}} "curl -s --fail-with-body http://localhost:4000/api/vms/{{id}}" | jq -r '.web_url // empty'
 
 # Get connection ticket for a VM
 vm-ticket id: _require-host
@@ -202,6 +210,22 @@ cleanup-taps: _require-host
 # Show server networking status (IP forwarding, NAT, TAPs)
 server-networking: _require-host
     ssh {{host}} "echo '=== IP Forwarding ===' && cat /proc/sys/net/ipv4/ip_forward && echo '' && echo '=== NAT Rules ===' && iptables -t nat -L POSTROUTING -v 2>/dev/null | head -5 || echo '(none)' && echo '' && echo '=== TAP Interfaces ===' && ip link show | grep mj- || echo '(none)'"
+
+# Show gateway service status
+gateway-status: _require-host
+    ssh {{host}} "systemctl status mjolnir-gateway --no-pager"
+
+# Follow gateway service logs
+gateway-logs: _require-host
+    ssh -t {{host}} "journalctl -u mjolnir-gateway -f"
+
+# Show recent gateway service logs
+gateway-logs-recent n="100": _require-host
+    ssh {{host}} "journalctl -u mjolnir-gateway -n {{n}} --no-pager"
+
+# Restart gateway service
+gateway-restart: _require-host
+    ssh {{host}} "systemctl restart mjolnir-gateway"
 
 # Build guest agent on the server
 server-build-agent: _require-host

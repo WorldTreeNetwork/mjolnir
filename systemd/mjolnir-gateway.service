@@ -1,0 +1,28 @@
+[Unit]
+Description=Mjolnir Web Gateway (HTTP to Iroh bridge)
+After=network-online.target mjolnir.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+
+ExecStart=/usr/local/bin/mjolnir-gateway
+
+EnvironmentFile=-/etc/mjolnir/gateway.env
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mjolnir-gateway
+
+LimitNOFILE=65536
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

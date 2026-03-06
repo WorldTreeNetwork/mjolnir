@@ -13,6 +13,7 @@ pub struct SpawnResponse {
     pub id: String,
     pub state: String,
     pub ticket: Option<String>,
+    #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
 }
 
@@ -22,12 +23,15 @@ pub struct AwaitShellResponse {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct VmSummary {
     pub id: String,
     pub state: String,
     pub ticket: Option<String>,
     pub guest_ip: Option<String>,
+    #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
+    pub web_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,7 +54,9 @@ pub struct VmInfo {
     pub state: String,
     pub ticket: Option<String>,
     pub guest_ip: Option<String>,
+    #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
+    pub web_url: Option<String>,
     pub config: Option<VmConfig>,
     pub boot_time: Option<i64>,
 }
@@ -303,6 +309,9 @@ pub async fn cmd_info(
         println!("\nConnection");
         println!("───────────────────────────────────────────────────────");
         println!("Ticket:       {}", ticket);
+        if let Some(ref url) = resp.web_url {
+            println!("Web URL:      {}", url);
+        }
     }
 
     if let Some(config) = resp.config {
@@ -437,6 +446,52 @@ pub async fn cmd_snapshots(
             "{:<30} {:<38} {:<28} {:>9} MB",
             snap.name, snap.source_vm_id, snap.created_at, size_mb
         );
+    }
+
+    Ok(())
+}
+
+pub async fn cmd_url(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    port: Option<u16>,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let resp: VmInfo = client
+        .get(format!("{}/api/vms/{}", base, &id))
+        .send()
+        .await
+        .context("failed to fetch VM info")?
+        .error_for_status()
+        .context("VM info request failed")?
+        .json()
+        .await
+        .context("failed to parse VM info response")?;
+
+    match resp.web_url {
+        Some(url) => {
+            if let Some(p) = port {
+                // Insert port suffix before the domain: https://<ticket>-<port>.<domain>
+                // The web_url is https://<ticket>.<domain>, so insert -<port> before the first dot
+                if let Some(dot_pos) = url.find('.') {
+                    println!("{}-{}{}", &url[..dot_pos], p, &url[dot_pos..]);
+                } else {
+                    println!("{}", url);
+                }
+            } else {
+                println!("{}", url);
+            }
+        }
+        None => {
+            anyhow::bail!("VM {} does not have Iroh enabled (no web URL available)", id);
+        }
     }
 
     Ok(())

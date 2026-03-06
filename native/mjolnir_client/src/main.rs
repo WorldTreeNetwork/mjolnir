@@ -96,6 +96,20 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    /// Get the web gateway URL for a VM
+    Url {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+        /// Show URL for a specific port
+        #[arg(long)]
+        port: Option<u16>,
+    },
 
     // --- Connections ---
     /// Connect to a VM terminal (WebSocket PTY)
@@ -353,6 +367,9 @@ async fn main() {
             api::cmd_exec(&profile, &api, &token, &id, &cmd).await
         }
         Command::Kill { id, api, token } => api::cmd_kill(&profile, &api, &token, &id).await,
+        Command::Url { id, api, token, port } => {
+            api::cmd_url(&profile, &api, &token, &id, port).await
+        }
 
         // --- Connections ---
         Command::Connect { id, api, token } => {

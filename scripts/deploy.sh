@@ -25,6 +25,7 @@ REMOTE_BTRFS="/var/lib/mjolnir/btrfs"
 HOST=""
 BUILD_AGENT=false
 BUILD_ROOTFS=false
+BUILD_GATEWAY=false
 AGENT_IROH=false
 
 for arg in "$@"; do
@@ -32,6 +33,7 @@ for arg in "$@"; do
         --agent) BUILD_AGENT=true ;;
         --iroh) AGENT_IROH=true ;;
         --rootfs) BUILD_ROOTFS=true ;;
+        --gateway) BUILD_GATEWAY=true ;;
         -*) echo "Unknown flag: $arg"; exit 1 ;;
         *) HOST="$arg" ;;
     esac
@@ -83,18 +85,37 @@ if $BUILD_ROOTFS; then
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/ubuntu-24.04"
 fi
 
+# --- Build gateway (optional) ---
+if $BUILD_GATEWAY; then
+    echo ""
+    echo "--- Building gateway ---"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE/native/mjolnir_gateway && cargo build --release"
+    ssh "$HOST" "cp $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/"
+fi
+
 # --- Build Elixir release ---
 echo ""
 echo "--- Building Elixir release ---"
 ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod mix deps.get && MIX_ENV=prod mix compile && MIX_ENV=prod mix release mjolnir --overwrite"
+
+# --- Update gateway systemd service ---
+ssh "$HOST" "if [ -f $REMOTE_CODE/systemd/mjolnir-gateway.service ]; then cp $REMOTE_CODE/systemd/mjolnir-gateway.service /etc/systemd/system/mjolnir-gateway.service && systemctl daemon-reload; fi"
 
 # --- Restart service ---
 echo ""
 echo "--- Restarting mjolnir service ---"
 ssh "$HOST" "systemctl restart mjolnir && sleep 2 && systemctl status mjolnir --no-pager"
 
+# --- Restart gateway if installed ---
+if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/null" | grep -q enabled; then
+    echo ""
+    echo "--- Restarting gateway service ---"
+    ssh "$HOST" "systemctl restart mjolnir-gateway && sleep 1 && systemctl status mjolnir-gateway --no-pager"
+fi
+
 echo ""
 echo "=== Deploy complete ==="
 echo ""
 echo "Logs:         ssh $HOST journalctl -u mjolnir -f"
+echo "Gateway logs: ssh $HOST journalctl -u mjolnir-gateway -f"
 echo "Remote shell: ssh $HOST /opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"

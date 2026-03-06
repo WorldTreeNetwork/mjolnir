@@ -28,7 +28,10 @@ config :mjolnir,
   guest_agent_bin: nil,
 
   # SSH (nil = no default key injection; can be a path or inline key string)
-  default_ssh_public_key: nil
+  default_ssh_public_key: nil,
+
+  # Web gateway domain for Iroh-enabled VMs
+  gateway_domain: "vm.worldtree.network"
 
 # Auth defaults
 config :mjolnir, :auth,
