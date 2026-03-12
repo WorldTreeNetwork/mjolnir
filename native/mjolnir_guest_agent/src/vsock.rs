@@ -3,6 +3,7 @@
 #[cfg(feature = "iroh")]
 use crate::protocol::IrohReady;
 use crate::protocol::{VsockRequest, VsockResponse};
+use crate::tmux;
 use crate::pty::{PtySession, PtyWriter};
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
@@ -699,6 +700,69 @@ async fn handle_request(
             message_inbox.lock().await.push_back(msg);
             message_notify.notify_waiters();
             VsockResponse::DeliverMessageAck { id }
+        }
+        VsockRequest::TerminalOpen { id, session_name } => {
+            info!("TerminalOpen: {}", session_name);
+            match tmux::ensure_session(&session_name).await {
+                Ok((name, status)) => VsockResponse::TerminalOpened { id, session_name: name, status },
+                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            }
+        }
+        VsockRequest::TerminalRead { id, session_name, scrollback_lines } => {
+            let lines = scrollback_lines.unwrap_or(100);
+            match tmux::capture_pane(&session_name, lines).await {
+                Ok((content, pane_rows, pane_cols, running_command)) => {
+                    VsockResponse::TerminalOutput { id, content, pane_rows, pane_cols, running_command }
+                }
+                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            }
+        }
+        VsockRequest::TerminalSend { id, session_name, command, keys } => {
+            match tmux::send_keys(&session_name, command.as_deref(), keys.as_deref()).await {
+                Ok(()) => VsockResponse::TerminalSent { id, sent: true },
+                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            }
+        }
+        VsockRequest::TerminalSendAndRead { id, session_name, command, timeout_ms } => {
+            let timeout = timeout_ms.unwrap_or(30_000);
+            let sentinel_id = uuid::Uuid::new_v4().to_string();
+            let write_tx = write_tx.clone();
+            let id_for_ack = id.clone();
+
+            tokio::spawn(async move {
+                let result = tmux::send_and_read(&session_name, &command, timeout, &sentinel_id).await;
+                let response = match result {
+                    Ok(output) => VsockResponse::TerminalCommandOutput {
+                        id,
+                        output: output.output,
+                        exit_code: output.exit_code,
+                        duration_ms: output.duration_ms,
+                        timed_out: output.timed_out,
+                    },
+                    Err(e) => {
+                        warn!("TerminalSendAndRead error for session {}: {}", session_name, e);
+                        VsockResponse::TerminalError { id, error: e.to_string() }
+                    },
+                };
+                let frame = frame_message(0, &response);
+                if let Err(e) = write_tx.send(frame).await {
+                    warn!("TerminalSendAndRead failed to send frame: {}", e);
+                }
+            });
+
+            VsockResponse::TerminalCommandAck { id: id_for_ack, status: "polling".to_string() }
+        }
+        VsockRequest::TerminalList { id } => {
+            match tmux::list_sessions().await {
+                Ok(sessions) => VsockResponse::TerminalSessions { id, sessions },
+                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            }
+        }
+        VsockRequest::TerminalClose { id, session_name } => {
+            match tmux::kill_session(&session_name).await {
+                Ok(()) => VsockResponse::TerminalClosed { id, session_name },
+                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            }
         }
         VsockRequest::SpawnSubAgent { id, .. }
         | VsockRequest::SnapshotSelf { id, .. }

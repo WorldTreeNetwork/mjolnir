@@ -144,7 +144,7 @@ pub fn format_addr_info(addr: &EndpointAddr) -> String {
 
 // --- Iroh QUIC shell connection ---
 
-pub async fn connect_to_vm(addr: EndpointAddr) -> Result<()> {
+pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
     let endpoint = Endpoint::builder().bind().await.context("Failed to bind Iroh endpoint")?;
@@ -166,6 +166,14 @@ pub async fn connect_to_vm(addr: EndpointAddr) -> Result<()> {
     )
     .await
     .context("Failed to send Hello frame")?;
+
+    // Inject tmux session command if requested
+    if let Some(ref name) = session {
+        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
+        write_frame(&mut send, &Frame::Data(cmd.into_bytes()))
+            .await
+            .context("Failed to send tmux session command")?;
+    }
 
     let original_termios = set_raw_mode().context("Failed to set raw mode")?;
     let orig_for_guard = original_termios.clone();
@@ -307,6 +315,7 @@ pub async fn cmd_connect(
     api_flag: &Option<String>,
     token: &Option<String>,
     vm_id: &str,
+    session: Option<String>,
 ) -> Result<()> {
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -345,7 +354,7 @@ pub async fn cmd_connect(
         restore_terminal(&orig_for_guard);
     });
 
-    let result = run_pty_loop(ws_stream).await;
+    let result = run_pty_loop(ws_stream, session).await;
 
     restore_terminal(&original_termios);
 
@@ -359,7 +368,7 @@ pub async fn cmd_connect(
 }
 
 #[cfg(unix)]
-async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
         + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -374,6 +383,13 @@ where
     let resize_msg = serde_json::json!({"type": "resize", "rows": rows, "cols": cols});
     ws_write.send(Message::Text(resize_msg.to_string())).await
         .context("Failed to send initial resize")?;
+
+    // Inject tmux session command if requested
+    if let Some(ref name) = session {
+        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
+        ws_write.send(Message::Binary(cmd.into_bytes())).await
+            .context("Failed to send tmux session command")?;
+    }
 
     // Set up SIGWINCH handler
     let mut sigwinch = tokio::signal::unix::signal(
@@ -414,7 +430,7 @@ where
 }
 
 #[cfg(windows)]
-async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
 where
     S: futures_util::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
         + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
@@ -433,6 +449,13 @@ where
     });
     ws_write.send(Message::Text(resize_msg.to_string())).await
         .context("Failed to send initial resize")?;
+
+    // Inject tmux session command if requested
+    if let Some(ref name) = session {
+        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
+        ws_write.send(Message::Binary(cmd.into_bytes())).await
+            .context("Failed to send tmux session command")?;
+    }
 
     loop {
         tokio::select! {

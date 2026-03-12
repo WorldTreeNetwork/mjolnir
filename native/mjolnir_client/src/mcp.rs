@@ -94,6 +94,62 @@ pub struct AwaitPtyParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EmptyParams {}
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OpenTerminalParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+    #[schemars(description = "tmux session name (default: \"dev\").")]
+    pub session_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TerminalReadParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+    #[schemars(description = "tmux session name (default: \"dev\").")]
+    pub session_name: Option<String>,
+    #[schemars(description = "Number of scrollback lines to capture (default: 100, max: 1000).")]
+    pub scrollback_lines: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TerminalSendParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+    #[schemars(description = "tmux session name (default: \"dev\").")]
+    pub session_name: Option<String>,
+    #[schemars(description = "Complete command to execute (Enter is appended automatically). Exactly one of 'command' or 'keys' must be provided.")]
+    pub command: Option<String>,
+    #[schemars(description = "Raw tmux key sequence (e.g., \"C-c\", \"Escape\"). Exactly one of 'command' or 'keys' must be provided.")]
+    pub keys: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TerminalSendAndReadParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+    #[schemars(description = "tmux session name (default: \"dev\").")]
+    pub session_name: Option<String>,
+    #[schemars(description = "The command to execute (single-line only).")]
+    pub command: String,
+    #[schemars(description = "Timeout in milliseconds (default: 30000).")]
+    pub timeout_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TerminalListParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct TerminalCloseParams {
+    #[schemars(description = "UUID of the target VM.")]
+    pub vm_id: String,
+    #[schemars(description = "Name of the tmux session to close.")]
+    pub session_name: String,
+}
+
 // ── Helpers ──
 
 fn mcp_err(msg: impl Into<String>) -> ErrorData {
@@ -318,6 +374,80 @@ impl MjolnirMcpService {
             body["timeout"] = serde_json::Value::Number(t.into());
         }
         self.api_post(&format!("/api/vms/{}/await-pty", p.vm_id), &body).await
+    }
+
+    #[tool(name = "open_terminal", description = "Open or attach to a persistent terminal session (tmux) inside a VM. Use this for interactive work that requires state across commands.")]
+    async fn open_terminal(
+        &self,
+        Parameters(p): Parameters<OpenTerminalParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = p.session_name.as_deref().unwrap_or("dev");
+        let body = serde_json::json!({ "session_name": session });
+        self.api_post(&format!("/api/vms/{}/terminal/open", p.vm_id), &body).await
+    }
+
+    #[tool(name = "terminal_read", description = "Read the current visible content of a terminal session. Returns clean text with ANSI escapes stripped.")]
+    async fn terminal_read(
+        &self,
+        Parameters(p): Parameters<TerminalReadParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = p.session_name.as_deref().unwrap_or("dev");
+        let mut path = format!("/api/vms/{}/terminal/{}", p.vm_id, session);
+        if let Some(lines) = p.scrollback_lines {
+            path = format!("{}?scrollback_lines={}", path, lines);
+        }
+        self.api_get(&path).await
+    }
+
+    #[tool(name = "terminal_send", description = "Send a command or keystrokes to a terminal session. Use 'command' for complete commands or 'keys' for raw key sequences like 'C-c' or 'Escape'. Exactly one of 'command' or 'keys' must be provided.")]
+    async fn terminal_send(
+        &self,
+        Parameters(p): Parameters<TerminalSendParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = p.session_name.as_deref().unwrap_or("dev");
+        let mut body = serde_json::Map::new();
+        if let Some(cmd) = p.command {
+            body.insert("command".into(), serde_json::Value::String(cmd));
+        }
+        if let Some(keys) = p.keys {
+            body.insert("keys".into(), serde_json::Value::String(keys));
+        }
+        self.api_post(
+            &format!("/api/vms/{}/terminal/{}/send", p.vm_id, session),
+            &serde_json::Value::Object(body),
+        ).await
+    }
+
+    #[tool(name = "terminal_send_and_read", description = "Send a single-line command and wait for it to complete, returning the output. Preferred over separate send+read for simple command execution. Designed for single-line commands only; for multi-line scripts, write to a file first then execute it. Do NOT use for commands that spawn interactive processes (bash, python, ssh, docker exec -it, etc.) — these will timeout because no shell prompt returns.")]
+    async fn terminal_send_and_read(
+        &self,
+        Parameters(p): Parameters<TerminalSendAndReadParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = p.session_name.as_deref().unwrap_or("dev");
+        let mut body = serde_json::json!({ "command": p.command });
+        if let Some(t) = p.timeout_ms {
+            body["timeout_ms"] = serde_json::Value::Number(t.into());
+        }
+        self.api_post(
+            &format!("/api/vms/{}/terminal/{}/send-and-read", p.vm_id, session),
+            &body,
+        ).await
+    }
+
+    #[tool(name = "terminal_list", description = "List active terminal sessions (tmux) in a VM.")]
+    async fn terminal_list(
+        &self,
+        Parameters(p): Parameters<TerminalListParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.api_get(&format!("/api/vms/{}/terminal", p.vm_id)).await
+    }
+
+    #[tool(name = "terminal_close", description = "Close a terminal session in a VM. The session and its processes are destroyed.")]
+    async fn terminal_close(
+        &self,
+        Parameters(p): Parameters<TerminalCloseParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.api_delete(&format!("/api/vms/{}/terminal/{}", p.vm_id, p.session_name)).await
     }
 }
 

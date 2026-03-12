@@ -2012,14 +2012,17 @@ dependencies = [
 name = "mjolnir-guest-agent"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "futures-lite",
  "iroh",
  "libc",
  "mjolnir-protocol",
  "nix 0.29.0",
+ "once_cell",
  "rand 0.9.2",
  "serde",
  "serde_json",
+ "strip-ansi-escapes",
  "tokio",
  "tokio-vsock",
  "tracing",
@@ -3538,6 +3541,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4221,6 +4233,15 @@ checksum = "4c8e1df0bf1e1b28095c24564d1b90acae64ca69b097ed73896e342fa6649c57"
 dependencies = [
  "libc",
  "nix 0.24.3",
+]
+
+[[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

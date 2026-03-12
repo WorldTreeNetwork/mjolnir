@@ -210,7 +210,7 @@ pub async fn cmd_spawn(
     if connect {
         let ticket_str = ticket.ok_or_else(|| anyhow::anyhow!("No ticket available"))?;
         let addr = crate::connect::resolve_addr(&ticket_str, None, &[])?;
-        crate::connect::connect_to_vm(addr).await?;
+        crate::connect::connect_to_vm(addr, None).await?;
     }
 
     Ok(())

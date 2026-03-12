@@ -2,6 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Metadata about a tmux session.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TmuxSessionInfo {
+    pub session_name: String,
+    pub windows: u32,
+    pub created: u64,
+    pub attached: bool,
+}
+
 /// Messages from host to guest (vsock)
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -63,6 +72,36 @@ pub enum VsockRequest {
     SignalDone { id: String },
     #[serde(rename = "signal_done_ack")]
     SignalDoneAck { id: String, ok: bool },
+    #[serde(rename = "terminal_open")]
+    TerminalOpen { id: String, session_name: String },
+    #[serde(rename = "terminal_read")]
+    TerminalRead {
+        id: String,
+        session_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scrollback_lines: Option<i32>,
+    },
+    #[serde(rename = "terminal_send")]
+    TerminalSend {
+        id: String,
+        session_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        keys: Option<String>,
+    },
+    #[serde(rename = "terminal_send_and_read")]
+    TerminalSendAndRead {
+        id: String,
+        session_name: String,
+        command: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
+    #[serde(rename = "terminal_list")]
+    TerminalList { id: String },
+    #[serde(rename = "terminal_close")]
+    TerminalClose { id: String, session_name: String },
 }
 
 /// Messages from guest to host (vsock)
@@ -110,6 +149,43 @@ pub enum VsockResponse {
     },
     #[serde(rename = "deliver_message_ack")]
     DeliverMessageAck { id: String },
+    #[serde(rename = "terminal_opened")]
+    TerminalOpened {
+        id: String,
+        session_name: String,
+        status: String,
+    },
+    #[serde(rename = "terminal_output")]
+    TerminalOutput {
+        id: String,
+        content: String,
+        pane_rows: u16,
+        pane_cols: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        running_command: Option<String>,
+    },
+    #[serde(rename = "terminal_sent")]
+    TerminalSent { id: String, sent: bool },
+    #[serde(rename = "terminal_command_ack")]
+    TerminalCommandAck { id: String, status: String },
+    #[serde(rename = "terminal_command_output")]
+    TerminalCommandOutput {
+        id: String,
+        output: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        duration_ms: u64,
+        timed_out: bool,
+    },
+    #[serde(rename = "terminal_sessions")]
+    TerminalSessions {
+        id: String,
+        sessions: Vec<TmuxSessionInfo>,
+    },
+    #[serde(rename = "terminal_closed")]
+    TerminalClosed { id: String, session_name: String },
+    #[serde(rename = "terminal_error")]
+    TerminalError { id: String, error: String },
 }
 
 /// Notification sent when Iroh is ready

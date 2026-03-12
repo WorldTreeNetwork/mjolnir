@@ -11,6 +11,7 @@ mod iroh;
 mod agent;
 mod protocol;
 mod pty;
+mod tmux;
 mod vsock;
 
 use tracing::{error, info};

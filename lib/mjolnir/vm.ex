@@ -31,6 +31,8 @@ defmodule Mjolnir.VM do
     :iroh_json,
     :ticket,
     :pty_ready,
+    # Ownership (multi-tenancy)
+    :owner_id,
     # SSH key injection
     :ssh_public_key,
     # Iroh networking toggle
@@ -38,6 +40,8 @@ defmodule Mjolnir.VM do
     # Inter-VM message queue (buffered during boot)
     message_queue: []
   ]
+
+  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key)
 
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
@@ -48,7 +52,8 @@ defmodule Mjolnir.VM do
           optional(:ssh_public_key) => String.t(),
           optional(:snapshot) => String.t(),
           optional(:preserve_iroh_key) => boolean(),
-          optional(:enable_iroh) => boolean()
+          optional(:enable_iroh) => boolean(),
+          optional(:owner_id) => String.t() | nil
         }
 
   # ============================================================================
@@ -362,6 +367,48 @@ defmodule Mjolnir.VM do
     end
   end
 
+  @doc "Open or ensure a terminal session in the VM"
+  @spec terminal_open(vm_id(), String.t()) :: {:ok, map()} | {:error, term()}
+  def terminal_open(vm_id, session_name) do
+    GenServer.call(via_tuple(vm_id), {:terminal_open, session_name})
+  end
+
+  @doc "Read terminal content"
+  @spec terminal_read(vm_id(), String.t(), non_neg_integer()) :: {:ok, map()} | {:error, term()}
+  def terminal_read(vm_id, session_name, scrollback_lines \\ 100) do
+    GenServer.call(via_tuple(vm_id), {:terminal_read, session_name, scrollback_lines})
+  end
+
+  @doc "Send command or keys to terminal"
+  @spec terminal_send(vm_id(), String.t(), String.t() | nil, list() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def terminal_send(vm_id, session_name, command \\ nil, keys \\ nil) do
+    GenServer.call(via_tuple(vm_id), {:terminal_send, session_name, command, keys})
+  end
+
+  @doc "Send command and wait for output"
+  @spec terminal_send_and_read(vm_id(), String.t(), String.t(), non_neg_integer()) ::
+          {:ok, map()} | {:error, term()}
+  def terminal_send_and_read(vm_id, session_name, command, timeout_ms \\ 30_000) do
+    GenServer.call(
+      via_tuple(vm_id),
+      {:terminal_send_and_read, session_name, command, timeout_ms},
+      timeout_ms + 10_000
+    )
+  end
+
+  @doc "List terminal sessions"
+  @spec terminal_list(vm_id()) :: {:ok, map()} | {:error, term()}
+  def terminal_list(vm_id) do
+    GenServer.call(via_tuple(vm_id), :terminal_list)
+  end
+
+  @doc "Close a terminal session"
+  @spec terminal_close(vm_id(), String.t()) :: {:ok, map()} | {:error, term()}
+  def terminal_close(vm_id, session_name) do
+    GenServer.call(via_tuple(vm_id), {:terminal_close, session_name})
+  end
+
   @doc """
   Spawn a VM with a pre-assigned ID (used for restoring dormant VMs).
 
@@ -425,7 +472,8 @@ defmodule Mjolnir.VM do
       config: build_config(opts),
       hypervisor: hypervisor,
       ssh_public_key: ssh_key,
-      enable_iroh: enable_iroh
+      enable_iroh: enable_iroh,
+      owner_id: opts[:owner_id]
     }
 
     {:ok, state, {:continue, :boot}}
@@ -493,7 +541,7 @@ defmodule Mjolnir.VM do
     case do_snapshot(state, snapshot_name, []) do
       {:ok, _metadata} ->
         original_config = restore_config(state)
-        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config)
+        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
         Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
         {:stop, :normal, :ok, state}
 
@@ -505,6 +553,81 @@ defmodule Mjolnir.VM do
 
   def handle_call({:exec, command}, _from, state) do
     result = execute_command(state, command)
+    {:reply, result, state}
+  end
+
+  def handle_call({:terminal_open, session_name}, _from, state) do
+    result =
+      if state.vsock_conn,
+        do: Mjolnir.Vsock.Connection.terminal_open(state.vsock_conn, session_name),
+        else: {:error, :no_vsock_connection}
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:terminal_read, session_name, scrollback_lines}, _from, state) do
+    result =
+      if state.vsock_conn,
+        do:
+          Mjolnir.Vsock.Connection.terminal_read(
+            state.vsock_conn,
+            session_name,
+            scrollback_lines
+          ),
+        else: {:error, :no_vsock_connection}
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:terminal_send, session_name, command, keys}, _from, state) do
+    result =
+      if state.vsock_conn,
+        do: Mjolnir.Vsock.Connection.terminal_send(state.vsock_conn, session_name, command, keys),
+        else: {:error, :no_vsock_connection}
+
+    {:reply, result, state}
+  end
+
+  # IMPORTANT: terminal_send_and_read is handled asynchronously to avoid blocking
+  # the VM GenServer for up to 30+ seconds. Other terminal/exec calls can proceed
+  # concurrently while this long-running operation is in flight.
+  def handle_call({:terminal_send_and_read, session_name, command, timeout_ms}, from, state) do
+    if state.vsock_conn do
+      conn = state.vsock_conn
+
+      Task.start(fn ->
+        result =
+          Mjolnir.Vsock.Connection.terminal_send_and_read(
+            conn,
+            session_name,
+            command,
+            timeout_ms
+          )
+
+        GenServer.reply(from, result)
+      end)
+
+      {:noreply, state}
+    else
+      {:reply, {:error, :no_vsock_connection}, state}
+    end
+  end
+
+  def handle_call(:terminal_list, _from, state) do
+    result =
+      if state.vsock_conn,
+        do: Mjolnir.Vsock.Connection.terminal_list(state.vsock_conn),
+        else: {:error, :no_vsock_connection}
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:terminal_close, session_name}, _from, state) do
+    result =
+      if state.vsock_conn,
+        do: Mjolnir.Vsock.Connection.terminal_close(state.vsock_conn, session_name),
+        else: {:error, :no_vsock_connection}
+
     {:reply, result, state}
   end
 
@@ -1083,7 +1206,7 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp do_snapshot(state, name, _opts) do
+  defp do_snapshot(state, name, opts) do
     # Step 1: Flush guest caches
     case execute_command(state, "sync") do
       {:ok, _} -> :ok
@@ -1106,7 +1229,10 @@ defmodule Mjolnir.VM do
           # btrfs subvolume snapshot is atomic at the filesystem level.
 
           # Create the snapshot (subvolume snapshot + metadata)
-          BTRFS.create_snapshot(state.id, name, source_vm_id: state.id)
+          BTRFS.create_snapshot(state.id, name,
+            source_vm_id: state.id,
+            owner_id: opts[:owner_id] || state.owner_id
+          )
         after
           # Step 6: Always resume
           case state.hypervisor.resume_instance(state.socket_path) do
@@ -1165,8 +1291,19 @@ defmodule Mjolnir.VM do
       vcpus: state.config.vcpu_count,
       memory_mb: state.config.mem_size_mib,
       enable_iroh: state.enable_iroh,
-      ssh_public_key: state.ssh_public_key
+      ssh_public_key: state.ssh_public_key,
+      owner_id: state.owner_id
     }
+  end
+
+  defp normalize_config_keys(config) do
+    Map.new(config, fn
+      {k, v} when is_binary(k) ->
+        if k in @config_key_allowlist, do: {String.to_atom(k), v}, else: {k, v}
+
+      {k, v} ->
+        {k, v}
+    end)
   end
 
   defp restore_dormant_vm(vm_id) do
@@ -1191,7 +1328,9 @@ defmodule Mjolnir.VM do
       {:ok, entry} ->
         # Spawn the VM from its dormant snapshot, reusing the same VM ID
         opts =
-          Map.merge(entry.original_config, %{
+          entry.original_config
+          |> normalize_config_keys()
+          |> Map.merge(%{
             id: vm_id,
             snapshot: entry.snapshot_name,
             preserve_iroh_key: false

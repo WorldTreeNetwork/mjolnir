@@ -194,7 +194,7 @@ chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update 
 chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
     build-essential libssl-dev libffi-dev zlib1g-dev \
     libbz2-dev libreadline-dev libsqlite3-dev libncurses-dev \
-    pkg-config"
+    pkg-config tmux"
 
 # Install mise
 echo "Installing mise version manager..."

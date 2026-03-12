@@ -123,6 +123,9 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Attach to a named tmux session inside the VM
+        #[arg(long)]
+        session: Option<String>,
     },
     /// P2P connections via Iroh QUIC
     Iroh {
@@ -372,13 +375,13 @@ async fn main() {
         }
 
         // --- Connections ---
-        Command::Connect { id, api, token } => {
-            connect::cmd_connect(&profile, &api, &token, &id).await
+        Command::Connect { id, api, token, session } => {
+            connect::cmd_connect(&profile, &api, &token, &id, session).await
         }
         Command::Iroh { action } => match action {
             IrohCommand::Connect { ticket, relay, ip } => {
                 match connect::resolve_addr(&ticket, relay, &ip) {
-                    Ok(addr) => connect::connect_to_vm(addr).await,
+                    Ok(addr) => connect::connect_to_vm(addr, None).await,
                     Err(e) => Err(e),
                 }
             }
@@ -400,12 +403,12 @@ async fn main() {
         // --- Hidden backward-compat aliases ---
         Command::Shell { ticket, relay, ip } => {
             match connect::resolve_addr(&ticket, relay, &ip) {
-                Ok(addr) => connect::connect_to_vm(addr).await,
+                Ok(addr) => connect::connect_to_vm(addr, None).await,
                 Err(e) => Err(e),
             }
         }
         Command::Pty { id, api, token } => {
-            connect::cmd_connect(&profile, &api, &token, &id).await
+            connect::cmd_connect(&profile, &api, &token, &id, None).await
         }
         Command::SshAlias {
             ticket,

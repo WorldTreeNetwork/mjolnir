@@ -81,6 +81,40 @@ defmodule Mjolnir.Vsock.Connection do
     GenServer.cast(pid, {:send_control_message, Protocol.deliver_message(from_vm_id, payload)})
   end
 
+  @doc "Open or ensure a terminal session in the guest."
+  def terminal_open(pid, session_name) do
+    GenServer.call(pid, {:terminal_open, session_name})
+  end
+
+  @doc "Read terminal content from the guest."
+  def terminal_read(pid, session_name, scrollback_lines \\ 100) do
+    GenServer.call(pid, {:terminal_read, session_name, scrollback_lines})
+  end
+
+  @doc "Send command or keys to terminal in the guest."
+  def terminal_send(pid, session_name, command \\ nil, keys \\ nil) do
+    GenServer.call(pid, {:terminal_send, session_name, command, keys})
+  end
+
+  @doc "Send command and wait for output from the guest."
+  def terminal_send_and_read(pid, session_name, command, timeout_ms \\ 30_000) do
+    GenServer.call(
+      pid,
+      {:terminal_send_and_read, session_name, command, timeout_ms},
+      timeout_ms + 10_000
+    )
+  end
+
+  @doc "List terminal sessions in the guest."
+  def terminal_list(pid) do
+    GenServer.call(pid, :terminal_list)
+  end
+
+  @doc "Close a terminal session in the guest."
+  def terminal_close(pid, session_name) do
+    GenServer.call(pid, {:terminal_close, session_name})
+  end
+
   @doc """
   Register a process to receive data for a specific channel.
   The handler will receive messages of the form {:vsock_data, channel, data}.
@@ -149,6 +183,105 @@ defmodule Mjolnir.Vsock.Connection do
   def handle_call({:open_pty, rows, cols}, from, state) do
     request = Protocol.pty_open_request(rows, cols)
     request_id = request["id"]
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:terminal_open, session_name}, from, state) do
+    request_id = UUID.uuid4()
+    request = %{"type" => "terminal_open", "id" => request_id, "session_name" => session_name}
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:terminal_read, session_name, scrollback_lines}, from, state) do
+    request_id = UUID.uuid4()
+
+    request = %{
+      "type" => "terminal_read",
+      "id" => request_id,
+      "session_name" => session_name,
+      "scrollback_lines" => scrollback_lines
+    }
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:terminal_send, session_name, command, keys}, from, state) do
+    request_id = UUID.uuid4()
+    request = %{"type" => "terminal_send", "id" => request_id, "session_name" => session_name}
+    request = if command, do: Map.put(request, "command", command), else: request
+    request = if keys, do: Map.put(request, "keys", keys), else: request
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:terminal_send_and_read, session_name, command, timeout_ms}, from, state) do
+    request_id = UUID.uuid4()
+
+    request = %{
+      "type" => "terminal_send_and_read",
+      "id" => request_id,
+      "session_name" => session_name,
+      "command" => command,
+      "timeout_ms" => timeout_ms
+    }
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(:terminal_list, from, state) do
+    request_id = UUID.uuid4()
+    request = %{"type" => "terminal_list", "id" => request_id}
+
+    case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:terminal_close, session_name}, from, state) do
+    request_id = UUID.uuid4()
+    request = %{"type" => "terminal_close", "id" => request_id, "session_name" => session_name}
 
     case send_message(state.socket, request, 0) do
       :ok ->
@@ -401,6 +534,34 @@ defmodule Mjolnir.Vsock.Connection do
         # The VM.ex module handles this during boot via await_iroh_ready
         Logger.debug("Received iroh_ready (ignoring in connection): #{msg["node_id"]}")
         state
+
+      {:ok, %{"type" => "terminal_opened", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_opened")
+
+      {:ok, %{"type" => "terminal_output", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_output")
+
+      {:ok, %{"type" => "terminal_sent", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_sent")
+
+      # CRITICAL: terminal_command_ack is a NO-OP — do NOT call reply_to_pending!
+      # The pending request must remain until terminal_command_output arrives.
+      {:ok, %{"type" => "terminal_command_ack", "id" => id, "status" => status}} ->
+        Logger.debug("Terminal command ack for #{id}: #{status}")
+        state
+
+      # terminal_command_output is the REAL result from the spawned tokio task
+      {:ok, %{"type" => "terminal_command_output", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_command_output")
+
+      {:ok, %{"type" => "terminal_sessions", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_sessions")
+
+      {:ok, %{"type" => "terminal_closed", "id" => id} = response} ->
+        reply_to_pending(state, id, {:ok, response}, "terminal_closed")
+
+      {:ok, %{"type" => "terminal_error", "id" => id} = response} ->
+        reply_to_pending(state, id, {:error, response}, "terminal_error")
 
       {:ok, other} ->
         Logger.warning("Unknown vsock message type: #{inspect(other)}")
