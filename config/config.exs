@@ -24,6 +24,9 @@ config :mjolnir,
   # HTTP API
   api_port: 4000,
 
+  # Dormant registry persist interval (ms). 0 = instant (flush every change).
+  dormant_flush_delay_ms: 250,
+
   # Guest agent binary to inject into rootfs on boot (nil = skip injection)
   guest_agent_bin: nil,
 

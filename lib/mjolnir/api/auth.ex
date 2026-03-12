@@ -14,7 +14,7 @@ defmodule Mjolnir.API.Auth do
   @impl true
   def init(opts), do: opts
 
-  @all_scopes "vms:spawn vms:read vms:exec vms:stop pty:connect snapshots:create snapshots:read snapshots:delete"
+  @all_scopes "vms:spawn vms:read vms:exec vms:stop pty:connect terminal:read terminal:write snapshots:create snapshots:read snapshots:delete"
 
   @impl true
   def call(conn, _opts) do

@@ -6,9 +6,9 @@ defmodule Mjolnir.Policy.SnapshotTest do
   @owner_user %{user_id: "user-123"}
   @other_user %{user_id: "user-456"}
   @localhost %{user_id: "localhost"}
-  @owned_snapshot %{"owner_id" => "user-123", "name" => "my-snap"}
-  @other_snapshot %{"owner_id" => "user-456", "name" => "other-snap"}
-  @legacy_snapshot %{"owner_id" => nil, "name" => "old-snap"}
+  @owned_snapshot %{owner_id: "user-123", name: "my-snap"}
+  @other_snapshot %{owner_id: "user-456", name: "other-snap"}
+  @legacy_snapshot %{owner_id: nil, name: "old-snap"}
 
   describe "localhost bypass" do
     test "localhost can perform any action on any snapshot" do
@@ -71,9 +71,9 @@ defmodule Mjolnir.Policy.SnapshotTest do
     end
   end
 
-  describe "string key handling" do
-    test "metadata with string keys works correctly" do
-      meta = %{"owner_id" => "user-123", "name" => "test", "size_bytes" => 1024}
+  describe "atom key handling" do
+    test "metadata with atom keys works correctly" do
+      meta = %{owner_id: "user-123", name: "test", size_bytes: 1024}
       assert :ok = Snapshot.authorize(:read, @owner_user, meta)
       assert :error = Snapshot.authorize(:read, @other_user, meta)
     end

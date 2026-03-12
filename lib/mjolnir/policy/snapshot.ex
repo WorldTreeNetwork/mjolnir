@@ -8,15 +8,14 @@ defmodule Mjolnir.Policy.Snapshot do
 
   @type action :: :list | :read | :create | :delete
   @type user :: %{user_id: String.t()} | nil
-  @type resource :: %{String.t() => any()} | nil
+  @type resource :: %{atom() => any()} | nil
 
   @doc """
   Check if a user is authorized to perform an action on a snapshot.
 
   Returns `:ok` or `:error`.
 
-  Snapshot metadata uses string keys (decoded from JSON), so owner_id
-  is accessed as `"owner_id"`.
+  Snapshot metadata uses atom keys (normalized at the JSON decode boundary).
   """
   @spec authorize(action(), user(), resource()) :: :ok | :error
 
@@ -30,10 +29,10 @@ defmodule Mjolnir.Policy.Snapshot do
   def authorize(:create, %{user_id: uid}, _) when is_binary(uid), do: :ok
 
   # Legacy snapshots (nil owner_id) — deny to regular users
-  def authorize(_, %{user_id: _}, %{"owner_id" => nil}), do: :error
+  def authorize(_, %{user_id: _}, %{owner_id: nil}), do: :error
 
-  # Resource actions: owner only (metadata has string keys from JSON decode)
-  def authorize(action, %{user_id: uid}, %{"owner_id" => oid})
+  # Resource actions: owner only
+  def authorize(action, %{user_id: uid}, %{owner_id: oid})
       when action in [:read, :delete] do
     if uid == oid, do: :ok, else: :error
   end

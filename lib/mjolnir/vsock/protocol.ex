@@ -42,10 +42,19 @@ defmodule Mjolnir.Vsock.Protocol do
   - `{:ok, channel, payload, rest}` - Successfully decoded a complete frame
   - `{:incomplete, buffer}` - Need more data to complete frame
   """
+  # Max frame size matches the 64KB limit enforced by the Rust guest agent.
+  # Prevents memory exhaustion from malformed frames.
+  @max_frame_size 65_536
+
   def decode_frame(<<channel::8, length::big-32, rest::binary>>)
-      when byte_size(rest) >= length do
+      when length <= @max_frame_size and byte_size(rest) >= length do
     <<payload::binary-size(length), remaining::binary>> = rest
     {:ok, channel, payload, remaining}
+  end
+
+  def decode_frame(<<_channel::8, length::big-32, _rest::binary>>)
+      when length > @max_frame_size do
+    {:error, :frame_too_large}
   end
 
   def decode_frame(buffer), do: {:incomplete, buffer}

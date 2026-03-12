@@ -10,7 +10,9 @@ defmodule Mjolnir.API.Router do
   use Plug.Router
 
   import Mjolnir.API.Authz
-  alias Mjolnir.API.Views
+  alias Mjolnir.API.{Validation, Views}
+
+  require Logger
 
   plug(Plug.Logger)
   plug(:maybe_parse_body)
@@ -30,20 +32,30 @@ defmodule Mjolnir.API.Router do
     unless conn.halted do
       opts = %{}
 
+      # Validate base_image if provided (path traversal prevention)
       opts =
-        if conn.body_params["base_image"],
-          do: Map.put(opts, :base_image, conn.body_params["base_image"]),
-          else: opts
+        case conn.body_params["base_image"] do
+          nil ->
+            opts
+
+          base_image ->
+            case Validation.validate_safe_name(base_image, "base_image") do
+              {:ok, name} -> Map.put(opts, :base_image, name)
+              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+            end
+        end
 
       opts =
-        if conn.body_params["memory_mb"],
-          do: Map.put(opts, :memory_mb, conn.body_params["memory_mb"]),
-          else: opts
+        case conn.body_params["memory_mb"] do
+          nil -> opts
+          val -> Map.put(opts, :memory_mb, Validation.validate_integer(val, 512, 128, 32_768))
+        end
 
       opts =
-        if conn.body_params["vcpus"],
-          do: Map.put(opts, :vcpus, conn.body_params["vcpus"]),
-          else: opts
+        case conn.body_params["vcpus"] do
+          nil -> opts
+          val -> Map.put(opts, :vcpus, Validation.validate_integer(val, 1, 1, 64))
+        end
 
       opts =
         if conn.body_params["ssh_public_key"],
@@ -51,9 +63,16 @@ defmodule Mjolnir.API.Router do
           else: opts
 
       opts =
-        if conn.body_params["snapshot"],
-          do: Map.put(opts, :snapshot, conn.body_params["snapshot"]),
-          else: opts
+        case conn.body_params["snapshot"] do
+          nil ->
+            opts
+
+          snapshot ->
+            case Validation.validate_safe_name(snapshot, "snapshot") do
+              {:ok, name} -> Map.put(opts, :snapshot, name)
+              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+            end
+        end
 
       opts =
         if conn.body_params["preserve_iroh_key"],
@@ -65,20 +84,29 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
 
-      # Stamp ownership from authenticated user
-      opts = Map.put(opts, :owner_id, conn.assigns[:user_id])
+      # Short-circuit on any validation error (base_image, snapshot, etc.)
+      if opts[:_validation_error] do
+        json(conn, 400, %{error: opts[:_validation_error]})
+      else
+        # Stamp ownership from authenticated user
+        opts = Map.put(opts, :owner_id, conn.assigns[:user_id])
+        # Remove sentinel key before passing to VM.spawn
+        opts = Map.delete(opts, :_validation_error)
 
-      try do
-        case Mjolnir.VM.spawn(opts) do
-          {:ok, vm} ->
-            json(conn, 201, Views.render_vm(vm))
+        try do
+          case Mjolnir.VM.spawn(opts) do
+            {:ok, vm} ->
+              json(conn, 201, Views.render_vm(vm))
 
-          {:error, reason} ->
-            json(conn, 500, %{error: "spawn_failed", reason: inspect(reason)})
+            {:error, reason} ->
+              Logger.error("VM spawn failed: #{inspect(reason)}")
+              json(conn, 500, %{error: "spawn_failed"})
+          end
+        catch
+          :exit, reason ->
+            Logger.error("VM spawn crashed: #{inspect(reason)}")
+            json(conn, 500, %{error: "spawn_failed"})
         end
-      catch
-        :exit, reason ->
-          json(conn, 500, %{error: "spawn_failed", reason: inspect(reason)})
       end
     else
       conn
@@ -137,21 +165,25 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        command = conn.body_params["command"]
-        timeout = conn.body_params["timeout"] || 30_000
+        with {:ok, command} <- Validation.validate_command(conn.body_params["command"]) do
+          timeout = Validation.validate_timeout(conn.body_params["timeout"], 30_000, 300_000)
 
-        case Mjolnir.VM.exec(id, command, timeout: timeout) do
-          {:ok, output} ->
-            json(conn, 200, %{output: output})
+          case Mjolnir.VM.exec(id, command, timeout: timeout) do
+            {:ok, output} ->
+              json(conn, 200, %{output: output})
 
-          {:error, {:exit_code, code, stderr}} ->
-            json(conn, 200, %{exit_code: code, stderr: stderr})
+            {:error, {:exit_code, code, stderr}} ->
+              json(conn, 200, %{exit_code: code, stderr: stderr})
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+            {:error, :not_found} ->
+              json(conn, 404, %{error: "not_found"})
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+            {:error, reason} ->
+              Logger.error("VM exec failed for #{id}: #{inspect(reason)}")
+              json(conn, 500, %{error: "exec_failed"})
+          end
+        else
+          {:error, msg} -> json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -163,7 +195,7 @@ defmodule Mjolnir.API.Router do
 
   # List terminal sessions
   get "/api/vms/:id/terminal" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:read")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
@@ -176,7 +208,8 @@ defmodule Mjolnir.API.Router do
             json(conn, 404, %{error: "not_found"})
 
           {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+            Logger.error("Terminal list failed for #{id}: #{inspect(reason)}")
+            json(conn, 500, %{error: "terminal_list_failed"})
         end
       end)
     else
@@ -186,24 +219,29 @@ defmodule Mjolnir.API.Router do
 
   # Open or ensure a terminal session
   post "/api/vms/:id/terminal/open" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:write")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        session_name = conn.body_params["session_name"] || "dev"
+        case Validation.validate_session_name(conn.body_params["session_name"], "session_name") do
+          {:ok, session_name} ->
+            case Mjolnir.VM.terminal_open(id, session_name) do
+              {:ok, response} ->
+                json(conn, 200, %{
+                  session_name: Map.get(response, "session_name", session_name),
+                  status: Map.get(response, "status", "opened")
+                })
 
-        case Mjolnir.VM.terminal_open(id, session_name) do
-          {:ok, response} ->
-            json(conn, 200, %{
-              session_name: Map.get(response, "session_name", session_name),
-              status: Map.get(response, "status", "opened")
-            })
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+              {:error, reason} ->
+                Logger.error("Terminal open failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "terminal_open_failed"})
+            end
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+          {:error, msg} ->
+            json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -213,30 +251,33 @@ defmodule Mjolnir.API.Router do
 
   # Read terminal content
   get "/api/vms/:id/terminal/:session_name" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:read")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        scrollback_lines =
-          case conn.query_params["scrollback_lines"] do
-            nil -> 100
-            val -> String.to_integer(val)
-          end
+        case Validation.validate_session_name(session_name, "session_name") do
+          {:ok, validated_name} ->
+            scrollback_lines = Validation.validate_scrollback_lines(conn.query_params["scrollback_lines"])
 
-        case Mjolnir.VM.terminal_read(id, session_name, scrollback_lines) do
-          {:ok, response} ->
-            json(conn, 200, %{
-              content: Map.get(response, "content", ""),
-              pane_rows: Map.get(response, "pane_rows"),
-              pane_cols: Map.get(response, "pane_cols"),
-              running_command: Map.get(response, "running_command")
-            })
+            case Mjolnir.VM.terminal_read(id, validated_name, scrollback_lines) do
+              {:ok, response} ->
+                json(conn, 200, %{
+                  content: Map.get(response, "content", ""),
+                  pane_rows: Map.get(response, "pane_rows"),
+                  pane_cols: Map.get(response, "pane_cols"),
+                  running_command: Map.get(response, "running_command")
+                })
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+              {:error, reason} ->
+                Logger.error("Terminal read failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "terminal_read_failed"})
+            end
+
+          {:error, msg} ->
+            json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -246,22 +287,38 @@ defmodule Mjolnir.API.Router do
 
   # Send command or keys to terminal
   post "/api/vms/:id/terminal/:session_name/send" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:write")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        command = conn.body_params["command"]
-        keys = conn.body_params["keys"]
+        case Validation.validate_session_name(session_name, "session_name") do
+          {:ok, validated_name} ->
+            command = conn.body_params["command"]
+            keys = conn.body_params["keys"]
 
-        case Mjolnir.VM.terminal_send(id, session_name, command, keys) do
-          {:ok, _response} ->
-            json(conn, 200, %{sent: true})
+            # Validate command if provided (keys are intentionally unvalidated — they are tmux key names)
+            cmd_valid = if command, do: Validation.validate_command(command), else: {:ok, nil}
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+            case cmd_valid do
+              {:ok, _} ->
+              case Mjolnir.VM.terminal_send(id, validated_name, command, keys) do
+                {:ok, _response} ->
+                  json(conn, 200, %{sent: true})
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+                {:error, :not_found} ->
+                  json(conn, 404, %{error: "not_found"})
+
+                {:error, reason} ->
+                  Logger.error("Terminal send failed for #{id}: #{inspect(reason)}")
+                  json(conn, 500, %{error: "terminal_send_failed"})
+              end
+
+              {:error, msg} ->
+                json(conn, 400, %{error: msg})
+            end
+
+          {:error, msg} ->
+            json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -271,18 +328,16 @@ defmodule Mjolnir.API.Router do
 
   # Send command and wait for output
   post "/api/vms/:id/terminal/:session_name/send-and-read" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:write")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        command = conn.body_params["command"]
-        timeout_ms = conn.body_params["timeout_ms"] || 30_000
+        with {:ok, validated_name} <- Validation.validate_session_name(session_name, "session_name"),
+             {:ok, command} <- Validation.validate_command(conn.body_params["command"]) do
+          timeout_ms = Validation.validate_timeout(conn.body_params["timeout_ms"], 30_000, 300_000)
 
-        if is_nil(command) do
-          json(conn, 400, %{error: "command is required"})
-        else
           try do
-            case Mjolnir.VM.terminal_send_and_read(id, session_name, command, timeout_ms) do
+            case Mjolnir.VM.terminal_send_and_read(id, validated_name, command, timeout_ms) do
               {:ok, response} ->
                 json(conn, 200, %{
                   output: Map.get(response, "output", ""),
@@ -295,12 +350,15 @@ defmodule Mjolnir.API.Router do
                 json(conn, 404, %{error: "not_found"})
 
               {:error, reason} ->
-                json(conn, 500, %{error: inspect(reason)})
+                Logger.error("Terminal send_and_read failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "terminal_send_and_read_failed"})
             end
           catch
             :exit, {:timeout, _} ->
               json(conn, 504, %{error: "timeout"})
           end
+        else
+          {:error, msg} -> json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -310,19 +368,26 @@ defmodule Mjolnir.API.Router do
 
   # Close a terminal session
   delete "/api/vms/:id/terminal/:session_name" do
-    conn = require_scope(conn, "vms:exec")
+    conn = require_scope(conn, "terminal:write")
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        case Mjolnir.VM.terminal_close(id, session_name) do
-          {:ok, _response} ->
-            json(conn, 200, %{session_name: session_name, closed: true})
+        case Validation.validate_session_name(session_name, "session_name") do
+          {:ok, validated_name} ->
+            case Mjolnir.VM.terminal_close(id, validated_name) do
+              {:ok, _response} ->
+                json(conn, 200, %{session_name: validated_name, closed: true})
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
 
-          {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+              {:error, reason} ->
+                Logger.error("Terminal close failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "terminal_close_failed"})
+            end
+
+          {:error, msg} ->
+            json(conn, 400, %{error: msg})
         end
       end)
     else
@@ -361,7 +426,8 @@ defmodule Mjolnir.API.Router do
               json(conn, 404, %{error: "not_found"})
 
             {:error, reason} ->
-              json(conn, 500, %{error: inspect(reason)})
+              Logger.error("Message delivery failed for #{id}: #{inspect(reason)}")
+              json(conn, 500, %{error: "message_delivery_failed"})
           end
         else
           json(conn, 404, %{error: "not_found"})
@@ -386,7 +452,8 @@ defmodule Mjolnir.API.Router do
             json(conn, 404, %{error: "not_found"})
 
           {:error, reason} ->
-            json(conn, 500, %{error: inspect(reason)})
+            Logger.error("VM stop failed for #{id}: #{inspect(reason)}")
+            json(conn, 500, %{error: "stop_failed"})
         end
       end)
     else
@@ -422,7 +489,7 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :pty, fn _vm ->
-        timeout = conn.body_params["timeout"] || 30_000
+        timeout = Validation.validate_timeout(conn.body_params["timeout"], 30_000, 300_000)
 
         case Mjolnir.VM.await_pty(id, timeout) do
           {:ok, ticket} ->
@@ -445,26 +512,27 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "snapshots:create")
 
     unless conn.halted do
-      name = conn.body_params["name"]
+      case Validation.validate_safe_name(conn.body_params["name"], "name") do
+        {:ok, name} ->
+          authorize_vm(conn, id, :snapshot, fn vm ->
+            case Mjolnir.VM.snapshot(id, name, owner_id: vm.owner_id) do
+              {:ok, metadata} ->
+                json(conn, 201, metadata)
 
-      if is_nil(name) or name == "" do
-        json(conn, 400, %{error: "name is required"})
-      else
-        authorize_vm(conn, id, :snapshot, fn vm ->
-          case Mjolnir.VM.snapshot(id, name, owner_id: vm.owner_id) do
-            {:ok, metadata} ->
-              json(conn, 201, metadata)
+              {:error, {:snapshot_exists, _}} ->
+                json(conn, 409, %{error: "name unavailable"})
 
-            {:error, {:snapshot_exists, _}} ->
-              json(conn, 409, %{error: "name unavailable"})
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "vm not_found"})
 
-            {:error, :not_found} ->
-              json(conn, 404, %{error: "vm not_found"})
+              {:error, reason} ->
+                Logger.error("Snapshot create failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "snapshot_failed"})
+            end
+          end)
 
-            {:error, reason} ->
-              json(conn, 500, %{error: inspect(reason)})
-          end
-        end)
+        {:error, msg} ->
+          json(conn, 400, %{error: msg})
       end
     else
       conn
@@ -482,13 +550,14 @@ defmodule Mjolnir.API.Router do
 
           filtered =
             Enum.filter(snapshots, fn meta ->
-              user_id == "localhost" or meta["owner_id"] == user_id
+              user_id == "localhost" or meta[:owner_id] == user_id
             end)
 
           json(conn, 200, %{snapshots: filtered})
 
         {:error, reason} ->
-          json(conn, 500, %{error: inspect(reason)})
+          Logger.error("Snapshot list failed: #{inspect(reason)}")
+          json(conn, 500, %{error: "snapshot_list_failed"})
       end
     else
       conn
@@ -500,20 +569,27 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "snapshots:read")
 
     unless conn.halted do
-      case Mjolnir.BTRFS.get_snapshot(name) do
-        {:ok, %{metadata: metadata}} ->
-          user = %{user_id: conn.assigns[:user_id]}
+      case Validation.validate_safe_name(name, "snapshot name") do
+        {:ok, validated_name} ->
+          case Mjolnir.BTRFS.get_snapshot(validated_name) do
+            {:ok, %{metadata: metadata}} ->
+              user = %{user_id: conn.assigns[:user_id]}
 
-          case Mjolnir.Policy.Snapshot.authorize(:read, user, metadata) do
-            :ok -> json(conn, 200, metadata)
-            :error -> json(conn, 404, %{error: "not_found"})
+              case Mjolnir.Policy.Snapshot.authorize(:read, user, metadata) do
+                :ok -> json(conn, 200, metadata)
+                :error -> json(conn, 404, %{error: "not_found"})
+              end
+
+            {:error, {:snapshot_not_found, _}} ->
+              json(conn, 404, %{error: "not_found"})
+
+            {:error, reason} ->
+              Logger.error("Snapshot get failed for '#{validated_name}': #{inspect(reason)}")
+              json(conn, 500, %{error: "snapshot_get_failed"})
           end
 
-        {:error, {:snapshot_not_found, _}} ->
-          json(conn, 404, %{error: "not_found"})
-
-        {:error, reason} ->
-          json(conn, 500, %{error: inspect(reason)})
+        {:error, msg} ->
+          json(conn, 400, %{error: msg})
       end
     else
       conn
@@ -554,32 +630,40 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "snapshots:delete")
 
     unless conn.halted do
-      case Mjolnir.BTRFS.get_snapshot(name) do
-        {:ok, %{metadata: metadata}} ->
-          user = %{user_id: conn.assigns[:user_id]}
+      case Validation.validate_safe_name(name, "snapshot name") do
+        {:ok, validated_name} ->
+          case Mjolnir.BTRFS.get_snapshot(validated_name) do
+            {:ok, %{metadata: metadata}} ->
+              user = %{user_id: conn.assigns[:user_id]}
 
-          case Mjolnir.Policy.Snapshot.authorize(:delete, user, metadata) do
-            :ok ->
-              case Mjolnir.BTRFS.delete_snapshot(name) do
+              case Mjolnir.Policy.Snapshot.authorize(:delete, user, metadata) do
                 :ok ->
-                  json(conn, 200, %{ok: true})
+                  case Mjolnir.BTRFS.delete_snapshot(validated_name) do
+                    :ok ->
+                      json(conn, 200, %{ok: true})
 
-                {:error, {:snapshot_not_found, _}} ->
+                    {:error, {:snapshot_not_found, _}} ->
+                      json(conn, 404, %{error: "not_found"})
+
+                    {:error, reason} ->
+                      Logger.error("Snapshot delete failed for '#{validated_name}': #{inspect(reason)}")
+                      json(conn, 500, %{error: "snapshot_delete_failed"})
+                  end
+
+                :error ->
                   json(conn, 404, %{error: "not_found"})
-
-                {:error, reason} ->
-                  json(conn, 500, %{error: inspect(reason)})
               end
 
-            :error ->
+            {:error, {:snapshot_not_found, _}} ->
               json(conn, 404, %{error: "not_found"})
+
+            {:error, reason} ->
+              Logger.error("Snapshot lookup failed for '#{validated_name}': #{inspect(reason)}")
+              json(conn, 500, %{error: "snapshot_lookup_failed"})
           end
 
-        {:error, {:snapshot_not_found, _}} ->
-          json(conn, 404, %{error: "not_found"})
-
-        {:error, reason} ->
-          json(conn, 500, %{error: inspect(reason)})
+        {:error, msg} ->
+          json(conn, 400, %{error: msg})
       end
     else
       conn

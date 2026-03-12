@@ -11,16 +11,23 @@ defmodule Mjolnir.DormantRegistry do
   while the VM was dormant.
 
   State is persisted to `{btrfs_root}/@dormant/registry.json` with debounced
-  writes (coalesced within 100ms) and restored on startup. A final synchronous
-  flush runs on shutdown to prevent data loss.
+  writes (coalesced within a configurable interval, default 250ms) and restored
+  on startup. A final synchronous flush runs on shutdown to prevent data loss.
+
+  Configure the flush interval via application config:
+
+      config :mjolnir, dormant_flush_delay_ms: 250   # default
+      config :mjolnir, dormant_flush_delay_ms: 0     # instant (every change)
+
+  Or via environment variable: `MJOLNIR_DORMANT_FLUSH_DELAY_MS`.
   """
 
   use GenServer
   require Logger
 
-  defstruct entries: %{}, dirty: false, flush_ref: nil
+  defstruct entries: %{}, dirty: false, flush_ref: nil, flush_delay_ms: 250
 
-  @flush_delay_ms 100
+  @default_flush_delay_ms 250
 
   @type dormant_entry :: %{
           vm_id: String.t(),
@@ -118,8 +125,21 @@ defmodule Mjolnir.DormantRegistry do
 
   @impl true
   def init(_opts) do
-    state = %__MODULE__{entries: load_from_disk()}
+    flush_delay = resolve_flush_delay()
+
+    if flush_delay == 0 do
+      Logger.info("DormantRegistry: instant persist mode (flush on every change)")
+    else
+      Logger.info("DormantRegistry: persist interval #{flush_delay}ms")
+    end
+
+    state = %__MODULE__{entries: load_from_disk(), flush_delay_ms: flush_delay}
     {:ok, state}
+  end
+
+  defp resolve_flush_delay do
+    Application.get_env(:mjolnir, :dormant_flush_delay_ms, @default_flush_delay_ms)
+    |> max(0)
   end
 
   @impl true
@@ -248,8 +268,14 @@ defmodule Mjolnir.DormantRegistry do
   defp schedule_flush(state) do
     # Cancel any pending flush timer
     if state.flush_ref, do: Process.cancel_timer(state.flush_ref)
-    ref = Process.send_after(self(), :flush, @flush_delay_ms)
-    %{state | dirty: true, flush_ref: ref}
+
+    if state.flush_delay_ms == 0 do
+      # Instant mode: flush synchronously on every change
+      do_flush(%{state | dirty: true})
+    else
+      ref = Process.send_after(self(), :flush, state.flush_delay_ms)
+      %{state | dirty: true, flush_ref: ref}
+    end
   end
 
   defp do_flush(%{dirty: false} = state), do: state
@@ -292,9 +318,18 @@ defmodule Mjolnir.DormantRegistry do
 
     case File.mkdir_p(Path.dirname(path)) do
       :ok ->
-        case File.write(path, Jason.encode!(serializable, pretty: true)) do
+        tmp_path = path <> ".tmp"
+        json = Jason.encode!(serializable, pretty: true)
+
+        case File.write(tmp_path, json) do
           :ok ->
-            :ok
+            case File.rename(tmp_path, path) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning("Failed to rename dormant registry temp file: #{inspect(reason)}")
+            end
 
           {:error, reason} ->
             Logger.warning("Failed to persist dormant registry: #{inspect(reason)}")

@@ -258,6 +258,8 @@ defmodule Mjolnir.Vsock.Connection do
     case send_message(state.socket, request, 0) do
       :ok ->
         pending = Map.put(state.pending_requests, request_id, from)
+        # Schedule cleanup in case terminal_command_output never arrives
+        Process.send_after(self(), {:pending_timeout, request_id}, timeout_ms + 5_000)
         {:noreply, %{state | pending_requests: pending}}
 
       {:error, reason} ->
@@ -327,8 +329,14 @@ defmodule Mjolnir.Vsock.Connection do
   def handle_info({:tcp, _socket, data}, state) do
     # Accumulate data in buffer and process complete messages
     buffer = state.buffer <> data
-    {new_buffer, state} = process_buffer(buffer, state)
-    {:noreply, %{state | buffer: new_buffer}}
+
+    case process_buffer(buffer, state) do
+      {new_buffer, state} when is_binary(new_buffer) ->
+        {:noreply, %{state | buffer: new_buffer}}
+
+      {:stop, reason, state} ->
+        {:stop, reason, state}
+    end
   end
 
   def handle_info({:tcp_closed, _socket}, state) do
@@ -339,6 +347,19 @@ defmodule Mjolnir.Vsock.Connection do
   def handle_info({:tcp_error, _socket, reason}, state) do
     Logger.error("vsock error for VM #{state.vm_id}: #{inspect(reason)}")
     {:stop, {:tcp_error, reason}, state}
+  end
+
+  def handle_info({:pending_timeout, request_id}, state) do
+    case Map.get(state.pending_requests, request_id) do
+      nil ->
+        # Already handled (output arrived before timeout)
+        {:noreply, state}
+
+      from ->
+        Logger.warning("Pending request #{request_id} timed out, no output received")
+        GenServer.reply(from, {:error, :timeout})
+        {:noreply, %{state | pending_requests: Map.delete(state.pending_requests, request_id)}}
+    end
   end
 
   defp process_buffer(buffer, state) do
@@ -355,6 +376,10 @@ defmodule Mjolnir.Vsock.Connection do
 
       {:incomplete, buffer} ->
         {buffer, state}
+
+      {:error, :frame_too_large} ->
+        Logger.error("Oversized vsock frame from VM #{state.vm_id} (>64KB), dropping connection")
+        {:stop, :frame_too_large, state}
     end
   end
 
@@ -451,6 +476,17 @@ defmodule Mjolnir.Vsock.Connection do
         conn_pid = self()
         vm_id = state.vm_id
 
+        # Validate snapshot name from guest (defense-in-depth against compromised VM)
+        name_valid =
+          is_binary(name) and Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/, name) and
+            not String.contains?(name, "..") and byte_size(name) <= 128
+
+        unless name_valid do
+          Logger.warning("Guest sent invalid snapshot name: #{inspect(name)}")
+          send_message(state.socket, %{"type" => "snapshot_self_response", "id" => id, "ok" => false}, 0)
+        end
+
+        if name_valid do
         Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           response =
             try do
@@ -469,6 +505,7 @@ defmodule Mjolnir.Vsock.Connection do
 
           Mjolnir.Vsock.Connection.send_control_message(conn_pid, response)
         end)
+        end
 
         state
 

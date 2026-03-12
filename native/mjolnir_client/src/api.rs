@@ -15,6 +15,7 @@ pub struct SpawnResponse {
     pub ticket: Option<String>,
     #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
+    pub persist_interval_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -205,6 +206,13 @@ pub async fn cmd_spawn(
         println!("{}", t);
     } else {
         eprintln!("VM {} (no ticket yet)", resp.id);
+    }
+
+    // Show persist interval so users know their worst-case backup window
+    match resp.persist_interval_ms {
+        Some(0) => eprintln!("\x1b[36m⚡ Persist: instant (every change)\x1b[0m"),
+        Some(ms) => eprintln!("\x1b[36m💾 Persist interval: {}ms\x1b[0m", ms),
+        None => {}
     }
 
     if connect {

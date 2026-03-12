@@ -595,16 +595,21 @@ defmodule Mjolnir.VM do
     if state.vsock_conn do
       conn = state.vsock_conn
 
-      Task.start(fn ->
-        result =
-          Mjolnir.Vsock.Connection.terminal_send_and_read(
-            conn,
-            session_name,
-            command,
-            timeout_ms
-          )
+      Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
+        try do
+          result =
+            Mjolnir.Vsock.Connection.terminal_send_and_read(
+              conn,
+              session_name,
+              command,
+              timeout_ms
+            )
 
-        GenServer.reply(from, result)
+          GenServer.reply(from, result)
+        catch
+          kind, reason ->
+            GenServer.reply(from, {:error, {kind, reason}})
+        end
       end)
 
       {:noreply, state}

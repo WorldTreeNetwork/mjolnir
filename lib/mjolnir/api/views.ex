@@ -21,7 +21,8 @@ defmodule Mjolnir.API.Views do
       enable_iroh: vm.enable_iroh,
       web_url: web_url(vm),
       config: render_config(vm.config),
-      boot_time: vm.boot_time
+      boot_time: vm.boot_time,
+      persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250)
     }
   end
 

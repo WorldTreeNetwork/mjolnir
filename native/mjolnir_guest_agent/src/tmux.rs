@@ -18,6 +18,40 @@ pub struct CommandOutput {
     pub timed_out: bool,
 }
 
+/// Validate a tmux session name to prevent target syntax injection.
+///
+/// Tmux interprets `-t` arguments with special syntax: `session:window.pane`.
+/// A malicious session name like "foo:0.0" could target arbitrary windows/panes.
+/// We restrict to alphanumeric, hyphens, and underscores only.
+fn validate_session_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(anyhow!("Session name cannot be empty"));
+    }
+    if name.len() > 64 {
+        return Err(anyhow!("Session name too long (max 64 characters)"));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(anyhow!(
+            "Session name must contain only alphanumeric characters, hyphens, or underscores"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a command string for null bytes and length.
+fn validate_command(cmd: &str) -> Result<()> {
+    if cmd.len() > 65536 {
+        return Err(anyhow!("Command too long (max 64KB)"));
+    }
+    if cmd.contains('\0') {
+        return Err(anyhow!("Command must not contain null bytes"));
+    }
+    Ok(())
+}
+
 /// Per-session mutex to prevent concurrent send_and_read from interleaving sentinels.
 static SESSION_LOCKS: once_cell::sync::Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
@@ -33,6 +67,7 @@ async fn get_session_lock(session: &str) -> Arc<Mutex<()>> {
 /// Ensure a tmux session exists, creating it if necessary.
 /// Returns (session_name, status) where status is "created" or "attached".
 pub async fn ensure_session(name: &str) -> Result<(String, String)> {
+    validate_session_name(name)?;
     let check = Command::new("tmux")
         .args(["has-session", "-t", name])
         .output()
@@ -101,6 +136,7 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
 
 /// Kill a tmux session by name.
 pub async fn kill_session(name: &str) -> Result<()> {
+    validate_session_name(name)?;
     let output = Command::new("tmux")
         .args(["kill-session", "-t", name])
         .output()
@@ -122,6 +158,10 @@ pub async fn send_keys(
     command: Option<&str>,
     keys: Option<&str>,
 ) -> Result<()> {
+    validate_session_name(session)?;
+    if let Some(cmd) = command {
+        validate_command(cmd)?;
+    }
     match (command, keys) {
         (Some(_), Some(_)) => {
             return Err(anyhow!("Only one of 'command' or 'keys' may be specified"));
@@ -175,6 +215,7 @@ pub async fn capture_pane(
     session: &str,
     lines: i32,
 ) -> Result<(String, u16, u16, Option<String>)> {
+    validate_session_name(session)?;
     // Capture scrollback content
     let capture = Command::new("tmux")
         .args([
@@ -239,6 +280,9 @@ pub async fn send_and_read(
     timeout_ms: u64,
     sentinel_id: &str,
 ) -> Result<CommandOutput> {
+    validate_session_name(session)?;
+    validate_command(command)?;
+
     // Acquire per-session lock to prevent sentinel interleaving
     let lock = get_session_lock(session).await;
     let _guard = lock.lock().await;
@@ -246,17 +290,29 @@ pub async fn send_and_read(
     let start = Instant::now();
     let sentinel = format!("__MJOLNIR_DONE_{}_$?__", sentinel_id);
 
-    // Send the command with sentinel appended. We pass the full string to tmux
-    // without -l so the shell receives and evaluates $?.
+    // Send the command with sentinel appended.
+    // We use -l (literal) to prevent tmux from interpreting key names in the
+    // command string, then send Enter separately. The shell evaluates $?.
     let full_cmd = format!("{}; echo __MJOLNIR_DONE_{}_{}", command, sentinel_id, "$?__");
     let send_result = Command::new("tmux")
-        .args(["send-keys", "-t", session, &full_cmd, "Enter"])
+        .args(["send-keys", "-t", session, "-l", &full_cmd])
         .output()
         .await?;
 
     if !send_result.status.success() {
         let stderr = String::from_utf8_lossy(&send_result.stderr);
         return Err(anyhow!("Failed to send command: {}", stderr));
+    }
+
+    // Send Enter separately (not literal — we want tmux to interpret it as a keypress)
+    let enter_result = Command::new("tmux")
+        .args(["send-keys", "-t", session, "Enter"])
+        .output()
+        .await?;
+
+    if !enter_result.status.success() {
+        let stderr = String::from_utf8_lossy(&enter_result.stderr);
+        return Err(anyhow!("Failed to send Enter: {}", stderr));
     }
 
     let sentinel_prefix = format!("__MJOLNIR_DONE_{}_", sentinel_id);

@@ -13,6 +13,19 @@ defmodule Mjolnir.BTRFS do
 
   require Logger
 
+  # Defense-in-depth: reject names that could escape the intended directory.
+  # The router validates too, but this protects against internal callers.
+  @safe_name_regex ~r/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/
+
+  defp validate_path_component!(name, label) do
+    unless is_binary(name) and Regex.match?(@safe_name_regex, name) and
+             not String.contains?(name, "..") and byte_size(name) <= 128 do
+      raise ArgumentError, "#{label} contains unsafe characters: #{inspect(name)}"
+    end
+
+    name
+  end
+
   @doc """
   Clone a base image to create a new VM rootfs.
 
@@ -20,6 +33,7 @@ defmodule Mjolnir.BTRFS do
   The base image should be a BTRFS subvolume stored in @base/.
   """
   def clone(base_image, vm_id) do
+    validate_path_component!(base_image, "base_image")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
     source = Path.join([btrfs_root, "@base", base_image])
@@ -37,6 +51,7 @@ defmodule Mjolnir.BTRFS do
   Uses `btrfs subvolume snapshot` from @snapshots/{name}/ → @vms/{vm_id}/.
   """
   def clone_from_snapshot(name, vm_id) do
+    validate_path_component!(name, "snapshot name")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
     source = Path.join([btrfs_root, "@snapshots", name])
@@ -63,6 +78,7 @@ defmodule Mjolnir.BTRFS do
     - `:owner_id` — owner identity for multi-tenancy
   """
   def create_snapshot(vm_id, name, opts \\ []) do
+    validate_path_component!(name, "snapshot name")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
     source = Path.join([btrfs_root, vm_subdir, vm_id])
@@ -116,7 +132,7 @@ defmodule Mjolnir.BTRFS do
             case File.read(path) do
               {:ok, content} ->
                 case Jason.decode(content) do
-                  {:ok, meta} -> meta
+                  {:ok, meta} -> atomize_metadata(meta)
                   _ -> nil
                 end
 
@@ -142,6 +158,7 @@ defmodule Mjolnir.BTRFS do
   Returns `{:ok, %{metadata: map, path: string}}` or `{:error, reason}`.
   """
   def get_snapshot(name) do
+    validate_path_component!(name, "snapshot name")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     snapshot_dir = Path.join([btrfs_root, "@snapshots"])
     meta_path = Path.join(snapshot_dir, "#{name}.json")
@@ -149,7 +166,7 @@ defmodule Mjolnir.BTRFS do
 
     with {:ok, content} <- File.read(meta_path),
          {:ok, metadata} <- Jason.decode(content) do
-      {:ok, %{metadata: metadata, path: subvol_path}}
+      {:ok, %{metadata: atomize_metadata(metadata), path: subvol_path}}
     else
       {:error, :enoent} -> {:error, {:snapshot_not_found, name}}
       {:error, reason} -> {:error, {:read_snapshot_failed, reason}}
@@ -160,6 +177,7 @@ defmodule Mjolnir.BTRFS do
   Delete a snapshot (both subvolume directory and .json metadata file).
   """
   def delete_snapshot(name) do
+    validate_path_component!(name, "snapshot name")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     snapshot_dir = Path.join([btrfs_root, "@snapshots"])
     subvol_path = Path.join(snapshot_dir, name)
@@ -245,6 +263,16 @@ defmodule Mjolnir.BTRFS do
   end
 
   # Private helpers
+
+  # Known metadata keys — safe to atomize since we control the schema
+  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes)
+
+  defp atomize_metadata(metadata) when is_map(metadata) do
+    Map.new(metadata, fn
+      {k, v} when is_binary(k) and k in @metadata_keys -> {String.to_atom(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
 
   defp snapshot_subvolume(source, dest) do
     case System.cmd("btrfs", ["subvolume", "snapshot", source, dest], stderr_to_stdout: true) do
