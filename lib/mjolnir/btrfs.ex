@@ -60,6 +60,7 @@ defmodule Mjolnir.BTRFS do
 
   ## Options
     - `:source_vm_id` — recorded in metadata (defaults to vm_id)
+    - `:owner_id` — owner identity for multi-tenancy
   """
   def create_snapshot(vm_id, name, opts \\ []) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
@@ -83,6 +84,7 @@ defmodule Mjolnir.BTRFS do
         metadata = %{
           name: name,
           source_vm_id: opts[:source_vm_id] || vm_id,
+          owner_id: opts[:owner_id],
           created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
           size_bytes: size_bytes
         }

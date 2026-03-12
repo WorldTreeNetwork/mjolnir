@@ -108,12 +108,17 @@ defmodule Mjolnir.CloudHypervisor.Client do
   # Use curl for Unix socket requests — Req/Finch has an issue with CH's responses
   defp curl_request(method, socket_path, path, body) do
     url = "http://localhost#{path}"
+
     args = [
       "-s",
-      "-o", "/dev/null",
-      "-w", "%{http_code}",
-      "--unix-socket", socket_path,
-      "-X", method,
+      "-o",
+      "/dev/null",
+      "-w",
+      "%{http_code}",
+      "--unix-socket",
+      socket_path,
+      "-X",
+      method,
       url
     ]
 
@@ -132,12 +137,15 @@ defmodule Mjolnir.CloudHypervisor.Client do
           :ok
         else
           # Re-run to capture body for error reporting
-          body_args = [
-            "-s",
-            "--unix-socket", socket_path,
-            "-X", method,
-            url
-          ] ++ if(body, do: ["-H", "Content-Type: application/json", "-d", body], else: [])
+          body_args =
+            [
+              "-s",
+              "--unix-socket",
+              socket_path,
+              "-X",
+              method,
+              url
+            ] ++ if(body, do: ["-H", "Content-Type: application/json", "-d", body], else: [])
 
           {error_body, _} = System.cmd("curl", body_args, stderr_to_stdout: true)
           Logger.error("Cloud Hypervisor API error: #{status} - #{String.trim(error_body)}")

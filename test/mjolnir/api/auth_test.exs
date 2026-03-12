@@ -52,6 +52,17 @@ defmodule Mjolnir.API.AuthTest do
       assert conn.assigns[:claims]
     end
 
+    test "sets user_id to 'localhost' in assigns" do
+      Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+
+      conn =
+        conn(:get, "/api/vms")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> call_auth()
+
+      assert conn.assigns[:user_id] == "localhost"
+    end
+
     test "returns 401 when bypass_localhost is false and no token provided" do
       Application.put_env(:mjolnir, :auth, bypass_localhost: false)
 

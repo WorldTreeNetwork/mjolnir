@@ -41,9 +41,10 @@ defmodule Mjolnir.DormantIntegrationTest do
     :ok = VM.deliver_message(vm_id, "test", %{wake: true})
 
     # 7. Poll until vm_id reappears in VMRegistry (restore is async via Task)
-    poll_until(fn ->
-      Registry.lookup(VMRegistry, vm_id) != []
-    end, timeout: 60_000, interval: 500)
+    poll_until(
+      fn ->
+        Registry.lookup(VMRegistry, vm_id) != []
+      end, timeout: 60_000, interval: 500)
 
     # 8. Verify state was preserved through snapshot
     {:ok, output} = VM.exec(vm_id, "cat /tmp/marker", timeout: 10_000)

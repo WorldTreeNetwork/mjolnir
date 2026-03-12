@@ -14,6 +14,8 @@ defmodule Mjolnir.API.Auth do
   @impl true
   def init(opts), do: opts
 
+  @all_scopes "vms:spawn vms:read vms:exec vms:stop pty:connect snapshots:create snapshots:read snapshots:delete"
+
   @impl true
   def call(conn, _opts) do
     cond do
@@ -21,10 +23,9 @@ defmodule Mjolnir.API.Auth do
         conn
 
       localhost_bypass?(conn) ->
-        assign(conn, :claims, %{
-          "scope" =>
-            "vms:spawn vms:read vms:exec vms:stop pty:connect snapshots:create snapshots:read snapshots:delete"
-        })
+        conn
+        |> assign(:claims, %{"scope" => @all_scopes})
+        |> assign(:user_id, "localhost")
 
       true ->
         verify_token(conn)
@@ -37,8 +38,6 @@ defmodule Mjolnir.API.Auth do
     Keyword.get(auth_config, :bypass_localhost, false) &&
       conn.remote_ip in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}]
   end
-
-  @all_scopes "vms:spawn vms:read vms:exec vms:stop pty:connect snapshots:create snapshots:read snapshots:delete"
 
   defp verify_token(conn) do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),

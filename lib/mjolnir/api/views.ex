@@ -12,6 +12,7 @@ defmodule Mjolnir.API.Views do
     %{
       id: vm.id,
       state: vm.state,
+      owner_id: vm.owner_id,
       hypervisor: hypervisor_name(vm.hypervisor),
       guest_ip: get_in_net(vm, :guest_ip),
       pty_ready: vm.pty_ready || false,
@@ -31,6 +32,7 @@ defmodule Mjolnir.API.Views do
     %{
       id: vm.id,
       state: vm.state,
+      owner_id: vm.owner_id,
       hypervisor: hypervisor_name(vm.hypervisor),
       guest_ip: get_in_net(vm, :guest_ip),
       pty_ready: vm.pty_ready || false,
