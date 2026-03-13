@@ -29,6 +29,7 @@ libc = "0.2"
 once_cell = "1"
 strip-ansi-escapes = "0.2"
 anyhow = "1"
+zeroize = { version = "1", features = ["derive"] }
 
 [[bin]]
 name = "mjolnir-agent"

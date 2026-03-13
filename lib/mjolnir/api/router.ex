@@ -516,6 +516,38 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Authorize an Iroh peer for secret injection
+  post "/api/vms/:id/authorize-inject" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :exec, fn _vm ->
+        case conn.body_params["peer_node_id"] do
+          nil ->
+            json(conn, 400, %{error: "peer_node_id is required"})
+
+          peer_node_id when is_binary(peer_node_id) ->
+            case Mjolnir.VM.authorize_inject_peer(id, peer_node_id) do
+              :ok ->
+                json(conn, 200, %{ok: true, authorized: peer_node_id})
+
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
+
+              {:error, reason} ->
+                Logger.error("Authorize inject failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "authorize_inject_failed"})
+            end
+
+          _ ->
+            json(conn, 400, %{error: "peer_node_id must be a string"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
   # Create snapshot of a VM
   post "/api/vms/:id/snapshots" do
     conn = require_scope(conn, "snapshots:create")

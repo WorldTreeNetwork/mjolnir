@@ -136,6 +136,18 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build a configure_secrets_auth request message.
+  Tells the guest agent which Iroh NodeIds are authorized for secret injection.
+  """
+  def configure_secrets_auth_request(authorized_peers, request_id \\ nil) do
+    %{
+      "type" => "configure_secrets_auth",
+      "id" => request_id || UUID.uuid4(),
+      "authorized_peers" => authorized_peers
+    }
+  end
+
+  @doc """
   Build a pty_open request message.
   Opens a new PTY session with the specified dimensions.
   """

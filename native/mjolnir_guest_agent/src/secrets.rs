@@ -5,10 +5,12 @@
 //! are exposed as environment variables via `/etc/mjolnir/secrets.env`.
 
 use std::collections::HashMap;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{error, info, warn};
+use zeroize::Zeroize;
 
 pub const SECRETS_LUKS_PATH: &str = "/var/lib/mjolnir/secrets.luks";
 pub const SECRETS_MOUNT: &str = "/secrets";
@@ -25,9 +27,15 @@ pub fn is_injected() -> bool {
     SECRETS_INJECTED.load(Ordering::SeqCst)
 }
 
-/// Mark secrets as injected (one-shot guard).
-pub fn mark_injected() {
-    SECRETS_INJECTED.store(true, Ordering::SeqCst);
+/// Atomically try to claim the injection slot. Returns true if successful.
+/// This replaces the separate is_injected()/mark_injected() pattern to prevent TOCTOU races.
+pub fn try_claim_injection() -> bool {
+    SECRETS_INJECTED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+}
+
+/// Release the injection claim (used when LUKS init/open fails after claiming).
+pub fn release_injection_claim() {
+    SECRETS_INJECTED.store(false, Ordering::SeqCst);
 }
 
 /// Check if the secrets volume is currently mounted.
@@ -224,6 +232,9 @@ pub fn set_env_vars(entries: &HashMap<String, String>) -> Result<(), String> {
 
     // Merge new entries
     for (k, v) in entries {
+        if !is_valid_env_key(k) {
+            return Err(format!("Invalid env key: {:?}", k));
+        }
         vars.insert(k.clone(), v.clone());
     }
 
@@ -299,39 +310,65 @@ fn find_loop_for_file(file_path: &str) -> Result<String, String> {
         .ok_or_else(|| "No loop device found".to_string())
 }
 
-fn luks_format(loop_dev: &str, passphrase: &str) -> Result<(), String> {
-    // Write passphrase to a temporary keyfile (deleted immediately after)
+/// Write passphrase to a restrictive keyfile (mode 0600).
+fn write_keyfile(passphrase: &str) -> Result<(), String> {
+    use std::io::Write;
     let keyfile = "/tmp/.mjolnir-keyfile";
-    std::fs::write(keyfile, passphrase)
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(keyfile)
+        .map_err(|e| format!("Failed to create keyfile: {}", e))?;
+    file.write_all(passphrase.as_bytes())
         .map_err(|e| format!("Failed to write keyfile: {}", e))?;
+    Ok(())
+}
+
+/// Securely delete keyfile: overwrite with zeros, then unlink.
+fn secure_delete_keyfile() {
+    let keyfile = "/tmp/.mjolnir-keyfile";
+    if let Ok(meta) = std::fs::metadata(keyfile) {
+        let _ = std::fs::write(keyfile, vec![0u8; meta.len() as usize]);
+    }
+    let _ = std::fs::remove_file(keyfile);
+}
+
+fn luks_format(loop_dev: &str, passphrase: &str) -> Result<(), String> {
+    let mut passphrase_copy = passphrase.to_string();
+    write_keyfile(&passphrase_copy)?;
+    passphrase_copy.zeroize();
 
     let result = run_cmd("cryptsetup", &[
         "luksFormat",
         "--batch-mode",
-        "--key-file", keyfile,
+        "--type", "luks2",
+        "--cipher", "aes-xts-plain64",
+        "--key-size", "512",
+        "--hash", "sha256",
+        "--pbkdf", "argon2id",
+        "--key-file", "/tmp/.mjolnir-keyfile",
         loop_dev,
     ]);
 
-    // Always clean up the keyfile
-    let _ = std::fs::remove_file(keyfile);
-
+    secure_delete_keyfile();
     result.map(|_| ())
 }
 
 fn luks_open(loop_dev: &str, passphrase: &str) -> Result<(), String> {
-    let keyfile = "/tmp/.mjolnir-keyfile";
-    std::fs::write(keyfile, passphrase)
-        .map_err(|e| format!("Failed to write keyfile: {}", e))?;
+    let mut passphrase_copy = passphrase.to_string();
+    write_keyfile(&passphrase_copy)?;
+    passphrase_copy.zeroize();
 
     let result = run_cmd("cryptsetup", &[
         "luksOpen",
-        "--key-file", keyfile,
+        "--key-file", "/tmp/.mjolnir-keyfile",
         loop_dev,
         SECRETS_MAPPER_NAME,
     ]);
 
-    let _ = std::fs::remove_file(keyfile);
-
+    secure_delete_keyfile();
     result.map(|_| ())
 }
 
@@ -373,6 +410,14 @@ fn create_secrets_dirs() -> Result<(), String> {
     Ok(())
 }
 
+/// Validate that an env key name is safe for shell export.
+/// Must match [A-Za-z_][A-Za-z0-9_]*
+fn is_valid_env_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Parse KEY=VALUE lines from .env content. Skips comments (#) and blank lines.
 /// Handles simple quoting (double/single quotes around values).
 pub fn parse_env_into(content: &str, vars: &mut HashMap<String, String>) {
@@ -388,6 +433,11 @@ pub fn parse_env_into(content: &str, vars: &mut HashMap<String, String>) {
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim().to_string();
             let mut value = trimmed[eq_pos + 1..].trim().to_string();
+
+            if !is_valid_env_key(&key) {
+                warn!("Skipping invalid env key: {:?}", key);
+                continue;
+            }
 
             // Strip surrounding quotes
             if (value.starts_with('"') && value.ends_with('"'))
@@ -420,7 +470,15 @@ fn write_secrets_env(vars: &HashMap<String, String>) -> Result<(), String> {
         lines.join("\n") + "\n"
     };
 
-    std::fs::write(SECRETS_ENV_PATH, content)
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(SECRETS_ENV_PATH)
+        .map_err(|e| format!("Failed to write {}: {}", SECRETS_ENV_PATH, e))?;
+    file.write_all(content.as_bytes())
         .map_err(|e| format!("Failed to write {}: {}", SECRETS_ENV_PATH, e))?;
 
     info!("Wrote {} vars to {}", vars.len(), SECRETS_ENV_PATH);
@@ -503,5 +561,17 @@ mod tests {
         let mut vars = HashMap::new();
         parse_env_into("KEY=first\nKEY=second\n", &mut vars);
         assert_eq!(vars.get("KEY"), Some(&"second".to_string()));
+    }
+
+    #[test]
+    fn test_valid_env_keys() {
+        assert!(is_valid_env_key("FOO"));
+        assert!(is_valid_env_key("_BAR"));
+        assert!(is_valid_env_key("MY_VAR_123"));
+        assert!(!is_valid_env_key(""));
+        assert!(!is_valid_env_key("123ABC"));
+        assert!(!is_valid_env_key("FOO$(whoami)"));
+        assert!(!is_valid_env_key("FOO;rm -rf /"));
+        assert!(!is_valid_env_key("KEY=VALUE"));
     }
 }

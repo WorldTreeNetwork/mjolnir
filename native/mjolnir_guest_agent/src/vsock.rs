@@ -768,6 +768,21 @@ async fn handle_request(
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        VsockRequest::ConfigureSecretsAuth { id, authorized_peers } => {
+            info!("ConfigureSecretsAuth: {} peers", authorized_peers.len());
+            #[cfg(feature = "iroh")]
+            {
+                for peer in &authorized_peers {
+                    crate::iroh::authorize_inject_peer(peer);
+                }
+            }
+            VsockResponse::ExecResponse {
+                id,
+                exit_code: 0,
+                stdout: format!("authorized {} peers", authorized_peers.len()),
+                stderr: String::new(),
+            }
+        }
         VsockRequest::SpawnSubAgent { id, .. }
         | VsockRequest::SnapshotSelf { id, .. }
         | VsockRequest::EmitEvent { id, .. }

@@ -1,6 +1,44 @@
-# Mjolnir Current Status — 2026-02-26
+# Mjolnir Current Status — 2026-03-13
 
-## What Was Done This Session
+## Secrets Architecture (2026-03-12 → 2026-03-13)
+
+### Implementation Complete
+- **LUKS2 encrypted secrets volumes** inside guest VMs (AES-XTS-plain64, 512-bit, Argon2id)
+- **Iroh SECRET_INJECT_ALPN** (`mjolnir-secret-inject/1`) for passphrase delivery bypassing the host
+- **Peer authentication** — authorized inject peers configured via vsock, validated via `conn.remote_id()`
+- **Environment variable auto-sourcing** — every `exec` command sources `/etc/mjolnir/secrets.env`
+- **Security hardened** — zeroize, atomic injection guard, keyfile 0600 + zero-fill before delete, env key validation, secrets.env 0600
+
+### New/Modified Files
+| File | Changes |
+|------|---------|
+| `native/mjolnir_guest_agent/src/secrets.rs` | New — full LUKS engine, env management, security hardening |
+| `native/mjolnir_guest_agent/src/iroh.rs` | SECRET_INJECT_ALPN handler, peer auth, action dispatch |
+| `native/mjolnir_guest_agent/src/vsock.rs` | Exec auto-sources secrets.env, ConfigureSecretsAuth handler |
+| `native/mjolnir_guest_agent/src/protocol.rs` | ConfigureSecretsAuth request type |
+| `native/mjolnir_guest_agent/Cargo.toml` | Added zeroize crate |
+| `lib/mjolnir/vm.ex` | secrets_mode field, authorize_inject_peer/2, dormancy guard |
+| `lib/mjolnir/api/router.ex` | secrets_mode param, POST authorize-inject endpoint |
+| `lib/mjolnir/vsock/protocol.ex` | configure_secrets_auth_request/2 |
+| `lib/mjolnir/vsock/connection.ex` | Generic send_request/3 for correlated request/response |
+| `scripts/build-kernel.sh` | CONFIG_BLK_DEV_DM, CONFIG_DM_CRYPT, CONFIG_CRYPTO_XTS/AES |
+| `scripts/build-rootfs.sh` | cryptsetup-bin, kmod packages |
+| `docs/secrets-architecture.md` | Full architecture documentation |
+
+### Tests
+- **186 unit tests, 0 failures** (up from 101)
+- 8 new tests in secrets.rs (env parsing, key validation)
+
+### What Needs Testing
+- [ ] E2E: spawn VM → authorize peer → inject secrets → exec with env vars
+- [ ] Secrets persist across VM restart (LUKS file on virtio-fs)
+- [ ] Dormancy guard prevents handle_done with secrets_mode: :persistent
+
+---
+
+## Previous Sessions
+
+## What Was Done (2026-02-26)
 
 ### 1. Cloud Hypervisor as Default Hypervisor
 - Changed `config/config.exs` to set `hypervisor: Mjolnir.Hypervisor.CloudHypervisor`

@@ -75,6 +75,14 @@ defmodule Mjolnir.Vsock.Connection do
   end
 
   @doc """
+  Send a control message and wait for a correlated response.
+  The message must contain an "id" field for request/response matching.
+  """
+  def send_request(pid, message, timeout \\ 30_000) do
+    GenServer.call(pid, {:send_request, message}, timeout)
+  end
+
+  @doc """
   Deliver a message from another VM into the guest's inbox.
   """
   def deliver_message(pid, from_vm_id, payload) do
@@ -286,6 +294,19 @@ defmodule Mjolnir.Vsock.Connection do
     request = %{"type" => "terminal_close", "id" => request_id, "session_name" => session_name}
 
     case send_message(state.socket, request, 0) do
+      :ok ->
+        pending = Map.put(state.pending_requests, request_id, from)
+        {:noreply, %{state | pending_requests: pending}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:send_request, message}, from, state) do
+    request_id = message["id"]
+
+    case send_message(state.socket, message, 0) do
       :ok ->
         pending = Map.put(state.pending_requests, request_id, from)
         {:noreply, %{state | pending_requests: pending}}

@@ -8,11 +8,31 @@ use iroh::SecretKey;
 use mjolnir_protocol::{
     read_frame, write_frame, Frame, PROTOCOL_VERSION, SECRET_INJECT_ALPN, SHELL_ALPN, TCP_FWD_ALPN,
 };
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::RwLock;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
+
+/// Authorized Iroh NodeIds that may use the SECRET_INJECT_ALPN.
+/// Empty = reject all inject connections (default-deny).
+static AUTHORIZED_INJECT_PEERS: std::sync::LazyLock<RwLock<HashSet<String>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashSet::new()));
+
+/// Add an authorized peer for secret injection.
+pub fn authorize_inject_peer(node_id: &str) {
+    let mut peers = AUTHORIZED_INJECT_PEERS.write().unwrap();
+    peers.insert(node_id.to_string());
+    info!("Authorized inject peer: {}", node_id);
+}
+
+/// Check if a peer is authorized for secret injection.
+fn is_peer_authorized(node_id: &str) -> bool {
+    let peers = AUTHORIZED_INJECT_PEERS.read().unwrap();
+    peers.contains(node_id)
+}
 
 /// Default shell to spawn
 const DEFAULT_SHELL: &str = "/bin/bash";
@@ -123,7 +143,12 @@ async fn handle_incoming(incoming: Incoming) {
         }
         info!("TCP forward connection from {:?} closed", remote_id);
     } else if alpn == SECRET_INJECT_ALPN {
-        info!("Secret inject connection from {:?}", remote_id);
+        let remote_str = remote_id.to_string();
+        if !is_peer_authorized(&remote_str) {
+            warn!("Unauthorized secret inject attempt from {:?}", remote_id);
+            return;
+        }
+        info!("Secret inject connection from {:?} (authorized)", remote_id);
         if let Err(e) = handle_secret_inject(conn).await {
             error!("Secret inject error: {:?}", e);
         }
@@ -315,6 +340,9 @@ async fn handle_secret_inject(
     let request: serde_json::Value = serde_json::from_slice(&buf[..total])
         .map_err(|e| format!("Invalid JSON request: {}", e))?;
 
+    // Zero the read buffer after parsing to avoid leaving sensitive data (e.g. passphrase) in memory
+    buf[..total].fill(0);
+
     let action = request
         .get("action")
         .and_then(|v| v.as_str())
@@ -323,9 +351,18 @@ async fn handle_secret_inject(
     let response = match action {
         "inject" => handle_inject_action(&request),
         "status" => handle_status_action(),
-        "close" => handle_close_action(),
-        "set_env" => handle_set_env_action(&request),
-        "push_env" => handle_push_env_action(&request),
+        "close" | "set_env" | "push_env" => {
+            if !crate::secrets::is_injected() {
+                serde_json::json!({ "ok": false, "error": "secrets not yet injected" })
+            } else {
+                match action {
+                    "close" => handle_close_action(),
+                    "set_env" => handle_set_env_action(&request),
+                    "push_env" => handle_push_env_action(&request),
+                    _ => unreachable!(),
+                }
+            }
+        }
         _ => serde_json::json!({ "ok": false, "error": format!("unknown action: {}", action) }),
     };
 
@@ -339,8 +376,8 @@ async fn handle_secret_inject(
 fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
     use crate::secrets;
 
-    // One-shot guard: reject if already injected
-    if secrets::is_injected() {
+    // Atomically claim the injection slot (prevents TOCTOU race)
+    if !secrets::try_claim_injection() {
         return serde_json::json!({
             "ok": false,
             "error": "secrets already injected"
@@ -350,6 +387,7 @@ fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
     let passphrase = match request.get("passphrase").and_then(|v| v.as_str()) {
         Some(p) if !p.is_empty() => p,
         _ => {
+            secrets::release_injection_claim();
             return serde_json::json!({
                 "ok": false,
                 "error": "passphrase is required"
@@ -368,6 +406,7 @@ fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
         // Need to create
         let size = init_size_mb.unwrap_or(secrets::DEFAULT_SECRETS_SIZE_MB);
         if size < 32 {
+            secrets::release_injection_claim();
             return serde_json::json!({
                 "ok": false,
                 "error": "init_size_mb must be >= 32 (LUKS2 headers require ~16MB)"
@@ -387,9 +426,7 @@ fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
                 tracing::warn!("Failed to load env vars: {}", e);
             }
 
-            // Mark as injected (one-shot)
-            secrets::mark_injected();
-
+            // Injection is already claimed via try_claim_injection(); no further marking needed.
             serde_json::json!({
                 "ok": true,
                 "created": created,
@@ -397,6 +434,8 @@ fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
             })
         }
         Err(e) => {
+            // Release the claim so injection can be retried after a transient failure
+            secrets::release_injection_claim();
             serde_json::json!({
                 "ok": false,
                 "error": e

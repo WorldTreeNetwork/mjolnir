@@ -56,6 +56,7 @@ Mjolnir has four major layers, each implemented in the language best suited to i
 |  - vsock listener (host commands)                             |
 |  - Iroh endpoint (remote shell access)                        |
 |  - PTY management (terminal sessions)                         |
+|  - LUKS secrets engine (encrypted env vars)                   |
 +---------------------------------------------------------------+
         |  vsock + TAP networking
 +---------------------------------------------------------------+

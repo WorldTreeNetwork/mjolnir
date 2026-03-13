@@ -319,6 +319,19 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  Authorize an Iroh peer for secret injection into a VM.
+  The peer's NodeId will be sent to the guest agent, which will allow
+  SECRET_INJECT_ALPN connections from that peer.
+  """
+  @spec authorize_inject_peer(vm_id(), String.t()) :: :ok | {:error, term()}
+  def authorize_inject_peer(vm_id, peer_node_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] -> GenServer.call(pid, {:authorize_inject_peer, peer_node_id})
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Deliver a message from one VM to another.
 
   Routes through the VMRegistry for running VMs, or through the
@@ -567,6 +580,19 @@ defmodule Mjolnir.VM do
   def handle_call({:exec, command}, _from, state) do
     result = execute_command(state, command)
     {:reply, result, state}
+  end
+
+  def handle_call({:authorize_inject_peer, peer_node_id}, _from, state) do
+    if state.vsock_conn do
+      request = Mjolnir.Vsock.Protocol.configure_secrets_auth_request([peer_node_id])
+
+      case Mjolnir.Vsock.Connection.send_request(state.vsock_conn, request) do
+        {:ok, _stdout} -> {:reply, :ok, state}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    else
+      {:reply, {:error, :no_vsock_connection}, state}
+    end
   end
 
   def handle_call({:terminal_open, session_name}, _from, state) do

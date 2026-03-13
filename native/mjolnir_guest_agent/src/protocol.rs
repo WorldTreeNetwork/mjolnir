@@ -102,6 +102,8 @@ pub enum VsockRequest {
     TerminalList { id: String },
     #[serde(rename = "terminal_close")]
     TerminalClose { id: String, session_name: String },
+    #[serde(rename = "configure_secrets_auth")]
+    ConfigureSecretsAuth { id: String, authorized_peers: Vec<String> },
 }
 
 /// Messages from guest to host (vsock)
