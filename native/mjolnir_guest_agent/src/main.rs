@@ -11,6 +11,7 @@ mod iroh;
 mod agent;
 mod protocol;
 mod pty;
+mod secrets;
 mod tmux;
 mod vsock;
 

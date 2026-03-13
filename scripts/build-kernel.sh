@@ -57,10 +57,16 @@ echo "Enabling virtio-fs and related configs..."
 ./scripts/config --enable CONFIG_VIRTIO_PCI
 ./scripts/config --enable CONFIG_NET_9P
 
+# dm-crypt for LUKS encrypted secrets volumes
+./scripts/config --enable CONFIG_BLK_DEV_DM
+./scripts/config --enable CONFIG_DM_CRYPT
+./scripts/config --enable CONFIG_CRYPTO_XTS
+./scripts/config --enable CONFIG_CRYPTO_AES
+
 # Verification: ensure critical configs are =y (built-in, not module)
 echo "Verifying kernel configuration..."
 VERIFY_FAILED=0
-for opt in CONFIG_VIRTIO_FS CONFIG_FUSE_FS CONFIG_PVH; do
+for opt in CONFIG_VIRTIO_FS CONFIG_FUSE_FS CONFIG_PVH CONFIG_DM_CRYPT CONFIG_BLK_DEV_DM; do
     val=$(grep "^${opt}=" .config | cut -d= -f2)
     if [ "$val" != "y" ]; then
         echo "FATAL: $opt is '$val', must be 'y' (built-in, not module)"

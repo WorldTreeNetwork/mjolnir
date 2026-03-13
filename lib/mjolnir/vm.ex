@@ -37,11 +37,13 @@ defmodule Mjolnir.VM do
     :ssh_public_key,
     # Iroh networking toggle
     enable_iroh: false,
+    # Secrets mode: :none (default) | :persistent (LUKS encrypted volume)
+    secrets_mode: :none,
     # Inter-VM message queue (buffered during boot)
     message_queue: []
   ]
 
-  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key)
+  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode)
 
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
@@ -533,6 +535,17 @@ defmodule Mjolnir.VM do
 
   def handle_call({:deliver_message, _from_vm_id, _payload}, _from, state) do
     {:reply, {:error, {:not_available, state.state}}, state}
+  end
+
+  # VMs with persistent secrets cannot go dormant — nobody can provide the
+  # passphrase when auto-restoring on incoming message.
+  def handle_call(:handle_done, _from, %{secrets_mode: :persistent} = state) do
+    Logger.warning(
+      "VM #{state.id} has secrets_mode=persistent, refusing dormancy. " <>
+        "Stop explicitly with VM.stop/1 or snapshot manually with VM.snapshot/2."
+    )
+
+    {:reply, {:error, :secrets_prevent_dormancy}, state}
   end
 
   def handle_call(:handle_done, _from, state) do
@@ -1297,7 +1310,8 @@ defmodule Mjolnir.VM do
       memory_mb: state.config.mem_size_mib,
       enable_iroh: state.enable_iroh,
       ssh_public_key: state.ssh_public_key,
-      owner_id: state.owner_id
+      owner_id: state.owner_id,
+      secrets_mode: state.secrets_mode
     }
   end
 

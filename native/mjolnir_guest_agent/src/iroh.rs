@@ -6,7 +6,7 @@ use crate::pty::PtySession;
 use iroh::endpoint::{Endpoint, Incoming};
 use iroh::SecretKey;
 use mjolnir_protocol::{
-    read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN,
+    read_frame, write_frame, Frame, PROTOCOL_VERSION, SECRET_INJECT_ALPN, SHELL_ALPN, TCP_FWD_ALPN,
 };
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
@@ -34,7 +34,7 @@ pub async fn run_iroh_server(
     // Build endpoint
     let endpoint = Endpoint::builder()
         .secret_key(secret_key)
-        .alpns(vec![SHELL_ALPN.to_vec(), TCP_FWD_ALPN.to_vec()])
+        .alpns(vec![SHELL_ALPN.to_vec(), TCP_FWD_ALPN.to_vec(), SECRET_INJECT_ALPN.to_vec()])
         .bind()
         .await?;
 
@@ -122,6 +122,12 @@ async fn handle_incoming(incoming: Incoming) {
             error!("TCP forward error: {}", e);
         }
         info!("TCP forward connection from {:?} closed", remote_id);
+    } else if alpn == SECRET_INJECT_ALPN {
+        info!("Secret inject connection from {:?}", remote_id);
+        if let Err(e) = handle_secret_inject(conn).await {
+            error!("Secret inject error: {:?}", e);
+        }
+        info!("Secret inject connection from {:?} closed", remote_id);
     } else {
         warn!("Unknown ALPN: {:?}", alpn);
     }
@@ -276,4 +282,190 @@ async fn handle_tcp_forward(
     }
 
     Ok(())
+}
+
+/// Handle a secret injection connection.
+///
+/// Protocol: simple JSON request/response over a bidirectional QUIC stream.
+/// The passphrase is never logged.
+async fn handle_secret_inject(
+    conn: iroh::endpoint::Connection,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (mut send, mut recv) = conn.accept_bi().await?;
+
+    // Read request (max 64KB — passphrase + JSON overhead)
+    let mut buf = vec![0u8; 65536];
+    let mut total = 0;
+    loop {
+        match recv.read(&mut buf[total..]).await? {
+            Some(0) | None => break,
+            Some(n) => {
+                total += n;
+                // Try to parse — the client may have finished sending
+                if serde_json::from_slice::<serde_json::Value>(&buf[..total]).is_ok() {
+                    break;
+                }
+                if total >= buf.len() {
+                    break;
+                }
+            }
+        }
+    }
+
+    let request: serde_json::Value = serde_json::from_slice(&buf[..total])
+        .map_err(|e| format!("Invalid JSON request: {}", e))?;
+
+    let action = request
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("inject");
+
+    let response = match action {
+        "inject" => handle_inject_action(&request),
+        "status" => handle_status_action(),
+        "close" => handle_close_action(),
+        "set_env" => handle_set_env_action(&request),
+        "push_env" => handle_push_env_action(&request),
+        _ => serde_json::json!({ "ok": false, "error": format!("unknown action: {}", action) }),
+    };
+
+    let response_bytes = serde_json::to_vec(&response)?;
+    send.write_all(&response_bytes).await?;
+    send.finish()?;
+
+    Ok(())
+}
+
+fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
+    use crate::secrets;
+
+    // One-shot guard: reject if already injected
+    if secrets::is_injected() {
+        return serde_json::json!({
+            "ok": false,
+            "error": "secrets already injected"
+        });
+    }
+
+    let passphrase = match request.get("passphrase").and_then(|v| v.as_str()) {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return serde_json::json!({
+                "ok": false,
+                "error": "passphrase is required"
+            });
+        }
+    };
+
+    let init_size_mb = request
+        .get("init_size_mb")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+
+    let luks_exists = std::path::Path::new(secrets::SECRETS_LUKS_PATH).exists();
+
+    let result = if !luks_exists {
+        // Need to create
+        let size = init_size_mb.unwrap_or(secrets::DEFAULT_SECRETS_SIZE_MB);
+        if size < 32 {
+            return serde_json::json!({
+                "ok": false,
+                "error": "init_size_mb must be >= 32 (LUKS2 headers require ~16MB)"
+            });
+        }
+        secrets::init_secrets_volume(size, passphrase)
+            .map(|r| (r.created, r.mounted))
+    } else {
+        secrets::open_secrets_volume(passphrase)
+            .map(|_| (false, true))
+    };
+
+    match result {
+        Ok((created, mounted)) => {
+            // Load env vars after mount
+            if let Err(e) = secrets::load_env_vars() {
+                tracing::warn!("Failed to load env vars: {}", e);
+            }
+
+            // Mark as injected (one-shot)
+            secrets::mark_injected();
+
+            serde_json::json!({
+                "ok": true,
+                "created": created,
+                "mounted": mounted
+            })
+        }
+        Err(e) => {
+            serde_json::json!({
+                "ok": false,
+                "error": e
+            })
+        }
+    }
+}
+
+fn handle_status_action() -> serde_json::Value {
+    use crate::secrets;
+    serde_json::json!({
+        "ok": true,
+        "mounted": secrets::is_mounted(),
+        "injected": secrets::is_injected(),
+        "luks_exists": std::path::Path::new(secrets::SECRETS_LUKS_PATH).exists()
+    })
+}
+
+fn handle_close_action() -> serde_json::Value {
+    use crate::secrets;
+    match secrets::close_secrets_volume() {
+        Ok(()) => serde_json::json!({ "ok": true, "mounted": false }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+fn handle_set_env_action(request: &serde_json::Value) -> serde_json::Value {
+    use crate::secrets;
+    use std::collections::HashMap;
+
+    let entries = match request.get("entries").and_then(|v| v.as_object()) {
+        Some(obj) => {
+            let mut map = HashMap::new();
+            for (k, v) in obj {
+                if let Some(val) = v.as_str() {
+                    map.insert(k.clone(), val.to_string());
+                }
+            }
+            map
+        }
+        None => {
+            return serde_json::json!({
+                "ok": false,
+                "error": "entries object is required"
+            });
+        }
+    };
+
+    match secrets::set_env_vars(&entries) {
+        Ok(()) => serde_json::json!({ "ok": true, "set": entries.len() }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+fn handle_push_env_action(request: &serde_json::Value) -> serde_json::Value {
+    use crate::secrets;
+
+    let content = match request.get("content").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => {
+            return serde_json::json!({
+                "ok": false,
+                "error": "content string is required"
+            });
+        }
+    };
+
+    match secrets::push_env_content(content) {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
 }

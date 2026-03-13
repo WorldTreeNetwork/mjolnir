@@ -19,6 +19,9 @@ pub const SHELL_ALPN: &[u8] = b"mjolnir-shell/1";
 /// ALPN protocol identifier for Mjolnir TCP port forwarding.
 pub const TCP_FWD_ALPN: &[u8] = b"mjolnir-tcp-fwd/1";
 
+/// ALPN protocol identifier for encrypted secrets injection via Iroh.
+pub const SECRET_INJECT_ALPN: &[u8] = b"mjolnir-secret-inject/1";
+
 /// Current protocol version.
 pub const PROTOCOL_VERSION: u16 = 1;
 

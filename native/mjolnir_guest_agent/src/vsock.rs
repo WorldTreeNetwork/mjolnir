@@ -417,7 +417,11 @@ async fn handle_request(
     match request {
         VsockRequest::Exec { id, command } => {
             info!("Exec: {}", command);
-            let output = Command::new("sh").arg("-c").arg(&command).output();
+            // Source secrets env before every command (no-op if file doesn't exist)
+            // Note: must use `test -f` guard because `.` is a POSIX special builtin —
+            // in dash (Ubuntu's /bin/sh), `. /nonexistent` exits the shell immediately.
+            let wrapped = format!("[ -f {} ] && . {}; {}", crate::secrets::SECRETS_ENV_PATH, crate::secrets::SECRETS_ENV_PATH, command);
+            let output = Command::new("sh").arg("-c").arg(&wrapped).output();
             match output {
                 Ok(out) => VsockResponse::ExecResponse {
                     id,

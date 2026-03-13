@@ -84,6 +84,15 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
 
+      opts =
+        case conn.body_params["secrets_mode"] do
+          "persistent" -> Map.put(opts, :secrets_mode, :persistent)
+          "ephemeral" -> Map.put(opts, :secrets_mode, :ephemeral)
+          "none" -> Map.put(opts, :secrets_mode, :none)
+          nil -> opts
+          _ -> Map.put(opts, :_validation_error, "secrets_mode must be 'persistent', 'ephemeral', or 'none'")
+        end
+
       # Short-circuit on any validation error (base_image, snapshot, etc.)
       if opts[:_validation_error] do
         json(conn, 400, %{error: opts[:_validation_error]})
