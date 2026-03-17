@@ -7,6 +7,7 @@
 # Rust
 native/*/target/
 native/target/
+*.rlib
 
 # IDE
 .idea/
