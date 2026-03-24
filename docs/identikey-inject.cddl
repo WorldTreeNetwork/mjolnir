@@ -1,0 +1,180 @@
+; ============================================================
+; IdentiKey Inject Protocol — CDDL Schema (RFC 8610)
+;
+; Wire format over Iroh QUIC bidirectional stream:
+;   "II" (0x49 0x49) || meta_len (3 bytes BE u24) || meta (CBOR) || payload (until FIN)
+;
+; ALPN: mjolnir/inject/1
+; Magic: 0x49 0x49 ("II" — IdentiKey Inject)
+;
+; See: docs/plans/initramfs-verified-boot.md
+; ============================================================
+
+
+; --- Request Metadata ---
+;
+; CBOR map sent after the 5-byte header. All fields optional.
+; Omitted keys use documented defaults. Unknown integer keys
+; are ignored (forward-compatible extension point).
+
+inject-meta = {
+  ? 1 => kind,                ; payload type (default: 0 = opaque)
+  ? 2 => dest,                ; consumption directive (default: kind-dependent)
+  ? 3 => bool,                ; once: one-shot injection guard (default: true)
+  ? 4 => bool,                ; zeroize: scrub after consumption (default: true)
+  ? 5 => uint,                ; ttl: auto-scrub seconds, 0 = disabled (default: 0)
+  ? 6 => tstr,                ; label: human-readable name for logging only
+  ? 7 => bstr .size 32,       ; blake3: expected Blake3 hash of payload
+  * int => any,                ; extension point
+}
+
+; Payload type. Determines the expected format of the payload
+; bytes and the default `dest` when none is specified.
+kind = &(
+  opaque:         0,           ; arbitrary secret bytes         → dest: "mem"
+  passphrase:     1,           ; UTF-8 passphrase string        → dest: "luks:mjolnir-secrets"
+  symmetric-key:  2,           ; raw symmetric key bytes         → dest: "mem"
+  key:            3,           ; COSE_Key (CBOR-encoded, §7052) → dest: "mem"
+  env:            4,           ; KEY=VALUE\n pairs (UTF-8)      → dest: "env"
+  pem:            5,           ; PEM-encoded certificate/key    → dest: "/run/mjolnir/secrets/<label>.pem"
+  cbor:           6,           ; structured CBOR data           → dest: "mem"
+)
+
+; Consumption directive. Tells the receiver where to store
+; or how to use the payload.
+;
+;   "mem"          — hold in memory only, never touch disk
+;   "env"          — load as environment variables
+;   "luks:<name>"  — open LUKS device with this mapper name
+;   "/path/..."    — write to path (tmpfs, mode 0600)
+;
+dest = tstr
+
+
+; --- Response ---
+;
+; CBOR map sent by the receiver after processing.
+
+inject-response = {
+  1 => bool,                   ; ok: success or failure
+  ? 2 => tstr,                 ; error: message (present only if ok = false)
+  ? 3 => tstr,                 ; dest: actual destination used (echoed back)
+  ? 4 => bool,                 ; created: new resource created (e.g., LUKS formatted)
+  * int => any,                ; extension point
+}
+
+
+; --- COSE_Key (RFC 9052 §7) ---
+;
+; When kind = 3 (key), the payload bytes are CBOR-encoded as a
+; COSE_Key map. This provides self-describing key type identification,
+; algorithm binding, and interop with COSE-aware tooling (WebAuthn/FIDO2).
+
+COSE_Key = {
+  1 => kty,                    ; key type (required)
+  ? 2 => bstr,                 ; kid: key identifier (e.g., VM UUID)
+  ? 3 => int,                  ; alg: algorithm restriction
+  ? 4 => [+ key_ops],          ; key_ops: permitted operations
+  * label => any,              ; key-type-specific parameters
+}
+
+; Key types. Standard values from IANA COSE Key Types registry,
+; plus private-use extensions for lattice-based cryptography.
+kty = &(
+  OKP:        1,               ; Edwards/Montgomery curves (Ed25519, X25519)
+  EC2:        2,               ; NIST EC (P-256, P-384, P-521)
+  symmetric:  4,               ; symmetric keys (HMAC, AES, ChaCha20)
+  lattice:   -1,               ; lattice-based PRE (OpenFHE BFV) — private-use
+)
+
+; Key operations. Standard values from IANA COSE Key Operations registry,
+; plus private-use extension for proxy recryption.
+key_ops = &(
+  sign:        1,
+  verify:      2,
+  encrypt:     3,
+  decrypt:     4,
+  wrap:        5,
+  unwrap:      6,
+  derive-key:  7,
+  derive-bits: 8,
+  recrypt:    -1,              ; PRE recryption — private-use
+)
+
+label = int / tstr
+
+
+; --- Algorithm Identifiers (private-use range) ---
+;
+; Standard COSE algorithms use positive or small negative integers
+; from the IANA registry. We use the private-use range (< -65535)
+; for Mjolnir-specific algorithms.
+;
+;   -65537  OpenFHE BFV PRE (lattice proxy recryption)
+;   -65538  ML-DSA-87 (post-quantum signature, NIST FIPS 204)
+;
+; Standard algorithms referenced:
+;   -8      EdDSA (Ed25519)
+;    24     ChaCha20/Poly1305
+;    -65536 AES-256-XTS (private-use, no IANA registration for XTS)
+
+
+; ============================================================
+; Example COSE_Key: PRE Secret Key for boot injection
+; ============================================================
+;
+; {
+;   1: -1,                     kty: lattice
+;   2: h'<16-byte vm-uuid>',  kid: VM identifier
+;   3: -65537,                 alg: OpenFHE-BFV-PRE
+;   4: [4, 6],                 key_ops: [decrypt, unwrap]
+;   -1: h'<PRE SecretKey>'    private key material
+; }
+
+; ============================================================
+; Example COSE_Key: Ed25519 signing key
+; ============================================================
+;
+; {
+;   1: 1,                      kty: OKP
+;   3: -8,                     alg: EdDSA
+;   4: [1],                    key_ops: [sign]
+;   -1: 6,                     crv: Ed25519
+;   -4: h'<32-byte private>'  d: private key
+; }
+
+; ============================================================
+; Example COSE_Key: Symmetric LUKS DEK
+; ============================================================
+;
+; {
+;   1: 4,                      kty: symmetric
+;   3: -65536,                 alg: AES-256-XTS
+;   4: [4],                    key_ops: [decrypt]
+;   -1: h'<32-byte key>'      k: key value
+; }
+
+
+; ============================================================
+; Future: COSE_Encrypt0 for standalone capability tokens
+; ============================================================
+;
+; When encrypted key material or authorization tokens must be
+; stored or transmitted outside an authenticated channel (e.g.,
+; distributed caches, content-addressed storage, message queues),
+; they exist beyond Iroh's transport protection. In that context,
+; COSE_Encrypt0 (RFC 9052 §5.2) provides self-contained
+; authenticated encryption that travels with the payload:
+;
+;   COSE_Encrypt0 = [
+;     protected:   bstr,       CBOR-encoded header map
+;     unprotected: {},         informational headers
+;     ciphertext:  bstr,       encrypted payload
+;   ]
+;
+; The COSE_Key format adopted here for kind=3 payloads ensures
+; these keys are directly usable as COSE recipients when/if we
+; add COSE-wrapped tokens. Migration path:
+;
+;   Today:  II protocol over Iroh (transport-secured, COSE_Key payloads)
+;   Future: COSE_Encrypt0 at rest (self-secured, same COSE_Key format)

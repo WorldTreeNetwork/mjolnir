@@ -260,7 +260,9 @@ This is not hardware-backed attestation (no TPM/SEV-SNP), but it detects a tampe
 
 ## IdentiKey Inject Protocol
 
-Universal secret injection over Iroh QUIC. Replaces the previous `mjolnir-secret-inject/1` JSON protocol with a compact binary format using CBOR metadata. Handles all secret injection use cases: boot key delivery, LUKS passphrases, environment variables, certificates, and arbitrary secret material.
+Universal secret injection over Iroh QUIC. Replaces the previous `mjolnir-secret-inject/1` JSON protocol with a compact binary format using CBOR (RFC 8949) metadata with a formal CDDL schema (RFC 8610). Handles all secret injection use cases: boot key delivery, LUKS passphrases, environment variables, certificates, and arbitrary secret material.
+
+Cryptographic key payloads use COSE_Key (RFC 9052 §7) serialization for standardized key type identification, algorithm binding, and interop.
 
 ### ALPN
 
@@ -288,8 +290,8 @@ Response (from receiver):
 
 - **Magic `0x49 0x49`** ("II" — IdentiKey Inject): Identifies the protocol. Receiver rejects immediately if magic doesn't match, preventing misrouted streams from being parsed as metadata lengths.
 - **meta_len** (3 bytes, big-endian u24): Length of the CBOR metadata map. `0x00 0x00 0x00` = no metadata, apply all defaults. Max 16,777,215 bytes (~16 MB).
-- **CBOR map**: Optional metadata (see below). Only present if meta_len > 0.
-- **Payload**: Secret bytes, read until the QUIC stream FIN. The receiver never logs these bytes.
+- **CBOR map**: Optional metadata conforming to the `inject-meta` CDDL schema (see below). Only present if meta_len > 0.
+- **Payload**: Secret bytes, read until the QUIC stream FIN. The receiver never logs these bytes. For key payloads (kind=3), the payload is a CBOR-encoded COSE_Key.
 
 Minimum overhead: 5 bytes (`49 49 00 00 00` + payload).
 
@@ -306,31 +308,111 @@ stream.read_exact(&mut buf[1..4]).await?;   // read into last 3 bytes
 let meta_len = u32::from_be_bytes(buf) as usize;
 ```
 
-### Metadata Keys
+### CDDL Schema
 
-CBOR map with integer keys for compactness. All fields optional — omitted keys use the default. An empty map (`0xA0`, 1 byte) or absent metadata (meta_len=0) means all defaults.
+The metadata and response are formally specified in CDDL (RFC 8610). This is the normative schema — the tables below are derived from it.
 
-| CBOR Key | Name | Type | Default | Description |
-|----------|------|------|---------|-------------|
-| `1` | kind | uint | `0` (opaque) | Nature of the payload bytes |
+```cddl
+; ============================================================
+; IdentiKey Inject Protocol — Metadata & Response Schema
+; Wire format: "II" (0x49 0x49) || meta_len (u24 BE) || meta (CBOR) || payload
+; ============================================================
+
+; --- Metadata (request) ---
+
+inject-meta = {
+  ? 1 => kind,              ; payload type (default: 0 = opaque)
+  ? 2 => dest,              ; consumption directive (default: kind-dependent)
+  ? 3 => bool,              ; once: one-shot injection guard (default: true)
+  ? 4 => bool,              ; zeroize: scrub after consumption (default: true)
+  ? 5 => uint,              ; ttl: auto-scrub seconds, 0 = disabled (default: 0)
+  ? 6 => tstr,              ; label: human-readable name for logging
+  ? 7 => bstr .size 32,     ; blake3: expected Blake3 hash of payload
+  * int => any,             ; forward-compatible: unknown keys are ignored
+}
+
+kind = &(
+  opaque:         0,        ; arbitrary secret bytes
+  passphrase:     1,        ; UTF-8 passphrase string
+  symmetric-key:  2,        ; raw symmetric key (e.g., 256-bit AES/XChaCha20)
+  key:            3,        ; COSE_Key-encoded cryptographic key (see below)
+  env:            4,        ; KEY=VALUE\n pairs (UTF-8)
+  pem:            5,        ; PEM-encoded certificate/key bundle
+  cbor:           6,        ; structured CBOR data (nested config)
+)
+
+dest = tstr                 ; "mem", "env", "luks:<name>", or "/path/..."
+
+; --- Response ---
+
+inject-response = {
+  1 => bool,                ; ok: success or failure
+  ? 2 => tstr,              ; error: message (only if ok = false)
+  ? 3 => tstr,              ; dest: actual destination used
+  ? 4 => bool,              ; created: new resource created (e.g., LUKS formatted)
+  * int => any,             ; forward-compatible
+}
+
+; --- COSE_Key payload (when kind = 3) ---
+; See RFC 9052 §7. The payload bytes are a CBOR-encoded COSE_Key map.
+
+COSE_Key = {
+  1 => kty,                 ; key type (required)
+  ? 2 => bstr,              ; kid: key identifier
+  ? 3 => int,               ; alg: algorithm restriction
+  ? 4 => [+ key_ops],       ; key_ops: permitted operations
+  * label => any,           ; key-type-specific parameters
+}
+
+kty = &(
+  OKP:       1,             ; Edwards / Montgomery curves (Ed25519, X25519)
+  EC2:       2,             ; NIST EC (P-256, P-384, P-521)
+  symmetric: 4,             ; symmetric keys (HMAC, AES, ChaCha20)
+  lattice:   -1,            ; lattice-based (OpenFHE BFV PRE) — private-use range
+)
+
+key_ops = &(
+  sign:       1,
+  verify:     2,
+  encrypt:    3,
+  decrypt:    4,
+  wrap:       5,
+  unwrap:     6,
+  derive-key: 7,
+  derive-bits:8,
+  recrypt:   -1,            ; PRE recryption — private-use range
+)
+
+label = int / tstr
+```
+
+### Metadata Reference
+
+All fields are optional. Omitted keys use defaults. An empty map (`0xA0`) or absent metadata (meta_len=0) means all defaults.
+
+| CBOR Key | Name | CDDL Type | Default | Description |
+|----------|------|-----------|---------|-------------|
+| `1` | kind | uint (see `kind` choice) | `0` (opaque) | Nature of the payload bytes |
 | `2` | dest | tstr | `nil` (kind-dependent) | Where to store or how to consume the payload |
 | `3` | once | bool | `true` | One-shot: reject subsequent injections (atomic guard) |
 | `4` | zeroize | bool | `true` | Scrub payload from memory after consumption |
 | `5` | ttl | uint | `0` | Auto-scrub after N seconds (0 = no timer, scrub on use) |
 | `6` | label | tstr | `nil` | Human-readable name for logs (payload is NEVER logged) |
-| `7` | blake3 | bstr(32) | `nil` | Expected Blake3 hash of payload — verified before any use |
+| `7` | blake3 | bstr .size 32 | `nil` | Expected Blake3 hash of payload — verified before any use |
+
+Unknown integer keys are ignored (forward-compatible extension point).
 
 #### `kind` Values
 
-| Value | Name | Payload Contains | Default `dest` |
-|-------|------|-----------------|----------------|
-| `0` | opaque | Arbitrary secret bytes | `mem` |
-| `1` | passphrase | UTF-8 passphrase string | `luks:mjolnir-secrets` |
-| `2` | symmetric-key | Raw symmetric key (e.g., 256-bit) | `mem` |
-| `3` | pre-secret-key | Serialized PRE SecretKey (Recrypt) | `mem` (consumed in-memory, never written) |
+| Value | Name | Payload Format | Default `dest` |
+|-------|------|---------------|----------------|
+| `0` | opaque | Arbitrary bytes | `mem` |
+| `1` | passphrase | UTF-8 string | `luks:mjolnir-secrets` |
+| `2` | symmetric-key | Raw key bytes | `mem` |
+| `3` | key | COSE_Key (CBOR-encoded, see below) | `mem` (consumed in-memory, never written) |
 | `4` | env | `KEY=VALUE\n` pairs (UTF-8) | `env` |
-| `5` | pem | PEM-encoded certificate/key bundle | `/run/mjolnir/secrets/<label>.pem` |
-| `6` | cbor | Structured CBOR data (nested config) | `mem` |
+| `5` | pem | PEM-encoded bundle | `/run/mjolnir/secrets/<label>.pem` |
+| `6` | cbor | Structured CBOR data | `mem` |
 
 Unknown `kind` values are treated as `opaque`.
 
@@ -344,9 +426,59 @@ Unknown `kind` values are treated as `opaque`.
 | `/path/...` | Write to this path (tmpfs, mode 0600) | `/run/mjolnir/secrets/tls.pem` |
 | `mem` | Hold in memory only, never touch disk | — |
 
+### COSE_Key Payloads (kind=3)
+
+When `kind=3` (key), the payload is a CBOR-encoded COSE_Key map (RFC 9052 §7). This provides standardized key type identification, algorithm binding, and interoperability with COSE-aware tooling — the same format used by WebAuthn/FIDO2 for attestation keys.
+
+#### Why COSE_Key
+
+- **Self-describing**: The key type (`kty`) and algorithm (`alg`) are encoded in the key itself, not inferred from context. A receiver can determine what kind of key it holds without out-of-band information.
+- **Algorithm agility**: Adding new key types (ML-KEM, X-Wing, future PQ algorithms) means adding a `kty` value, not changing the wire format.
+- **IANA registry**: Standard `kty` values (OKP, EC2, symmetric) are IANA-registered. We extend into the private-use range for lattice PRE keys (`kty: -1`).
+- **FIDO2 alignment**: The same serialization used for WebAuthn public key credentials. If Mjolnir ever interoperates with hardware security keys or passkeys, the format is already compatible.
+
+#### Key Types Used in Mjolnir
+
+**PRE Secret Key (boot key injection):**
+
+```cbor
+{
+  1: -1,                    ; kty: lattice (private-use)
+  2: h'<vm-uuid>',         ; kid: VM identifier
+  3: -65537,               ; alg: OpenFHE-BFV-PRE (private-use)
+  4: [4, 6],               ; key_ops: [decrypt, unwrap]
+  -1: h'<serialized PRE SecretKey bytes>'  ; private key material
+}
+```
+
+**Ed25519 Signing Key (if injecting signing capability):**
+
+```cbor
+{
+  1: 1,                     ; kty: OKP
+  3: -8,                    ; alg: EdDSA
+  4: [1],                   ; key_ops: [sign]
+  -1: 6,                    ; crv: Ed25519
+  -4: h'<32-byte private key>'  ; d: private key
+}
+```
+
+**Symmetric Key (raw LUKS DEK, alternative to kind=2):**
+
+```cbor
+{
+  1: 4,                     ; kty: symmetric
+  3: 24,                    ; alg: ChaCha20/Poly1305 (or -65536 for AES-XTS)
+  4: [4],                   ; key_ops: [decrypt]
+  -1: h'<32-byte key>'     ; k: key value
+}
+```
+
+Using `kind=3` (COSE_Key) instead of `kind=2` (raw bytes) for symmetric keys is recommended when algorithm binding matters — the COSE_Key encodes *what cipher this key is for*, preventing a ChaCha20 key from being accidentally used with AES-XTS.
+
 ### Response
 
-CBOR map with integer keys:
+CBOR map with integer keys, conforming to `inject-response` schema:
 
 | CBOR Key | Name | Type | Description |
 |----------|------|------|-------------|
@@ -357,13 +489,18 @@ CBOR map with integer keys:
 
 ### Example Frames
 
-**Boot key injection (verified boot, Phase D):**
+**Boot key injection (verified boot, Phase D) — COSE_Key payload:**
 
 ```
 49 49                         # magic "II"
 00 00 07                      # meta_len = 7
-A2 01 03 04 F5               # CBOR: {1: 3, 4: true}  (kind=pre-secret-key, zeroize=true)
-<PRE SecretKey bytes...>      # payload until FIN
+A2 01 03 04 F5               # CBOR meta: {1: 3, 4: true}  (kind=key, zeroize=true)
+A5                            # payload: COSE_Key map (5 entries)
+  01 20                       #   kty: -1 (lattice)
+  02 50 <16-byte vm-uuid>    #   kid: VM identifier
+  03 3A 0000FFFF             #   alg: -65537 (OpenFHE-BFV-PRE)
+  04 82 04 06                #   key_ops: [decrypt, unwrap]
+  20 59 <len> <PRE key bytes>#   -1: private key material
 ```
 
 Response: `{1: true, 3: "mem"}`
@@ -373,9 +510,9 @@ Response: `{1: true, 3: "mem"}`
 ```
 49 49
 00 00 0C
-A2 01 02 02 6D 6C 75 6B 73 3A 75 73 65 72 64 61 74 61
-                              # CBOR: {1: 2, 2: "luks:userdata"}
-<32 bytes raw key>
+A2 01 02 02 6E              # CBOR meta: {1: 2, 2: "luks:userdata"}
+  6C 75 6B 73 3A 75 73 65 72 64 61 74 61
+<32 bytes raw key>           # payload: raw symmetric key
 ```
 
 Response: `{1: true, 3: "luks:userdata", 4: false}`
@@ -385,27 +522,16 @@ Response: `{1: true, 3: "luks:userdata", 4: false}`
 ```
 49 49
 00 00 1C
-A2 01 01 02 74 6C 75 6B 73 3A 6D 6A 6F 6C 6E 69 72 2D 73 65 63 72 65 74 73
-                              # CBOR: {1: 1, 2: "luks:mjolnir-secrets"}
+A2 01 01 02 74              # CBOR meta: {1: 1, 2: "luks:mjolnir-secrets"}
+  6C 75 6B 73 3A 6D 6A 6F 6C 6E 69 72 2D 73 65 63 72 65 74 73
 <passphrase bytes>
 ```
 
 **Zero-metadata (simplest possible):**
 
 ```
-49 49 00 00 00                # magic + meta_len=0
-<secret bytes>                # kind=opaque, dest=mem, once=true, zeroize=true
-```
-
-**Env vars with integrity check:**
-
-```
-49 49
-00 00 2A
-A3 01 04 06 66 61 70 70 2D 65 6E 76 07 58 20 <32 bytes>
-                              # CBOR: {1: 4, 6: "app-env", 7: <blake3 hash>}
-DATABASE_URL=postgres://...
-API_KEY=sk-...
+49 49 00 00 00               # magic + meta_len=0
+<secret bytes>               # kind=opaque, dest=mem, once=true, zeroize=true
 ```
 
 ### Security Properties
@@ -421,6 +547,17 @@ API_KEY=sk-...
 | No logging | Payload bytes are never logged. Only `label`, `kind`, and `dest` appear in logs |
 | Time-bounded | Optional `ttl` — auto-scrub if not consumed within N seconds |
 | Misroute protection | Magic bytes `0x49 0x49` — reject immediately if not present |
+| Algorithm binding | COSE_Key payloads encode `kty` + `alg` — prevents key/cipher mismatch |
+
+### On COSE for Untrusted Channels
+
+The IdentiKey Inject protocol does not use COSE signing or encryption at the transport layer — Iroh QUIC TLS 1.3 already provides authenticated, encrypted delivery. COSE's signing/encryption (COSE_Sign1, COSE_Encrypt0) is designed for payloads that travel through **untrusted intermediaries** where the transport cannot be relied upon.
+
+This becomes relevant for a future use case: **standalone capability tokens**. When encrypted key material or authorization tokens are stored in unknown locations (distributed caches, content-addressed storage, passed through message queues), they exist outside any authenticated channel. In that context, wrapping them in COSE_Encrypt0 (with the recipient's COSE_Key) or COSE_Sign1 (for integrity without confidentiality) provides self-contained protection that travels with the payload. The COSE_Key format we adopt here for `kind=3` payloads ensures these keys will be directly usable as COSE recipients if/when we add COSE-wrapped tokens.
+
+The migration path:
+- **Today**: IdentiKey Inject over Iroh (transport-secured, COSE_Key for key payloads)
+- **Future**: COSE_Encrypt0 wrapping for at-rest tokens (self-secured, same COSE_Key format)
 
 ### Relationship to Existing Secret Inject Protocol
 
