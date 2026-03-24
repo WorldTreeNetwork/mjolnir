@@ -1,6 +1,6 @@
 # Initramfs Verified Boot Design
 
-Mjolnir's boot chain gains a cryptographic trust boundary by inserting an initramfs between kernel load and rootfs mount. The initramfs creates a verified, authenticated execution environment before any user data is accessible — enabling dm-verity integrity on the immutable base OS, LUKS-encrypted mutable userdata unlocked via Identikey/Recrypt key injection, and a guest-owned PTY console from the first instruction.
+Mjolnir's boot chain gains a cryptographic trust boundary by inserting an initramfs between kernel load and rootfs mount. The initramfs creates a verified, authenticated execution environment before any user data is accessible — enabling Blake3 integrity verification on the immutable base OS, LUKS-encrypted secure data unlocked via Identikey key injection, and a guest-owned PTY console from the first instruction.
 
 ## Motivation
 
@@ -12,32 +12,135 @@ CH loads kernel → kernel mounts virtio-fs directly → userspace
 
 The kernel trusts whatever virtio-fs serves. There is no point at which we can verify integrity, inject cryptographic keys, or gate boot on authentication. The initramfs fixes all three.
 
-## Architecture: Three-Layer Separation
+## Architecture: Three-Tier Storage
+
+Mjolnir's storage model separates data into three tiers based on mutability, sensitivity, and the BTRFS features each tier can leverage.
 
 ```
-Layer 1: BOOT IMAGE (kernel + initramfs)
-  - Signed with ED25519 + ML-DSA-87 (MultiSig)
-  - Immutable, versioned by signature over content hash
-  - Contains public keys, Iroh bootstrap, /init
+Tier 1: BASE OS (BTRFS subvolume via virtio-fs, read-only)
+  - Shared across VMs via reflink clones
+  - Immutable, versioned by Blake3 manifest signature
+  - Blake3 integrity verification at boot
+  - Full BTRFS benefits: dedup, compression, instant cloning
 
-Layer 2: BASE OS (ext4 block image)
-  - Protected by dm-verity (SHA-256 Merkle tree)
-  - Read-only, mounted after hash verification
-  - Contains OS packages, libraries, system binaries
+Tier 2: SEMI-PRIVATE USERLAND (BTRFS subvolume via virtio-fs, read-write)
+  - Per-VM writable space for application code, configs, logs, packages
+  - Plaintext on host BTRFS — host can read (user trusts hypervisor for this tier)
+  - Full BTRFS benefits: incremental sync, dedup, compression (zstd), snapshots
+  - This is where most user data lives — the "normal Linux box" experience
 
-Layer 3: USERDATA (BTRFS subvolume via virtio-fs)
-  - Encrypted via LUKS2/dm-crypt (see Cipher Suite for exact cipher)
-  - Mutable, CoW-versioned via BTRFS snapshots
-  - Key injected at boot from Identikey via Iroh + recryption proxy
+Tier 3: ENCRYPTED SECURE DATA (LUKS2 image via virtio-blk)
+  - Per-VM encrypted partition for secrets, credentials, PII, sensitive app data
+  - Host sees only ciphertext — cannot read even with root access
+  - Key injected at boot from Identikey via Iroh + optional PRE recryption
+  - BTRFS block-level incremental sync works (4KB extent tracking)
+  - No cross-VM dedup or compression (encrypted data is high-entropy)
 ```
 
 ### Design Principles
 
 1. **The initramfs is the trust root.** It runs before any unverified code. It contains the public keys needed to verify everything else.
-2. **The boot volume is not BTRFS.** It's a signed ext4 image with dm-verity. BTRFS is reserved for mutable userdata where CoW versioning matters.
-3. **Signing is versioning.** A dm-verity root hash uniquely identifies a base OS image. Signing that hash with a timestamped signature creates an immutable version record.
-4. **The VM cannot start without cryptographic authorization.** The LUKS key is not on-disk. It arrives via Iroh from Identikey (or the recryption proxy). No key, no boot.
-5. **The host never sees plaintext keys.** All key material flows through end-to-end encrypted channels (Iroh QUIC) or proxy recryption (PRE transforms without decrypting).
+2. **Go with the grain of Linux.** LUKS/dm-crypt provides battle-tested, AES-NI accelerated, kernel-optimized transparent encryption. Don't reinvent it. Use virtio-blk for the encrypted partition so dm-crypt operates on a real block device — no loopback indirection.
+3. **virtio-fs is the superpower.** Live filesystem sharing, reflink clones, instant snapshots, incremental sync, dedup, compression. Keep as much data on virtio-fs as possible. Only move data to the encrypted tier when it genuinely needs host-opaque encryption.
+4. **Signing is versioning.** A Blake3 manifest hash uniquely identifies a base OS image. Signing that hash with a timestamped signature creates an immutable version record.
+5. **The VM cannot start without cryptographic authorization.** The LUKS key is not on-disk. It arrives via Iroh from Identikey (or the recryption proxy). No key, no boot.
+6. **The host never sees plaintext keys.** All key material flows through end-to-end encrypted channels (Iroh QUIC) or proxy recryption (PRE transforms without decrypting).
+7. **Each encryption layer does what it's best at.** LUKS encrypts the box. Recrypt/PRE controls who has the key. Iroh secures transport. Don't conflate them.
+
+### BTRFS Feature Matrix by Tier
+
+| Feature | Tier 1: Base OS | Tier 2: Semi-Private | Tier 3: Encrypted |
+|---------|----------------|---------------------|-------------------|
+| Reflink clone | Yes (shared base) | Yes (per-VM CoW) | Yes (CoW on .img file) |
+| Incremental send | Send once, all share | Full file-level diffs | Block-level diffs (4KB) |
+| Cross-VM dedup | Perfect (shared extents) | Yes (identical files) | No (different keys → different ciphertext) |
+| Transparent compression | Yes (zstd) | Yes (zstd) | No (high entropy) |
+| Snapshot | Atomic with VM subvolume | Atomic with VM subvolume | Atomic with VM subvolume |
+| Host can read | Yes (immutable, doesn't matter) | Yes (by design) | No (ciphertext only) |
+
+## Encryption Layers & Host Isolation
+
+Mjolnir provides defense-in-depth through four independent encryption layers. Each layer addresses a specific threat and uses the technology best suited for it.
+
+### Layer 1: Transport Encryption (Iroh QUIC + TLS 1.3)
+
+**Threat**: Network eavesdropping, man-in-the-middle attacks.
+
+**Technology**: Iroh provides end-to-end encrypted QUIC connections using TLS 1.3 session keys. The host cannot read traffic even though it transits the host's network stack, because the TLS session is established directly between the user's device and the guest's Iroh endpoint.
+
+**What it protects**: Key injection (LUKS DEK delivery), Recrypt payload delivery, PTY console traffic, all inter-node communication.
+
+**Host sees**: Encrypted QUIC packets. Cannot decrypt without the TLS session keys, which exist only in the endpoints' memory.
+
+### Layer 2: Key Transformation (Recrypt / Proxy Re-Encryption)
+
+**Threat**: Unauthorized access to data across trust boundaries. Data encrypted under User A's key needs to be accessible to VM B without A sharing their private key, and without the proxy learning the plaintext.
+
+**Technology**: OpenFHE BFV lattice-based PRE. A re-encryption key `rk(A→B)` transforms ciphertext encrypted under A's public key into ciphertext decryptable by B's private key. The proxy (host) performs the transformation on the ciphertext without ever seeing the plaintext or either party's private key.
+
+**What it protects**: Cross-user data sharing, snapshot access delegation, LUKS key wrapping for VM spawn. The DEK (Data Encryption Key) for a VM's LUKS partition is encrypted under the user's public key. At spawn time, the proxy re-encrypts it under the VM's ephemeral public key. The VM decrypts with its private key (injected via Iroh).
+
+**Host sees**: BFV lattice ciphertexts (~5-10KB opaque blobs). Cannot extract the plaintext DEK or either party's private key. The re-encryption key `rk(A→B)` allows *only* the specific directional transformation — it cannot be used to decrypt directly.
+
+### Layer 3: At-Rest Encryption (LUKS2 / dm-crypt via virtio-blk)
+
+**Threat**: Host reading sensitive data from the VM's storage at rest (disk inspection, backup theft, decommissioned hardware).
+
+**Technology**: LUKS2 with `aes-xts-plain64` (512-bit keys, 256-bit effective), hardware-accelerated via AES-NI. The encrypted partition is presented to the VM as a virtio-blk device (`/dev/vda`). dm-crypt operates directly on the block device — no loopback indirection, no FUSE stacking.
+
+**What it protects**: Tier 3 (Encrypted Secure Data) — secrets, credentials, PII, sensitive application data. Everything written to `/data/secure/` is transparently encrypted by the kernel before reaching the host's storage.
+
+**Host sees**: The `data.img` file on BTRFS contains only ciphertext. AES-XTS encrypts each 512-byte sector independently, so even the access pattern (which sectors were written) is visible, but the content is not. The LUKS header is visible (contains cipher metadata, key slots) but the DEK is protected by the key injection flow.
+
+**What it does NOT protect**: Tier 2 (Semi-Private Userland). Files on the virtio-fs share are plaintext on the host's BTRFS. This is by design — the user accepts host visibility for general data in exchange for full BTRFS features (dedup, compression, incremental sync). Only genuinely sensitive data belongs in Tier 3.
+
+**Why not encrypt everything?** Two reasons:
+1. **BTRFS feature loss**: Encrypted data cannot be deduplicated across VMs, cannot be compressed, and incremental sync operates at opaque block granularity rather than semantic file-level diffs.
+2. **virtio-fs DAX transparency**: Even if you LUKS-encrypt via loopback inside the guest over virtio-fs, the decrypted data would be visible to the host through virtiofsd's shared memory region (DAX). A malicious host with root access can read the virtiofsd process's memory-mapped pages. Tier 3's virtio-blk path avoids this entirely — dm-crypt operates inside the guest kernel, and the cleartext never leaves the guest's address space.
+
+### Layer 4: Integrity Verification (Blake3 Manifest + Signed Boot Chain)
+
+**Threat**: A malicious host tampering with the base OS to inject backdoors that exfiltrate injected keys. Example: host modifies `/sbin/init` to phone home the LUKS DEK after injection.
+
+**Technology**: Blake3 cryptographic hashing over a file manifest, signed with ED25519 + ML-DSA-87 (dual classical + post-quantum). The initramfs (which is itself signed and loaded by Cloud Hypervisor) verifies the base OS manifest before pivoting to it.
+
+**What it protects**: Tier 1 (Base OS) integrity. The initramfs walks the base OS filesystem, computes Blake3 hashes, and compares against a signed manifest. If any file has been modified, the boot is refused and the VM drops to an emergency shell.
+
+**Host cannot**: Modify base OS files without detection, as long as the initramfs and its embedded public keys are genuine. The initramfs is a signed artifact loaded directly by Cloud Hypervisor — the host would have to replace both the initramfs AND the signature, which requires the private signing key.
+
+### Layer Summary
+
+```
+Data Flow (incoming secure payload):
+
+  User Device ──Iroh QUIC TLS 1.3──→ Guest Iroh Endpoint
+       │                                    │
+       │  (Layer 1: transport encrypted)    │
+       │                                    ▼
+       │                             Recrypt decrypt
+       │                             (Layer 2: PRE unwrap)
+       │                                    │
+       │                                    ▼
+       │                             Write to /data/secure/
+       │                             (Layer 3: LUKS dm-crypt)
+       │                                    │
+       │                                    ▼
+       │                             Host BTRFS: ciphertext
+       │
+  At no point does the host see cleartext.
+  At no point does the host hold a decryption key.
+```
+
+```
+Data Flow (semi-private application data):
+
+  Application writes to /app/code/server.js
+       │
+       ▼
+  virtio-fs → virtiofsd → Host BTRFS: plaintext
+  (Host CAN read this — user accepts this for Tier 2)
+  (Full BTRFS benefits: dedup, compression, incremental sync)
+```
 
 ## Boot Sequence
 
@@ -47,33 +150,118 @@ Cloud Hypervisor loads:
   └── initramfs.img       (cpio archive, signed separately)
 
 initramfs /init:
-  1. Mount virtio-fs (raw BTRFS host share) at /mnt/host READONLY
-  2. Verify dm-verity root hash signature:
-     └── Read root hash from /mnt/host/boot/base-os.roothash
-     └── Read signature from /mnt/host/boot/base-os.roothash.sig
+  1. Start mjolnir-boot-agent (vsock PTY + Iroh endpoint)
+  2. Mount virtio-fs "myfs" at /mnt/host (read-only)
+  3. Verify base OS Blake3 manifest:
+     └── Read manifest from /mnt/host/os/.manifest.blake3
+     └── Read signature from /mnt/host/os/.manifest.blake3.sig
      └── Verify MultiSig against pubkeys baked into initramfs
-     └── Compare verified hash against mjolnir.roothash from cmdline
-  3. Activate dm-verity: veritysetup open /dev/vda base-os \
-       --hash-device=/mnt/host/boot/base-os.verity \
-       --root-hash=<verified_hash>
-  4. Mount /dev/mapper/base-os at /mnt/base (read-only ext4)
-  5. Start vsock listener → present boot console on PTY channel
-  6. Start Iroh endpoint (using guest's pre-loaded Iroh key)
-  7. Receive VM ephemeral private key via Iroh IdentiKey Inject protocol
+     └── Walk /mnt/host/os/, recompute Blake3 hashes
+     └── Compare computed manifest hash against signed value
+  4. Mount /mnt/host/os/ at /mnt/base (read-only bind mount)
+  5. Start Iroh endpoint (using guest's pre-loaded Iroh key)
+  6. Receive LUKS DEK via Iroh IdentiKey Inject protocol
      └── User device connects directly to guest (INJECT_ALPN, E2E encrypted)
-     └── Delivers PRE secret key (kind=3, pre-secret-key) for this VM session
-  8. Receive re-wrapped DEK via vsock from host
-  9. Decrypt DEK using VM ephemeral private key → recover raw 256-bit LUKS key
-  10. Open LUKS: cryptsetup open /mnt/host/userdata.luks userdata \
-        --type=luks2 --key-file=<decrypted_dek>
-  11. Shred key material from tmpfs
-  12. Set up overlayfs for mutable system state:
-      └── Mount LUKS userdata at /mnt/userdata
-      └── overlayfs: lower=/mnt/base/etc upper=/mnt/userdata/etc-overlay merged=/mnt/merged/etc
-      └── bind-mount /mnt/userdata/data → /mnt/merged/data
-  13. pivot_root /mnt/merged → exec /sbin/init
-  14. Hand off vsock PTY from mjolnir-boot-agent → mjolnir-agent (full guest agent)
+     └── Delivers LUKS DEK (kind=2, symmetric-key, dest=luks:secure)
+  7. Open LUKS: cryptsetup open /dev/vda secure \
+       --type=luks2 --key-file=<decrypted_dek>
+  8. Shred key material from tmpfs
+  9. Set up merged root:
+     └── Mount LUKS partition at /mnt/secure
+     └── overlayfs: lower=/mnt/base upper=/mnt/host/user/root-overlay
+         workdir=/mnt/host/user/overlay-work merged=/mnt/merged
+     └── bind-mount /mnt/host/user/data → /mnt/merged/data
+     └── bind-mount /mnt/secure → /mnt/merged/data/secure
+  10. pivot_root /mnt/merged → exec /sbin/init
+  11. Hand off vsock PTY from mjolnir-boot-agent → mjolnir-agent
 ```
+
+## Blake3 Manifest Verification
+
+Blake3 manifest verification replaces dm-verity for base OS integrity. This choice preserves virtio-fs as the sole storage backend for the base OS, avoiding the need for ext4 images or virtio-blk block devices for the OS layer.
+
+### Why Not dm-verity?
+
+dm-verity requires a block device — it intercepts block I/O and verifies each block against a Merkle hash tree. virtio-fs is a file-sharing protocol (FUSE-based), not a block device. Introducing dm-verity would require:
+- Converting the base OS from a BTRFS subvolume to an ext4 block image
+- Adding a virtio-blk device for the base OS
+- Running both virtio-fs (for userdata) and virtio-blk (for base OS) simultaneously
+- Losing BTRFS features (dedup, compression, reflink cloning) for the base OS layer
+
+This complexity is not justified when Blake3 manifest verification provides equivalent tamper detection for Mjolnir's use case.
+
+### How It Works
+
+**Build time** (on the signing host):
+
+```bash
+# Walk the base OS subvolume, hash every file
+find @base/ubuntu-24.04/ -type f -print0 | sort -z | while IFS= read -r -d '' f; do
+  hash=$(b3sum --no-names "$f")
+  printf '%s  %s\n' "$hash" "${f#@base/ubuntu-24.04/}"
+done > manifest.txt
+
+# Hash the manifest itself → single 32-byte root hash
+b3sum --no-names manifest.txt > manifest.blake3
+
+# Sign with dual classical + post-quantum
+mjolnir-sign --key boot-signing.key \
+  --input manifest.blake3 \
+  --output manifest.blake3.sig
+
+# Place into the base OS subvolume
+cp manifest.txt manifest.blake3 manifest.blake3.sig \
+  @base/ubuntu-24.04/.manifest.*
+```
+
+**Boot time** (in initramfs):
+
+```bash
+# 1. Verify signature on manifest hash
+/bin/mjolnir-boot-agent --verify-sig \
+  /mnt/host/os/.manifest.blake3.sig \
+  /mnt/host/os/.manifest.blake3 \
+  /etc/boot-verify.pub /etc/boot-verify-pq.pub
+[ $? -ne 0 ] && echo "[!] SIGNATURE VERIFICATION FAILED" && exec /bin/sh
+
+# 2. Re-walk filesystem, recompute hashes, compare
+/bin/mjolnir-boot-agent --verify-manifest /mnt/host/os/
+[ $? -ne 0 ] && echo "[!] MANIFEST MISMATCH — base OS tampered" && exec /bin/sh
+
+echo "[+] Base OS integrity verified"
+```
+
+### Trade-offs vs dm-verity
+
+| Aspect | Blake3 Manifest | dm-verity |
+|--------|----------------|-----------|
+| Verification timing | Eager (full hash at boot) | Lazy (hash on each read) |
+| Boot cost | ~200ms for 1GB base (Blake3 at 5+ GB/s) | ~50ms setup, then per-read overhead |
+| Runtime re-verification | No (read-only mount sufficient) | Yes (every block read) |
+| Storage backend | Any filesystem (virtio-fs, NFS, etc.) | Block device only (virtio-blk) |
+| BTRFS compatibility | Full (stays on BTRFS subvolume) | None (requires ext4 image) |
+| Implementation complexity | ~100 lines Rust (hash + compare) | Kernel modules + veritysetup + ext4 tooling |
+| Host tamper detection | At boot only (sufficient if read-only) | Continuous (detects post-boot tampering) |
+
+The "no runtime re-verification" limitation is acceptable because the base OS is mounted **read-only** from a BTRFS snapshot via virtio-fs. Nothing in the guest can modify it. A post-boot host-side modification would require writing directly to the BTRFS subvolume while virtiofsd has it open — a narrow attack window that would likely corrupt the mount rather than cleanly substitute files.
+
+### Optional: Spot-Check Mode
+
+For faster boot on large base images, the initramfs can verify a subset of critical files rather than the full manifest:
+
+```
+Critical paths (always verified):
+  /sbin/init, /lib/systemd/systemd
+  /usr/bin/mjolnir-agent, /usr/bin/recrypt
+  /etc/passwd, /etc/shadow, /etc/sudoers
+  /lib/x86_64-linux-gnu/libc.so.6, libcrypto.so
+
+Full manifest verification:
+  Deferred to a background systemd service after boot
+  Logs result, optionally halts if mismatch detected
+```
+
+This reduces boot-time verification to ~10ms (handful of files) while still catching the most impactful tampering. Full verification runs asynchronously after the VM is operational.
 
 ## Cipher Suite
 
@@ -81,45 +269,31 @@ initramfs /init:
 
 | Function | Algorithm | Exact Cipher String | Key Size | Rationale |
 |----------|-----------|-------------------|----------|-----------|
-| dm-verity hash tree | SHA-256 | `--hash=sha256` | 256-bit | Mainline kernel support. dm-verity has limited hash algorithm options. SHA-256 is fine for integrity — it's not protecting secrecy. Blake3 would require a custom kernel hash driver; SHA-256 is pragmatic. |
+| Blake3 manifest hash | Blake3 | N/A (userspace) | 256-bit | 4-8x faster than SHA-256, hardware-friendly. Used for all integrity checking: boot manifest, content addressing, Bao streaming verification. |
 | Boot image signing | ED25519 + ML-DSA-87 | N/A (userspace) | 256-bit + PQ | Dual classical + post-quantum signatures. Matches `recrypt-core::sign::MultiSig`. Both must verify for the signature to be accepted. |
 | LUKS bulk encryption | AES-256-XTS | `--cipher aes-xts-plain64 --key-size 512` | 512-bit (256 effective) | Matches existing secrets architecture (`docs/secrets-architecture.md`). AES-XTS is the Linux dm-crypt standard with hardware AES-NI acceleration. XTS mode uses two 256-bit keys (512 total) for tweakable encryption. |
 | LUKS key derivation | None (raw key) | `--key-file` (not passphrase) | 256-bit | Unlike the existing secrets volume (which uses Argon2id PBKDF from a passphrase), the verified boot injects a raw 256-bit key. No PBKDF overhead. |
 | DEK wrapping (PRE) | OpenFHE BFV lattice | N/A (userspace) | Post-quantum | 96-byte `KeyMaterial` bundle (32B sym key + 24B nonce + 32B plaintext hash + 8B size) is PRE-encrypted. ~5-10KB ciphertext. Recryption operates on wrapped key only — milliseconds regardless of data size. |
 | Key transport | Iroh QUIC + TLS 1.3 | N/A (protocol) | Session keys | End-to-end encrypted channel bypassing the host. DEK ciphertext travels inside this tunnel. |
-| Content hashing | Blake3 | N/A (userspace) | 256-bit | Used for all application-level hashing (file integrity, content addressing, Bao streaming verification). 4-8x faster than Blake2b. |
+| Content encryption | XChaCha20-Poly1305 | N/A (userspace) | 256-bit | Used by Recrypt for file-level encryption of secure payloads. AEAD with 192-bit nonces (no nonce reuse risk). |
+| Content hashing | Blake3 | N/A (userspace) | 256-bit | Used for all application-level hashing (file integrity, content addressing, Bao streaming verification). |
 
 ### Why AES-XTS for LUKS (Not XChaCha20)
 
 The existing secrets architecture (`docs/secrets-architecture.md`) uses `aes-xts-plain64` with 512-bit keys. We retain this for LUKS because:
 
-1. **dm-crypt cipher name compatibility** — `cryptsetup` expects kernel crypto API names. `aes-xts-plain64` is universally supported. There is no `xchacha20-poly1305` dm-crypt cipher name in mainline kernels. The closest alternatives (`chacha20-poly1305`, `adiantum`) require `CONFIG_CRYPTO_CHACHA20POLY1305` or `CONFIG_CRYPTO_ADIANTUM`.
+1. **dm-crypt cipher name compatibility** — `cryptsetup` expects kernel crypto API names. `aes-xts-plain64` is universally supported. There is no `xchacha20-poly1305` dm-crypt cipher name in mainline kernels.
 2. **AES-NI hardware acceleration** — AES-XTS runs at ~3-5 GB/s on modern x86_64 with AES-NI. XChaCha20 (software-only in kernel) runs at ~1-2 GB/s. For block device encryption, this matters.
-3. **Consistency** — Using the same LUKS cipher across both the secrets volume and userdata volume simplifies kernel config requirements and debugging.
-4. **XChaCha20 remains the choice for streaming encryption** — The Recrypt stack uses XChaCha20-Poly1305 for file-level encryption (btrfs send streams, content-addressed blobs). Different layers use the best cipher for their context.
-
-### Why SHA-256 for dm-verity (Not Blake3)
-
-The Linux kernel's dm-verity implementation supports SHA-256, SHA-512, and SHA-3. Adding Blake3 would require:
-- A custom kernel crypto module (`crypto_register_shash`)
-- Patching the dm-verity target to recognize the algorithm
-- Maintaining a custom kernel build indefinitely
-
-SHA-256 is the right choice here because:
-1. dm-verity protects integrity of the **read-only base OS** — not secrecy
-2. SHA-256 has hardware acceleration (SHA-NI) on x86_64
-3. The base OS image is verified once at boot, not continuously hashed
-4. The real security boundary (LUKS encryption) uses AES-XTS with full cipher freedom
-
-Blake3 is used everywhere else: content addressing, Bao streaming verification, file hashing in the Recrypt stack.
+3. **Consistency** — Using the same LUKS cipher across both the secrets volume and secure data volume simplifies kernel config requirements.
+4. **XChaCha20 remains the choice for streaming encryption** — The Recrypt stack uses XChaCha20-Poly1305 for file-level encryption (secure payloads, content-addressed blobs). Different layers use the best cipher for their context.
 
 ### Algorithm Substitutability
 
 The design supports cipher agility at each layer:
 
-- **dm-verity**: Change `--hash` flag in `veritysetup format`. Requires kernel support.
+- **Blake3 manifest**: Change hash function in `mjolnir-boot-agent --verify-manifest`. No kernel dependency.
 - **Boot signing**: The initramfs signature format includes an algorithm identifier. New algorithms can be added without changing the verification flow.
-- **LUKS**: `cryptsetup` supports pluggable ciphers. Switch via `--cipher` at format time. If kernel adds `xchacha20-poly1305` as a dm-crypt cipher, migration is a reformat.
+- **LUKS**: `cryptsetup` supports pluggable ciphers. Switch via `--cipher` at format time.
 - **DEK wrapping**: Recrypt's `PreBackend` trait abstracts over backends. Swap OpenFHE BFV for any future PRE scheme.
 
 ### Kernel Crypto Requirements
@@ -127,13 +301,19 @@ The design supports cipher agility at each layer:
 The guest kernel must have these options enabled:
 
 ```
-CONFIG_BLK_DEV_DM=y           # Device mapper
-CONFIG_DM_CRYPT=y              # dm-crypt (LUKS)
-CONFIG_DM_VERITY=y             # dm-verity (base OS integrity)
+# Storage
+CONFIG_VIRTIO_FS=y             # virtio-fs (base OS + semi-private userland)
+CONFIG_FUSE_FS=y               # FUSE support for virtiofsd
+CONFIG_BLK_DEV_DM=y            # Device mapper (dm-crypt)
+CONFIG_DM_CRYPT=y              # dm-crypt for LUKS
+
+# Encryption
 CONFIG_CRYPTO_XTS=y            # XTS block cipher mode
 CONFIG_CRYPTO_AES=y            # AES cipher
-CONFIG_CRYPTO_SHA256=y         # SHA-256 for dm-verity
-CONFIG_CRYPTO_AES_NI_INTEL=y   # AES-NI hardware acceleration (optional but recommended)
+CONFIG_CRYPTO_AES_NI_INTEL=y   # AES-NI hardware acceleration
+
+# Filesystem
+CONFIG_OVERLAY_FS=y            # overlayfs for merged root
 ```
 
 ## Ephemeral Key Derivation: Zero-Trust Key Injection
@@ -161,7 +341,7 @@ User Device                    Host                         Guest (initramfs)
                                5. Read wrapped_dek from
                                   snapshot metadata
                                6. Boot kernel + initramfs ──> /init starts
-                                                              dm-verity verified
+                                                              Blake3 verified
                                                               Iroh endpoint ready
                                7. authorize_inject_peer(     (via vsock configure)
                                     user_node_id)
@@ -169,7 +349,7 @@ User Device                    Host                         Guest (initramfs)
                                                               AUTHORIZED_INJECT_PEERS
 8. Connect to guest via Iroh
    (INJECT_ALPN)
-   Verify dm-verity roothash
+   Verify Blake3 manifest hash
    (optional remote attestation)
 9. Send vm_kp.secret via Iroh ──────────────────────────────> 10. Receive vm_sk
    (E2E encrypted, bypasses host)                                 (one-shot injection guard)
@@ -177,7 +357,7 @@ User Device                    Host                         Guest (initramfs)
                                      wrapped_dek)
                                12. Deliver rewrapped ───────> 13. decrypt(vm_sk, rewrapped)
                                    via vsock                       → recover LUKS DEK
-                                                              14. cryptsetup open
+                                                              14. cryptsetup open /dev/vda
                                                               15. shred vm_sk + DEK
                                                               16. pivot_root, boot complete
 ```
@@ -247,13 +427,13 @@ User Device (while online)     Host (later, autonomous)     Guest (initramfs)
 
 **Trust trade-off**: The pre-committed pool is honest-but-curious safe (host would have to actively attack the initramfs), not cryptographically ZK. This is acceptable for autonomous spawning — the initramfs is a signed, auditable artifact. If someone modifies it to extract keys, the signature breaks.
 
-### Optional: Remote Attestation via dm-verity Root Hash
+### Optional: Remote Attestation via Blake3 Manifest Hash
 
 Before delivering `vm_sk` (primary path, step 9), the user device can verify the guest booted the correct image:
 
-1. User device requests dm-verity root hash from guest via Iroh
-2. Boot agent reads `mjolnir.roothash` from `/proc/cmdline`, reports it
-3. User device compares against the expected root hash from the signed manifest
+1. User device requests Blake3 manifest hash from guest via Iroh
+2. Boot agent reads the verified manifest hash from memory, reports it
+3. User device compares against the expected hash from the signed manifest
 4. Only delivers `vm_sk` if the hash matches
 
 This is not hardware-backed attestation (no TPM/SEV-SNP), but it detects a tampered boot image as long as the guest is running the genuine initramfs (which is guaranteed by the signed boot chain, provided Cloud Hypervisor loaded the correct kernel+initramfs).
@@ -421,7 +601,7 @@ Unknown `kind` values are treated as `opaque`.
 | Pattern | Meaning | Example |
 |---------|---------|---------|
 | `nil` / absent | Kind-dependent default (see table above) | — |
-| `luks:<name>` | Open LUKS device with this dm-crypt mapper name | `luks:userdata`, `luks:mjolnir-secrets` |
+| `luks:<name>` | Open LUKS device with this dm-crypt mapper name | `luks:secure`, `luks:mjolnir-secrets` |
 | `env` | Load as environment variables | — |
 | `/path/...` | Write to this path (tmpfs, mode 0600) | `/run/mjolnir/secrets/tls.pem` |
 | `mem` | Hold in memory only, never touch disk | — |
@@ -432,10 +612,10 @@ When `kind=3` (key), the payload is a CBOR-encoded COSE_Key map (RFC 9052 §7). 
 
 #### Why COSE_Key
 
-- **Self-describing**: The key type (`kty`) and algorithm (`alg`) are encoded in the key itself, not inferred from context. A receiver can determine what kind of key it holds without out-of-band information.
+- **Self-describing**: The key type (`kty`) and algorithm (`alg`) are encoded in the key itself, not inferred from context.
 - **Algorithm agility**: Adding new key types (ML-KEM, X-Wing, future PQ algorithms) means adding a `kty` value, not changing the wire format.
 - **IANA registry**: Standard `kty` values (OKP, EC2, symmetric) are IANA-registered. We extend into the private-use range for lattice PRE keys (`kty: -1`).
-- **FIDO2 alignment**: The same serialization used for WebAuthn public key credentials. If Mjolnir ever interoperates with hardware security keys or passkeys, the format is already compatible.
+- **FIDO2 alignment**: The same serialization used for WebAuthn public key credentials.
 
 #### Key Types Used in Mjolnir
 
@@ -487,53 +667,6 @@ CBOR map with integer keys, conforming to `inject-response` schema:
 | `3` | dest | tstr | Actual destination used (echoed back) |
 | `4` | created | bool | Whether a new resource was created (e.g., LUKS formatted) |
 
-### Example Frames
-
-**Boot key injection (verified boot, Phase D) — COSE_Key payload:**
-
-```
-49 49                         # magic "II"
-00 00 07                      # meta_len = 7
-A2 01 03 04 F5               # CBOR meta: {1: 3, 4: true}  (kind=key, zeroize=true)
-A5                            # payload: COSE_Key map (5 entries)
-  01 20                       #   kty: -1 (lattice)
-  02 50 <16-byte vm-uuid>    #   kid: VM identifier
-  03 3A 0000FFFF             #   alg: -65537 (OpenFHE-BFV-PRE)
-  04 82 04 06                #   key_ops: [decrypt, unwrap]
-  20 59 <len> <PRE key bytes>#   -1: private key material
-```
-
-Response: `{1: true, 3: "mem"}`
-
-**Raw LUKS key (Phase C, direct DEK delivery):**
-
-```
-49 49
-00 00 0C
-A2 01 02 02 6E              # CBOR meta: {1: 2, 2: "luks:userdata"}
-  6C 75 6B 73 3A 75 73 65 72 64 61 74 61
-<32 bytes raw key>           # payload: raw symmetric key
-```
-
-Response: `{1: true, 3: "luks:userdata", 4: false}`
-
-**Passphrase injection (existing secrets flow):**
-
-```
-49 49
-00 00 1C
-A2 01 01 02 74              # CBOR meta: {1: 1, 2: "luks:mjolnir-secrets"}
-  6C 75 6B 73 3A 6D 6A 6F 6C 6E 69 72 2D 73 65 63 72 65 74 73
-<passphrase bytes>
-```
-
-**Zero-metadata (simplest possible):**
-
-```
-49 49 00 00 00               # magic + meta_len=0
-<secret bytes>               # kind=opaque, dest=mem, once=true, zeroize=true
-```
-
 ### Security Properties
 
 | Property | Mechanism |
@@ -548,16 +681,6 @@ A2 01 01 02 74              # CBOR meta: {1: 1, 2: "luks:mjolnir-secrets"}
 | Time-bounded | Optional `ttl` — auto-scrub if not consumed within N seconds |
 | Misroute protection | Magic bytes `0x49 0x49` — reject immediately if not present |
 | Algorithm binding | COSE_Key payloads encode `kty` + `alg` — prevents key/cipher mismatch |
-
-### On COSE for Untrusted Channels
-
-The IdentiKey Inject protocol does not use COSE signing or encryption at the transport layer — Iroh QUIC TLS 1.3 already provides authenticated, encrypted delivery. COSE's signing/encryption (COSE_Sign1, COSE_Encrypt0) is designed for payloads that travel through **untrusted intermediaries** where the transport cannot be relied upon.
-
-This becomes relevant for a future use case: **standalone capability tokens**. When encrypted key material or authorization tokens are stored in unknown locations (distributed caches, content-addressed storage, passed through message queues), they exist outside any authenticated channel. In that context, wrapping them in COSE_Encrypt0 (with the recipient's COSE_Key) or COSE_Sign1 (for integrity without confidentiality) provides self-contained protection that travels with the payload. The COSE_Key format we adopt here for `kind=3` payloads ensures these keys will be directly usable as COSE recipients if/when we add COSE-wrapped tokens.
-
-The migration path:
-- **Today**: IdentiKey Inject over Iroh (transport-secured, COSE_Key for key payloads)
-- **Future**: COSE_Encrypt0 wrapping for at-rest tokens (self-secured, same COSE_Key format)
 
 ### Relationship to Existing Secret Inject Protocol
 
@@ -579,50 +702,87 @@ Status and lifecycle operations (`status`, `close`) move to the vsock JSON contr
 
 ```
 /var/lib/mjolnir/
-├── boot/                              # Signed boot artifacts (immutable)
+├── boot/                              # Signed boot artifacts
 │   ├── vmlinux-ch                     # PVH kernel
 │   ├── vmlinux-ch.sig                 # MultiSig over kernel hash
-│   ├── initramfs.img                  # cpio archive
-│   ├── initramfs.img.sig              # MultiSig over initramfs hash
-│   └── base-os/
-│       ├── ubuntu-24.04.img           # ext4 block image (dm-verity protected)
-│       ├── ubuntu-24.04.verity        # dm-verity hash tree
-│       ├── ubuntu-24.04.roothash      # 32-byte root hash
-│       └── ubuntu-24.04.roothash.sig  # MultiSig over root hash
+│   ├── initramfs.img                  # cpio archive (trust root)
+│   └── initramfs.img.sig             # MultiSig over initramfs hash
 │
-├── @vms/<uuid>/                       # Per-VM BTRFS subvolume (virtio-fs shared)
-│   └── userdata.luks                  # LUKS2-encrypted user data
+├── @base/ubuntu-24.04/               # Tier 1: Base OS (read-only BTRFS snapshot)
+│   ├── /sbin/init                    # Standard Ubuntu root filesystem
+│   ├── /usr/...
+│   ├── /etc/...
+│   ├── .manifest.txt                 # Blake3 hash manifest (file → hash)
+│   ├── .manifest.blake3              # Blake3 hash of manifest itself
+│   └── .manifest.blake3.sig          # MultiSig over manifest hash
+│
+├── @vms/<uuid>/                       # Per-VM BTRFS subvolume
+│   ├── os/                           # Tier 1: reflink clone of @base (read-only in guest)
+│   ├── user/                         # Tier 2: semi-private userland (read-write via virtio-fs)
+│   │   ├── data/                     # Application code, configs, logs
+│   │   ├── root-overlay/             # overlayfs upper layer for system paths
+│   │   └── overlay-work/            # overlayfs workdir
+│   └── secure/                       # Tier 3: encrypted partition
+│       └── data.img                  # LUKS2-encrypted block image (virtio-blk)
 │
 └── @snapshots/<name>/                 # Named snapshots (BTRFS CoW)
-    ├── userdata.luks                  # Encrypted userdata snapshot
-    └── metadata.json                  # Snapshot metadata (wrapped DEK, etc.)
+    ├── os/                           # Frozen base OS state
+    ├── user/                         # Frozen semi-private userland
+    ├── secure/
+    │   └── data.img                  # Frozen encrypted data (ciphertext)
+    └── metadata.json                 # Snapshot metadata: wrapped DEK, base OS version, etc.
 ```
 
 ### Guest-Side (After Boot)
 
 ```
 /                    ← overlayfs merged root
-├── /sbin/init       ← from dm-verity base (read-only lower)
-├── /usr/...         ← from dm-verity base (read-only lower)
-├── /etc/...         ← overlayfs: base /etc (lower) + userdata etc-overlay (upper)
+├── /sbin/init       ← from Blake3-verified base (read-only lower)
+├── /usr/...         ← from Blake3-verified base (read-only lower)
+├── /etc/...         ← overlayfs: base /etc (lower) + user overlay (upper)
 │                      Applications see a single merged /etc that is writable.
-│                      Changes persist to the LUKS-encrypted upper layer.
+│                      Changes persist to the semi-private user tier.
 │
-/data                ← bind mount from LUKS-decrypted userdata
+/data/               ← bind mount from semi-private userland (Tier 2)
 ├── /data/home/
-├── /data/var/
-└── /data/app/       ← application code and state
+├── /data/app/       ← application code and state
+├── /data/var/       ← logs, caches, runtime state
+│
+/data/secure/        ← LUKS-decrypted mount (Tier 3, virtio-blk)
+├── /data/secure/secrets/    ← credentials, API keys, tokens
+├── /data/secure/private/    ← PII, financial data, sensitive app data
+└── /data/secure/keys/       ← cryptographic keys (injected via Identikey)
 ```
 
-**Overlay mount strategy**: The base OS provides the read-only lower layer for the entire root filesystem. An overlayfs is set up with the LUKS-encrypted userdata as the upper (writable) layer. This means:
+**Mount strategy**:
 - System binaries (`/usr`, `/sbin`) come from the verified base — immutable
-- Configuration (`/etc`) is an overlay — base provides defaults, userdata provides overrides
-- User data (`/data`) is a direct bind mount from the encrypted volume
-- Applications do not need special path awareness — standard `/etc`, `/home`, etc. paths work
+- Configuration (`/etc`) is an overlay — base provides defaults, user tier provides overrides
+- General data (`/data`) is a direct bind mount from the semi-private user tier
+- Secure data (`/data/secure`) is a mount from the LUKS-encrypted partition
+- Applications do not need special path awareness — `/data/secure/` is just a directory
+
+### Guest Agent Stack
+
+```
+/usr/bin/mjolnir-agent     # VM lifecycle, vsock, Iroh, PTY (from base OS)
+/usr/bin/recrypt            # PRE operations: decrypt incoming payloads,
+                            # encrypt outgoing payloads (from base OS)
+
+Workflow for incoming secure data:
+  1. Recrypt payload arrives via Iroh (PRE-encrypted under VM's public key)
+  2. `recrypt decrypt` → recovers cleartext in memory
+  3. Write to /data/secure/incoming/ → LUKS encrypts transparently
+  4. Application reads /data/secure/incoming/ → LUKS decrypts transparently
+
+Workflow for outgoing secure data:
+  1. Application writes to /data/secure/outgoing/
+  2. `recrypt encrypt --recipient=<target_pubkey>` → read + encrypt
+  3. Send ciphertext via Iroh to target
+```
 
 ## Cloud Hypervisor Configuration Changes
 
-The VM needs both virtio-blk (for the dm-verity base OS image) and virtio-fs (for the encrypted userdata BTRFS subvolume).
+The VM needs both virtio-fs (for Tier 1 base OS and Tier 2 semi-private userland) and virtio-blk (for Tier 3 encrypted secure data partition).
 
 ### Config Struct Additions
 
@@ -634,8 +794,7 @@ typedstruct do
 
   # New fields for verified boot
   field(:initramfs_path, String.t(), default: nil)
-  field(:base_os_image, String.t(), default: nil)        # ext4 dm-verity image path
-  field(:base_os_roothash, String.t(), default: nil)      # dm-verity root hash (hex)
+  field(:secure_data_image, String.t(), default: nil)   # LUKS2 data.img path for virtio-blk
 end
 ```
 
@@ -653,16 +812,14 @@ def kernel_payload(%__MODULE__{} = config) do
   end
 end
 
-defp boot_args(%__MODULE__{base_os_roothash: nil} = config) do
+defp boot_args(%__MODULE__{initramfs_path: nil} = config) do
   # Legacy mode: direct virtio-fs root mount
   config.boot_args
 end
 
-defp boot_args(%__MODULE__{base_os_roothash: roothash} = config) do
+defp boot_args(%__MODULE__{} = config) do
   # Verified boot: initramfs handles mounting
-  # Pass roothash and VM network config via cmdline
   "console=ttyS0 reboot=k panic=1 " <>
-    "mjolnir.roothash=#{roothash} " <>
     "mjolnir.vm_ip=#{config.network_interface[:guest_ip]} " <>
     "mjolnir.vm_cid=#{config.vsock_cid}"
 end
@@ -671,13 +828,13 @@ end
 ### Disk Configuration (New)
 
 ```elixir
-def disk_config(%__MODULE__{base_os_image: nil}), do: nil
+def disk_config(%__MODULE__{secure_data_image: nil}), do: nil
 
-def disk_config(%__MODULE__{base_os_image: path}) do
+def disk_config(%__MODULE__{secure_data_image: path}) do
   [
     %{
       "path" => path,
-      "readonly" => true
+      "readonly" => false
     }
   ]
 end
@@ -707,14 +864,84 @@ def vm_create_payload(%__MODULE__{} = config, vsock_path) do
 end
 ```
 
-### virtiofsd Scope Change
+### virtiofsd Scope
 
-Currently, `Mjolnir.VirtioFS` (`lib/mjolnir/virtiofs.ex`) starts virtiofsd to share the entire rootfs BTRFS subvolume. Under verified boot, virtiofsd shares **only the userdata subvolume**:
+virtiofsd continues to share the per-VM BTRFS subvolume, which now contains both `os/` (read-only base) and `user/` (semi-private userland). The `secure/` directory also lives in the subvolume but contains only the opaque `data.img` LUKS container — virtiofsd can see the file metadata but not the encrypted contents.
 
-- **Current**: `shared_dir` = `@vms/<uuid>/` (full rootfs including OS)
-- **Verified boot**: `shared_dir` = `@vms/<uuid>/` (now contains only `userdata.luks` + metadata)
+- **Current**: `shared_dir` = `@vms/<uuid>/` (full rootfs)
+- **Verified boot**: `shared_dir` = `@vms/<uuid>/` (os/ + user/ + secure/data.img)
 
-The base OS comes via virtio-blk (`/dev/vda`), not virtio-fs. The virtiofsd still runs for userdata access, but its scope is reduced to the encrypted user partition.
+The initramfs mounts virtio-fs, verifies `os/` via Blake3, reads `user/` for overlay state, and the encrypted partition is accessed only via virtio-blk (`/dev/vda` pointing at `secure/data.img`).
+
+## BTRFS Snapshot & Replication
+
+### Snapshot Semantics
+
+A single `btrfs subvolume snapshot` captures the entire VM state atomically:
+
+```bash
+btrfs subvolume snapshot @vms/<uuid>/ @snapshots/<name>/
+```
+
+This captures:
+- `os/` — reflink of the shared base (nearly free, just metadata pointers)
+- `user/` — CoW snapshot of semi-private userland (only changed blocks duplicated)
+- `secure/data.img` — CoW snapshot of the encrypted partition (only changed 4KB extents)
+
+All three tiers in one atomic operation. Restore is equally simple:
+
+```bash
+btrfs subvolume snapshot @snapshots/<name>/ @vms/<new-uuid>/
+```
+
+### Incremental Replication
+
+BTRFS `send/receive` enables efficient replication across hosts:
+
+```bash
+# First snapshot: full send
+btrfs send @snapshots/snap-v1/ | ssh remote btrfs receive /var/lib/mjolnir/@snapshots/
+
+# Subsequent snapshots: incremental send (only changed data)
+btrfs send -p @snapshots/snap-v1/ @snapshots/snap-v2/ | ssh remote btrfs receive /var/lib/mjolnir/@snapshots/
+```
+
+**Per-tier incremental efficiency:**
+
+| Tier | Incremental Send Behavior | Typical Efficiency |
+|------|--------------------------|-------------------|
+| **os/** (base OS) | Near-zero if base version unchanged | Excellent — shared reflinks |
+| **user/** (semi-private) | File-level diffs — only changed files sent | Excellent — semantic diffs |
+| **secure/data.img** (encrypted) | Block-level diffs — changed 4KB extents of the .img | Good — AES-XTS encrypts sectors independently, so a small change only affects that sector's ciphertext extent |
+
+The key insight for `data.img`: BTRFS tracks which 4KB extents of the file were written, regardless of whether the content is encrypted. `btrfs send` identifies exactly which extents changed between snapshots and sends only those. AES-XTS mode is sector-aligned — a change to one sector affects only that sector's ciphertext — so the incremental diff accurately reflects the *size* of the change, even though the *content* is opaque.
+
+**What you cannot do** with the encrypted tier:
+- **Cross-VM deduplication**: Same plaintext under different LUKS keys produces different ciphertext. Two VMs with identical files in their encrypted partitions will store two copies.
+- **Transparent compression**: Encrypted data has high entropy and is incompressible. BTRFS zstd compression has no effect on `data.img`.
+- **Content-aware diffing**: `btrfs send` knows *which blocks* changed but not *what* changed semantically. For the semi-private tier, BTRFS can send just the modified file; for the encrypted tier, it sends all modified extents of the monolithic `.img`.
+
+These limitations apply only to Tier 3. The vast majority of VM data (application code, libraries, configs, logs) lives in Tier 2 where all BTRFS features work at full effectiveness.
+
+### Snapshot Metadata
+
+Each snapshot records the information needed for restore:
+
+```json
+{
+  "snapshot_name": "my-app-v3",
+  "created_at": "2026-03-23T14:30:00Z",
+  "base_os_version": "ubuntu-24.04",
+  "base_os_manifest_hash": "b3:a1b2c3d4...",
+  "wrapped_dek": "<base64-encoded PRE-encrypted LUKS DEK>",
+  "dek_encrypted_for": "<user-public-key-id>",
+  "secure_partition_size_bytes": 10737418240,
+  "original_vm_id": "550e8400-e29b-41d4-a716-446655440000",
+  "original_config": { "vcpu_count": 2, "mem_size_mib": 512 }
+}
+```
+
+The `wrapped_dek` is the LUKS DEK encrypted under the user's public key (via PRE). To restore the snapshot on a new VM, the DEK must be re-encrypted under the new VM's ephemeral key — this is exactly what PRE provides.
 
 ## PTY Console Architecture
 
@@ -745,9 +972,10 @@ vsock channel 2+: Additional PTY sessions (post-boot)
 The initramfs contains a **stripped-down** `mjolnir-boot-agent` — a minimal Rust binary with only the capabilities needed during the boot ceremony:
 
 - vsock listener (control channel + PTY)
-- Iroh endpoint (INJECT_ALPN for receiving VM ephemeral key)
+- Iroh endpoint (INJECT_ALPN for receiving LUKS DEK or VM ephemeral key)
+- Blake3 manifest verification
 - Signature verification (ED25519 + ML-DSA-87)
-- PRE decryption (unwrap re-encrypted DEK)
+- Optional: PRE decryption (unwrap re-encrypted DEK)
 
 After `pivot_root`, the full `mjolnir-agent` (existing guest agent at `native/mjolnir_guest_agent/`) takes over. The handoff:
 
@@ -765,6 +993,8 @@ This is the **Phase D+ version** (full verification + encryption). Phase A start
 
 ```bash
 #!/bin/sh
+# Mjolnir Verified Boot — initramfs /init
+
 # 1. Start vsock PTY + Iroh endpoint immediately
 /bin/mjolnir-boot-agent --boot-mode &
 AGENT_PID=$!
@@ -776,40 +1006,30 @@ echo "Mjolnir Verified Boot"
 echo "====================="
 echo ""
 
-# 3. Mount host share (read-only, for accessing boot artifacts + userdata)
+# 3. Mount host share (read-only, for accessing base OS + userland + encrypted image)
+mkdir -p /mnt/host
 mount -t virtiofs myfs /mnt/host -o ro
 
-# 4. Verify base OS root hash signature BEFORE trusting it
-echo "[*] Verifying base OS signature..."
+# 4. Verify base OS Blake3 manifest signature
+echo "[*] Verifying base OS integrity..."
 /bin/mjolnir-boot-agent --verify-sig \
-  /mnt/host/boot/base-os.roothash.sig \
-  /mnt/host/boot/base-os.roothash \
+  /mnt/host/os/.manifest.blake3.sig \
+  /mnt/host/os/.manifest.blake3 \
   /etc/boot-verify.pub /etc/boot-verify-pq.pub
 if [ $? -ne 0 ]; then
   echo "[!] SIGNATURE VERIFICATION FAILED — refusing to boot"
   exec /bin/sh  # Drop to emergency shell
 fi
 
-# 5. Read verified root hash
-ROOTHASH=$(cat /mnt/host/boot/base-os.roothash)
-CMDLINE_HASH=$(cat /proc/cmdline | tr ' ' '\n' | grep mjolnir.roothash | cut -d= -f2)
-if [ "$ROOTHASH" != "$CMDLINE_HASH" ]; then
-  echo "[!] Root hash mismatch (file vs cmdline) — refusing to boot"
+# 5. Verify Blake3 manifest against actual filesystem
+/bin/mjolnir-boot-agent --verify-manifest /mnt/host/os/
+if [ $? -ne 0 ]; then
+  echo "[!] BASE OS INTEGRITY CHECK FAILED — files tampered"
   exec /bin/sh
 fi
-echo "[+] Base OS signature verified: $ROOTHASH"
+echo "[+] Base OS integrity verified (Blake3)"
 
-# 6. Activate dm-verity
-veritysetup open /dev/vda base-os \
-  --hash-device=/mnt/host/boot/base-os.verity \
-  --root-hash="$ROOTHASH"
-echo "[+] dm-verity activated"
-
-# 7. Mount verified base
-mount -o ro /dev/mapper/base-os /mnt/base
-echo "[+] Base OS mounted (read-only, dm-verity)"
-
-# 8. Wait for VM ephemeral key via Iroh (user device injects directly)
+# 6. Wait for LUKS DEK via Iroh (user device injects directly)
 echo "[*] Waiting for key injection via Iroh..."
 /bin/mjolnir-boot-agent --wait-for-key --timeout=60
 if [ $? -ne 0 ]; then
@@ -817,41 +1037,45 @@ if [ $? -ne 0 ]; then
   echo "[!] Dropping to emergency shell (no access to encrypted data)"
   exec /bin/sh
 fi
-echo "[+] Ephemeral key received"
+echo "[+] LUKS key received"
 
-# 9. Wait for re-wrapped DEK via vsock (host delivers after recryption)
-echo "[*] Requesting encrypted DEK from host..."
-DEK_PATH=$(/bin/mjolnir-boot-agent --decrypt-dek)
-echo "[+] DEK decrypted"
-
-# 10. Open encrypted userdata
-echo "[*] Unlocking encrypted userdata..."
-cryptsetup open /mnt/host/userdata.luks userdata \
+# 7. Open encrypted secure data partition (virtio-blk /dev/vda)
+DEK_PATH=$(/bin/mjolnir-boot-agent --get-dek-path)
+echo "[*] Unlocking encrypted secure partition..."
+cryptsetup open /dev/vda secure \
   --type=luks2 --key-file="$DEK_PATH"
 shred -u "$DEK_PATH"    # Destroy key material from tmpfs
-echo "[+] Userdata unlocked"
+echo "[+] Secure partition unlocked"
 
-# 11. Set up overlayfs
-mkdir -p /mnt/merged /mnt/userdata /mnt/work
-mount /dev/mapper/userdata /mnt/userdata
-# Overlay for /etc: base provides defaults, userdata provides overrides
-mkdir -p /mnt/userdata/etc-overlay /mnt/userdata/etc-work
-mount -t overlay overlay /mnt/base/etc \
-  -o lowerdir=/mnt/base/etc,upperdir=/mnt/userdata/etc-overlay,workdir=/mnt/userdata/etc-work
+# 8. Remount host share as read-write (for semi-private userland)
+umount /mnt/host
+mount -t virtiofs myfs /mnt/host -o rw
 
-# Bind mount userdata
-mkdir -p /mnt/base/data
-mount --bind /mnt/userdata/data /mnt/base/data
+# 9. Set up merged root via overlayfs
+mkdir -p /mnt/merged /mnt/secure
 
-echo "[+] Filesystem assembled (dm-verity base + encrypted overlay)"
+# overlayfs: verified base (lower) + semi-private userland (upper)
+mount -t overlay overlay /mnt/merged \
+  -o lowerdir=/mnt/host/os,upperdir=/mnt/host/user/root-overlay,workdir=/mnt/host/user/overlay-work
+
+# Bind mount semi-private data
+mkdir -p /mnt/merged/data
+mount --bind /mnt/host/user/data /mnt/merged/data
+
+# Mount decrypted secure partition
+mkdir -p /mnt/merged/data/secure
+mount /dev/mapper/secure /mnt/merged/data/secure
+
+echo "[+] Filesystem assembled (Blake3-verified base + encrypted secure partition)"
 echo ""
 echo "Booting into verified environment..."
 
-# 12. Write Iroh key for full agent to pick up
-cp /tmp/iroh.key /mnt/base/etc/mjolnir/iroh.key
+# 10. Write Iroh key for full agent to pick up
+mkdir -p /mnt/merged/etc/mjolnir
+cp /tmp/iroh.key /mnt/merged/etc/mjolnir/iroh.key
 
-# 13. pivot_root and exec init
-cd /mnt/base
+# 11. pivot_root and exec init
+cd /mnt/merged
 mkdir -p mnt/initramfs
 pivot_root . mnt/initramfs
 exec chroot . /sbin/init
@@ -861,20 +1085,18 @@ exec chroot . /sbin/init
 
 The existing secrets architecture (`docs/secrets-architecture.md`) provides encrypted environment variable storage via LUKS volumes with passphrase-based injection. The verified boot design **extends** this, not replaces it:
 
-| Aspect | Existing Secrets Volume | Verified Boot Userdata |
-|--------|------------------------|----------------------|
-| **Purpose** | Store env vars (`DATABASE_URL`, etc.) | Encrypt all user filesystem data |
+| Aspect | Existing Secrets Volume | Verified Boot Secure Partition |
+|--------|------------------------|-------------------------------|
+| **Purpose** | Store env vars (`DATABASE_URL`, etc.) | Encrypt all sensitive filesystem data |
 | **LUKS cipher** | `aes-xts-plain64`, 512-bit | `aes-xts-plain64`, 512-bit (same) |
 | **Key type** | Passphrase + Argon2id PBKDF | Raw 256-bit key (no PBKDF) |
-| **Injection** | Iroh `INJECT_ALPN` (passphrase) | Iroh `INJECT_ALPN` (PRE secret key) |
-| **Volume location** | `/var/lib/mjolnir/secrets.luks` (inside guest) | `@vms/<uuid>/userdata.luks` (on host, virtio-fs) |
+| **Injection** | Iroh `INJECT_ALPN` (passphrase) | Iroh `INJECT_ALPN` (raw DEK or PRE key) |
+| **Storage** | `/var/lib/mjolnir/secrets.luks` (inside guest) | `/dev/vda` via virtio-blk (host-side data.img) |
 | **Lifecycle** | Created on first injection | Created at VM spawn |
 
-**Coexistence**: In the verified boot model, the secrets volume lives *inside* the encrypted userdata. Once the userdata LUKS is unlocked, the secrets volume at `/data/secrets.luks` can be opened with the existing passphrase flow. The two layers are complementary:
-- Userdata LUKS: encrypts the entire user filesystem (key via PRE)
-- Secrets LUKS: additional isolation for sensitive env vars (key via passphrase)
+**Coexistence**: In the verified boot model, the existing secrets volume can live *inside* the encrypted secure partition at `/data/secure/secrets.luks`. This provides defense-in-depth: even if the LUKS DEK for the secure partition were somehow compromised, the env var secrets have an additional encryption layer with a separate passphrase. Alternatively, env vars can be stored directly in `/data/secure/env/` since the partition is already encrypted.
 
-**Migration**: Existing VMs without verified boot continue to work in legacy mode (direct virtio-fs root mount, passphrase-based secrets). Verified boot is opt-in per VM via the `base_os_roothash` config field.
+**Migration**: Existing VMs without verified boot continue to work in legacy mode (direct virtio-fs root mount, passphrase-based secrets). Verified boot is opt-in per VM via the `initramfs_path` config field.
 
 ## Boot Image Build Pipeline
 
@@ -888,125 +1110,137 @@ boot-image/
 ├── initramfs.img                  # cpio archive
 ├── initramfs.img.blake3
 ├── initramfs.img.sig
-├── base-os/
-│   ├── ubuntu-24.04.img           # ext4 image
-│   ├── ubuntu-24.04.verity        # dm-verity hash tree (SHA-256)
-│   ├── ubuntu-24.04.roothash      # 32-byte root hash
-│   └── ubuntu-24.04.roothash.sig  # MultiSig over root hash
 └── manifest.json                  # Ties all artifacts + hashes + sigs together
     manifest.json.sig              # Signed manifest
 ```
 
-### Build Script (Conceptual)
+### Base OS Manifest Build
 
 ```bash
 #!/bin/bash
-# scripts/build-boot-image.sh
+# scripts/build-base-manifest.sh — Generate signed Blake3 manifest for a base OS subvolume
 
-SIGNING_KEY=${SIGNING_KEY:-keys/boot-signing.key}
 BASE_IMAGE=${1:-ubuntu-24.04}
+SIGNING_KEY=${SIGNING_KEY:-keys/boot-signing.key}
+BASE_DIR="/var/lib/mjolnir/@base/${BASE_IMAGE}"
 
-# 1. Build base OS ext4 image from BTRFS subvolume
-echo "[*] Creating ext4 image from @base/${BASE_IMAGE}..."
-mkfs.ext4 -d "/var/lib/mjolnir/@base/${BASE_IMAGE}" \
-  "boot-image/base-os/${BASE_IMAGE}.img" 2G
+echo "[*] Generating Blake3 manifest for ${BASE_DIR}..."
 
-# 2. Generate dm-verity hash tree
-echo "[*] Generating dm-verity hash tree (SHA-256)..."
-veritysetup format \
-  "boot-image/base-os/${BASE_IMAGE}.img" \
-  "boot-image/base-os/${BASE_IMAGE}.verity" \
-  --hash=sha256 \
-  | grep "Root hash" | awk '{print $3}' \
-  > "boot-image/base-os/${BASE_IMAGE}.roothash"
+# Walk all files, hash each one, produce sorted manifest
+find "${BASE_DIR}" -type f ! -name '.manifest.*' -print0 \
+  | sort -z \
+  | while IFS= read -r -d '' f; do
+      relpath="${f#${BASE_DIR}/}"
+      hash=$(b3sum --no-names "$f")
+      printf '%s  %s\n' "$hash" "$relpath"
+    done > "${BASE_DIR}/.manifest.txt"
 
-# 3. Sign the root hash
-echo "[*] Signing root hash..."
+# Hash the manifest itself
+b3sum --no-names "${BASE_DIR}/.manifest.txt" > "${BASE_DIR}/.manifest.blake3"
+
+# Sign the manifest hash
 mjolnir-sign --key "$SIGNING_KEY" \
-  --input "boot-image/base-os/${BASE_IMAGE}.roothash" \
-  --output "boot-image/base-os/${BASE_IMAGE}.roothash.sig"
+  --input "${BASE_DIR}/.manifest.blake3" \
+  --output "${BASE_DIR}/.manifest.blake3.sig"
 
-# 4. Build initramfs (contains pubkey, boot agent, busybox, veritysetup, cryptsetup)
-echo "[*] Building initramfs..."
-./scripts/build-initramfs.sh \
-  --pubkey "keys/boot-verify.pub" \
-  --output "boot-image/initramfs.img"
+echo "[+] Manifest ready: $(cat ${BASE_DIR}/.manifest.blake3)"
+echo "[+] $(wc -l < ${BASE_DIR}/.manifest.txt) files hashed"
+```
 
-# 5. Sign initramfs and kernel
-for artifact in vmlinux-ch initramfs.img; do
-  blake3sum "boot-image/${artifact}" | awk '{print $1}' > "boot-image/${artifact}.blake3"
-  mjolnir-sign --key "$SIGNING_KEY" \
-    --input "boot-image/${artifact}.blake3" \
-    --output "boot-image/${artifact}.sig"
+### Initramfs Build
+
+```bash
+#!/bin/bash
+# scripts/build-initramfs.sh
+
+PUBKEY=${1:-keys/boot-verify.pub}
+PUBKEY_PQ=${2:-keys/boot-verify-pq.pub}
+OUTPUT=${3:-boot-image/initramfs.img}
+
+WORKDIR=$(mktemp -d)
+mkdir -p "${WORKDIR}"/{bin,etc,dev,proc,sys,mnt/host,mnt/merged,mnt/secure,tmp}
+
+# Minimal userspace
+cp /usr/bin/busybox "${WORKDIR}/bin/"
+ln -s busybox "${WORKDIR}/bin/sh"
+for cmd in mount umount mkdir cat shred cp cd; do
+  ln -s busybox "${WORKDIR}/bin/${cmd}"
 done
 
-# 6. Generate manifest
-echo "[*] Generating signed manifest..."
-# manifest.json includes all hashes and artifact metadata
-python3 scripts/gen-manifest.py boot-image/ > boot-image/manifest.json
-mjolnir-sign --key "$SIGNING_KEY" \
-  --input boot-image/manifest.json \
-  --output boot-image/manifest.json.sig
+# Cryptographic tools
+cp target/x86_64-unknown-linux-musl/release/mjolnir-boot-agent "${WORKDIR}/bin/"
+cp /usr/sbin/cryptsetup "${WORKDIR}/bin/"   # Static musl build
 
-echo "[+] Boot image ready. Root hash: $(cat boot-image/base-os/${BASE_IMAGE}.roothash)"
+# Public keys for signature verification
+cp "$PUBKEY" "${WORKDIR}/etc/boot-verify.pub"
+cp "$PUBKEY_PQ" "${WORKDIR}/etc/boot-verify-pq.pub"
+
+# Init script
+cp scripts/initramfs-init.sh "${WORKDIR}/init"
+chmod +x "${WORKDIR}/init"
+
+# Build cpio archive
+(cd "${WORKDIR}" && find . | cpio -o -H newc | gzip -9) > "$OUTPUT"
+echo "[+] Initramfs: $(du -h $OUTPUT | cut -f1) compressed"
+
+rm -rf "${WORKDIR}"
 ```
 
 ### Initramfs Contents
 
-The initramfs cpio archive contains only what's needed for the boot ceremony:
-
 ```
 /init                       # Boot script (see above)
 /bin/busybox                # Minimal userspace (sh, mount, cat, shred, mkdir)
-/bin/mjolnir-boot-agent     # Rust binary: vsock PTY + Iroh + sig verify + PRE decrypt
-/bin/veritysetup            # dm-verity activation (static-linked against musl)
+/bin/mjolnir-boot-agent     # Rust binary: vsock PTY + Iroh + Blake3 verify + sig verify
 /bin/cryptsetup             # LUKS open (static-linked against musl)
 /etc/boot-verify.pub        # ED25519 public key for signature verification
 /etc/boot-verify-pq.pub    # ML-DSA-87 public key for PQ signature verification
-/lib/modules/               # dm-verity and dm-crypt kernel modules (if not built-in)
 ```
 
-Target size: ~5-10MB compressed. All binaries statically linked against musl.
-
-**Build note**: Statically linking `veritysetup` and `cryptsetup` (which depend on `libdevmapper` and `libcryptsetup`) is non-trivial. Alpine Linux packages provide musl-linked static builds that can be extracted directly. Alternatively, build from source with `--enable-static --disable-shared` against musl-libc.
+Target size: ~8-15MB compressed. No `veritysetup` needed (replaced by Blake3 manifest verification in the boot agent binary).
 
 ## Estimated Boot Latency
 
 | Phase | Duration | Notes |
 |-------|----------|-------|
 | CH kernel + initramfs load | ~200ms | Existing |
-| dm-verity signature verify | ~10ms | ED25519 + ML-DSA-87 verify |
-| dm-verity activation | ~50ms | Device mapper setup, no I/O yet |
-| dm-verity base OS mount | ~100ms | First reads verify Merkle path |
+| Blake3 manifest signature verify | ~10ms | ED25519 + ML-DSA-87 verify |
+| Blake3 base OS verification | ~200ms | ~1GB base at 5+ GB/s (Blake3 with AVX-512) |
 | Iroh key injection | 200-500ms | QUIC handshake + E2E key delivery from user device |
-| DEK recryption + delivery | ~50ms | Host recrypts, delivers via vsock |
 | LUKS open | ~50ms | Raw key injection (no PBKDF — much faster than Argon2id) |
 | Overlay setup + pivot_root | ~50ms | overlayfs + bind mounts |
 | **Total added** | **~500-800ms** | Over current ~2-3s boot |
 
 Expected total boot time: ~2.5-3.8 seconds for a fully verified, encrypted boot.
 
+With spot-check mode (critical files only instead of full manifest), Blake3 verification drops to ~10ms and total added latency is ~300-600ms.
+
 ## Counterfactuals and Trade-offs
 
-### 1. dm-verity Requires a Block Device
+### 1. Why Not dm-verity?
 
-dm-verity cannot protect a virtio-fs directory share. The base OS must be an ext4 image served via virtio-blk. This means CH needs both `"disks"` (base OS) and `"fs"` (userdata) entries. Cloud Hypervisor supports mixing storage backends, so this is configuration, not a limitation.
+dm-verity provides continuous runtime integrity checking but requires a block device, forcing the base OS off BTRFS onto ext4 via virtio-blk. This sacrifices virtio-fs live sharing, reflink cloning, deduplication, and compression for the OS tier. Blake3 manifest verification provides equivalent tamper detection at boot time. The base OS is mounted read-only — runtime re-verification is unnecessary for our threat model.
 
-The BTRFS subvolume approach remains for userdata where CoW snapshots matter. The base OS doesn't need CoW — it's immutable.
+### 2. Why Not Encrypt Everything?
 
-### 2. User Must Be Online for Primary Path
+Encrypting all user data (Tier 2 + Tier 3) would require either: (a) the entire filesystem on LUKS via virtio-blk, losing virtio-fs entirely, or (b) LUKS-over-loopback-over-virtio-fs, adding three layers of I/O indirection. Either approach eliminates BTRFS's most valuable features for the majority of data. The three-tier model provides full encryption where it matters (secrets, PII, sensitive data) while preserving BTRFS superpowers (dedup, compression, incremental sync) for everything else.
 
-The user-device-generated ephemeral keypair (primary path) requires the user to be online during VM spawn to inject the private key via Iroh. This is acceptable for interactive use. For autonomous spawning (dormant restoration, scaling), the pre-committed key pool (offline path) provides a fallback with a slightly weaker trust model.
+Additionally, virtio-fs with DAX gives the host memory-mapped access to guest filesystem contents. Even LUKS-over-virtio-fs does not protect against a host inspecting virtiofsd's shared memory. True host-opaque encryption requires either virtio-blk (Tier 3) or application-level encryption (Recrypt).
 
-### 3. Offline Boot
+### 3. User Must Be Online for Primary Path
 
-If the Identikey user is unreachable AND the recryption proxy is down AND no pre-committed keys are available, the VM cannot unlock its userdata. This is by design — it's the zero-knowledge property. The initramfs should:
+The user-device-generated ephemeral keypair (primary path) requires the user to be online during VM spawn to inject the LUKS DEK via Iroh. This is acceptable for interactive use. For autonomous spawning (dormant restoration, scaling), the pre-committed key pool (offline path) provides a fallback with a slightly weaker trust model.
+
+### 4. Offline Boot
+
+If the Identikey user is unreachable AND no pre-committed keys are available, the VM boots but cannot unlock its encrypted secure partition. This is by design — it's the zero-knowledge property. The initramfs should:
 
 - Retry with exponential backoff (5s, 10s, 20s...)
 - Display status on the PTY console: "Waiting for key provider..."
-- After timeout (configurable, default 60s): drop to a minimal shell for debugging, with no access to encrypted data
+- After timeout (configurable, default 60s): drop to a minimal shell for debugging
+- Semi-private userland (`/data/`) is still accessible — only `/data/secure/` requires the key
 
-### 4. Signing Key Trust
+### 5. Signing Key Trust
 
 The boot image signing key is a single point of trust. Whoever holds it can produce a malicious initramfs that exfiltrates LUKS keys. Mitigations:
 
@@ -1014,13 +1248,21 @@ The boot image signing key is a single point of trust. Whoever holds it can prod
 - **Multi-party signing**: Require 2-of-N threshold signatures
 - **Transparency log**: Publish signed boot image hashes to an append-only log
 
-### 5. Rollback Protection
+### 6. Rollback Protection
 
-dm-verity alone doesn't prevent booting an older (potentially vulnerable) base OS image. For rollback protection:
+Blake3 manifest verification alone doesn't prevent booting an older (potentially vulnerable) base OS image. For rollback protection:
 
 - Include a monotonic version counter in the signed manifest
 - The initramfs checks the counter against a stored minimum (in LUKS header metadata or a TPM-like counter)
 - Refuse to boot if the version is below the minimum
+
+### 7. Secure Partition Sizing
+
+The `data.img` LUKS partition is created at VM spawn with a fixed size. Resizing a LUKS volume requires unmounting, which means VM downtime. Options:
+
+- Default to a generous size (e.g., 10GB) — most secure data is small (keys, credentials, PII records)
+- Support online resize via `cryptsetup resize` + `resize2fs` if the underlying image is grown
+- Allow the user to specify size at spawn time
 
 ## Implementation Phases
 
@@ -1032,26 +1274,23 @@ Prove the boot chain works:
 3. initramfs mounts virtio-fs and does `pivot_root` (same as today, but via initramfs)
 4. Verify PTY console works during initramfs phase via `mjolnir-boot-agent` (vsock only, no Iroh)
 
-**Note**: Phase A skips signature verification and dm-verity. The init script is a simplified version that just mounts and pivots.
+### Phase B: Blake3 Base OS Verification
 
-### Phase B: dm-verity Base OS
+Add integrity checking:
+1. Build Blake3 manifest for the base OS subvolume (`scripts/build-base-manifest.sh`)
+2. Add `--verify-manifest` and `--verify-sig` commands to `mjolnir-boot-agent`
+3. initramfs verifies Blake3 manifest before pivoting
+4. Set up overlayfs: base OS (lower, read-only) + semi-private userland (upper, writable)
 
-Add integrity verification:
-1. Build ext4 base OS image from existing BTRFS subvolume
-2. Generate dm-verity hash tree with `veritysetup format`
-3. Add `base_os_image` and `disk_config/1` to CH config for virtio-blk
-4. Update virtiofsd scope: `shared_dir` now points to userdata-only subvolume
-5. initramfs activates dm-verity, mounts verified base, sets up overlayfs
-6. virtio-fs now serves only the userdata subvolume
-
-### Phase C: LUKS Encrypted Userdata (Direct DEK via Iroh)
+### Phase C: LUKS Encrypted Secure Partition (Direct DEK via Iroh)
 
 Add encryption with the simplest key injection (no PRE yet):
-1. Create LUKS-formatted userdata volume at VM spawn (`cryptsetup luksFormat --cipher aes-xts-plain64 --key-size 512 --key-file <random_dek>`)
-2. Extend `mjolnir-boot-agent` with Iroh endpoint for INJECT_ALPN
-3. User device unwraps DEK locally, delivers raw DEK via Iroh (E2E)
-4. initramfs receives DEK, opens LUKS, assembles overlay, pivots
-5. Establish agent handoff: boot-agent writes Iroh key, full agent picks it up
+1. Create LUKS-formatted `data.img` at VM spawn (`cryptsetup luksFormat --cipher aes-xts-plain64 --key-size 512 --key-file <random_dek>`)
+2. Add `secure_data_image` to CH config for virtio-blk
+3. Extend `mjolnir-boot-agent` with Iroh endpoint for INJECT_ALPN
+4. User device delivers raw DEK via Iroh (E2E)
+5. initramfs receives DEK, opens LUKS on `/dev/vda`, assembles overlay, pivots
+6. Establish agent handoff: boot-agent writes Iroh key, full agent picks it up
 
 ### Phase D: Identikey/Recrypt Key Injection (Full PRE)
 
@@ -1067,10 +1306,10 @@ Complete the zero-knowledge key flow:
 
 Production signing pipeline:
 1. `mjolnir-sign` CLI tool (wraps `recrypt-core::sign`)
-2. Boot image build script (`scripts/build-boot-image.sh`)
+2. Boot image + manifest build scripts
 3. Manifest generation and verification
-4. Init script signature verification (ED25519 + ML-DSA-87 dual check before trusting roothash)
-5. Remote attestation: client verifies guest dm-verity hash before key delivery
+4. Init script signature verification (ED25519 + ML-DSA-87 dual check)
+5. Remote attestation: client verifies guest Blake3 manifest hash before key delivery
 6. Key management (generation, rotation, multi-party)
 
 ## References
@@ -1079,7 +1318,7 @@ Production signing pipeline:
 - `lib/mjolnir/cloud_hypervisor/config.ex` — Current CH config (to be extended)
 - `lib/mjolnir/cloud_hypervisor/client.ex` — CH API client
 - `lib/mjolnir/vm.ex` — VM lifecycle GenServer
-- `lib/mjolnir/virtiofs.ex` — Current virtiofsd management (scope changes in Phase B)
+- `lib/mjolnir/virtiofs.ex` — virtiofsd management (scope unchanged)
 - `native/mjolnir_guest_agent/src/iroh.rs` — Iroh endpoint + INJECT_ALPN handler
 - `native/mjolnir_guest_agent/src/secrets.rs` — LUKS engine + one-shot injection guard
 - `docs/research/zero-knowledge-vm-storage/synthesis.md` — Zero-knowledge architecture research
