@@ -53,12 +53,16 @@ defmodule Mjolnir.CloudHypervisor.Config do
   - vsock (cid, socket path)
   """
   def vm_create_payload(%__MODULE__{} = config, vsock_path) do
+    serial_log = Path.join(Path.dirname(vsock_path), "#{config.vm_id}_serial.log")
+
     payload = %{
       "payload" => kernel_payload(config),
       "cpus" => cpus_config(config),
       "memory" => memory_config(config),
       "fs" => fs_config(config),
-      "vsock" => vsock_config(config, vsock_path)
+      "vsock" => vsock_config(config, vsock_path),
+      "serial" => %{"mode" => "File", "file" => serial_log},
+      "console" => %{"mode" => "Off"}
     }
 
     case network_config(config) do

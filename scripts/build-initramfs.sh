@@ -82,7 +82,7 @@ echo "OK: busybox is statically linked"
 # --- Validate required busybox applets ---
 chmod +x "$BUSYBOX_CACHE"
 MISSING=""
-for applet in sh mount mkdir switch_root sleep; do
+for applet in sh mount mkdir switch_root sleep killall; do
     if ! "$BUSYBOX_CACHE" --list | grep -q "^${applet}$"; then
         MISSING="$MISSING $applet"
     fi
@@ -91,7 +91,7 @@ if [ -n "$MISSING" ]; then
     echo "ERROR: busybox missing required applets:$MISSING"
     exit 1
 fi
-echo "OK: required applets present (sh mount mkdir switch_root sleep)"
+echo "OK: required applets present (sh mount mkdir switch_root sleep killall)"
 
 # --- Populate staging directory ---
 echo "--- Populating staging directory ---"
@@ -101,7 +101,7 @@ cp "$BUSYBOX_CACHE" "$STAGING_DIR/bin/busybox"
 chmod 755 "$STAGING_DIR/bin/busybox"
 
 # Create busybox symlinks
-for applet in sh mount mkdir switch_root sleep; do
+for applet in sh mount mkdir switch_root sleep killall; do
     ln -sf busybox "$STAGING_DIR/bin/$applet"
 done
 
