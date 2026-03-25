@@ -1,5 +1,7 @@
 # Initramfs Verified Boot Design
 
+> **See also:** `docs/encryption-and-security.md` for the consolidated security architecture overview — three-tier storage model, four encryption layers, threat model, and implementation status.
+
 Mjolnir's boot chain gains a cryptographic trust boundary by inserting an initramfs between kernel load and rootfs mount. The initramfs creates a verified, authenticated execution environment before any user data is accessible — enabling Blake3 integrity verification on the immutable base OS, LUKS-encrypted secure data unlocked via Identikey key injection, and a guest-owned PTY console from the first instruction.
 
 ## Motivation

@@ -1,5 +1,7 @@
 # Mjolnir Secrets Architecture
 
+> **See also:** `docs/encryption-and-security.md` for how secrets fit into the broader security model — three-tier storage (secrets are Tier 3), four encryption layers, and the full threat model.
+
 ## Overview
 
 Mjolnir provides encrypted secrets management for VMs using LUKS2 encrypted volumes, with passphrase injection over Iroh's end-to-end encrypted QUIC connections. Secrets are automatically loaded as environment variables — applications consume them like any standard env-based configuration (e.g., `DATABASE_URL`, `API_KEY`).

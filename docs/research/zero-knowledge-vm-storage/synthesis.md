@@ -1,5 +1,7 @@
 # Zero-Knowledge VM Storage: Synthesis
 
+> **See also:** `docs/encryption-and-security.md` for the consolidated security architecture that this research informed — three-tier storage model, cipher suite selection, and build phases.
+
 ## Key Findings
 
 The research across five hypotheses converges on a clear architecture for achieving

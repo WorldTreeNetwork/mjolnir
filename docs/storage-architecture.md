@@ -1,6 +1,8 @@
 # Storage Architecture
 
-## 1. Current Architecture: ext4-on-BTRFS
+> **Superseded:** This document describes the original ext4-on-BTRFS / Firecracker-era storage model. Mjolnir now uses Cloud Hypervisor v50 + virtio-fs with BTRFS subvolumes (no ext4 images). For the current architecture, see `docs/encryption-and-security.md` (three-tier storage model) and `docs/plans/initramfs-verified-boot.md` (verified boot design). This document is retained for historical context.
+
+## 1. Original Architecture: ext4-on-BTRFS
 
 Firecracker requires block device images (ext4 files). Mjolnir stores these on a BTRFS host filesystem to leverage copy-on-write reflink cloning.
 
