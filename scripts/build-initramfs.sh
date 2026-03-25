@@ -20,12 +20,18 @@ BOOT_AGENT_BIN="$PROJECT_ROOT/native/target/x86_64-unknown-linux-musl/release/mj
 INIT_SCRIPT="$SCRIPT_DIR/initramfs-init.sh"
 
 # Busybox static x86_64 binary
-# Primary: use system busybox if available and statically linked
-# Fallback: download from busybox.net (pinned version)
-BUSYBOX_VERSION="1.36.1"
-BUSYBOX_URL="https://busybox.net/downloads/binaries/${BUSYBOX_VERSION}-x86_64-linux-musl/busybox"
+# Primary: use system busybox if available, statically linked, and SHA256 matches
+# Fallback: download from busybox.net (pinned older version — 1.36.1 not available there)
 BUSYBOX_SYSTEM="/usr/bin/busybox"
-BUSYBOX_CACHE="$CACHE_DIR/busybox-${BUSYBOX_VERSION}"
+BUSYBOX_CACHE="$CACHE_DIR/busybox"
+
+# Download fallback: busybox.net only has up to 1.35.0 for x86_64-linux-musl
+BUSYBOX_DOWNLOAD_VERSION="1.35.0"
+BUSYBOX_DOWNLOAD_URL="https://busybox.net/downloads/binaries/${BUSYBOX_DOWNLOAD_VERSION}-x86_64-linux-musl/busybox"
+BUSYBOX_DOWNLOAD_SHA256="6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348"
+
+# System busybox: Ubuntu busybox-static 1:1.36.1-6ubuntu3.1 (apt install busybox-static)
+BUSYBOX_SYSTEM_SHA256="dbac288c29ba568459550a2da9e7ae0ded6b1fc728ee9fad3044c44e62d6ac14"
 
 MAX_SIZE_BYTES=$((10 * 1024 * 1024))  # 10MB hard limit
 
@@ -49,27 +55,35 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/bin"
 
 # --- Obtain and verify busybox ---
-# Pinned SHA256 for the system busybox on our server (Ubuntu busybox-static 1.36.1)
-BUSYBOX_SHA256="dbac288c29ba568459550a2da9e7ae0ded6b1fc728ee9fad3044c44e62d6ac14"
-
 if [ ! -f "$BUSYBOX_CACHE" ]; then
     if [ -f "$BUSYBOX_SYSTEM" ] && file "$BUSYBOX_SYSTEM" | grep -q "statically linked"; then
-        echo "--- Using system busybox (statically linked) ---"
-        cp "$BUSYBOX_SYSTEM" "$BUSYBOX_CACHE"
-    else
-        echo "--- Downloading busybox ${BUSYBOX_VERSION} ---"
-        curl -fsSL --connect-timeout 30 -o "$BUSYBOX_CACHE.tmp" "$BUSYBOX_URL"
-        mv "$BUSYBOX_CACHE.tmp" "$BUSYBOX_CACHE"
+        echo "--- Trying system busybox ---"
+        ACTUAL_SHA256=$(sha256sum "$BUSYBOX_SYSTEM" | awk '{print $1}')
+        if [ "$ACTUAL_SHA256" = "$BUSYBOX_SYSTEM_SHA256" ]; then
+            echo "OK: system busybox SHA256 matches pinned value"
+            cp "$BUSYBOX_SYSTEM" "$BUSYBOX_CACHE"
+        else
+            echo "WARN: system busybox SHA256 mismatch (got $ACTUAL_SHA256)"
+            echo "      expected $BUSYBOX_SYSTEM_SHA256"
+            echo "      Falling back to download..."
+        fi
     fi
 fi
 
-echo "--- Verifying busybox SHA256 ---"
-echo "${BUSYBOX_SHA256}  ${BUSYBOX_CACHE}" | sha256sum -c - || {
-    echo "ERROR: busybox SHA256 mismatch — refusing to use untrusted binary"
-    rm -f "$BUSYBOX_CACHE"
-    exit 1
-}
-echo "OK: busybox SHA256 verified"
+if [ ! -f "$BUSYBOX_CACHE" ]; then
+    echo "--- Downloading busybox ${BUSYBOX_DOWNLOAD_VERSION} from busybox.net ---"
+    curl -fsSL --connect-timeout 30 -o "$BUSYBOX_CACHE.tmp" "$BUSYBOX_DOWNLOAD_URL"
+    ACTUAL_SHA256=$(sha256sum "$BUSYBOX_CACHE.tmp" | awk '{print $1}')
+    if [ "$ACTUAL_SHA256" != "$BUSYBOX_DOWNLOAD_SHA256" ]; then
+        echo "ERROR: downloaded busybox SHA256 mismatch"
+        echo "  expected: $BUSYBOX_DOWNLOAD_SHA256"
+        echo "  got:      $ACTUAL_SHA256"
+        rm -f "$BUSYBOX_CACHE.tmp"
+        exit 1
+    fi
+    echo "OK: downloaded busybox SHA256 verified"
+    mv "$BUSYBOX_CACHE.tmp" "$BUSYBOX_CACHE"
+fi
 
 echo "--- Verifying busybox is statically linked ---"
 if ! file "$BUSYBOX_CACHE" | grep -q "statically linked"; then
@@ -116,10 +130,14 @@ chmod 755 "$STAGING_DIR/init"
 echo "Staging contents:"
 find "$STAGING_DIR" | sort | sed "s|$STAGING_DIR||"
 
+# --- Zero all timestamps for reproducibility ---
+# GNU cpio does NOT honor SOURCE_DATE_EPOCH — it records actual file mtimes.
+# Force all files/dirs to epoch 0 so the archive is byte-identical across runs.
+find "$STAGING_DIR" -exec touch -h -d @0 {} +
+
 # --- Build cpio archive ---
 echo "--- Building cpio archive ---"
 
-# SOURCE_DATE_EPOCH=0: zero timestamps for reproducibility
 # find . | sort: deterministic ordering
 # cpio --reproducible: zero inode/device numbers
 # -o -H newc: output in newc (new ASCII) format
@@ -127,7 +145,7 @@ echo "--- Building cpio archive ---"
 # gzip --no-name: omit filename/timestamp from gzip header
 (
     cd "$STAGING_DIR"
-    SOURCE_DATE_EPOCH=0 find . | sort | \
+    find . | sort | \
         cpio --reproducible -o -H newc --owner=0:0 | \
         gzip --no-name > "$OUTPUT_IMG"
 )
