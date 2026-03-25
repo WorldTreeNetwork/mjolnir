@@ -803,6 +803,7 @@ setup_directories() {
 
     # Ensure /var/lib/mjolnir exists
     mkdir -p "$MJOLNIR_ROOT"
+    mkdir -p "$MJOLNIR_ROOT/boot"
 
     # Set up test and dev directories within BTRFS for reflink to work
     if [[ -d "$MJOLNIR_ROOT/btrfs" ]]; then

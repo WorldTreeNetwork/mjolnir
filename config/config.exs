@@ -30,6 +30,11 @@ config :mjolnir,
   # Guest agent binary to inject into rootfs on boot (nil = skip injection)
   guest_agent_bin: nil,
 
+  # Initramfs image for two-phase boot (nil = legacy direct virtiofs boot)
+  # Set to /var/lib/mjolnir/boot/initramfs.img to enable initramfs mode.
+  # Override at runtime via MJOLNIR_INITRAMFS_PATH env var.
+  initramfs_path: nil,
+
   # SSH (nil = no default key injection; can be a path or inline key string)
   default_ssh_public_key: nil,
 

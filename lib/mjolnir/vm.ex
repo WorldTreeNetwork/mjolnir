@@ -827,7 +827,7 @@ defmodule Mjolnir.VM do
              }),
            :ok <- configure_vm(hypervisor, socket_path, config),
            :ok <- hypervisor.start_instance(socket_path),
-           :ok <- wait_for_boot(vsock_path),
+           :ok <- wait_for_boot(vsock_path, state),
            :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
         # Inject SSH public key if provided
         if state.ssh_public_key do
@@ -1042,9 +1042,11 @@ defmodule Mjolnir.VM do
     hypervisor.configure_vm(socket_path, config)
   end
 
-  defp wait_for_boot(vsock_path, timeout \\ 30_000) do
-    # Wait for guest agent to respond to ping
+  defp wait_for_boot(vsock_path, _state, timeout \\ 30_000) do
     start_time = System.monotonic_time(:millisecond)
+    # Two-phase wait works for both legacy and initramfs modes:
+    # - Legacy: first ping returns :full → done immediately
+    # - Initramfs: first ping returns :boot → wait for :full after switch_root
     wait_for_agent(vsock_path, timeout, start_time)
   end
 
@@ -1055,9 +1057,14 @@ defmodule Mjolnir.VM do
       {:error, :boot_timeout}
     else
       case try_ping_agent(vsock_path) do
-        :ok ->
-          Logger.debug("Guest agent responded after #{elapsed}ms")
+        {:ok, :full} ->
+          Logger.debug("Guest agent (full) responded after #{elapsed}ms")
           :ok
+
+        {:ok, :boot} ->
+          Logger.debug("Boot agent responded after #{elapsed}ms, waiting for full agent")
+          Process.sleep(500)
+          wait_for_agent(vsock_path, timeout, start_time)
 
         {:error, _reason} ->
           Process.sleep(500)
@@ -1232,13 +1239,25 @@ defmodule Mjolnir.VM do
   end
 
   defp try_ping_agent(vsock_path) do
-    case vsock_connect(vsock_path, 2000) do
-      {:ok, sock} ->
-        :gen_tcp.close(sock)
-        :ok
+    alias Mjolnir.Vsock.Protocol
+    ping_id = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    ping = %{"type" => "ping", "id" => ping_id}
+    timeout = 2000
 
-      {:error, _reason} = error ->
-        error
+    with {:ok, sock} <- vsock_connect(vsock_path, timeout),
+         :ok <- :gen_tcp.send(sock, Protocol.encode(ping)),
+         {:ok, <<_channel::8, length::big-32>>} <- :gen_tcp.recv(sock, 5, timeout),
+         {:ok, body} <- :gen_tcp.recv(sock, length, timeout),
+         :ok <- :gen_tcp.close(sock),
+         {:ok, %{"type" => "pong"} = pong} <- Jason.decode(body) do
+      agent_type = if pong["agent"] == "boot", do: :boot, else: :full
+      {:ok, agent_type}
+    else
+      {:ok, unexpected} ->
+        {:error, {:unexpected_response, unexpected}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

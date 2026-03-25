@@ -56,6 +56,18 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
         do: Map.put(config, :kernel_path, ch_kernel),
         else: config
 
+    # Use initramfs if configured (two-phase boot: initramfs → virtiofs rootfs)
+    # Boot args must omit root=/rootfstype= when initramfs handles mounting (TC6)
+    config =
+      if initramfs_path = Application.get_env(:mjolnir, :initramfs_path) do
+        Map.merge(config, %{
+          initramfs_path: initramfs_path,
+          boot_args: "console=ttyS0 reboot=k panic=1 rw"
+        })
+      else
+        config
+      end
+
     # Build the full vm.create payload, filtering to known Config fields
     known_keys = Config.__struct__() |> Map.keys() |> MapSet.new()
     filtered = Map.filter(config, fn {k, _v} -> MapSet.member?(known_keys, k) end)

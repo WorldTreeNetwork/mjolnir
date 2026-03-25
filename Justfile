@@ -83,6 +83,33 @@ deploy-rootfs: _require-host
 deploy-gateway: _require-host
     ./scripts/deploy.sh {{host}} --gateway
 
+# --- Boot image pipeline ---
+
+# Cross-compile the boot agent (musl static binary) on server
+build-boot-agent: _require-host
+    ssh {{host}} "cd /opt/mjolnir && \
+        export PATH=\"/root/.cargo/bin:/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:\$PATH\" && \
+        eval \"\$(\$HOME/.local/bin/mise activate bash 2>/dev/null || true)\" && \
+        cargo build --release \
+            --target x86_64-unknown-linux-musl \
+            -p mjolnir-guest-agent --bin mjolnir-boot-agent --no-default-features --features boot"
+
+# Build the initramfs cpio archive on server (requires build-boot-agent)
+build-initramfs: build-boot-agent
+    ssh {{host}} "cd /opt/mjolnir && bash scripts/build-initramfs.sh"
+
+# Deploy initramfs + boot agent to /var/lib/mjolnir/boot/ on server
+deploy-boot: _require-host
+    ssh {{host}} "mkdir -p /var/lib/mjolnir/boot && \
+        cp /opt/mjolnir/boot-image/initramfs.img /var/lib/mjolnir/boot/initramfs.img && \
+        cp /opt/mjolnir/native/target/x86_64-unknown-linux-musl/release/mjolnir-boot-agent \
+            /var/lib/mjolnir/boot/mjolnir-boot-agent && \
+        chmod 644 /var/lib/mjolnir/boot/initramfs.img && \
+        chmod 755 /var/lib/mjolnir/boot/mjolnir-boot-agent"
+    @echo "Deployed. To activate initramfs boot:"
+    @echo "  Set MJOLNIR_INITRAMFS_PATH=/var/lib/mjolnir/boot/initramfs.img"
+    @echo "  Then: just restart"
+
 # ═══════════════════════════════════════════════════════════════════════
 # VM Operations (SSH + curl localhost:4000)
 # ═══════════════════════════════════════════════════════════════════════

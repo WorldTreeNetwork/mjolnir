@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Metadata about a tmux session.
+#[cfg(feature = "full")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TmuxSessionInfo {
     pub session_name: String,
@@ -72,8 +73,10 @@ pub enum VsockRequest {
     SignalDone { id: String },
     #[serde(rename = "signal_done_ack")]
     SignalDoneAck { id: String, ok: bool },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_open")]
     TerminalOpen { id: String, session_name: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_read")]
     TerminalRead {
         id: String,
@@ -81,6 +84,7 @@ pub enum VsockRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         scrollback_lines: Option<i32>,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_send")]
     TerminalSend {
         id: String,
@@ -90,6 +94,7 @@ pub enum VsockRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         keys: Option<String>,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_send_and_read")]
     TerminalSendAndRead {
         id: String,
@@ -98,10 +103,13 @@ pub enum VsockRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_list")]
     TerminalList { id: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_close")]
     TerminalClose { id: String, session_name: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "configure_secrets_auth")]
     ConfigureSecretsAuth { id: String, authorized_peers: Vec<String> },
 }
@@ -118,7 +126,13 @@ pub enum VsockResponse {
         stderr: String,
     },
     #[serde(rename = "pong")]
-    Pong { id: String },
+    Pong {
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+    },
+    #[serde(rename = "boot_status")]
+    BootStatus { stage: String, detail: String },
     #[cfg(feature = "iroh")]
     #[serde(rename = "iroh_status")]
     IrohStatus {
@@ -151,12 +165,14 @@ pub enum VsockResponse {
     },
     #[serde(rename = "deliver_message_ack")]
     DeliverMessageAck { id: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_opened")]
     TerminalOpened {
         id: String,
         session_name: String,
         status: String,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_output")]
     TerminalOutput {
         id: String,
@@ -166,10 +182,13 @@ pub enum VsockResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         running_command: Option<String>,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_sent")]
     TerminalSent { id: String, sent: bool },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_command_ack")]
     TerminalCommandAck { id: String, status: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_command_output")]
     TerminalCommandOutput {
         id: String,
@@ -179,13 +198,16 @@ pub enum VsockResponse {
         duration_ms: u64,
         timed_out: bool,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_sessions")]
     TerminalSessions {
         id: String,
         sessions: Vec<TmuxSessionInfo>,
     },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_closed")]
     TerminalClosed { id: String, session_name: String },
+    #[cfg(feature = "full")]
     #[serde(rename = "terminal_error")]
     TerminalError { id: String, error: String },
 }

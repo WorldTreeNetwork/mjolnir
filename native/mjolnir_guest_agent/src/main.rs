@@ -8,10 +8,13 @@
 
 #[cfg(feature = "iroh")]
 mod iroh;
+#[cfg(feature = "full")]
 mod agent;
 mod protocol;
 mod pty;
+#[cfg(feature = "full")]
 mod secrets;
+#[cfg(feature = "full")]
 mod tmux;
 mod vsock;
 

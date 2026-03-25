@@ -27,6 +27,10 @@ if guest_agent_bin = System.get_env("MJOLNIR_GUEST_AGENT_BIN") do
   config :mjolnir, guest_agent_bin: guest_agent_bin
 end
 
+if initramfs_path = System.get_env("MJOLNIR_INITRAMFS_PATH") do
+  config :mjolnir, initramfs_path: initramfs_path
+end
+
 if flush_delay = System.get_env("MJOLNIR_DORMANT_FLUSH_DELAY_MS") do
   config :mjolnir, dormant_flush_delay_ms: String.to_integer(flush_delay)
 end

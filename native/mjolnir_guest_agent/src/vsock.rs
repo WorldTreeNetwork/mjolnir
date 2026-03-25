@@ -3,6 +3,7 @@
 #[cfg(feature = "iroh")]
 use crate::protocol::IrohReady;
 use crate::protocol::{VsockRequest, VsockResponse};
+#[cfg(feature = "full")]
 use crate::tmux;
 use crate::pty::{PtySession, PtyWriter};
 use std::collections::{HashMap, VecDeque};
@@ -175,6 +176,225 @@ fn frame_binary(channel: u8, data: &[u8]) -> FramedMsg {
     frame.extend_from_slice(&length.to_be_bytes());
     frame.extend_from_slice(data);
     frame
+}
+
+/// Boot agent vsock listener — handles Ping, PtyOpen, PtyResize, and PtyClose.
+/// Rejects all other request types with an error response.
+pub async fn run_boot_listener(port: u32) {
+    let mut listener = match VsockListener::bind(VMADDR_CID_ANY, port) {
+        Ok(l) => l,
+        Err(e) => {
+            error!("Failed to bind vsock boot listener on port {}: {}", port, e);
+            return;
+        }
+    };
+    eprintln!("[mjolnir-boot-agent] ready on vsock port {}", port);
+    info!("Boot agent vsock listener started on port {}", port);
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, addr)) => {
+                info!("Boot agent: connection from {:?}", addr);
+                tokio::spawn(handle_boot_connection(stream));
+            }
+            Err(e) => error!("Boot agent: failed to accept connection: {}", e),
+        }
+    }
+}
+
+async fn handle_boot_connection(mut stream: VsockStream) {
+    let (write_tx, mut write_rx) = mpsc::channel::<FramedMsg>(64);
+    let pty_manager = Arc::new(Mutex::new(PtyManager::new()));
+
+    let mut read_buf = vec![0u8; 65536];
+    let mut acc: Vec<u8> = Vec::new();
+
+    'conn: loop {
+        tokio::select! {
+            result = stream.read(&mut read_buf) => {
+                match result {
+                    Ok(0) => {
+                        info!("Boot agent: vsock connection closed");
+                        break 'conn;
+                    }
+                    Ok(n) => {
+                        acc.extend_from_slice(&read_buf[..n]);
+
+                        while acc.len() >= 5 {
+                            let channel = acc[0];
+                            let length = u32::from_be_bytes([acc[1], acc[2], acc[3], acc[4]]) as usize;
+
+                            if length > 65536 {
+                                error!("Boot agent: message too large: {}", length);
+                                break 'conn;
+                            }
+
+                            if acc.len() < 5 + length {
+                                break;
+                            }
+
+                            let payload = acc[5..5 + length].to_vec();
+                            acc.drain(..5 + length);
+
+                            if channel == 0 {
+                                // JSON control — handle Ping and PtyOpen only
+                                let response = match serde_json::from_slice::<VsockRequest>(&payload) {
+                                    Ok(VsockRequest::Ping { id }) => {
+                                        VsockResponse::Pong { id, agent: Some("boot".to_string()) }
+                                    }
+                                    Ok(VsockRequest::PtyOpen { id, rows, cols }) => {
+                                        let mut manager = pty_manager.lock().await;
+                                        match manager.allocate_channel() {
+                                            Some(ch) => {
+                                                match PtySession::spawn("/bin/sh", cols, rows) {
+                                                    Ok(session) => {
+                                                        let (mut pty_reader, pty_writer) = session.into_split();
+                                                        manager.insert(ch, Arc::new(Mutex::new(pty_writer)));
+                                                        drop(manager);
+
+                                                        let tx = write_tx.clone();
+                                                        let pty_manager_clone = pty_manager.clone();
+                                                        tokio::spawn(async move {
+                                                            let mut buf = vec![0u8; 4096];
+                                                            loop {
+                                                                match pty_reader.read(&mut buf).await {
+                                                                    Ok(0) => break,
+                                                                    Ok(n) => {
+                                                                        let frame = frame_binary(ch, &buf[..n]);
+                                                                        if tx.send(frame).await.is_err() { break; }
+                                                                    }
+                                                                    Err(_) => break,
+                                                                }
+                                                            }
+                                                            pty_manager_clone.lock().await.remove(ch);
+                                                            let closed = frame_message(0, &VsockResponse::PtyClosed { channel: ch });
+                                                            let _ = tx.send(closed).await;
+                                                        });
+
+                                                        VsockResponse::PtyOpened { id, channel: ch }
+                                                    }
+                                                    Err(e) => VsockResponse::ExecResponse {
+                                                        id,
+                                                        exit_code: -1,
+                                                        stdout: String::new(),
+                                                        stderr: format!("Failed to spawn PTY: {}", e),
+                                                    },
+                                                }
+                                            }
+                                            None => VsockResponse::ExecResponse {
+                                                id,
+                                                exit_code: -1,
+                                                stdout: String::new(),
+                                                stderr: "No available PTY channels".to_string(),
+                                            },
+                                        }
+                                    }
+                                    Ok(VsockRequest::PtyResize { id, channel, rows, cols }) => {
+                                        let manager = pty_manager.lock().await;
+                                        match manager.get(channel) {
+                                            Some(writer) => {
+                                                drop(manager);
+                                                let w = writer.lock().await;
+                                                match w.resize(rows, cols) {
+                                                    Ok(()) => VsockResponse::ExecResponse {
+                                                        id,
+                                                        exit_code: 0,
+                                                        stdout: "Resized".to_string(),
+                                                        stderr: String::new(),
+                                                    },
+                                                    Err(e) => VsockResponse::ExecResponse {
+                                                        id,
+                                                        exit_code: -1,
+                                                        stdout: String::new(),
+                                                        stderr: format!("Resize failed: {}", e),
+                                                    },
+                                                }
+                                            }
+                                            None => VsockResponse::ExecResponse {
+                                                id,
+                                                exit_code: -1,
+                                                stdout: String::new(),
+                                                stderr: format!("Unknown PTY channel: {}", channel),
+                                            },
+                                        }
+                                    }
+                                    Ok(VsockRequest::PtyClose { channel }) => {
+                                        pty_manager.lock().await.remove(channel);
+                                        VsockResponse::PtyClosed { channel }
+                                    }
+                                    Ok(other) => {
+                                        let id = match &other {
+                                            VsockRequest::Exec { id, .. }
+                                            | VsockRequest::ConfigureNetwork { id, .. }
+                                            | VsockRequest::ConfigureSsh { id, .. }
+                                            | VsockRequest::ConfigureIdentity { id, .. }
+                                            | VsockRequest::DeliverMessage { id, .. }
+                                            | VsockRequest::SignalDone { id }
+                                            | VsockRequest::SignalDoneAck { id, .. }
+                                            | VsockRequest::SpawnSubAgent { id, .. }
+                                            | VsockRequest::SnapshotSelf { id, .. }
+                                            | VsockRequest::EmitEvent { id, .. }
+                                            | VsockRequest::SendMessage { id, .. } => id.clone(),
+                                            _ => "unknown".to_string(),
+                                        };
+                                        warn!("Boot agent: rejecting unsupported request type");
+                                        VsockResponse::ExecResponse {
+                                            id,
+                                            exit_code: -1,
+                                            stdout: String::new(),
+                                            stderr: "Not supported in boot agent".to_string(),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Boot agent: failed to parse request: {}", e);
+                                        continue;
+                                    }
+                                };
+                                let frame = frame_message(0, &response);
+                                if write_tx.send(frame).await.is_err() {
+                                    break 'conn;
+                                }
+                            } else {
+                                // Binary data for PTY channel
+                                let manager = pty_manager.lock().await;
+                                if let Some(writer) = manager.get(channel) {
+                                    drop(manager);
+                                    let mut w = writer.lock().await;
+                                    if let Err(e) = w.write_all(&payload).await {
+                                        warn!("Boot agent: failed to write to PTY channel {}: {}", channel, e);
+                                    }
+                                } else {
+                                    warn!("Boot agent: received data for unknown PTY channel: {}", channel);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+                            error!("Boot agent: failed to read from vsock: {}", e);
+                        }
+                        break 'conn;
+                    }
+                }
+            }
+            Some(frame) = write_rx.recv() => {
+                if let Err(e) = stream.write_all(&frame).await {
+                    error!("Boot agent: failed to write to vsock: {}", e);
+                    break 'conn;
+                }
+                while let Ok(frame) = write_rx.try_recv() {
+                    if let Err(e) = stream.write_all(&frame).await {
+                        error!("Boot agent: failed to write to vsock: {}", e);
+                        break 'conn;
+                    }
+                }
+                if let Err(e) = stream.flush().await {
+                    error!("Boot agent: failed to flush vsock: {}", e);
+                    break 'conn;
+                }
+            }
+        }
+    }
 }
 
 pub async fn run_vsock_listener(
@@ -420,7 +640,10 @@ async fn handle_request(
             // Source secrets env before every command (no-op if file doesn't exist)
             // Note: must use `test -f` guard because `.` is a POSIX special builtin —
             // in dash (Ubuntu's /bin/sh), `. /nonexistent` exits the shell immediately.
+            #[cfg(feature = "full")]
             let wrapped = format!("[ -f {} ] && . {}; {}", crate::secrets::SECRETS_ENV_PATH, crate::secrets::SECRETS_ENV_PATH, command);
+            #[cfg(not(feature = "full"))]
+            let wrapped = command.clone();
             let output = Command::new("sh").arg("-c").arg(&wrapped).output();
             match output {
                 Ok(out) => VsockResponse::ExecResponse {
@@ -439,7 +662,7 @@ async fn handle_request(
         }
         VsockRequest::Ping { id } => {
             info!("Ping");
-            VsockResponse::Pong { id }
+            VsockResponse::Pong { id, agent: None }
         }
         VsockRequest::ConfigureNetwork { id, ip } => {
             info!("Configure network: {}", ip);
@@ -705,6 +928,7 @@ async fn handle_request(
             message_notify.notify_waiters();
             VsockResponse::DeliverMessageAck { id }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalOpen { id, session_name } => {
             info!("TerminalOpen: {}", session_name);
             match tmux::ensure_session(&session_name).await {
@@ -712,6 +936,7 @@ async fn handle_request(
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalRead { id, session_name, scrollback_lines } => {
             let lines = scrollback_lines.unwrap_or(100);
             match tmux::capture_pane(&session_name, lines).await {
@@ -721,12 +946,14 @@ async fn handle_request(
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalSend { id, session_name, command, keys } => {
             match tmux::send_keys(&session_name, command.as_deref(), keys.as_deref()).await {
                 Ok(()) => VsockResponse::TerminalSent { id, sent: true },
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalSendAndRead { id, session_name, command, timeout_ms } => {
             let timeout = timeout_ms.unwrap_or(30_000);
             let sentinel_id = uuid::Uuid::new_v4().to_string();
@@ -756,18 +983,21 @@ async fn handle_request(
 
             VsockResponse::TerminalCommandAck { id: id_for_ack, status: "polling".to_string() }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalList { id } => {
             match tmux::list_sessions().await {
                 Ok(sessions) => VsockResponse::TerminalSessions { id, sessions },
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        #[cfg(feature = "full")]
         VsockRequest::TerminalClose { id, session_name } => {
             match tmux::kill_session(&session_name).await {
                 Ok(()) => VsockResponse::TerminalClosed { id, session_name },
                 Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
             }
         }
+        #[cfg(feature = "full")]
         VsockRequest::ConfigureSecretsAuth { id, authorized_peers } => {
             info!("ConfigureSecretsAuth: {} peers", authorized_peers.len());
             #[cfg(feature = "iroh")]
