@@ -76,7 +76,7 @@ An MCP Set is a curated, portable collection of MCP tool definitions that an age
 {
   "name": "mjolnir-vm-ops",
   "version": "1.0.0",
-  "description": "Firecracker microVM lifecycle management",
+  "description": "Cloud Hypervisor microVM lifecycle management",
   "tools": ["spawn_vm", "exec", "stop_vm", "create_snapshot", ...],
   "backend": {
     "type": "http",
@@ -122,7 +122,7 @@ Each MCP Set and each tool within it gets a generated visual identity — a trad
 │    aesthetic]               │
 │                             │
 │  ─────────────────────────  │
-│  Firecracker microVM        │
+│  Cloud Hypervisor microVM   │
 │  Boot: ~2s | RAM: 128-8192  │
 │                             │
 │  SET: mjolnir-vm-ops        │

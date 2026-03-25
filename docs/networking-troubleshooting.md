@@ -209,7 +209,7 @@ Mjolnir.VM.exec(vm.id, "curl -I 93.184.216.34")  # example.com
    ip link show mj-XXXX
    ```
 
-3. Firecracker has network interface configured?
+3. Cloud Hypervisor has network interface configured?
    Check VM spawn logs for network interface setup.
 
 ### Guest ARP fails (`ip neigh` shows FAILED)

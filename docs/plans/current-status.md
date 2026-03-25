@@ -43,7 +43,7 @@
 ### 1. Cloud Hypervisor as Default Hypervisor
 - Changed `config/config.exs` to set `hypervisor: Mjolnir.Hypervisor.CloudHypervisor`
 - Added `ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch"` to config
-- Both hypervisors (CH and Firecracker) are behind the `Mjolnir.Hypervisor` behaviour (8 callbacks)
+- Both hypervisors (CH and Firecracker/legacy) are behind the `Mjolnir.Hypervisor` behaviour (8 callbacks)
 - Config key `guest_agent_bin` added for auto-injection into rootfs at boot
 
 ### 2. Critical Bug Fixes (6 total)
@@ -61,7 +61,7 @@
 - **`lib/mjolnir/dormant_registry.ex`** — ETS registry for dormant VM metadata (snapshot + config for wake-on-message)
 
 ### 4. Config Fixes
-- `boot_args` in `CloudHypervisor.Config` now includes `root=myfs rootfstype=virtiofs rw` (virtio-fs rootfs; Firecracker uses `is_root_device` flag with virtio-blk)
+- `boot_args` in `CloudHypervisor.Config` now includes `root=myfs rootfstype=virtiofs rw` (virtio-fs rootfs; legacy Firecracker used `is_root_device` flag with virtio-blk)
 - `vsock_cid` now generated per-VM from UUID via MD5 hash (was hardcoded to 3, causing CID collisions)
 - CID range: [3, 0xFFFFFFFF), derived from first 4 bytes of `MD5(vm_uuid)`
 

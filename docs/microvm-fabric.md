@@ -4,12 +4,12 @@
 ### Executive Summary
 
 This document specifies a distributed computational fabric where:
-- **Compute units** are Firecracker microVMs (Linux shells with full `apt` access)
+- **Compute units** are Cloud Hypervisor microVMs (Linux shells with full `apt` access)
 - **State persistence** leverages BTRFS copy-on-write for instant VM cloning and filesystem snapshots
 - **Orchestration** is handled by Elixir/OTP for actor-based concurrency, supervision trees, and distributed message-passing
 - **AI agents** (e.g., Claude Code) run natively inside microVMs with full system access
 
-VMs can be cloned instantly (BTRFS reflink), their filesystems snapshotted, and migrated between nodes. Full orthogonal persistence (memory + CPU state) is a future option via Firecracker's native snapshotting—see [orthogonal-persistence.md](orthogonal-persistence.md).
+VMs can be cloned instantly (BTRFS reflink), their filesystems snapshotted, and migrated between nodes. Full orthogonal persistence (memory + CPU state) is a future option via Cloud Hypervisor's native pause/resume—see [orthogonal-persistence.md](orthogonal-persistence.md).
 
 ---
 
@@ -41,8 +41,8 @@ VMs can be cloned instantly (BTRFS reflink), their filesystems snapshotted, and 
 │  └─────┬─────┘  │ │  └─────┬─────┘  │ │  └─────┬─────┘  │
 │        │        │ │        │        │ │        │        │
 │  ┌─────┴─────┐  │ │  ┌─────┴─────┐  │ │  ┌─────┴─────┐  │
-│  │Firecracker│  │ │  │Firecracker│  │ │  │Firecracker│  │
-│  │  Manager  │  │ │  │  Manager  │  │ │  │  Manager  │  │
+│  │   Cloud   │  │ │  │   Cloud   │  │ │  │   Cloud   │  │
+│  │Hypervisor │  │ │  │Hypervisor │  │ │  │Hypervisor │  │
 │  └─────┬─────┘  │ │  └─────┬─────┘  │ │  └─────┬─────┘  │
 │        │        │ │        │        │ │        │        │
 │  ┌─────┴─────┐  │ │  ┌─────┴─────┐  │ │  ┌─────┴─────┐  │
@@ -61,58 +61,55 @@ VMs can be cloned instantly (BTRFS reflink), their filesystems snapshotted, and 
 
 ## 2. Core Components
 
-### 2.1 Firecracker MicroVM Layer
+### 2.1 Cloud Hypervisor MicroVM Layer
 
-Firecracker provides:
+Cloud Hypervisor provides:
 - **~125ms boot time** (vs minutes for traditional VMs)
-- **~5MB memory overhead** per microVM
+- **Low memory overhead** per microVM
 - **Minimal attack surface** (reduced device model)
-- **Snapshotting** of memory + device state
+- **Pause/resume** of memory + device state
+- **virtio-fs** for direct BTRFS subvolume sharing with guests
 
 #### MicroVM Configuration
 
+Cloud Hypervisor uses a single `vm.create` PUT with a full JSON payload, then `vm.boot`. The kernel must be PVH-capable.
+
 ```json
 {
-  "boot-source": {
-    "kernel_image_path": "/var/lib/mjolnir/vmlinux-5.10",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
-  },
-  "drives": [
+  "cpus": { "boot_vcpus": 2, "max_vcpus": 2 },
+  "memory": { "size": 536870912, "shared": true },
+  "kernel": { "path": "/var/lib/mjolnir/vmlinux-ch" },
+  "cmdline": { "args": "console=hvc0 root=myfs rootfstype=virtiofs rw" },
+  "fs": [
     {
-      "drive_id": "rootfs",
-      "path_on_host": "/var/lib/mjolnir/btrfs/vms/{vm_id}/overlay.ext4",
-      "is_root_device": true,
-      "is_read_only": false
+      "tag": "myfs",
+      "socket": "/tmp/mjolnir/virtiofsd/{vm_id}.sock"
     }
   ],
-  "machine-config": {
-    "vcpu_count": 2,
-    "mem_size_mib": 512,
-    "smt": false
-  },
-  "network-interfaces": [
+  "net": [
     {
-      "iface_id": "eth0",
-      "guest_mac": "{generated_mac}",
-      "host_dev_name": "tap{vm_id}"
+      "tap": "mj-{tap_id}",
+      "mac": "{generated_mac}"
     }
   ],
   "vsock": {
-    "guest_cid": 3,
-    "uds_path": "/tmp/mjolnir/vsock/{vm_id}.sock"
+    "cid": "{vm_cid}",
+    "socket": "/tmp/mjolnir/vsock/{vm_id}.sock"
   }
 }
 ```
 
 #### Kernel Selection
 
+Cloud Hypervisor requires a PVH-capable kernel with VIRTIO_FS built in. The production kernel is at `/var/lib/mjolnir/vmlinux-ch`.
+
 | Kernel Version | Use Case | Notes |
 |----------------|----------|-------|
-| 5.10 LTS | Production workloads | Stable, well-tested with FC |
-| 6.1 LTS | Newer BTRFS features | Better compression, zoned storage |
-| 6.6 LTS | Bleeding edge | Latest perf improvements |
+| 5.10 LTS | Legacy (deprecated) | Used with Firecracker; lacks VIRTIO_FS |
+| 6.1 LTS | Minimum for CH | VIRTIO_FS support, good BTRFS features |
+| 6.12+ | Current production | PVH + VIRTIO_FS built-in; used on server |
 
-**Recommendation**: 6.1 LTS—best BTRFS features without bleeding-edge risk.
+**Recommendation**: 6.12+ with PVH and VIRTIO_FS compiled in—required for Cloud Hypervisor + virtio-fs.
 
 #### Base Image Selection
 
@@ -126,77 +123,62 @@ Firecracker provides:
 
 ### 2.2 BTRFS Storage Layer
 
-BTRFS provides the checkpointing foundation via copy-on-write semantics. Firecracker requires ext4 file images (not directory trees), so we store ext4 images on a BTRFS filesystem to get the best of both worlds:
+BTRFS provides the checkpointing foundation via copy-on-write semantics. Cloud Hypervisor exposes the VM rootfs via **virtio-fs**, which means the guest mounts a host directory directly—no block device image required. This eliminates the ext4-on-BTRFS workaround that was needed with Firecracker (legacy).
 
-- **Firecracker compatibility**: ext4 rootfs images that Firecracker expects
-- **Instant cloning**: BTRFS reflink copies (`cp --reflink=auto`) for near-instant CoW file duplication
+- **Direct subvolume sharing**: BTRFS subvolumes are mounted into the guest via virtiofsd
+- **Instant cloning**: BTRFS reflink copies (`cp --reflink=auto`) for near-instant CoW directory duplication
 - **Snapshot flexibility**: Multiple checkpoint strategies available
 
 ```
 /var/lib/mjolnir/btrfs/
-├── @base/                    # Base OS images (immutable ext4 files)
-│   ├── debian-12.ext4        # ~300MB base image
-│   └── ubuntu-22.04.ext4     # Alternative base
-├── @vms/                     # Per-VM directories
-│   └── {vm_id}/
-│       └── rootfs.ext4       # CoW clone of base image
-└── @snapshots/               # Archived/transferred snapshots
-    └── {vm_id}/
-        └── {timestamp}.ext4
+├── @base/                    # Base OS subvolumes (immutable directories)
+│   └── ubuntu-24.04/         # ~300MB Ubuntu 24.04 rootfs directory
+├── @vms/                     # Per-VM subvolume directories
+│   └── {vm_id}/              # CoW clone of base subvolume
+└── @snapshots/               # Named snapshots
+    └── {snapshot_name}/      # Reflink copy of a VM subvolume
 ```
 
-#### Why ext4 on BTRFS (Not BTRFS Subvolumes)
+#### BTRFS Subvolumes + virtio-fs (Current Architecture)
 
-**The challenge**: Firecracker requires a block device image (ext4 file) as the rootfs. It cannot mount a BTRFS subvolume directly—subvolumes are directory trees, not block devices.
+Cloud Hypervisor exposes a host directory to the guest via a virtiofsd socket. The guest boots with `root=myfs rootfstype=virtiofs rw`, mounting the host BTRFS subvolume directly as its root filesystem.
 
-**The solution**: Store ext4 images on a BTRFS filesystem, using BTRFS's reflink feature for instant copy-on-write cloning:
-
-```bash
-# Clone base image for new VM (instant, ~0 bytes until writes)
-cp --reflink=auto @base/debian-12.ext4 @vms/{vm_id}/rootfs.ext4
-```
-
-This gives us:
-1. **Instant VM creation**: Reflink copy is O(1), regardless of image size
-2. **Storage efficiency**: Cloned images share blocks until modified (CoW)
-3. **Firecracker compatibility**: Each VM gets a proper ext4 block device
-
-#### BTRFS Operations
+This solves the old block-device constraint entirely: BTRFS subvolumes are directory trees, and virtio-fs is designed to share exactly that.
 
 ```bash
-# Setup directory structure (done by bootstrap-host.sh)
-mkdir -p /var/lib/mjolnir/btrfs/@base
-mkdir -p /var/lib/mjolnir/btrfs/@vms
-mkdir -p /var/lib/mjolnir/btrfs/@snapshots
+# Clone base subvolume for new VM (instant CoW via reflink)
+cp --reflink=auto -a /var/lib/mjolnir/btrfs/@base/ubuntu-24.04 \
+  /var/lib/mjolnir/btrfs/@vms/{vm_id}
 
-# Clone base image for new VM (instant CoW via reflink)
-cp --reflink=auto /var/lib/mjolnir/btrfs/@base/debian-12.ext4 \
-  /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4
+# Start virtiofsd to expose the subvolume to the guest
+virtiofsd --socket-path=/tmp/mjolnir/virtiofsd/{vm_id}.sock \
+  --shared-dir=/var/lib/mjolnir/btrfs/@vms/{vm_id} \
+  --cache=auto
 
-# Snapshot a running VM's rootfs (file-level)
-cp --reflink=auto /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4 \
-  /var/lib/mjolnir/btrfs/@snapshots/{vm_id}/{timestamp}.ext4
+# Snapshot a running VM's rootfs (directory-level reflink)
+cp --reflink=auto -a /var/lib/mjolnir/btrfs/@vms/{vm_id} \
+  /var/lib/mjolnir/btrfs/@snapshots/{snapshot_name}
 
 # Restore from snapshot
-cp --reflink=auto /var/lib/mjolnir/btrfs/@snapshots/{vm_id}/{timestamp}.ext4 \
-  /var/lib/mjolnir/btrfs/@vms/{vm_id}/rootfs.ext4
+cp --reflink=auto -a /var/lib/mjolnir/btrfs/@snapshots/{snapshot_name} \
+  /var/lib/mjolnir/btrfs/@vms/{vm_id}
 ```
 
 #### Checkpoint/Restore Strategy
 
-We use **filesystem-only checkpoints** via BTRFS reflink copies:
+We use **filesystem-only checkpoints** via BTRFS reflink copies of subvolume directories:
 
 ```bash
-# Snapshot a VM's rootfs (instant CoW copy)
-cp --reflink=auto @vms/{vm_id}/rootfs.ext4 @snapshots/{vm_id}/{name}.ext4
+# Snapshot a VM's rootfs (instant CoW directory copy)
+cp --reflink=auto -a @vms/{vm_id} @snapshots/{snapshot_name}
 
 # Restore from snapshot
-cp --reflink=auto @snapshots/{vm_id}/{name}.ext4 @vms/{vm_id}/rootfs.ext4
+cp --reflink=auto -a @snapshots/{snapshot_name} @vms/{vm_id}
 ```
 
 This captures workspace state (files, installed packages, project data) but **not** running process state (memory, CPU registers). For our current use cases—workspace backup, VM cloning, cross-host transfer—this is sufficient.
 
-**Future option**: Firecracker provides native memory+CPU snapshots for true pause/resume. See [orthogonal-persistence.md](orthogonal-persistence.md) for details on when we might need this.
+**Future option**: Cloud Hypervisor supports native pause/resume for true memory+CPU snapshots. See [orthogonal-persistence.md](orthogonal-persistence.md) for details on when we might need this.
 
 #### Compression Strategy
 
@@ -259,7 +241,7 @@ defmodule Mjolnir.VM do
 
   defstruct [
     :id,
-    :firecracker_pid,
+    :hypervisor_pid,
     :vsock,
     :state,           # :booting | :running | :paused | :checkpointing | :migrating
     :config,
@@ -309,13 +291,13 @@ defmodule Mjolnir.VM do
 
   @impl true
   def handle_continue(:boot, state) do
-    with {:ok, btrfs_subvol} <- setup_btrfs_overlay(state.config),
-         {:ok, fc_config} <- generate_firecracker_config(state.config, btrfs_subvol),
-         {:ok, fc_pid} <- start_firecracker(fc_config),
+    with {:ok, btrfs_subvol} <- setup_btrfs_subvol(state.config),
+         {:ok, ch_config} <- generate_ch_config(state.config, btrfs_subvol),
+         {:ok, ch_pid} <- start_cloud_hypervisor(ch_config),
          {:ok, vsock} <- connect_vsock(state.id) do
-      
-      new_state = %{state | 
-        firecracker_pid: fc_pid,
+
+      new_state = %{state |
+        hypervisor_pid: ch_pid,
         vsock: vsock,
         btrfs_subvol: btrfs_subvol,
         state: :running
@@ -377,20 +359,17 @@ defmodule Mjolnir.VM do
   # Private functions
   
   defp via_tuple(id), do: {:via, Registry, {Mjolnir.VMRegistry, id}}
-  
-  defp setup_btrfs_overlay(config) do
-    base_image = config.base_image || "debian-12"
-    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@base", "#{base_image}.ext4"])
-    dest_dir = Path.join([btrfs_root, "@vms", config.id])
-    dest = Path.join(dest_dir, "rootfs.ext4")
 
-    with :ok <- File.mkdir_p(dest_dir),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+  defp setup_btrfs_subvol(config) do
+    base_image = config.base_image || "ubuntu-24.04"
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    source = Path.join([btrfs_root, "@base", base_image])
+    dest = Path.join([btrfs_root, "@vms", config.id])
+
+    with {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
       {:ok, dest}
     else
       {err, _} -> {:error, {:reflink_copy_failed, err}}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -459,7 +438,7 @@ end
 
 ## 3. Checkpointing System
 
-Mjolnir uses **filesystem-only checkpoints**—we snapshot the VM's rootfs (ext4 image) via BTRFS reflink copies. This captures workspace state but not running process memory.
+Mjolnir uses **filesystem-only checkpoints**—we snapshot the VM's rootfs (BTRFS subvolume directory) via reflink copies. This captures workspace state but not running process memory.
 
 For full VM state snapshots (memory + CPU + devices), see [orthogonal-persistence.md](orthogonal-persistence.md). We defer this complexity until live migration or VM forking becomes a requirement.
 
@@ -472,62 +451,59 @@ defmodule Mjolnir.BTRFS do
   """
 
   @doc """
-  Snapshot a VM's rootfs. VM should be stopped or quiesced for consistency.
+  Snapshot a VM's rootfs subvolume. VM should be stopped or quiesced for consistency.
   """
   def snapshot(vm_id, snapshot_name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
-    dest_dir = Path.join([btrfs_root, "@snapshots", vm_id])
-    dest = Path.join(dest_dir, "#{snapshot_name}.ext4")
+    source = Path.join([btrfs_root, "@vms", vm_id])
+    dest = Path.join([btrfs_root, "@snapshots", snapshot_name])
 
-    with :ok <- File.mkdir_p(dest_dir),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
-      {:ok, dest}
+    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+      {_, 0} -> {:ok, dest}
+      {err, _} -> {:error, {:snapshot_failed, err}}
     end
   end
 
   @doc """
-  Restore a VM's rootfs from a snapshot. VM must be stopped.
+  Restore a VM's rootfs from a named snapshot. VM must be stopped.
   """
   def restore(vm_id, snapshot_name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@snapshots", vm_id, "#{snapshot_name}.ext4"])
-    dest = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
+    source = Path.join([btrfs_root, "@snapshots", snapshot_name])
+    dest = Path.join([btrfs_root, "@vms", vm_id])
 
-    case System.cmd("cp", ["--reflink=auto", source, dest]) do
-      {_, 0} -> :ok
+    with :ok <- File.rm_rf(dest),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+      :ok
+    else
       {err, _} -> {:error, {:restore_failed, err}}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   @doc """
-  Clone a VM's rootfs to create a new VM. Source VM should be stopped.
+  Clone a VM's rootfs subvolume to create a new VM. Source VM should be stopped.
   """
   def clone_vm(source_vm_id, target_vm_id) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@vms", source_vm_id, "rootfs.ext4"])
-    dest_dir = Path.join([btrfs_root, "@vms", target_vm_id])
-    dest = Path.join(dest_dir, "rootfs.ext4")
+    source = Path.join([btrfs_root, "@vms", source_vm_id])
+    dest = Path.join([btrfs_root, "@vms", target_vm_id])
 
-    with :ok <- File.mkdir_p(dest_dir),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
-      {:ok, dest}
+    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+      {_, 0} -> {:ok, dest}
+      {err, _} -> {:error, {:clone_failed, err}}
     end
   end
 
   @doc """
-  List snapshots for a VM.
+  List named snapshots.
   """
-  def list_snapshots(vm_id) do
+  def list_snapshots do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    snapshot_dir = Path.join([btrfs_root, "@snapshots", vm_id])
+    snapshot_dir = Path.join([btrfs_root, "@snapshots"])
 
     case File.ls(snapshot_dir) do
-      {:ok, files} ->
-        snapshots = files
-        |> Enum.filter(&String.ends_with?(&1, ".ext4"))
-        |> Enum.map(&String.trim_trailing(&1, ".ext4"))
-        {:ok, snapshots}
+      {:ok, names} -> {:ok, names}
       {:error, :enoent} -> {:ok, []}
       error -> error
     end
@@ -644,48 +620,47 @@ end
 
 ### 4.2 Agent Workspace Management
 
-Agent workspaces are stored inside the VM's ext4 rootfs image. When agents need persistent workspaces that survive VM restarts, use the VM's rootfs snapshot capabilities.
+Agent workspaces live inside the VM's BTRFS subvolume, exposed to the guest via virtio-fs. When agents need persistent workspaces that survive VM restarts, use the VM's rootfs snapshot capabilities.
 
 ```elixir
 defmodule Mjolnir.Agent.Workspace do
   @moduledoc """
   Manages agent workspaces via VM rootfs snapshots.
-  Workspaces live inside the VM's ext4 image and can be
+  Workspaces live inside the VM's BTRFS subvolume directory and can be
   cloned/snapshotted using reflink copies.
   """
 
   def snapshot_vm_rootfs(vm_id, name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
-    dest_dir = Path.join([btrfs_root, "@snapshots", vm_id])
-    dest = Path.join(dest_dir, "#{name}.ext4")
+    source = Path.join([btrfs_root, "@vms", vm_id])
+    dest = Path.join([btrfs_root, "@snapshots", name])
 
-    with :ok <- File.mkdir_p(dest_dir),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
-      {:ok, dest}
+    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+      {_, 0} -> {:ok, dest}
+      {err, _} -> {:error, {:snapshot_failed, err}}
     end
   end
 
   def clone_vm(source_vm_id, target_vm_id) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@vms", source_vm_id, "rootfs.ext4"])
-    dest_dir = Path.join([btrfs_root, "@vms", target_vm_id])
-    dest = Path.join(dest_dir, "rootfs.ext4")
+    source = Path.join([btrfs_root, "@vms", source_vm_id])
+    dest = Path.join([btrfs_root, "@vms", target_vm_id])
 
     # Instant CoW clone via reflink
-    with :ok <- File.mkdir_p(dest_dir),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
-      {:ok, dest}
+    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+      {_, 0} -> {:ok, dest}
+      {err, _} -> {:error, {:clone_failed, err}}
     end
   end
 
   def restore_from_snapshot(vm_id, snapshot_name) do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-    source = Path.join([btrfs_root, "@snapshots", vm_id, "#{snapshot_name}.ext4"])
-    dest = Path.join([btrfs_root, "@vms", vm_id, "rootfs.ext4"])
+    source = Path.join([btrfs_root, "@snapshots", snapshot_name])
+    dest = Path.join([btrfs_root, "@vms", vm_id])
 
-    # Replace current rootfs with snapshot (VM must be stopped)
-    with {_, 0} <- System.cmd("cp", ["--reflink=auto", source, dest]) do
+    # Replace current rootfs subvolume with snapshot (VM must be stopped)
+    with :ok <- File.rm_rf(dest),
+         {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
       :ok
     end
   end
@@ -788,7 +763,7 @@ end
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Layer 1: Firecracker VMM (hardware virtualization)         │
+│ Layer 1: Cloud Hypervisor VMM (hardware virtualization)     │
 │  - Minimal device model (reduced attack surface)            │
 │  - seccomp-bpf + cgroups                                    │
 │  - Separate kernel per VM                                   │
@@ -926,9 +901,10 @@ end
 cpu: 4+ cores (with VT-x/AMD-V)
 memory: 16GB+ RAM
 storage: 100GB+ BTRFS partition
-kernel: Linux 5.10+ (6.1+ recommended)
+kernel: Linux 6.1+ (6.12+ recommended, must have PVH + VIRTIO_FS)
 packages:
-  - firecracker (1.5+)
+  - cloud-hypervisor (v50+)
+  - virtiofsd
   - btrfs-progs
   - erlang-otp (26+)
   - elixir (1.15+)
@@ -940,25 +916,27 @@ packages:
 #!/bin/bash
 set -euo pipefail
 
-# Install Firecracker
-FC_VERSION="1.5.0"
-curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VERSION}/firecracker-v${FC_VERSION}-x86_64.tgz" | tar xz
-mv release-v${FC_VERSION}-x86_64/firecracker-v${FC_VERSION}-x86_64 /usr/local/bin/firecracker
-mv release-v${FC_VERSION}-x86_64/jailer-v${FC_VERSION}-x86_64 /usr/local/bin/jailer
+# Install Cloud Hypervisor
+CH_VERSION="50.0"
+curl -L "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/cloud-hypervisor-static" \
+  -o /usr/local/bin/cloud-hypervisor
+chmod +x /usr/local/bin/cloud-hypervisor
+
+# Install virtiofsd
+apt-get install -y virtiofsd
 
 # Setup BTRFS storage
 mkfs.btrfs -L mjolnir /dev/sdb
 mkdir -p /var/lib/mjolnir/btrfs
 mount -o compress=zstd:3,noatime,ssd /dev/sdb /var/lib/mjolnir/btrfs
 
-# Create directory structure for ext4 images on BTRFS
-mkdir -p /var/lib/mjolnir/btrfs/@base      # Base ext4 images
+# Create directory structure for BTRFS subvolumes
+mkdir -p /var/lib/mjolnir/btrfs/@base      # Base OS subvolumes (directories)
 mkdir -p /var/lib/mjolnir/btrfs/@vms       # Per-VM rootfs clones
-mkdir -p /var/lib/mjolnir/btrfs/@snapshots # Checkpoint storage
+mkdir -p /var/lib/mjolnir/btrfs/@snapshots # Named snapshots
 
-# Download base kernel
-curl -L "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin" \
-  -o /var/lib/mjolnir/vmlinux-5.10
+# PVH kernel with VIRTIO_FS built in (place your custom kernel here)
+# /var/lib/mjolnir/vmlinux-ch
 
 # Install Elixir
 apt-get install -y erlang elixir
@@ -1416,7 +1394,7 @@ end
 
 ## Appendix A: BTRFS Best Practices
 
-Since we use ext4 files on BTRFS (not subvolumes), quota management is simpler:
+Since we use BTRFS subvolume directories (not ext4 file images), reflink cloning applies at the directory level:
 
 ```bash
 # Enable quotas for overall storage limits (optional)
@@ -1448,9 +1426,11 @@ To check actual disk usage accounting for shared blocks:
 compsize /var/lib/mjolnir/btrfs/@vms/
 ```
 
-## Appendix B: Firecracker Jailer
+## Appendix B: Firecracker Jailer (Legacy — Deprecated)
 
-For production deployments, use jailer for additional isolation:
+> **Note**: Firecracker is no longer the active hypervisor. Cloud Hypervisor v50 is the default. This section is retained for historical reference only.
+
+The Firecracker jailer provided additional isolation via a chroot sandbox:
 
 ```bash
 jailer --id ${VM_ID} \
@@ -1461,21 +1441,26 @@ jailer --id ${VM_ID} \
   -- --config-file /config.json
 ```
 
+Cloud Hypervisor achieves similar isolation via seccomp-bpf and cgroups without requiring a separate jailer binary.
+
 ## Appendix C: Kernel Configuration
 
 Minimal kernel config for microVMs:
 
 ```
-# Required for Firecracker
+# Required for Cloud Hypervisor (PVH boot)
+CONFIG_PVH=y
 CONFIG_VIRTIO=y
-CONFIG_VIRTIO_BLK=y
 CONFIG_VIRTIO_NET=y
 CONFIG_VSOCK=y
 CONFIG_VIRTIO_VSOCK=y
 
-# Filesystem
+# Required for virtio-fs (host filesystem sharing)
+CONFIG_VIRTIO_FS=y
+CONFIG_FUSE_FS=y
+
+# Filesystem (guest side; ext4 optional for legacy)
 CONFIG_EXT4_FS=y
-CONFIG_BTRFS_FS=y
 
 # Networking
 CONFIG_NET=y
@@ -1492,9 +1477,11 @@ CONFIG_IPV6=y
 
 ## References
 
-1. Firecracker Design: https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md
-2. Firecracker Snapshotting: https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md
-3. BTRFS Documentation: https://btrfs.readthedocs.io/
-4. Elixir/OTP Documentation: https://hexdocs.pm/elixir/
-5. libcluster: https://github.com/bitwalker/libcluster
-6. vsock: https://man7.org/linux/man-pages/man7/vsock.7.html
+1. Cloud Hypervisor Documentation: https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/
+2. Cloud Hypervisor API Reference: https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/vmm/src/api/openapi/cloud-hypervisor.yaml
+3. virtio-fs / virtiofsd: https://virtio-fs.gitlab.io/
+4. BTRFS Documentation: https://btrfs.readthedocs.io/
+5. Elixir/OTP Documentation: https://hexdocs.pm/elixir/
+6. libcluster: https://github.com/bitwalker/libcluster
+7. vsock: https://man7.org/linux/man-pages/man7/vsock.7.html
+8. Firecracker Design (legacy reference): https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md

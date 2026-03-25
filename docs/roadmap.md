@@ -1,6 +1,8 @@
 # Mjolnir Project Roadmap
 ## From Theory to Distributed Computation Fabric
 
+> **Note:** This roadmap was written during the Firecracker era. Mjolnir now uses Cloud Hypervisor v50 with virtio-fs and BTRFS subvolumes (no ext4 images). Many Phase 1/2 items are complete. See `docs/plans/current-status.md` for up-to-date status and `docs/encryption-and-security.md` for the current architecture.
+
 ### Vision
 
 Mjolnir is a distributed computational fabric where:
@@ -33,7 +35,7 @@ Mjolnir is a distributed computational fabric where:
 │  - Channel routing (fan-out, pub-sub, round-robin)                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 2: MicroVM Execution Fabric          [microvm-fabric.md]     │
-│  - Firecracker VM management                                        │
+│  - Cloud Hypervisor VM management                                   │
 │  - BTRFS checkpointing                                              │
 │  - Elixir/OTP orchestration                                         │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -318,7 +320,7 @@ end
 |----------|-------|-------------|--------|
 | [computational-fabric.md](computational-fabric.md) | Theory | π/ρ-calculus, crypto identity, MCP integration, economic layer | Draft |
 | [spec.md](spec.md) | Messaging | Type synchronization, transport abstraction, routing patterns | Draft |
-| [microvm-fabric.md](microvm-fabric.md) | Execution | Firecracker + BTRFS + Elixir + Iroh implementation | Draft |
+| [microvm-fabric.md](microvm-fabric.md) | Execution | Cloud Hypervisor + BTRFS + Elixir + Iroh implementation | Draft |
 | [orthogonal-persistence.md](orthogonal-persistence.md) | Pattern | Checkpoint/restore semantics, process calculus mapping | Draft |
 | [everything-is-a-channel.md](everything-is-a-channel.md) | Philosophy | Channels as universal primitive | Notes |
 | [event-queue.md](event-queue.md) | Notes | Email as robust event queue, TCP/UART streams | Notes |
@@ -330,11 +332,11 @@ end
 
 | Component | Technology | Rationale |
 |-----------|------------|-----------|
-| **Virtualization** | Firecracker | Sub-second boot, minimal overhead, snapshotting |
+| **Virtualization** | Cloud Hypervisor | virtio-fs, BTRFS subvolumes, PVH boot (Firecracker deprecated) |
 | **Guest OS** | **Debian 12 (Bookworm)** | Minimal, apt-native, no Ubuntu bloat |
 | **Filesystem** | BTRFS | CoW cloning (reflink), send/receive for migration, compression |
 | **Orchestration** | Elixir/OTP | Supervision trees, distributed by default, message-passing |
-| **Host OS** | Debian 12 or Ubuntu 22.04 | Stable, good Firecracker support |
+| **Host OS** | Debian 12 or Ubuntu 22.04 | Stable, good KVM/Cloud Hypervisor support |
 | **Kernel** | Linux 6.1 LTS | Modern BTRFS, good virtualization support |
 | **Networking (Phase 1)** | Tailscale | Encrypted overlay, easy NAT traversal |
 | **Networking (Phase 2)** | Iroh DHT | Masterless discovery, content-addressed checkpoints |
@@ -416,7 +418,7 @@ The project is in early design phase. Key areas needing work:
 
 1. **Elixir core**: VM lifecycle, checkpoint coordinator
 2. **BTRFS tooling**: Snapshot management, quota enforcement
-3. **Firecracker integration**: Config generation, API client
+3. **Cloud Hypervisor integration**: Config generation, API client
 4. **Agent framework**: Workspace management, channel bridging
 5. **Documentation**: Architecture diagrams, API reference
 

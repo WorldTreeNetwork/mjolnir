@@ -20,7 +20,7 @@ Mjolnir exists because we believe the answer should be: *you do.*
 
 Mjolnir is a distributed computational fabric for spawning, checkpointing, and orchestrating Linux microVMs. It provides the primitive operations of sovereign compute — create an isolated execution environment, run code in it, snapshot its state, restore it later, move it elsewhere, connect it to peers — without requiring permission from any central authority.
 
-At its technical core, Mjolnir is an Elixir/OTP application that orchestrates microVMs through multiple hypervisors (Firecracker, Cloud Hypervisor), uses BTRFS copy-on-write reflinks for instant filesystem cloning, communicates with guest agents over vsock, and integrates Iroh for NAT-traversing peer-to-peer connectivity. Each VM runs a Rust guest agent that provides command execution, PTY shell access, an agent SDK for in-VM applications, and inter-VM messaging.
+At its technical core, Mjolnir is an Elixir/OTP application that orchestrates microVMs through Cloud Hypervisor (the active default; Firecracker is deprecated), uses BTRFS copy-on-write reflinks for instant filesystem cloning, communicates with guest agents over vsock, and integrates Iroh for NAT-traversing peer-to-peer connectivity. Each VM runs a Rust guest agent that provides command execution, PTY shell access, an agent SDK for in-VM applications, and inter-VM messaging.
 
 But the technical description misses the point. Mjolnir is not a product. It is infrastructure for a different kind of internet — one where computation is sovereign, portable, and addressable by cryptographic identity rather than by the IP address your cloud provider assigned you.
 

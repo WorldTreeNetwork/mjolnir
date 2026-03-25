@@ -58,7 +58,7 @@ A tool is defined as:
 {
   "name": "spawn_vm",
   "title": "Spawn MicroVM",
-  "description": "Create and boot a new Firecracker microVM with specified resources",
+  "description": "Create and boot a new Cloud Hypervisor microVM with specified resources",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -151,7 +151,7 @@ const vmId = z.string().uuid().describe("UUID of the target VM");
 
 export const tools = {
   spawn_vm: {
-    description: "Spawn a new Firecracker microVM. Returns the VM details including its UUID.",
+    description: "Spawn a new Cloud Hypervisor microVM. Returns the VM details including its UUID.",
     input: z.object({
       base_image: z.string().optional()
         .describe("Base rootfs image name (default: ubuntu-24.04)"),
@@ -602,7 +602,7 @@ Enriched descriptions are written to `descriptions/<project>.descriptions.json`.
 ```json
 {
   "spawn_vm": {
-    "description": "Create and boot a new Firecracker microVM. The VM starts from a base image or named snapshot and is ready for commands within ~2 seconds.",
+    "description": "Create and boot a new Cloud Hypervisor microVM. The VM starts from a base image or named snapshot and is ready for commands within ~2 seconds.",
     "paramDescriptions": {
       "base_image": "Name of the root filesystem template (e.g., 'ubuntu-24.04'). Defaults to the server's configured default.",
       "memory_mb": "RAM allocation in megabytes. Must be between 128 and 8192. Default: 512.",

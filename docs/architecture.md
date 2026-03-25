@@ -4,7 +4,7 @@
 
 Mjolnir is a distributed computational fabric for spawning lightweight Linux shells as isolated microVMs. Each VM boots in under a second, gets its own filesystem via instant copy-on-write cloning, and is reachable from anywhere in the world through NAT-traversing encrypted connections.
 
-**Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Both hypervisors are supported behind the `Mjolnir.Hypervisor` behaviour.
+**Default hypervisor: Cloud Hypervisor v50.0** (transitioned from Firecracker in Feb 2026). Cloud Hypervisor is the active backend. Firecracker is retained in the codebase for reference but is deprecated and no longer actively maintained.
 
 The goal: lightweight micro-VMs that spin up fast, have snapshotted filesystems, synchronize across devices, rehydrate easily, work behind any NAT, and can communicate with each other.
 
@@ -26,7 +26,7 @@ The goal: lightweight micro-VMs that spin up fast, have snapshotted filesystems,
                     | (client)  |     |     | OTP App   |
                     +-----------+     |     +-----------+
                          |            |           |
-                         |      QUIC/Iroh    Firecracker
+                         |      QUIC/Iroh    Cloud Hypervisor
                          |            |           |
                          +-----+------+     +-----+-----+-----+
                                |            |     |     |     |
@@ -67,13 +67,13 @@ Mjolnir has four major layers, each implemented in the language best suited to i
 |  - BTRFS filesystem operations                                |
 |  - Network management (TAP + routing)                         |
 +---------------------------------------------------------------+
-        |  Firecracker REST API over Unix socket
+        |  Cloud Hypervisor REST API over Unix socket
 +---------------------------------------------------------------+
-|  HYPERVISOR LAYER (Cloud Hypervisor / Firecracker)            |
+|  HYPERVISOR LAYER (Cloud Hypervisor, primary)                 |
 |  - KVM-based microVM isolation                                |
 |  - ~5MB memory overhead per VM                                |
-|  - ext4 rootfs from BTRFS reflink clone                       |
-|  - Mjolnir.Hypervisor behaviour abstracts both backends       |
+|  - BTRFS subvolumes shared into VM via virtio-fs              |
+|  - Mjolnir.Hypervisor behaviour (Firecracker deprecated)      |
 +---------------------------------------------------------------+
 ```
 
@@ -117,16 +117,16 @@ HTTP POST /api/vms
          |
          v
   +------------------+
-  | Port.open        |  Start firecracker binary as OS process
-  | firecracker      |  Crash-isolated: if it dies, Elixir knows
+  | Port.open        |  Start cloud-hypervisor binary as OS process
+  | cloud-hypervisor |  Crash-isolated: if it dies, Elixir knows
   +------------------+
          |
          v
   +------------------+
-  | Firecracker      |  Configure via REST API over Unix socket:
-  | REST API         |  - kernel, rootfs drive, vCPU/memory
+  | Cloud Hypervisor |  Configure via REST API over Unix socket:
+  | REST API         |  - kernel (PVH), virtio-fs mount, vCPU/memory
   +------------------+  - vsock, network interface
-         |              - start instance
+         |              - vm.create then vm.boot
          v
   +------------------+
   | Guest boots      |  ~200ms kernel + ~300ms userspace
@@ -214,7 +214,7 @@ HTTP POST /api/vms/:id/exec {"command": "apt install -y nginx"}
          |
          v
   +------------------+
-  | Vsock.Connection |  Connect to Firecracker vsock proxy UDS
+  | Vsock.Connection |  Connect to Cloud Hypervisor vsock UDS
   | GenServer        |  Send "CONNECT 5000\n", wait for "OK"
   +------------------+
          |
@@ -277,7 +277,7 @@ Mjolnir.Application (one_for_one)
     Serves Mjolnir.API.Router on configured port (default 4000)
 ```
 
-`Mjolnir.Cleanup` is a supervised process that runs `sweep/0` at startup to kill orphaned hypervisor processes (both Cloud Hypervisor and Firecracker), clean stale TAP devices, and remove leftover sockets/directories from previous crashes.
+`Mjolnir.Cleanup` is a supervised process that runs `sweep/0` at startup to kill orphaned Cloud Hypervisor processes (and any legacy Firecracker processes from prior deployments), clean stale TAP devices, and remove leftover sockets/directories from previous crashes.
 
 Each VM is a GenServer that owns its hypervisor process as a Port. If the hypervisor crashes, the Port sends an exit signal, and the GenServer cleans up (TAP device, routes, sockets, rootfs). Transient restart means VMs exit `:normal` on boot failure (preventing restart loops) — they're intentionally ephemeral.
 
@@ -376,23 +376,23 @@ No bridge device needed. Each VM has its own TAP with a /32 route. The host acts
 ### Filesystem
 
 ```
-BTRFS filesystem (ext4-on-BTRFS strategy)
+BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 |
 +-- @base/
-|   debian-12.ext4          ~300MB base image (immutable template)
+|   ubuntu-24.04/           Base rootfs directory (BTRFS subvolume, immutable template)
 |
 +-- @vms/
-|   {vm-uuid}/
-|     rootfs.ext4           Instant CoW clone via cp --reflink
-|                           Shares blocks with base until modified
-|                           Each VM write only allocates delta blocks
+|   {vm-uuid}/              Per-VM rootfs (BTRFS subvolume, CoW clone of base)
+|                           Shared with guest via virtio-fs (virtiofsd vhost-user socket)
+|                           Mounted in guest as: root=myfs rootfstype=virtiofs rw
 |
-+-- @snapshots/             (future)
-    {vm-uuid}/
-      {timestamp}.ext4      Point-in-time filesystem snapshot
++-- @snapshots/
+    {name}/                 Named snapshot (BTRFS subvolume clone, point-in-time)
 ```
 
-Why ext4 on BTRFS? Firecracker needs a block device image (ext4 file). BTRFS subvolumes are directory trees, not block devices. But BTRFS reflinks give us O(1) copy-on-write cloning of files on the same filesystem. So we get instant VM creation (clone the ext4 file) with storage efficiency (shared blocks until written).
+Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
+
+Previously (when Firecracker was the hypervisor), the storage strategy was ext4-on-BTRFS: ext4 image files stored on a BTRFS filesystem, cloned with `cp --reflink`. Firecracker needed a block device image and didn't support virtio-fs. That strategy still works but is no longer used.
 
 ### HTTP API
 
@@ -414,17 +414,20 @@ Authentication: JWT bearer tokens with scope-based authorization. Scopes are spa
 
 ## Technical Choices and Their Benefits
 
-### Firecracker (not Docker, not QEMU)
+### Cloud Hypervisor (microVMs, not containers)
 
 | What we get | Why it matters |
 |-------------|----------------|
 | KVM-based hardware isolation | Each VM is a real virtual machine, not a container. Full kernel isolation. |
 | ~125ms boot, ~5MB overhead | VMs feel instant. Can run hundreds on a single host. |
 | Minimal device model | Reduced attack surface. No PCI, no USB, no GPU — just virtio. |
+| virtio-fs for rootfs sharing | BTRFS subvolumes mounted directly into guests. No ext4 image files. |
 | Native snapshotting | Future: pause VM, save memory+CPU state, resume anywhere. |
 | vsock for host-guest | Direct communication without networking. Low latency, no TCP overhead. |
 
-Docker gives you process isolation (cgroups + namespaces). Firecracker gives you hardware isolation (KVM + reduced VMM). For running untrusted code — especially AI agents with full system access — hardware isolation is non-negotiable.
+Docker gives you process isolation (cgroups + namespaces). Cloud Hypervisor gives you hardware isolation (KVM + reduced VMM). For running untrusted code — especially AI agents with full system access — hardware isolation is non-negotiable.
+
+Firecracker was the original hypervisor backend (deprecated Feb 2026). It lacks virtio-fs support, which is required for the current BTRFS subvolume storage architecture. The Firecracker modules are retained in the codebase for reference.
 
 ### BTRFS with reflink (not overlayfs, not ZFS)
 
@@ -436,7 +439,7 @@ Docker gives you process isolation (cgroups + namespaces). Firecracker gives you
 | Compression (zstd) | 30-50% space savings on typical Linux rootfs. |
 | Linux-native | No licensing concerns (unlike ZFS). Mainline kernel support. |
 
-overlayfs is great for containers but doesn't work with Firecracker's block device model. ZFS has the same CoW features but isn't in the mainline kernel and has CDDL licensing complexity. BTRFS gives us everything we need and is a first-class Linux citizen.
+overlayfs is great for containers but doesn't compose well with virtio-fs shared directories — changes from the guest don't always propagate correctly back to the host layer. ZFS has the same CoW features but isn't in the mainline kernel and has CDDL licensing complexity. BTRFS gives us everything we need and is a first-class Linux citizen.
 
 ### Elixir/OTP (not Go, not Python)
 
@@ -449,7 +452,7 @@ overlayfs is great for containers but doesn't work with Firecracker's block devi
 | Hot code reloading | Update orchestration logic without stopping running VMs. |
 | Pattern matching | Clean protocol handling for vsock message parsing. |
 
-The actor model maps perfectly to VM management: each VM is an actor with its own state and lifecycle. OTP supervision handles the exact failure modes we care about (Firecracker crash, network timeout, boot failure).
+The actor model maps perfectly to VM management: each VM is an actor with its own state and lifecycle. OTP supervision handles the exact failure modes we care about (hypervisor crash, network timeout, boot failure).
 
 ### Iroh (not Tailscale, not WireGuard, not SSH)
 
@@ -502,17 +505,17 @@ Every VM is a first-class peer on the network with its own cryptographic identit
 +------------------------------------------------------------------+
 |                         HOST                                      |
 |                                                                   |
-|   Elixir OTP                          Firecracker                 |
+|   Elixir OTP                          Cloud Hypervisor            |
 |   +----------+    Unix socket    +-------------------+            |
-|   |  VM      |<---------------->| firecracker       |            |
+|   |  VM      |<---------------->| cloud-hypervisor  |            |
 |   | GenServer|   REST API        | (hypervisor)      |            |
 |   +----------+                   +-------------------+            |
 |        |                               |                          |
-|        | vsock proxy UDS               | KVM                      |
+|        | vsock UDS                     | KVM                      |
 |        |                               |                          |
 |   +----v-----+                   +-----v---------------------+    |
 |   | Vsock    |    vsock          |  GUEST VM                 |    |
-|   |Connection|<---- CID 3 ----->|  +---------------------+  |    |
+|   |Connection|<---- CID N ----->|  +---------------------+  |    |
 |   +----------+    port 5000     |  | mjolnir-agent       |  |    |
 |                                  |  |                     |  |    |
 |        Protocol: length-prefix   |  | vsock listener      |  |    |
@@ -578,7 +581,7 @@ This captures workspace state (files, installed packages, project data) without 
 
 ### Full State Snapshots (Future)
 
-Firecracker supports native memory + CPU state snapshots. Combined with BTRFS filesystem snapshots, this enables true pause/resume:
+Cloud Hypervisor supports native memory + CPU state snapshots via `vm.pause` + state serialization. Combined with BTRFS filesystem snapshots, this enables true pause/resume:
 
 ```elixir
 # Pause VM, save everything (memory + filesystem)
@@ -727,17 +730,16 @@ iex> Mjolnir.VM.stop(vm.id)
 
 ```
 /var/lib/mjolnir/
-  vmlinux                           Firecracker kernel
-  vmlinux-ch                        Cloud Hypervisor PVH kernel
+  vmlinux                           Firecracker kernel (deprecated, unused)
+  vmlinux-ch                        Cloud Hypervisor PVH kernel (active)
   btrfs/
-    @base/ubuntu-24.04.ext4         Base rootfs image (913MB)
-    @vms/{uuid}/rootfs.ext4         Per-VM rootfs (CoW clone)
-    @snapshots/{name}/              Named snapshots
+    @base/ubuntu-24.04/             Base rootfs (BTRFS subvolume, directory tree)
+    @vms/{uuid}/                    Per-VM rootfs (BTRFS subvolume, CoW clone)
+    @snapshots/{name}/              Named snapshots (BTRFS subvolume clones)
 
 /tmp/mjolnir/
-  {uuid}.sock                       Hypervisor API socket (Unix domain)
+  {uuid}.sock                       Cloud Hypervisor API socket (Unix domain)
   {uuid}_vsock                      Cloud Hypervisor vsock socket
-  {uuid}.vsock                      Firecracker vsock proxy socket
 
 /etc/mjolnir/
   iroh.key                          Per-VM Iroh identity (32 bytes)
@@ -760,12 +762,12 @@ lib/mjolnir/
   cleanup.ex                        Orphan process/TAP cleanup on startup
   dormant_registry.ex               ETS registry for dormant VM metadata
   ticket.ex                         z-base-32 ticket encoding
-  hypervisor/cloud_hypervisor.ex    CH backend (default)
-  hypervisor/firecracker.ex         Firecracker backend
+  hypervisor/cloud_hypervisor.ex    CH backend (default, active)
+  hypervisor/firecracker.ex         Firecracker backend (deprecated, reference only)
   cloud_hypervisor/client.ex        CH REST client (vm.create, vm.boot, etc.)
   cloud_hypervisor/config.ex        CH vm.create payload builder
-  firecracker/client.ex             Firecracker REST client
-  firecracker/config.ex             Firecracker VM configuration
+  firecracker/client.ex             Firecracker REST client (deprecated)
+  firecracker/config.ex             Firecracker VM configuration (deprecated)
   vsock/protocol.ex                 Vsock wire protocol (channel mux)
   vsock/connection.ex               Persistent vsock connection GenServer
   api/router.ex                     HTTP API (health, CRUD, exec, messages, dormant)

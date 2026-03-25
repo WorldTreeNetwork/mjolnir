@@ -259,11 +259,11 @@ Key takeaways:
 
 This implementation serves as a concrete example of how theoretical computer science concepts like orthogonal persistence and process calculus can be applied to solve practical engineering challenges in blockchain and distributed systems development.
 
-## Future: Full VM State Snapshots with Firecracker
+## Future: Full VM State Snapshots
 
 Mjolnir currently implements **filesystem-only persistence** via BTRFS reflink copies. This captures workspace state (files, installed packages) but not running process state (memory, CPU registers).
 
-For true orthogonal persistence—where a VM can be paused mid-execution and resumed exactly where it left off—Firecracker provides native **memory + CPU + device state snapshots**:
+For true orthogonal persistence—where a VM can be paused mid-execution and resumed exactly where it left off—a hypervisor must provide native **memory + CPU + device state snapshots**. The notes below were written when Firecracker was the active hypervisor (now deprecated in favor of Cloud Hypervisor). Cloud Hypervisor supports pause/resume via its REST API (`vm.pause`, `vm.resume`) but does not currently expose full memory snapshot/restore in the same way. This section is preserved as a reference for when full-state checkpointing is implemented.
 
 ```bash
 # Pause VM and create full state snapshot
@@ -293,12 +293,12 @@ curl --unix-socket $API_SOCK -X PUT /snapshot/load -d '{
 
 ### Key Limitations
 
-Firecracker snapshots have significant constraints:
+Hypervisor snapshots (Firecracker, Cloud Hypervisor) have significant constraints:
 
 - **CPU compatibility**: Snapshots not portable across CPU models (Intel ↔ AMD)
 - **Kernel compatibility**: Cross-kernel-version restore is "considered unstable"
 - **Network state**: TCP connections and vsock state may not survive
-- **Disk not included**: Firecracker snapshots capture memory/CPU only—disk must be managed separately (hence BTRFS)
+- **Disk not included**: Hypervisor snapshots capture memory/CPU only—disk must be managed separately (hence BTRFS)
 
 ### When We'll Need This
 
@@ -316,7 +316,8 @@ For now, filesystem snapshots + fresh VM boots are sufficient. The path to full 
 - Milner, R. (1999). "Communicating and Mobile Systems: The π-Calculus"
 - Cardelli, L. & Gordon, A.D. (1998). "Mobile Ambients"
 - Morrison, R. et al. (1999). "Design of an Object-Oriented Database for Orthogonal Persistence"
-- [Firecracker Snapshot Documentation](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md)
+- [Cloud Hypervisor Documentation](https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/docs/)
+- [Firecracker Snapshot Documentation (legacy reference)](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md)
 
 ## Application to Pi-Calculus Based Systems
 

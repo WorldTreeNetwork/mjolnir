@@ -131,6 +131,16 @@ cd native/mjolnir_guest_agent && cargo build --release    # Build guest agent
 
 The guest agent binary is `mjolnir-agent` and must be cross-compiled for the VM's target architecture (x86_64-unknown-linux-musl for static linking).
 
+**Important: All Rust builds must happen on the server**, not on macOS. The guest agent depends on `tokio-vsock` which is Linux-only — `cargo check` and `cargo build` both fail on macOS. Use the Mjolnir server (`ssh root@45.76.77.97`) as the build server:
+
+```bash
+just build-boot-agent           # Cross-compile boot agent on server via SSH
+just build-initramfs            # Build initramfs cpio archive on server (depends on build-boot-agent)
+just deploy-boot                # Copy boot artifacts to /var/lib/mjolnir/boot/
+```
+
+The full guest agent is built as part of `just deploy-full` (which runs `cargo build` on the server via `scripts/deploy.sh --agent`).
+
 ### Host Setup (Linux only, requires root)
 
 ```bash

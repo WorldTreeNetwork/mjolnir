@@ -495,7 +495,7 @@ This dual-layer design does not replace Mjolnir's existing components. It layers
 +---------------------------------------------------------------+
 |  EXISTING: Vsock Protocol (host <-> guest)                    |
 +---------------------------------------------------------------+
-|  EXISTING: Hypervisor (Firecracker / Cloud Hypervisor)        |
+|  EXISTING: Hypervisor (Cloud Hypervisor; Firecracker deprecated) |
 +---------------------------------------------------------------+
 |  EXISTING: BTRFS (CoW filesystem cloning)                     |
 +---------------------------------------------------------------+
