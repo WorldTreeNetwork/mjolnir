@@ -206,6 +206,19 @@ async fn handle_boot_connection(mut stream: VsockStream) {
     let (write_tx, mut write_rx) = mpsc::channel::<FramedMsg>(64);
     let pty_manager = Arc::new(Mutex::new(PtyManager::new()));
 
+    // Emit BootStatus on channel 0 so the host knows the boot agent is alive
+    // before it even sends a ping. This enables proactive readiness detection.
+    let status = frame_message(
+        0,
+        &VsockResponse::BootStatus {
+            stage: "agent_ready".to_string(),
+            detail: "vsock:5000".to_string(),
+        },
+    );
+    if write_tx.send(status).await.is_err() {
+        return;
+    }
+
     let mut read_buf = vec![0u8; 65536];
     let mut acc: Vec<u8> = Vec::new();
 
@@ -237,7 +250,7 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                             acc.drain(..5 + length);
 
                             if channel == 0 {
-                                // JSON control — handle Ping and PtyOpen only
+                                // JSON control — handle Ping, PtyOpen, PtyResize, PtyClose
                                 let response = match serde_json::from_slice::<VsockRequest>(&payload) {
                                     Ok(VsockRequest::Ping { id }) => {
                                         VsockResponse::Pong { id, agent: Some("boot".to_string()) }
@@ -319,10 +332,17 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                         }
                                     }
                                     Ok(VsockRequest::PtyClose { channel }) => {
-                                        pty_manager.lock().await.remove(channel);
+                                        // remove() returns the Arc<Mutex<PtyWriter>>.
+                                        // Dropping it triggers PtyWriter::drop which sends
+                                        // SIGTERM to the child process. The reader task will
+                                        // then get EOF and exit, cleaning up its resources.
+                                        let _writer = pty_manager.lock().await.remove(channel);
+                                        drop(_writer);
                                         VsockResponse::PtyClosed { channel }
                                     }
                                     Ok(other) => {
+                                        // Extract id from all known request variants for error correlation.
+                                        // Ping/PtyOpen/PtyResize are handled above; PtyClose has no id.
                                         let id = match &other {
                                             VsockRequest::Exec { id, .. }
                                             | VsockRequest::ConfigureNetwork { id, .. }
@@ -335,6 +355,17 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                             | VsockRequest::SnapshotSelf { id, .. }
                                             | VsockRequest::EmitEvent { id, .. }
                                             | VsockRequest::SendMessage { id, .. } => id.clone(),
+                                            #[cfg(feature = "iroh")]
+                                            VsockRequest::GetIrohStatus { id }
+                                            | VsockRequest::ConfigureIroh { id, .. } => id.clone(),
+                                            #[cfg(feature = "full")]
+                                            VsockRequest::TerminalOpen { id, .. }
+                                            | VsockRequest::TerminalRead { id, .. }
+                                            | VsockRequest::TerminalSend { id, .. }
+                                            | VsockRequest::TerminalSendAndRead { id, .. }
+                                            | VsockRequest::TerminalList { id }
+                                            | VsockRequest::ConfigureSecretsAuth { id, .. } => id.clone(),
+                                            // Ping, PtyOpen, PtyResize handled above; PtyClose has no id
                                             _ => "unknown".to_string(),
                                         };
                                         warn!("Boot agent: rejecting unsupported request type");
