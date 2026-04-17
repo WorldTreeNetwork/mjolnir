@@ -283,7 +283,7 @@ fn cmd_setup(
     let bootstrap_cmd = format!(
         r#"export PATH="$HOME/.local/bin:$PATH" && \
 command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; \
-cd /opt/mjolnir && {}./scripts/bootstrap-host.sh"#,
+cd /opt/mjolnir && {}./scripts/bootstrap-host-ubuntu.sh"#,
         env_prefix
     );
 

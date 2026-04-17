@@ -46,7 +46,7 @@ if [[ -f "$BINARY" ]]; then
     echo "Binary: $(pwd)/$BINARY"
     echo "Size: $(du -h "$BINARY" | cut -f1)"
     echo ""
-    echo "To install in rootfs, run bootstrap-host.sh or copy manually"
+    echo "To install in rootfs, run bootstrap-host-ubuntu.sh (or -arch.sh) or copy manually"
 else
     echo "ERROR: Build failed"
     exit 1

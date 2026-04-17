@@ -295,7 +295,7 @@ server-build-rootfs: _require-host
 # Bootstrap a fresh server (rsync code, trust mise, run bootstrap)
 bootstrap: _require-host
     rsync -avz --delete --filter=':- .gitignore' --exclude='.git' . {{host}}:/opt/mjolnir/ && \
-        ssh {{host}} 'export PATH="$HOME/.local/bin:$PATH" && command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host.sh'
+        ssh {{host}} 'export PATH="$HOME/.local/bin:$PATH" && command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh'
 
 # ═══════════════════════════════════════════════════════════════════════
 # MCP Smoke Tests (JSON-RPC over HTTP)

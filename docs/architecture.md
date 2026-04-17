@@ -698,7 +698,7 @@ iex -S mix
 ./scripts/build-client.sh
 
 # Full host bootstrap (Linux only, requires root)
-sudo USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
+sudo USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh
 ```
 
 ### Usage

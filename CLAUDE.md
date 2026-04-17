@@ -144,7 +144,8 @@ The full guest agent is built as part of `just deploy-full` (which runs `cargo b
 ### Host Setup (Linux only, requires root)
 
 ```bash
-sudo ./scripts/bootstrap-host.sh
+sudo ./scripts/bootstrap-host-ubuntu.sh  # Ubuntu/Debian servers
+sudo ./scripts/bootstrap-host-arch.sh    # Arch Linux (local dev)
 ```
 
 Requires Linux with KVM (`/dev/kvm`), a BTRFS filesystem, Cloud Hypervisor v50+, Elixir 1.15+, and Erlang 26+.

@@ -64,7 +64,7 @@ git clone https://github.com/IdentiKey/mjolnir.git
 cd mjolnir
 
 # Run dev bootstrap (loopback if no spare disk)
-sudo DEV_MODE=1 USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
+sudo DEV_MODE=1 USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh
 ```
 
 ### Option B: Production Bootstrap
@@ -73,10 +73,10 @@ Deploys to `/opt/mjolnir` for production use:
 
 ```bash
 # With loopback storage
-sudo USE_LOOPBACK=1 ./scripts/bootstrap-host.sh
+sudo USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh
 
 # Or with a dedicated device
-sudo BTRFS_DEVICE=/dev/sdb ./scripts/bootstrap-host.sh
+sudo BTRFS_DEVICE=/dev/sdb ./scripts/bootstrap-host-ubuntu.sh
 ```
 
 ### Option C: Manual Setup (Already Have Deps Installed)

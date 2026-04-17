@@ -13,9 +13,9 @@ set -euo pipefail
 # 6. Runs verification tests
 #
 # Usage:
-#   curl -sSL <url>/bootstrap-host.sh | sudo bash
+#   curl -sSL <url>/bootstrap-host-ubuntu.sh | sudo bash
 #   # or
-#   sudo ./bootstrap-host.sh
+#   sudo ./bootstrap-host-ubuntu.sh
 #
 # Environment variables:
 #   DEV_MODE             - Set to 1 for development setup (skip /opt deploy, setup dev dirs)
