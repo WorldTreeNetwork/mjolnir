@@ -96,7 +96,7 @@ build-boot-agent: _require-host
     ssh {{host}} "cd /opt/mjolnir/native && \
         export PATH=\"/root/.cargo/bin:/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:\$PATH\" && \
         eval \"\$(\$HOME/.local/bin/mise activate bash 2>/dev/null || true)\" && \
-        cargo build --release \
+        cargo zigbuild --release \
             --target x86_64-unknown-linux-musl \
             -p mjolnir-guest-agent --bin mjolnir-boot-agent --no-default-features --features boot"
 

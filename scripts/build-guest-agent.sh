@@ -27,15 +27,20 @@ else
     echo "Features: none (vsock-only mode)"
 fi
 
-# Ensure musl target is installed
+# Ensure musl target is installed (zigbuild still needs the Rust stdlib for this target)
 if ! rustup target list --installed | grep -q x86_64-unknown-linux-musl; then
     echo "Installing musl target..."
     rustup target add x86_64-unknown-linux-musl
 fi
 
-# Build static binary (explicit --bin avoids compiling mjolnir-boot-agent which has separate feature deps)
+if ! cargo zigbuild --version &>/dev/null; then
+    echo "Installing cargo-zigbuild..."
+    cargo install cargo-zigbuild
+fi
+
+# Build static binary via zigbuild (hermetic musl, no system loader dependency)
 echo "Building release binary..."
-cargo build --release --target x86_64-unknown-linux-musl --bin mjolnir-agent $FEATURES
+cargo zigbuild --release --target x86_64-unknown-linux-musl --bin mjolnir-agent $FEATURES
 
 # Cargo workspace puts the binary in the workspace root's target dir
 BINARY="../target/x86_64-unknown-linux-musl/release/mjolnir-agent"

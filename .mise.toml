@@ -6,6 +6,7 @@ erlang = "26.2.5"
 elixir = "1.16.2-otp-26"
 rust = "stable"
 just = "latest"
+zig = "latest"
 
 [env]
 # Ensure musl target is available for guest agent builds
@@ -16,7 +17,8 @@ description = "Install dependencies and build guest agent"
 run = """
 mix deps.get
 rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
-cd native/mjolnir_guest_agent && cargo build --release --target x86_64-unknown-linux-musl
+cargo install cargo-zigbuild 2>/dev/null || true
+cd native/mjolnir_guest_agent && cargo zigbuild --release --target x86_64-unknown-linux-musl
 """
 
 [tasks.test]
