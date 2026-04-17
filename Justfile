@@ -87,7 +87,7 @@ deploy-gateway: _require-host
 
 # Cross-compile the boot agent (musl static binary) on server
 build-boot-agent: _require-host
-    ssh {{host}} "cd /opt/mjolnir && \
+    ssh {{host}} "cd /opt/mjolnir/native && \
         export PATH=\"/root/.cargo/bin:/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:\$PATH\" && \
         eval \"\$(\$HOME/.local/bin/mise activate bash 2>/dev/null || true)\" && \
         cargo build --release \

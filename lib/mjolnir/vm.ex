@@ -474,7 +474,7 @@ defmodule Mjolnir.VM do
     # Resolve enable_iroh: spawn opts > app config > true
     enable_iroh =
       case opts[:enable_iroh] do
-        nil -> Application.get_env(:mjolnir, :enable_iroh, false)
+        nil -> Application.get_env(:mjolnir, :enable_iroh, true)
         val -> val
       end
 
