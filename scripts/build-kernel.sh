@@ -57,6 +57,15 @@ echo "Enabling virtio-fs and related configs..."
 ./scripts/config --enable CONFIG_VIRTIO_PCI
 ./scripts/config --enable CONFIG_NET_9P
 
+# EFI stub is unused in PVH boot — disable it to avoid GCC 15 C23 bool/false keyword conflicts
+./scripts/config --disable CONFIG_EFI_STUB
+
+# GCC 15 defaults to C23, which makes bool/false/true keywords, breaking the compressed boot stub.
+# The arch/x86/boot/compressed/ subdir sets its own KBUILD_CFLAGS without -std=gnu11,
+# so it doesn't inherit the kernel's C standard. Patch it explicitly.
+echo "Patching compressed boot Makefile for GCC 15 C23 compatibility..."
+sed -i '/^KBUILD_CFLAGS := -m\$(BITS)/a KBUILD_CFLAGS += -std=gnu11' arch/x86/boot/compressed/Makefile
+
 # dm-crypt for LUKS encrypted secrets volumes
 ./scripts/config --enable CONFIG_BLK_DEV_DM
 ./scripts/config --enable CONFIG_DM_CRYPT

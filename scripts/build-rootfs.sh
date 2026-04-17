@@ -94,6 +94,15 @@ if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
     cp "$AGENT_BIN" "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
     chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
 
+    # Arch Linux builds musl binaries as static PIE, requiring /lib/ld-musl-x86_64.so.1.
+    # Copy the musl loader from the build host so the binary runs in the Ubuntu guest.
+    MUSL_LOADER=$(readlink -f /lib/ld-musl-x86_64.so.1 2>/dev/null || echo "")
+    if [[ -f "$MUSL_LOADER" ]]; then
+        cp "$MUSL_LOADER" "$MOUNT_DIR/usr/lib/ld-musl-x86_64.so.1"
+        chmod 755 "$MOUNT_DIR/usr/lib/ld-musl-x86_64.so.1"
+        echo "Installed musl loader for static PIE binary compatibility"
+    fi
+
     mkdir -p "$MOUNT_DIR/etc/mjolnir"
     chmod 700 "$MOUNT_DIR/etc/mjolnir"
 
@@ -106,8 +115,10 @@ Wants=sysinit.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/mjolnir-agent
-Restart=always
-RestartSec=1
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=3
+StartLimitIntervalSec=30
 
 [Install]
 WantedBy=basic.target

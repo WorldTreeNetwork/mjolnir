@@ -13,8 +13,8 @@ config :mjolnir,
   vm_storage_subdir: "@vms-dev",
   socket_dir: "/tmp/mjolnir-dev",
 
-  # Auto-inject current guest agent into restored snapshots
-  guest_agent_bin: "/opt/mjolnir/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
+  # Auto-inject current guest agent — path relative to project root (works for any checkout location)
+  guest_agent_bin: Path.join(File.cwd!(), "native/target/x86_64-unknown-linux-musl/release/mjolnir-agent")
 
 config :mjolnir, :auth,
   bypass_localhost: true,

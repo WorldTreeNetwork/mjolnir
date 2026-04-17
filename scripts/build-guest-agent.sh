@@ -33,9 +33,9 @@ if ! rustup target list --installed | grep -q x86_64-unknown-linux-musl; then
     rustup target add x86_64-unknown-linux-musl
 fi
 
-# Build static binary
+# Build static binary (explicit --bin avoids compiling mjolnir-boot-agent which has separate feature deps)
 echo "Building release binary..."
-cargo build --release --target x86_64-unknown-linux-musl $FEATURES
+cargo build --release --target x86_64-unknown-linux-musl --bin mjolnir-agent $FEATURES
 
 # Cargo workspace puts the binary in the workspace root's target dir
 BINARY="../target/x86_64-unknown-linux-musl/release/mjolnir-agent"
