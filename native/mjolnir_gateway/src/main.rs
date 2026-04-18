@@ -58,6 +58,17 @@ struct Config {
     #[arg(long, default_value = "256", env = "GATEWAY_POOL_MAX")]
     pool_max: usize,
 
+    /// Pool staleness probe timeout in seconds (0 = disable probe).
+    /// When reusing a pooled QUIC connection, the gateway requires the VM
+    /// to emit the first response byte within this window. If not, the
+    /// connection is assumed silently dead (e.g. NAT rebind, guest crash
+    /// without RST), evicted from the pool, and the request retried once
+    /// with a freshly-dialled connection. The probe applies ONLY to
+    /// pool-hit requests; fresh connections respect `response_timeout`
+    /// only. Set to 0 to disable (restores old "trust the pool" behavior).
+    #[arg(long, default_value = "10", env = "GATEWAY_POOL_PROBE_TIMEOUT")]
+    pool_probe_timeout: u64,
+
     /// TLS listen address. Empty string disables the TLS listener.
     #[arg(long, default_value = "0.0.0.0:443", env = "GATEWAY_TLS_LISTEN")]
     tls_listen: String,
@@ -375,6 +386,11 @@ enum ProxyError {
     StreamError(String),
     /// VM did not send any response bytes within the timeout.
     ResponseTimeout,
+    /// A pooled connection appeared alive but never delivered the first
+    /// response byte within the probe window. Indicates silent death
+    /// (NAT rebind, peer restart without QUIC close). Triggers a
+    /// retry-with-fresh-connection in `handle_connection`.
+    PoolStale,
 }
 
 impl std::fmt::Display for ProxyError {
@@ -388,6 +404,7 @@ impl std::fmt::Display for ProxyError {
             ProxyError::ConnectError(e) => write!(f, "Could not reach VM: {}", e),
             ProxyError::StreamError(e) => write!(f, "VM connection failed: {}", e),
             ProxyError::ResponseTimeout => write!(f, "VM did not respond in time"),
+            ProxyError::PoolStale => write!(f, "Pooled VM connection was silently dead; retrying with fresh"),
         }
     }
 }
@@ -403,6 +420,7 @@ impl ProxyError {
             ProxyError::ConnectError(_) => 502,
             ProxyError::StreamError(_) => 502,
             ProxyError::ResponseTimeout => 504,
+            ProxyError::PoolStale => 504,
         }
     }
 }
@@ -554,25 +572,47 @@ fn extract_host(header_bytes: &[u8]) -> Option<String> {
 }
 
 /// Set up the proxy: read headers, parse subdomain, connect to VM via Iroh.
-/// Returns the header buffer (to be forwarded) and the QUIC send/recv streams.
+///
+/// Returns `(header_buf, send, recv, pool_hit, pubkey)`:
+/// - `header_buf`: already-read HTTP request to forward
+/// - `send`/`recv`: QUIC bidi streams
+/// - `pool_hit`: true iff the underlying QUIC connection was taken from
+///   the pool (vs freshly dialled). Used by `run_proxy` to decide
+///   whether to enforce `pool_probe_timeout` on first-byte read.
+/// - `pubkey`: the VM's Iroh PublicKey, so the caller can evict it from
+///   the pool on a detected silent-death (see `handle_connection`'s
+///   `PoolStale` retry branch).
+///
+/// When `force_fresh` is true, the cached connection is skipped entirely
+/// and evicted up front. Used by `handle_connection` to retry after a
+/// `PoolStale` detection.
 async fn setup_proxy<S>(
     stream: &mut S,
     ep: &Endpoint,
     pool: &ConnectionPool,
     cfg: &Config,
+    force_fresh: bool,
+    // When force_fresh, caller has already buffered the request body so
+    // we don't re-read from the client. None on first attempt.
+    pre_read_headers: Option<Vec<u8>>,
 ) -> Result<
     (
         Vec<u8>,
         iroh::endpoint::SendStream,
         iroh::endpoint::RecvStream,
+        bool,
+        PublicKey,
     ),
     ProxyError,
 >
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    // Read HTTP headers (5s timeout for header reading)
-    let header_buf = read_until_headers(stream, Duration::from_secs(5)).await?;
+    // Read HTTP headers (5s timeout for header reading) — or reuse buffered
+    let header_buf = match pre_read_headers {
+        Some(buf) => buf,
+        None => read_until_headers(stream, Duration::from_secs(5)).await?,
+    };
 
     // Extract Host header
     let host = extract_host(&header_buf).ok_or(ProxyError::MissingHost)?;
@@ -585,21 +625,40 @@ where
     let addr = resolve_ticket(&info.node_id_z32)?;
     let pubkey = addr.id;
 
+    // When force_fresh, pre-emptively evict any cached connection so we
+    // dial a brand new one below.
+    if force_fresh {
+        pool.evict(&pubkey);
+    }
+
     // Try cached connection first, fall back to new connect
-    let conn = if let Some(cached) = pool.get(&pubkey) {
-        debug!("Pool hit for {}", info.node_id_z32);
-        cached
+    let (conn, pool_hit) = if !force_fresh {
+        if let Some(cached) = pool.get(&pubkey) {
+            debug!("Pool hit for {}", info.node_id_z32);
+            (cached, true)
+        } else {
+            debug!("Pool miss for {}, connecting...", info.node_id_z32);
+            let new_conn = tokio::time::timeout(
+                Duration::from_secs(cfg.connect_timeout),
+                ep.connect(addr.clone(), TCP_FWD_ALPN),
+            )
+            .await
+            .map_err(|_| ProxyError::ConnectTimeout)?
+            .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+            pool.insert(pubkey, new_conn.clone());
+            (new_conn, false)
+        }
     } else {
-        debug!("Pool miss for {}, connecting...", info.node_id_z32);
+        debug!("Forced fresh connect for {}", info.node_id_z32);
         let new_conn = tokio::time::timeout(
             Duration::from_secs(cfg.connect_timeout),
-            ep.connect(addr, TCP_FWD_ALPN),
+            ep.connect(addr.clone(), TCP_FWD_ALPN),
         )
         .await
         .map_err(|_| ProxyError::ConnectTimeout)?
         .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
         pool.insert(pubkey, new_conn.clone());
-        new_conn
+        (new_conn, false)
     };
 
     // Open bidirectional stream
@@ -630,7 +689,7 @@ where
         .await
         .map_err(|e| ProxyError::StreamError(e.to_string()))?;
 
-    Ok((header_buf, send, recv))
+    Ok((header_buf, send, recv, pool_hit, pubkey))
 }
 
 /// Write an HTTP error response through `w` and shut down the write half.
@@ -643,50 +702,72 @@ where
     let _ = w.shutdown().await;
 }
 
-/// Run the bidirectional proxy: forward buffered headers, wait for first response
-/// byte (with timeout), then copy in both directions.
+/// Forward the buffered request headers to the VM and, optionally,
+/// block until the VM emits its first response byte. Returned as
+/// `Ok(Some(byte))` so the caller can prepend it to the client stream
+/// before handing the rest off to `run_proxy`. When `probe_timeout` is
+/// zero, this helper skips the probe entirely and returns `Ok(None)`.
 ///
-/// On `ResponseTimeout` or `StreamError` the error response is written to the
-/// client stream internally before returning `Err`. The caller does not need to
-/// write anything on error.
+/// Errors are returned to the caller without any client-facing I/O so
+/// `handle_connection` can either retry with a fresh QUIC connection
+/// (on `ResponseTimeout` from a pool-hit — treated as silent death) or
+/// synthesize a 502/504 error page after surfacing the actual problem.
+async fn forward_headers_and_probe(
+    header_buf: &[u8],
+    quic_send: &mut iroh::endpoint::SendStream,
+    quic_recv: &mut iroh::endpoint::RecvStream,
+    probe_timeout: Duration,
+    is_pool_hit: bool,
+) -> Result<Option<u8>, ProxyError> {
+    quic_send
+        .write_all(header_buf)
+        .await
+        .map_err(|e| ProxyError::StreamError(e.to_string()))?;
+
+    if probe_timeout.is_zero() {
+        return Ok(None);
+    }
+
+    // On pool hits, a probe timeout almost certainly means a silently-dead
+    // connection (NAT rebind, peer restart) — signal that with the
+    // dedicated `PoolStale` variant so `handle_connection` knows to retry
+    // with a fresh dial. On fresh connections the same symptom means the
+    // upstream actually isn't responding — that is `ResponseTimeout`.
+    let timeout_err = || {
+        if is_pool_hit {
+            ProxyError::PoolStale
+        } else {
+            ProxyError::ResponseTimeout
+        }
+    };
+
+    let mut fb = [0u8; 1];
+    match tokio::time::timeout(probe_timeout, quic_recv.read(&mut fb)).await {
+        Ok(Ok(Some(1))) => Ok(Some(fb[0])),
+        Ok(Ok(Some(_) | None)) => Err(timeout_err()),
+        Ok(Err(e)) => Err(ProxyError::StreamError(e.to_string())),
+        Err(_) => Err(timeout_err()),
+    }
+}
+
+/// Bidirectional copy between client TCP stream and VM QUIC streams.
+/// If `prefix_byte` is `Some`, it is written to the client before the
+/// copy begins (used when the pool-probe has already consumed the first
+/// response byte).
 async fn run_proxy<S>(
     stream: S,
-    header_buf: Vec<u8>,
+    prefix_byte: Option<u8>,
     mut quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
-    response_timeout: Duration,
-) -> Result<(), ProxyError>
-where
+) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (mut tcp_read, mut tcp_write) = tokio::io::split(stream);
 
-    // Forward the already-read HTTP headers to the VM
-    if let Err(e) = quic_send.write_all(&header_buf).await {
-        warn!("Failed to forward headers to VM: {}", e);
-        return Ok(());
-    }
-
-    // Wait for the first byte from the VM with a timeout.
-    // This catches the case where nothing is listening on the target port.
-    if !response_timeout.is_zero() {
-        let mut first_byte = [0u8; 1];
-        let err = match tokio::time::timeout(response_timeout, quic_recv.read(&mut first_byte)).await {
-            Ok(Ok(Some(1))) => {
-                // Got the first byte — forward it and continue with full copy
-                if let Err(e) = tcp_write.write_all(&first_byte).await {
-                    warn!("Failed to write first byte to client: {}", e);
-                    return Ok(());
-                }
-                None
-            }
-            Ok(Ok(Some(_) | None)) => Some(ProxyError::ResponseTimeout),
-            Ok(Err(e)) => Some(ProxyError::StreamError(e.to_string())),
-            Err(_) => Some(ProxyError::ResponseTimeout),
-        };
-        if let Some(e) = err {
-            write_error_and_shutdown(&mut tcp_write, &e).await;
-            return Err(e);
+    if let Some(b) = prefix_byte {
+        if let Err(e) = tcp_write.write_all(&[b]).await {
+            warn!("Failed to write probed first byte to client: {}", e);
+            return;
         }
     }
 
@@ -702,7 +783,6 @@ where
 
     let (c2v, v2c) = tokio::join!(client_to_vm, vm_to_client);
     if let Err(e) = c2v {
-        // Connection reset by client is normal (browser closed tab)
         if e.kind() != std::io::ErrorKind::ConnectionReset {
             warn!("client->vm error: {}", e);
         }
@@ -712,8 +792,6 @@ where
             warn!("vm->client error: {}", e);
         }
     }
-
-    Ok(())
 }
 
 /// Handle a single incoming connection (plain TCP or TLS).
@@ -722,19 +800,93 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let response_timeout = Duration::from_secs(cfg.response_timeout);
+    let pool_probe_timeout = Duration::from_secs(cfg.pool_probe_timeout);
 
-    match setup_proxy(&mut stream, ep, pool, cfg).await {
-        Ok((header_buf, quic_send, quic_recv)) => {
-            info!("{}: proxying", peer);
-            if let Err(e) = run_proxy(stream, header_buf, quic_send, quic_recv, response_timeout).await {
-                // run_proxy already wrote the error response to the client before returning.
-                warn!("{}: {}", peer, e);
+    // We allow at most one retry: the first attempt may use a pooled connection
+    // that has silently died (NAT rebind, peer restarted without QUIC close).
+    // If the pool-probe fires, we drop the stale conn and dial a fresh one.
+    // `cached_headers` preserves the already-parsed HTTP request (including any
+    // body bytes that arrived in the same TCP packet) across the retry so we
+    // don't re-read from the client (which has been blocking on response).
+    let mut cached_headers: Option<Vec<u8>> = None;
+
+    for attempt in 0u32..2 {
+        let force_fresh = attempt > 0;
+        match setup_proxy(
+            &mut stream,
+            ep,
+            pool,
+            cfg,
+            force_fresh,
+            cached_headers.take(),
+        )
+        .await
+        {
+            Ok((header_buf, mut quic_send, mut quic_recv, pool_hit, pubkey)) => {
+                info!(
+                    "{}: proxying{}",
+                    peer,
+                    if pool_hit {
+                        " (pooled)"
+                    } else if force_fresh {
+                        " (fresh retry)"
+                    } else {
+                        " (fresh)"
+                    }
+                );
+
+                // Choose probe timeout:
+                // - Pool hit + pool_probe_timeout > 0 → aggressive probe
+                //   (detects silent-dead pooled connections and retries fresh).
+                // - Fresh connection → fall back to response_timeout (may be 0
+                //   = unlimited, which is correct for reasoning models).
+                let probe = if pool_hit && !pool_probe_timeout.is_zero() {
+                    pool_probe_timeout
+                } else {
+                    response_timeout
+                };
+
+                match forward_headers_and_probe(
+                    &header_buf,
+                    &mut quic_send,
+                    &mut quic_recv,
+                    probe,
+                    pool_hit,
+                )
+                .await
+                {
+                    Ok(first_byte) => {
+                        run_proxy(stream, first_byte, quic_send, quic_recv).await;
+                        return;
+                    }
+                    Err(e) => {
+                        // Silent-dead pool connection: evict + retry once fresh.
+                        // `PoolStale` is only ever produced when the probe fired
+                        // on a pool-hit, so if we see it on attempt 0 we know a
+                        // fresh dial is the right recovery.
+                        if matches!(e, ProxyError::PoolStale) && attempt == 0 {
+                            warn!(
+                                "{}: pool probe timed out after {:?}, evicting and retrying fresh",
+                                peer, pool_probe_timeout
+                            );
+                            pool.evict(&pubkey);
+                            let _ = quic_send.finish();
+                            // quic_recv drops on scope exit
+                            cached_headers = Some(header_buf);
+                            continue;
+                        }
+                        warn!("{}: {}", peer, e);
+                        write_error_and_shutdown(&mut stream, &e).await;
+                        return;
+                    }
+                }
             }
-        }
-        Err(e) => {
-            warn!("{}: {}", peer, e);
-            let _ = stream.write_all(&error_to_http_response(&e)).await;
-            let _ = stream.shutdown().await;
+            Err(e) => {
+                warn!("{}: {}", peer, e);
+                let _ = stream.write_all(&error_to_http_response(&e)).await;
+                let _ = stream.shutdown().await;
+                return;
+            }
         }
     }
 }
@@ -890,8 +1042,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Accept loop ───────────────────────────────────────────────────────────
 
     info!(
-        "Gateway ready (pool: max={}, ttl={}s)",
-        cfg.pool_max, cfg.pool_ttl
+        "Gateway ready (pool: max={}, ttl={}s, probe={}s)",
+        cfg.pool_max, cfg.pool_ttl, cfg.pool_probe_timeout
     );
 
     loop {
