@@ -58,11 +58,11 @@ build-client:
 
 # Deploy Elixir code + guest agent (with Iroh P2P)
 deploy: _require-host
-    ./scripts/deploy.sh {{host}} --agent --iroh
+    ./scripts/deploy.sh {{host}} --agent
 
 # Deploy code + agent + rebuild initramfs boot image
 deploy-boot: _require-host
-    ./scripts/deploy.sh {{host}} --agent --iroh
+    ./scripts/deploy.sh {{host}} --agent
     ssh {{host}} "cd /opt/mjolnir/native && \
         export PATH=\"/root/.cargo/bin:/root/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:\$PATH\" && \
         eval \"\$(\$HOME/.local/bin/mise activate bash 2>/dev/null || true)\" && \

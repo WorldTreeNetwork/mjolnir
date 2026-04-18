@@ -4,19 +4,19 @@ set -euo pipefail
 # Build the guest agent for musl (static binary that works in minimal rootfs)
 #
 # Usage:
-#   ./scripts/build-guest-agent.sh            # default: vsock-only (2MB, fast)
-#   ./scripts/build-guest-agent.sh --iroh     # include Iroh P2P shell (23MB)
+#   ./scripts/build-guest-agent.sh            # default: with Iroh P2P (23MB)
+#   ./scripts/build-guest-agent.sh --no-iroh  # vsock-only (2MB, fast)
 #
 # Run from project root
 
 cd "$(dirname "$0")/../native/mjolnir_guest_agent"
 
 # Parse args
-FEATURES=""
+FEATURES="--features iroh"
 for arg in "$@"; do
     case "$arg" in
-        --iroh) FEATURES="--features iroh" ;;
-        *) echo "Unknown flag: $arg (use --iroh to enable Iroh P2P)"; exit 1 ;;
+        --no-iroh) FEATURES="" ;;
+        *) echo "Unknown flag: $arg (use --no-iroh to disable Iroh P2P)"; exit 1 ;;
     esac
 done
 

@@ -4,10 +4,10 @@ set -euo pipefail
 # Deploy Mjolnir to a remote server.
 #
 # Usage:
-#   ./scripts/deploy.sh <host>                # rsync + build release + restart service
-#   ./scripts/deploy.sh <host> --agent        # also rebuild guest agent (vsock-only)
-#   ./scripts/deploy.sh <host> --agent --iroh # rebuild guest agent with Iroh P2P
-#   ./scripts/deploy.sh <host> --rootfs       # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
+#   ./scripts/deploy.sh <host>                 # rsync + build release + restart service
+#   ./scripts/deploy.sh <host> --agent         # also rebuild guest agent (Iroh P2P on by default)
+#   ./scripts/deploy.sh <host> --agent --no-iroh # rebuild guest agent without Iroh (smaller binary)
+#   ./scripts/deploy.sh <host> --rootfs        # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
 #   ./scripts/deploy.sh                       # uses MJOLNIR_HOST or prompts
 #
 # Examples:
@@ -26,12 +26,12 @@ HOST=""
 BUILD_AGENT=false
 BUILD_ROOTFS=false
 BUILD_GATEWAY=false
-AGENT_IROH=false
+AGENT_IROH=true
 
 for arg in "$@"; do
     case "$arg" in
         --agent) BUILD_AGENT=true ;;
-        --iroh) AGENT_IROH=true ;;
+        --no-iroh) AGENT_IROH=false ;;
         --rootfs) BUILD_ROOTFS=true ;;
         --gateway) BUILD_GATEWAY=true ;;
         -*) echo "Unknown flag: $arg"; exit 1 ;;
@@ -70,8 +70,8 @@ ssh "$HOST" "cp $REMOTE_CODE/systemd/mjolnir.service /etc/systemd/system/mjolnir
 # --- Guest agent + rootfs (optional, before release build) ---
 if $BUILD_AGENT; then
     AGENT_FLAGS=""
-    if $AGENT_IROH; then
-        AGENT_FLAGS="--iroh"
+    if ! $AGENT_IROH; then
+        AGENT_FLAGS="--no-iroh"
     fi
     echo ""
     echo "--- Building guest agent (musl static binary) ---"
