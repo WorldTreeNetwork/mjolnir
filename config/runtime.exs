@@ -23,6 +23,10 @@ if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
 end
 
+if base_image = System.get_env("MJOLNIR_BASE_IMAGE") do
+  config :mjolnir, default_base_image: base_image
+end
+
 if guest_agent_bin = System.get_env("MJOLNIR_GUEST_AGENT_BIN") do
   config :mjolnir, guest_agent_bin: guest_agent_bin
 end

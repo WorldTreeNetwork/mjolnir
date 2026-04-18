@@ -177,13 +177,13 @@ pub fn resolve_host(flag: &Option<String>, profile: &Profile) -> Result<String> 
 // Config mutation
 // ---------------------------------------------------------------------------
 
-/// Set a key in the "default" profile. Supported keys: api, host, ssh_key,
+/// Set a key in the given profile (defaults to "default"). Supported keys: api, host, ssh_key,
 /// setup_source.
-pub fn set(key: &str, value: &str) -> Result<()> {
+pub fn set_in(profile_name: &str, key: &str, value: &str) -> Result<()> {
     let mut profiles = load_profiles();
     let profile = profiles
         .profiles
-        .entry("default".to_string())
+        .entry(profile_name.to_string())
         .or_default();
 
     match key {
@@ -200,9 +200,14 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     }
 
     save_profiles(&profiles)?;
-    eprintln!("Set {} = {}", key, value);
+    eprintln!("Set [{}] {} = {}", profile_name, key, value);
     Ok(())
 }
+
+pub fn set(key: &str, value: &str) -> Result<()> {
+    set_in("default", key, value)
+}
+
 
 // ---------------------------------------------------------------------------
 // Display

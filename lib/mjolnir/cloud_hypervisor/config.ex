@@ -22,7 +22,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
     field(:mem_size_mib, pos_integer(), default: 512)
 
     field(:boot_args, String.t(),
-      default: "console=ttyS0 reboot=k panic=1 root=myfs rootfstype=virtiofs rw"
+      default: "console=ttyS0 reboot=k panic=1 root=myfs rootfstype=virtiofs rw net.ifnames=0"
     )
 
     # CID must be unique per concurrent VM. CID 0-2 are reserved by the kernel.

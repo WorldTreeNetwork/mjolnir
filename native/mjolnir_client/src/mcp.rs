@@ -7,6 +7,8 @@
 //!   mjolnir mcp-serve              # uses default profile
 //!   mjolnir mcp-serve --api http://localhost:4000
 
+use std::sync::{Arc, RwLock};
+
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
@@ -22,7 +24,8 @@ use crate::{auth, config};
 #[derive(Debug, Clone)]
 pub struct MjolnirMcpService {
     tool_router: ToolRouter<Self>,
-    api_base: String,
+    api_base: Arc<RwLock<String>>,
+    profile_name: Arc<RwLock<String>>,
 }
 
 // ── Parameter structs ──
@@ -95,6 +98,12 @@ pub struct AwaitPtyParams {
 pub struct EmptyParams {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SwitchProfileParams {
+    #[schemars(description = "Profile name to switch to (e.g. 'cloud', 'local').")]
+    pub profile: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OpenTerminalParams {
     #[schemars(description = "UUID of the target VM.")]
     pub vm_id: String,
@@ -160,11 +169,16 @@ fn mcp_err(msg: impl Into<String>) -> ErrorData {
 
 #[tool_router]
 impl MjolnirMcpService {
-    pub fn new(api_base: String) -> Self {
+    pub fn new(profile_name: String, api_base: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            api_base,
+            api_base: Arc::new(RwLock::new(api_base)),
+            profile_name: Arc::new(RwLock::new(profile_name)),
         }
+    }
+
+    fn current_api_base(&self) -> String {
+        self.api_base.read().unwrap().clone()
     }
 
     /// Build an authenticated reqwest client.
@@ -187,7 +201,7 @@ impl MjolnirMcpService {
     /// GET request, return body text.
     async fn api_get(&self, path: &str) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
-        let url = format!("{}{}", self.api_base, path);
+        let url = format!("{}{}", self.current_api_base(), path);
         let resp = client.get(&url).send().await.map_err(|e| {
             mcp_err(format!("Request to {} failed: {}", url, e))
         })?;
@@ -205,7 +219,7 @@ impl MjolnirMcpService {
     /// POST request with JSON body, return body text.
     async fn api_post(&self, path: &str, body: &serde_json::Value) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
-        let url = format!("{}{}", self.api_base, path);
+        let url = format!("{}{}", self.current_api_base(), path);
         let resp = client.post(&url).json(body).send().await.map_err(|e| {
             mcp_err(format!("Request to {} failed: {}", url, e))
         })?;
@@ -223,7 +237,7 @@ impl MjolnirMcpService {
     /// DELETE request, return body text.
     async fn api_delete(&self, path: &str) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
-        let url = format!("{}{}", self.api_base, path);
+        let url = format!("{}{}", self.current_api_base(), path);
         let resp = client.delete(&url).send().await.map_err(|e| {
             mcp_err(format!("Request to {} failed: {}", url, e))
         })?;
@@ -449,6 +463,59 @@ impl MjolnirMcpService {
     ) -> Result<CallToolResult, ErrorData> {
         self.api_delete(&format!("/api/vms/{}/terminal/{}", p.vm_id, p.session_name)).await
     }
+
+    #[tool(name = "get_profile", description = "Show which Mjolnir profile and API endpoint this MCP instance is currently using.")]
+    async fn get_profile(
+        &self,
+        Parameters(_): Parameters<EmptyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let profile = self.profile_name.read().unwrap().clone();
+        let api = self.current_api_base();
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::json!({ "profile": profile, "api": api }).to_string(),
+        )]))
+    }
+
+    #[tool(name = "list_profiles", description = "List all configured Mjolnir profiles and their API endpoints.")]
+    async fn list_profiles(
+        &self,
+        Parameters(_): Parameters<EmptyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let profiles = config::load_profiles();
+        let map: serde_json::Map<String, serde_json::Value> = profiles
+            .profiles
+            .into_iter()
+            .map(|(name, p)| {
+                let api = p.api.unwrap_or_else(|| "http://localhost:4000".into());
+                (name, serde_json::Value::String(api))
+            })
+            .collect();
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::Value::Object(map).to_string(),
+        )]))
+    }
+
+    #[tool(name = "switch_profile", description = "Switch this MCP instance to a different profile/server. Affects only this Claude Code session — other sessions are unaffected.")]
+    async fn switch_profile(
+        &self,
+        Parameters(p): Parameters<SwitchProfileParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let profiles = config::load_profiles();
+        let profile = profiles.profiles.get(&p.profile).cloned().ok_or_else(|| {
+            let names: Vec<_> = profiles.profiles.keys().cloned().collect();
+            mcp_err(format!(
+                "Profile '{}' not found. Available: {}",
+                p.profile,
+                names.join(", ")
+            ))
+        })?;
+        let new_api = profile.api.unwrap_or_else(|| "http://localhost:4000".into());
+        *self.api_base.write().unwrap() = new_api.clone();
+        *self.profile_name.write().unwrap() = p.profile.clone();
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::json!({ "profile": p.profile, "api": new_api }).to_string(),
+        )]))
+    }
 }
 
 #[tool_handler]
@@ -470,6 +537,7 @@ impl ServerHandler for MjolnirMcpService {
 // ── Entry point ──
 
 pub async fn run_mcp_server(
+    profile_name: &str,
     profile: &config::Profile,
     api_flag: &Option<String>,
 ) -> anyhow::Result<()> {
@@ -479,9 +547,9 @@ pub async fn run_mcp_server(
         .trim_end_matches('/')
         .to_string();
 
-    eprintln!("mjolnir mcp-serve: connecting to {}", api_base);
+    eprintln!("mjolnir mcp-serve: profile={} api={}", profile_name, api_base);
 
-    let service = MjolnirMcpService::new(api_base);
+    let service = MjolnirMcpService::new(profile_name.to_string(), api_base);
     let server = service.serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())

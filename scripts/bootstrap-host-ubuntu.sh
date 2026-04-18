@@ -224,6 +224,7 @@ install_base_packages() {
         build-essential \
         btrfs-progs \
         jq \
+        arch-install-scripts \
         debootstrap \
         musl-tools \
         pkg-config \
@@ -762,14 +763,15 @@ build_ch_kernel() {
 }
 
 build_rootfs() {
-    log_section "Building Ubuntu 24.04 Rootfs"
+    local distro="${ROOTFS_DISTRO:-arch}"
+    log_section "Building ${distro} Rootfs"
 
     if [[ "${SKIP_ROOTFS:-0}" == "1" ]]; then
         log_info "Skipping rootfs build (SKIP_ROOTFS=1)"
         return 0
     fi
 
-    local rootfs_path="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04"
+    local rootfs_path="$MJOLNIR_ROOT/btrfs/@base/${distro}"
     local agent_bin="$MJOLNIR_CODE/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
     if [[ -d "$rootfs_path" ]]; then
@@ -777,15 +779,17 @@ build_rootfs() {
         return 0
     fi
 
-    # Build BTRFS subvolume using build-rootfs.sh
+    local build_script="scripts/build-rootfs-${distro}.sh"
+    if [[ ! -f "$MJOLNIR_CODE/$build_script" ]]; then
+        log_error "No build script for distro '${distro}': $build_script"
+        log_error "Available: $(ls "$MJOLNIR_CODE/scripts/build-rootfs-"*.sh 2>/dev/null | xargs -n1 basename | sed 's/build-rootfs-//;s/\.sh//' | tr '\n' ' ')"
+        exit 1
+    fi
+
     log_info "Building rootfs BTRFS subvolume (this takes a few minutes)..."
-
-    # Set agent binary path for build script
     export AGENT_BIN="$agent_bin"
-
-    # Run the build script directly to the target location on BTRFS
     cd "$MJOLNIR_CODE"
-    bash scripts/build-rootfs.sh "$rootfs_path"
+    bash "$build_script" "$rootfs_path"
 
     log_success "Rootfs built: $rootfs_path ($(du -sh "$rootfs_path" | cut -f1))"
 }
@@ -812,9 +816,10 @@ setup_directories() {
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-dev"
 
         # Snapshot base subvolume to test directory for test isolation
-        if [[ -d "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" ]]; then
-            btrfs subvolume snapshot "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" \
-                "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04"
+        local distro="${ROOTFS_DISTRO:-arch}"
+        if [[ -d "$MJOLNIR_ROOT/btrfs/@base/${distro}" ]]; then
+            btrfs subvolume snapshot "$MJOLNIR_ROOT/btrfs/@base/${distro}" \
+                "$MJOLNIR_ROOT/btrfs/@base-test/${distro}"
         fi
 
         # Create symlinks for test config paths

@@ -478,14 +478,15 @@ build_ch_kernel() {
 }
 
 build_rootfs() {
-    log_section "Building Ubuntu 24.04 Rootfs"
+    local distro="${ROOTFS_DISTRO:-arch}"
+    log_section "Building ${distro} Rootfs"
 
     if [[ "${SKIP_ROOTFS:-0}" == "1" ]]; then
         log_info "Skipping rootfs build (SKIP_ROOTFS=1)"
         return 0
     fi
 
-    local rootfs_path="$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04"
+    local rootfs_path="$MJOLNIR_ROOT/btrfs/@base/${distro}"
     local agent_bin="$MJOLNIR_CODE/native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"
 
     if [[ -d "$rootfs_path" ]]; then
@@ -493,19 +494,16 @@ build_rootfs() {
         return 0
     fi
 
+    local build_script="scripts/build-rootfs-${distro}.sh"
+    if [[ ! -f "$MJOLNIR_CODE/$build_script" ]]; then
+        log_error "No build script for distro '${distro}': $build_script"
+        log_error "Available: $(ls "$MJOLNIR_CODE/scripts/build-rootfs-"*.sh 2>/dev/null | xargs -n1 basename | sed 's/build-rootfs-//;s/\.sh//' | tr '\n' ' ')"
+        exit 1
+    fi
+
     export AGENT_BIN="$agent_bin"
     cd "$MJOLNIR_CODE"
-    bash scripts/build-rootfs.sh "$rootfs_path"
-
-    # build-rootfs.sh auto-copies /lib/ld-musl-x86_64.so.1 from the build host
-    # when the binary is static PIE. Verify it landed.
-    if [[ -f "$rootfs_path/usr/lib/ld-musl-x86_64.so.1" ]]; then
-        log_success "musl loader present in rootfs ($(du -h "$rootfs_path/usr/lib/ld-musl-x86_64.so.1" | cut -f1))"
-    else
-        log_warn "musl loader NOT found in rootfs at $rootfs_path/usr/lib/ld-musl-x86_64.so.1"
-        log_warn "If the guest agent is static PIE, it will fail to start. Copy the musl loader manually:"
-        log_warn "  cp /usr/lib/musl/lib/libc.so $rootfs_path/usr/lib/ld-musl-x86_64.so.1"
-    fi
+    bash "$build_script" "$rootfs_path"
 
     log_success "Rootfs built: $rootfs_path ($(du -sh "$rootfs_path" | cut -f1))"
 }
@@ -598,11 +596,12 @@ setup_directories() {
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-test"
         mkdir -p "$MJOLNIR_ROOT/btrfs/@vms-dev"
 
-        if [[ -d "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" ]]; then
-            btrfs subvolume snapshot "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" \
-                "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04" 2>/dev/null || \
-                cp -a --reflink=auto "$MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04" \
-                    "$MJOLNIR_ROOT/btrfs/@base-test/ubuntu-24.04"
+        local distro="${ROOTFS_DISTRO:-arch}"
+        if [[ -d "$MJOLNIR_ROOT/btrfs/@base/${distro}" ]]; then
+            btrfs subvolume snapshot "$MJOLNIR_ROOT/btrfs/@base/${distro}" \
+                "$MJOLNIR_ROOT/btrfs/@base-test/${distro}" 2>/dev/null || \
+                cp -a --reflink=auto "$MJOLNIR_ROOT/btrfs/@base/${distro}" \
+                    "$MJOLNIR_ROOT/btrfs/@base-test/${distro}"
         fi
 
         rm -rf "$MJOLNIR_ROOT/btrfs-test"
@@ -667,7 +666,7 @@ print_summary() {
         echo "  Data:           $MJOLNIR_ROOT"
         echo "  BTRFS:          $MJOLNIR_ROOT/btrfs (host filesystem)"
         echo "  Kernel (CH):    $MJOLNIR_ROOT/vmlinux-ch"
-        echo "  Base image:     $MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04"
+        echo "  Base image:     $MJOLNIR_ROOT/btrfs/@base/${ROOTFS_DISTRO:-arch}"
         echo "  musl loader:    /usr/lib/musl/lib/libc.so (auto-copied to rootfs)"
         echo ""
         echo "To start developing:"
@@ -682,7 +681,7 @@ print_summary() {
         echo "  Data:           $MJOLNIR_ROOT"
         echo "  BTRFS:          $MJOLNIR_ROOT/btrfs (host filesystem)"
         echo "  Kernel (CH):    $MJOLNIR_ROOT/vmlinux-ch"
-        echo "  Base image:     $MJOLNIR_ROOT/btrfs/@base/ubuntu-24.04"
+        echo "  Base image:     $MJOLNIR_ROOT/btrfs/@base/${ROOTFS_DISTRO:-arch}"
         echo "  NAT:            nftables (table 'mjolnir', subnet 10.200.0.0/10)"
         echo "  Service:        mjolnir.service"
         echo "  Config:         /etc/mjolnir/env"

@@ -451,7 +451,10 @@ async fn main() {
 
         // --- Config ---
         Command::Config { action } => match action {
-            Some(ConfigAction::Set { key, value }) => config::set(&key, &value),
+            Some(ConfigAction::Set { key, value }) => {
+                let profile_name = cli.profile.as_deref().unwrap_or("default");
+                config::set_in(profile_name, &key, &value)
+            }
             Some(ConfigAction::Profiles) => {
                 config::show_profiles();
                 Ok(())
@@ -488,7 +491,10 @@ async fn main() {
         },
 
         // --- MCP server ---
-        Command::McpServe { api } => mcp::run_mcp_server(&profile, &api).await,
+        Command::McpServe { api } => {
+            let profile_name = cli.profile.as_deref().unwrap_or("default");
+            mcp::run_mcp_server(profile_name, &profile, &api).await
+        }
 
         // --- Server admin (sync — blocks tokio runtime, which is fine for CLI) ---
         Command::Server { action } => server::run(action, &profile),

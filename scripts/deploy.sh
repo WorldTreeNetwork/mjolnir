@@ -5,9 +5,9 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/deploy.sh <host>                # rsync + build release + restart service
-#   ./scripts/deploy.sh <host> --agent        # also rebuild guest agent (vsock-only) + rootfs
-#   ./scripts/deploy.sh <host> --agent --iroh # rebuild guest agent with Iroh P2P + rootfs
-#   ./scripts/deploy.sh <host> --rootfs       # rebuild rootfs only (no agent recompile)
+#   ./scripts/deploy.sh <host> --agent        # also rebuild guest agent (vsock-only)
+#   ./scripts/deploy.sh <host> --agent --iroh # rebuild guest agent with Iroh P2P
+#   ./scripts/deploy.sh <host> --rootfs       # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
 #   ./scripts/deploy.sh                       # uses MJOLNIR_HOST or prompts
 #
 # Examples:
@@ -76,13 +76,13 @@ if $BUILD_AGENT; then
     echo ""
     echo "--- Building guest agent (musl static binary) ---"
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && ./scripts/build-guest-agent.sh $AGENT_FLAGS"
-    BUILD_ROOTFS=true
 fi
 
 if $BUILD_ROOTFS; then
+    DISTRO="${ROOTFS_DISTRO:-arch}"
     echo ""
-    echo "--- Rebuilding rootfs ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && sudo ./scripts/build-rootfs.sh $REMOTE_BTRFS/@base/ubuntu-24.04"
+    echo "--- Rebuilding rootfs (distro: $DISTRO) ---"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent sudo bash scripts/build-rootfs-${DISTRO}.sh $REMOTE_BTRFS/@base/${DISTRO}"
 fi
 
 # --- Build gateway (optional) ---

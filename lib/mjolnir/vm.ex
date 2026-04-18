@@ -67,7 +67,7 @@ defmodule Mjolnir.VM do
 
   ## Options
 
-  - `:base_image` - Base image name (default: "ubuntu-24.04")
+  - `:base_image` - Base image name (default: "arch"; other option: "ubuntu-24.04")
   - `:vcpus` - Number of vCPUs (default: 2)
   - `:memory_mb` - Memory in MiB (default: 512)
   - `:snapshot` - Snapshot name to spawn from (instead of base image)
@@ -75,7 +75,7 @@ defmodule Mjolnir.VM do
 
   ## Examples
 
-      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-24.04", memory_mb: 1024})
+      {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "arch", memory_mb: 1024})
       {:ok, vm} = Mjolnir.VM.spawn(%{snapshot: "my-snapshot", preserve_iroh_key: true})
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
