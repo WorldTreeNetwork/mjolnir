@@ -884,6 +884,26 @@ setup_networking() {
 setup_systemd_service() {
     log_section "Setting Up Systemd Service"
 
+    # Create dedicated service user — runs with CAP_NET_ADMIN+CAP_SYS_ADMIN, not root
+    if ! id -u mjolnir &>/dev/null; then
+        useradd --system --no-create-home --shell /sbin/nologin \
+            --comment "Mjolnir VM daemon" mjolnir
+        log_info "Created mjolnir system user"
+    else
+        log_info "mjolnir user already exists"
+    fi
+
+    # Code dir: full ownership (release binary, logs, runtime artifacts)
+    chown -R mjolnir:mjolnir "$MJOLNIR_CODE"
+
+    # Data dir: top-level ownership only — do NOT recurse into BTRFS subvolumes
+    # (guest rootfs files retain their original uid/gid; CAP_SYS_ADMIN covers
+    # privileged ioctls regardless of parent directory ownership)
+    chown mjolnir:mjolnir "$MJOLNIR_ROOT"
+    for d in btrfs sockets boot; do
+        [[ -d "$MJOLNIR_ROOT/$d" ]] && chown mjolnir:mjolnir "$MJOLNIR_ROOT/$d"
+    done
+
     # Install service file (always update — may have changed)
     cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
 

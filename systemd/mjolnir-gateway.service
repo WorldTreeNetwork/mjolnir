@@ -5,12 +5,18 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-User=root
-Group=root
+User=mjolnir
+Group=mjolnir
 
 ExecStart=/usr/local/bin/mjolnir-gateway
 
 EnvironmentFile=-/etc/mjolnir/gateway.env
+
+# No elevated capabilities needed — gateway is pure network I/O
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=true
 
 Restart=on-failure
 RestartSec=5
