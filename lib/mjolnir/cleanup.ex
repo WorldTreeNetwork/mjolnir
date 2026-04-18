@@ -117,7 +117,7 @@ defmodule Mjolnir.Cleanup do
           case Regex.run(~r/(mj-[a-f0-9]+)/, line) do
             [_, tap_name] ->
               Logger.info("Removing orphan TAP interface: #{tap_name}")
-              System.cmd("ip", ["link", "del", tap_name], stderr_to_stdout: true)
+              System.cmd("sudo", ["-n", "ip", "link", "del", tap_name], stderr_to_stdout: true)
 
             _ ->
               :ok

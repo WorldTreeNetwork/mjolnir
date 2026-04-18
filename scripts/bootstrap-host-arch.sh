@@ -174,6 +174,23 @@ install_base_packages() {
         log_warn "virtiofsd not found in repos — check AUR or install manually"
     fi
 
+    # virtiofsd ships at /usr/lib/virtiofsd on Arch; the mjolnir code expects
+    # /usr/libexec/virtiofsd (FHS-compliant location). Symlink bridges that.
+    if [[ -f /usr/lib/virtiofsd && ! -e /usr/libexec/virtiofsd ]]; then
+        mkdir -p /usr/libexec
+        ln -s /usr/lib/virtiofsd /usr/libexec/virtiofsd
+        log_info "Linked /usr/lib/virtiofsd → /usr/libexec/virtiofsd"
+    fi
+
+    # File capabilities let virtiofsd override DAC checks, chown, etc. without
+    # running as root — required for guest writes to rootfs files owned by root.
+    if command -v virtiofsd &>/dev/null || [[ -f /usr/lib/virtiofsd ]]; then
+        local vfsd_path
+        vfsd_path=$(readlink -f "$(command -v virtiofsd 2>/dev/null || echo /usr/lib/virtiofsd)")
+        setcap 'cap_dac_override,cap_chown,cap_fowner,cap_fsetid,cap_setfcap,cap_setgid,cap_setuid,cap_mknod,cap_sys_admin+eip' "$vfsd_path"
+        log_info "Applied file capabilities to $vfsd_path"
+    fi
+
     log_success "Base packages installed"
 }
 
@@ -641,6 +658,10 @@ setup_systemd_service() {
     done
 
     cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
+
+    install -m 440 "$MJOLNIR_CODE/systemd/mjolnir.sudoers" /etc/sudoers.d/mjolnir
+    visudo -c -f /etc/sudoers.d/mjolnir || { log_error "sudoers syntax check failed"; exit 1; }
+    log_info "Sudoers rules installed at /etc/sudoers.d/mjolnir"
 
     mkdir -p /etc/mjolnir
     if [[ ! -f /etc/mjolnir/env ]]; then

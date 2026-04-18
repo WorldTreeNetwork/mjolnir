@@ -20,10 +20,7 @@ EnvironmentFile=/etc/mjolnir/env
 # CAP_NET_ADMIN: TAP interfaces, ip-route, nftables
 # CAP_SYS_ADMIN: BTRFS subvolume create/snapshot/delete
 # /dev/kvm and /dev/net/tun are 0666 — no caps needed for those
-AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
-NoNewPrivileges=true
-
+AmbientCapabilities=CAP_NET_ADMIN
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=true

@@ -203,7 +203,7 @@ defmodule Mjolnir.Network do
   end
 
   defp run_cmd(cmd, args) do
-    case System.cmd(cmd, args, stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", cmd | args], stderr_to_stdout: true) do
       {_output, 0} ->
         :ok
 

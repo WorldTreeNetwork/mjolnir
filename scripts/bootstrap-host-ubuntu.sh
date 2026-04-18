@@ -416,6 +416,16 @@ install_cloud_hypervisor() {
         log_success "virtiofsd already installed"
     fi
 
+    # File capabilities let virtiofsd override DAC checks, chown, etc. without
+    # running as root — required for guest writes to rootfs files owned by root.
+    local vfsd_path
+    vfsd_path=$(command -v virtiofsd 2>/dev/null || find /usr -name virtiofsd -type f 2>/dev/null | head -1)
+    if [[ -n "$vfsd_path" ]]; then
+        vfsd_path=$(readlink -f "$vfsd_path")
+        setcap 'cap_dac_override,cap_chown,cap_fowner,cap_fsetid,cap_setfcap,cap_setgid,cap_setuid,cap_mknod,cap_sys_admin+eip' "$vfsd_path"
+        log_info "Applied file capabilities to $vfsd_path"
+    fi
+
     log_success "Cloud Hypervisor installed: $(cloud-hypervisor --version 2>/dev/null || echo "v${CH_VERSION}")"
 }
 
@@ -906,6 +916,10 @@ setup_systemd_service() {
 
     # Install service file (always update — may have changed)
     cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
+
+    install -m 440 "$MJOLNIR_CODE/systemd/mjolnir.sudoers" /etc/sudoers.d/mjolnir
+    visudo -c -f /etc/sudoers.d/mjolnir || { log_error "sudoers syntax check failed"; exit 1; }
+    log_info "Sudoers rules installed at /etc/sudoers.d/mjolnir"
 
     # Install environment file (only if not already present — preserve operator customizations)
     mkdir -p /etc/mjolnir

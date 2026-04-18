@@ -1,0 +1,44 @@
+# Mjolnir sudoers — granular NOPASSWD rules for the mjolnir service user
+#
+# Install:  install -m 440 systemd/mjolnir.sudoers /etc/sudoers.d/mjolnir
+# Validate: visudo -c -f /etc/sudoers.d/mjolnir
+#
+# Why needed: Erlang's erl_child_setup calls setresuid() before exec'ing port
+# processes, which Linux clears the ambient capability set per execve(2).
+# AmbientCapabilities in the service unit applies to the BEAM process itself
+# but cannot propagate to System.cmd subprocesses. sudo NOPASSWD bridges this
+# until these calls are replaced with Rust NIFs.
+#
+# Future: Replace BTRFS operations with BTRFS_IOC_SNAP_CREATE_V2 / subvolume
+# ioctls via NIF, and TAP creation with netlink + TUNSETIFF via NIF. That
+# eliminates subprocesses entirely and this file becomes unnecessary.
+#
+# Note: NoNewPrivileges must be absent from the service unit — sudo is setuid
+# and is blocked by that flag.
+
+Defaults:mjolnir !requiretty
+
+# ── BTRFS subvolume operations (CAP_SYS_ADMIN) ───────────────────────────────
+# VM rootfs clone: base image → new VM directory
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@base/* /var/lib/mjolnir/btrfs/@vms/*
+# VM rootfs restore: snapshot → new VM directory
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@snapshots/* /var/lib/mjolnir/btrfs/@vms/*
+# VM checkpoint: running VM directory → named snapshot
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@vms/* /var/lib/mjolnir/btrfs/@snapshots/*
+# VM and snapshot teardown
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume delete /var/lib/mjolnir/btrfs/@vms/*
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume delete /var/lib/mjolnir/btrfs/@snapshots/*
+# Introspection
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show /var/lib/mjolnir/btrfs/@vms/*
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show /var/lib/mjolnir/btrfs/@snapshots/*
+mjolnir ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume list /var/lib/mjolnir/btrfs
+
+# ── TAP interface management (CAP_NET_ADMIN) ─────────────────────────────────
+# All TAP devices use the mj-{8hex} naming prefix — rules are scoped to that.
+mjolnir ALL=(root) NOPASSWD: /usr/bin/ip tuntap add mj-* mode tap
+mjolnir ALL=(root) NOPASSWD: /usr/bin/ip link set mj-* up
+mjolnir ALL=(root) NOPASSWD: /usr/bin/ip link del mj-*
+# Route management: IP argument contains '/' (e.g. 10.200.1.2/32) so the
+# wildcard must cover the full argument; device is always a mj-* interface.
+mjolnir ALL=(root) NOPASSWD: /usr/bin/ip route add * dev mj-*
+mjolnir ALL=(root) NOPASSWD: /usr/bin/ip route del * dev mj-*

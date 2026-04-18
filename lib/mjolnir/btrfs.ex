@@ -222,7 +222,7 @@ defmodule Mjolnir.BTRFS do
   Delete a subvolume (VM overlay or snapshot).
   """
   def delete_subvolume(path) do
-    case System.cmd("btrfs", ["subvolume", "delete", path], stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "delete", path], stderr_to_stdout: true) do
       {_, 0} ->
         Logger.debug("Deleted BTRFS subvolume: #{path}")
         :ok
@@ -237,7 +237,7 @@ defmodule Mjolnir.BTRFS do
   Check if a path is a BTRFS subvolume.
   """
   def subvolume?(path) do
-    case System.cmd("btrfs", ["subvolume", "show", path], stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "show", path], stderr_to_stdout: true) do
       {_, 0} -> true
       _ -> false
     end
@@ -247,7 +247,7 @@ defmodule Mjolnir.BTRFS do
   List subvolumes under a path.
   """
   def list_subvolumes(path) do
-    case System.cmd("btrfs", ["subvolume", "list", path], stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "list", path], stderr_to_stdout: true) do
       {output, 0} ->
         subvols =
           output
@@ -275,7 +275,7 @@ defmodule Mjolnir.BTRFS do
   end
 
   defp snapshot_subvolume(source, dest) do
-    case System.cmd("btrfs", ["subvolume", "snapshot", source, dest], stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest], stderr_to_stdout: true) do
       {_, 0} ->
         Logger.debug("Created BTRFS snapshot: #{source} -> #{dest}")
         :ok
