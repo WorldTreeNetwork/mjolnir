@@ -105,7 +105,7 @@ defmodule Mjolnir.VM do
   """
   @spec exec(vm_id(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def exec(vm_id, command, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
     GenServer.call(via_tuple(vm_id), {:exec, command}, timeout)
   end
 
@@ -1263,7 +1263,7 @@ defmodule Mjolnir.VM do
 
   defp execute_command(state, command) do
     if state.vsock_conn do
-      Mjolnir.Vsock.Connection.exec(state.vsock_conn, command)
+      Mjolnir.Vsock.Connection.exec(state.vsock_conn, command, :infinity)
     else
       {:error, :no_vsock_connection}
     end

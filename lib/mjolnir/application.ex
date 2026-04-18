@@ -35,7 +35,7 @@ defmodule Mjolnir.Application do
         maybe_jwks_strategy() ++
         [
           # HTTP API
-          {Bandit, plug: Mjolnir.API.Router, port: api_port}
+          {Bandit, plug: Mjolnir.API.Router, port: api_port, thousand_island_options: [read_timeout: :infinity]}
         ]
 
     opts = [strategy: :one_for_one, name: Mjolnir.Supervisor]

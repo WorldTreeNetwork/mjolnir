@@ -175,9 +175,7 @@ defmodule Mjolnir.API.Router do
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
         with {:ok, command} <- Validation.validate_command(conn.body_params["command"]) do
-          timeout = Validation.validate_timeout(conn.body_params["timeout"], 30_000, 300_000)
-
-          case Mjolnir.VM.exec(id, command, timeout: timeout) do
+          case Mjolnir.VM.exec(id, command, timeout: :infinity) do
             {:ok, output} ->
               json(conn, 200, %{output: output})
 
