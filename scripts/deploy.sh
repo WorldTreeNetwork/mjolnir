@@ -52,6 +52,104 @@ fi
 
 MISE_ACTIVATE='eval "$($HOME/.local/bin/mise activate bash)"'
 
+# --- Preflight check for gateway environment config ---
+check_gateway_env() {
+    local host="$1"
+    local remote_code="$2"
+
+    # Helper: color output if terminal supports it
+    local yellow='' red='' reset=''
+    if [ -t 1 ]; then
+        yellow='\e[33m'
+        red='\e[31m'
+        reset='\e[0m'
+    fi
+
+    # Check if /etc/mjolnir/gateway.env exists on the host
+    if ! ssh "$host" "[ -f /etc/mjolnir/gateway.env ]" 2>/dev/null; then
+        printf "${yellow}=== WARN: Gateway environment file not found ===${reset}\n"
+        printf "${yellow}/etc/mjolnir/gateway.env does not exist on the remote host.${reset}\n"
+        printf "${yellow}To set up the gateway environment:${reset}\n"
+        printf "${yellow}  1. On the host, create /etc/mjolnir/ if it does not exist${reset}\n"
+        printf "${yellow}  2. Copy $remote_code/systemd/gateway.env.example to /etc/mjolnir/gateway.env${reset}\n"
+        printf "${yellow}  3. Edit /etc/mjolnir/gateway.env and configure as needed${reset}\n"
+        printf "${yellow}  4. Re-run the deploy script${reset}\n"
+        printf "${yellow}Proceeding with deploy (gateway service may not start cleanly).${reset}\n"
+        return 0
+    fi
+
+    printf "\n=== Gateway Environment Preflight Check ===\n"
+
+    # Extract example keys
+    local example_keys=$(ssh "$host" "grep -E '^[A-Z_]+=.*' '$remote_code/systemd/gateway.env.example' | cut -d= -f1 | sort -u" 2>/dev/null || echo "")
+
+    # Extract host keys
+    local host_keys=$(ssh "$host" "grep -E '^[A-Z_]+=.*' /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f1 | sort -u" || echo "")
+
+    # Find missing or empty keys
+    local missing_keys=()
+    while IFS= read -r key; do
+        if [ -z "$key" ]; then
+            continue
+        fi
+        # Check if key exists in host env and is non-empty
+        local host_value=$(ssh "$host" "grep -E \"^${key}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "")
+        if [ -z "$host_value" ]; then
+            missing_keys+=("$key")
+        fi
+    done <<< "$example_keys"
+
+    # Report missing keys
+    if [ ${#missing_keys[@]} -gt 0 ]; then
+        printf "${yellow}Missing or empty keys (from example):${reset}\n"
+        for key in "${missing_keys[@]}"; do
+            printf "  ${yellow}${key}${reset}\n"
+        done
+    fi
+
+    # Check ACME requirements if enabled
+    local acme_enabled=$(ssh "$host" "grep -E '^GATEWAY_ACME=enabled' /etc/mjolnir/gateway.env 2>/dev/null" || echo "")
+    if [ -n "$acme_enabled" ]; then
+        printf "\n${yellow}ACME is enabled. Checking required fields...${reset}\n"
+
+        local acme_required=("CLOUDFLARE_API_TOKEN" "GATEWAY_ACME_EMAIL" "GATEWAY_ACME_DOMAINS")
+        local acme_missing=()
+
+        for key in "${acme_required[@]}"; do
+            local value=$(ssh "$host" "grep -E \"^${key}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "")
+            if [ -z "$value" ]; then
+                acme_missing+=("$key")
+            fi
+        done
+
+        if [ ${#acme_missing[@]} -gt 0 ]; then
+            printf "${red}ACME enabled but missing/empty required fields:${reset}\n"
+            for key in "${acme_missing[@]}"; do
+                printf "  ${red}${key}${reset}\n"
+            done
+        else
+            printf "${yellow}All ACME required fields are set.${reset}\n"
+        fi
+    fi
+
+    # Report currently-set TLS/ACME values (redacted)
+    printf "\n=== Current TLS/ACME Configuration ===\n"
+
+    local tls_vars=("GATEWAY_LISTEN" "GATEWAY_TLS_LISTEN" "GATEWAY_TLS_CERT" "GATEWAY_TLS_KEY" "GATEWAY_ACME" "GATEWAY_ACME_DIRECTORY" "GATEWAY_ACME_DOMAINS" "CLOUDFLARE_API_TOKEN")
+
+    for var in "${tls_vars[@]}"; do
+        local value=$(ssh "$host" "grep -E \"^${var}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "(unset)")
+
+        if [ "$var" = "CLOUDFLARE_API_TOKEN" ] && [ "$value" != "(unset)" ] && [ -n "$value" ]; then
+            value="(set)"
+        fi
+
+        printf "  %s=%s\n" "$var" "$value"
+    done
+
+    printf "=== End Preflight Check ===\n\n"
+}
+
 echo "=== Deploying to $HOST ==="
 
 # --- Rsync ---
@@ -90,7 +188,7 @@ if $BUILD_GATEWAY; then
     echo ""
     echo "--- Building gateway ---"
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE/native/mjolnir_gateway && cargo build --release"
-    ssh "$HOST" "cp $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/"
+    ssh "$HOST" "install -m755 $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/mjolnir-gateway"
 fi
 
 # --- Build Elixir release ---
@@ -100,6 +198,11 @@ ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod mix deps.get && M
 
 # --- Update gateway systemd service ---
 ssh "$HOST" "if [ -f $REMOTE_CODE/systemd/mjolnir-gateway.service ]; then cp $REMOTE_CODE/systemd/mjolnir-gateway.service /etc/systemd/system/mjolnir-gateway.service && systemctl daemon-reload; fi"
+
+# --- Preflight gateway env check (if gateway is/will be enabled) ---
+if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/null" | grep -q enabled; then
+    check_gateway_env "$HOST" "$REMOTE_CODE"
+fi
 
 # --- Restart service ---
 echo ""
