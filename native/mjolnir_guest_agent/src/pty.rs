@@ -3,7 +3,7 @@
 use nix::pty::{openpty, OpenptyResult, Winsize};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
-use nix::unistd::{dup2, execvp, fork, setsid, ForkResult, Pid};
+use nix::unistd::{chdir, dup2, execvp, fork, setsid, ForkResult, Pid};
 use std::ffi::CString;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use tokio::fs::File;
@@ -82,6 +82,15 @@ impl PtySession {
                 if slave_fd > 2 {
                     drop(slave);
                 }
+
+                // Set up root environment and working directory
+                std::env::set_var("HOME", "/root");
+                std::env::set_var("USER", "root");
+                std::env::set_var("LOGNAME", "root");
+                if std::env::var_os("TERM").is_none() {
+                    std::env::set_var("TERM", "xterm-256color");
+                }
+                chdir("/root").ok();
 
                 // Exec shell
                 let cmd_cstr = CString::new(cmd).unwrap();
