@@ -3,12 +3,13 @@ Description=Mjolnir MicroVM Fabric
 After=network.target local-fs.target mjolnir-loopback.service
 Requires=local-fs.target
 Wants=mjolnir-loopback.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=exec
 User=mjolnir
 Group=mjolnir
-
 WorkingDirectory=/opt/mjolnir
 
 ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir start
@@ -16,19 +17,18 @@ ExecStop=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir stop
 
 EnvironmentFile=/etc/mjolnir/env
 
-# --- Capabilities ---
-# CAP_NET_ADMIN: TAP interface creation, ip-route, nftables NAT rules
+# CAP_NET_ADMIN: TAP interfaces, ip-route, nftables
 # CAP_SYS_ADMIN: BTRFS subvolume create/snapshot/delete
-# /dev/kvm and /dev/net/tun are world-accessible (0666) — no extra caps needed for those.
+# /dev/kvm and /dev/net/tun are 0666 — no caps needed for those
 AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
 NoNewPrivileges=true
 
-# --- Hardening ---
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=true
 ReadWritePaths=/var/lib/mjolnir /etc/mjolnir
+
 RuntimeDirectory=mjolnir
 RuntimeDirectoryMode=0750
 
@@ -42,8 +42,6 @@ TimeoutStopSec=30
 
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal

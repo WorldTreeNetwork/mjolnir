@@ -2,6 +2,8 @@
 Description=Mjolnir Web Gateway (HTTP to Iroh bridge)
 After=network-online.target mjolnir.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=exec
@@ -20,8 +22,6 @@ ProtectSystem=true
 
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 StandardOutput=journal
 StandardError=journal
