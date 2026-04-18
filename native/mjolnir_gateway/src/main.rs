@@ -8,24 +8,29 @@
 //!
 //! Supports HTTP/1.1, WebSocket upgrades, SSE, and any TCP-based protocol.
 
+use arc_swap::ArcSwap;
 use clap::Parser;
 use dashmap::DashMap;
 use iroh::endpoint::{Connection, Endpoint};
 use iroh_base::{EndpointAddr, PublicKey};
+use mjolnir_gateway::acme::{AcmeConfig, IssuedCert};
+use mjolnir_gateway::cloudflare::CloudflareClient;
+use mjolnir_gateway::tls::{load_server_config, load_server_config_from_bytes, TlsError};
 use mjolnir_protocol::TCP_FWD_ALPN;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, info, warn};
+use std::time::{Duration, Instant, SystemTime};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tracing::{debug, error, info, warn};
 
 #[derive(Parser, Clone)]
 #[command(name = "mjolnir-gateway", about = "Mjolnir Web Gateway — HTTP to Iroh bridge")]
 struct Config {
-    /// Listen address
+    /// Listen address for plaintext HTTP. Empty string disables the plaintext listener.
     #[arg(long, default_value = "0.0.0.0:8080", env = "GATEWAY_LISTEN")]
-    listen: SocketAddr,
+    listen: String,
 
     /// Default VM target port when none specified in subdomain
     #[arg(long, default_value = "80", env = "GATEWAY_DEFAULT_PORT")]
@@ -52,7 +57,224 @@ struct Config {
     /// Maximum number of cached connections in the pool.
     #[arg(long, default_value = "256", env = "GATEWAY_POOL_MAX")]
     pool_max: usize,
+
+    /// TLS listen address. Empty string disables the TLS listener.
+    #[arg(long, default_value = "0.0.0.0:443", env = "GATEWAY_TLS_LISTEN")]
+    tls_listen: String,
+
+    /// PEM-encoded cert chain (fullchain). Required if tls_listen is non-empty.
+    #[arg(long, default_value = "/etc/mjolnir/fullchain.pem", env = "GATEWAY_TLS_CERT")]
+    tls_cert: PathBuf,
+
+    /// PEM-encoded private key. Required if tls_listen is non-empty.
+    #[arg(long, default_value = "/etc/mjolnir/privkey.pem", env = "GATEWAY_TLS_KEY")]
+    tls_key: PathBuf,
+
+    /// Refuse TLS handshakes if cert expires within this many seconds.
+    /// Default 86400 (24h) — set to 0 to disable.
+    #[arg(long, default_value = "86400", env = "GATEWAY_TLS_EXPIRY_FAIL_SECS")]
+    tls_expiry_fail_secs: u64,
+
+    /// TLS session resumption cache size.
+    #[arg(long, default_value = "4096", env = "GATEWAY_TLS_SESSION_CACHE")]
+    tls_session_cache: usize,
+
+    /// ACME auto-TLS mode. "enabled" = issue/renew certs via ACME; anything else = static-cert mode.
+    #[arg(long, default_value = "disabled", env = "GATEWAY_ACME")]
+    acme: String,
+
+    /// ACME directory URL.
+    #[arg(long, default_value = "https://acme-v02.api.letsencrypt.org/directory", env = "GATEWAY_ACME_DIRECTORY")]
+    acme_directory: String,
+
+    /// Contact email for the ACME account.
+    #[arg(long, default_value = "", env = "GATEWAY_ACME_EMAIL")]
+    acme_email: String,
+
+    /// Comma-separated domains to include in the cert. Wildcards OK.
+    #[arg(long, default_value = "", env = "GATEWAY_ACME_DOMAINS", value_delimiter = ',')]
+    acme_domains: Vec<String>,
+
+    /// Re-issue the cert this many seconds before expiry. Default 30 days.
+    #[arg(long, default_value = "2592000", env = "GATEWAY_ACME_RENEW_BEFORE_SECS")]
+    acme_renew_before_secs: u64,
+
+    /// Cloudflare API token (Zone:DNS:Edit scope). Required if acme=enabled.
+    #[arg(long, default_value = "", env = "CLOUDFLARE_API_TOKEN", hide_env_values = true, hide = true)]
+    cloudflare_api_token: String,
 }
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+/// Fail-fast check when ACME mode is enabled: all required fields must be set.
+fn validate_acme_config(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut missing = Vec::new();
+    if cfg.cloudflare_api_token.is_empty() {
+        missing.push("CLOUDFLARE_API_TOKEN (--cloudflare-api-token)");
+    }
+    if cfg.acme_email.is_empty() {
+        missing.push("GATEWAY_ACME_EMAIL (--acme-email)");
+    }
+    if cfg.acme_domains.is_empty() || cfg.acme_domains.iter().all(|d| d.is_empty()) {
+        missing.push("GATEWAY_ACME_DOMAINS (--acme-domains)");
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "acme=enabled requires the following to be set: {}",
+            missing.join(", ")
+        )
+        .into());
+    }
+    Ok(())
+}
+
+// ── TlsState ─────────────────────────────────────────────────────────────────
+
+/// Hot-reloadable TLS server configuration. The inner `ServerConfig` is stored
+/// in an `ArcSwap` so the SIGHUP handler can atomically swap in a fresh cert
+/// without pausing in-flight connections.
+struct TlsState {
+    config: ArcSwap<rustls::ServerConfig>,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    session_cache: usize,
+    fail_within: Duration,
+    /// The expiry time of the currently-loaded certificate.
+    not_after: std::sync::RwLock<SystemTime>,
+}
+
+impl TlsState {
+    /// Load TLS config from disk and wrap in a shared `Arc<TlsState>`.
+    /// Returns `Err` if the cert or key cannot be read/parsed — callers
+    /// should treat this as a fatal startup error (MH3 fail-safe).
+    fn load(
+        cert_path: PathBuf,
+        key_path: PathBuf,
+        session_cache: usize,
+        fail_within: Duration,
+    ) -> Result<Arc<Self>, TlsError> {
+        let (server_config, resolver) =
+            load_server_config(&cert_path, &key_path, session_cache, fail_within)?;
+        let not_after = resolver.current_not_after();
+        Ok(Arc::new(Self {
+            config: ArcSwap::from(server_config),
+            cert_path,
+            key_path,
+            session_cache,
+            fail_within,
+            not_after: std::sync::RwLock::new(not_after),
+        }))
+    }
+
+    /// Build a `TlsState` from in-memory PEM bytes (ACME path).
+    fn from_pem_bytes(
+        chain_pem: &[u8],
+        key_pem: &[u8],
+        session_cache: usize,
+        fail_within: Duration,
+        not_after: SystemTime,
+    ) -> Result<Arc<Self>, TlsError> {
+        let (server_config, _resolver) =
+            load_server_config_from_bytes(chain_pem, key_pem, session_cache, fail_within)?;
+        Ok(Arc::new(Self {
+            config: ArcSwap::from(server_config),
+            // Sentinel paths — not used in ACME mode (reload goes through swap_from_pem).
+            cert_path: PathBuf::new(),
+            key_path: PathBuf::new(),
+            session_cache,
+            fail_within,
+            not_after: std::sync::RwLock::new(not_after),
+        }))
+    }
+
+    /// Reload the certificate from disk and atomically swap it in.
+    /// On failure the **current** certificate remains active (fail-safe).
+    fn reload(&self) -> Result<(), TlsError> {
+        match load_server_config(&self.cert_path, &self.key_path, self.session_cache, self.fail_within) {
+            Ok((new_config, resolver)) => {
+                let new_not_after = resolver.current_not_after();
+                self.config.store(new_config);
+                if let Ok(mut guard) = self.not_after.write() {
+                    *guard = new_not_after;
+                }
+                info!(event = "cert.reloaded", "TLS certificate hot-reloaded");
+                Ok(())
+            }
+            Err(e) => {
+                warn!(event = "cert.reload_failed", error = %e, "TLS reload failed — keeping previous certificate");
+                Err(e)
+            }
+        }
+    }
+
+    /// Swap in a new certificate from in-memory PEM bytes (ACME renewal path).
+    /// Atomically replaces the `ServerConfig`. On failure the current config
+    /// remains active.
+    fn swap_from_pem(
+        &self,
+        chain_pem: &[u8],
+        key_pem: &[u8],
+        new_not_after: SystemTime,
+    ) -> Result<(), TlsError> {
+        let (new_config, _resolver) =
+            load_server_config_from_bytes(chain_pem, key_pem, self.session_cache, self.fail_within)?;
+        self.config.store(new_config);
+        if let Ok(mut guard) = self.not_after.write() {
+            *guard = new_not_after;
+        }
+        Ok(())
+    }
+
+    /// Return the expiry time of the currently-loaded certificate.
+    fn current_not_after(&self) -> SystemTime {
+        self.not_after.read().map(|g| *g).unwrap_or(SystemTime::UNIX_EPOCH)
+    }
+
+    /// Build a `TlsAcceptor` from the currently-active `ServerConfig`.
+    fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
+        tokio_rustls::TlsAcceptor::from(self.config.load_full())
+    }
+}
+
+// ── ACME renewal ──────────────────────────────────────────────────────────────
+
+/// Returns `true` when the cert will expire within `renew_before` from now.
+fn should_renew(state: &TlsState, renew_before: &Duration) -> bool {
+    let not_after = state.current_not_after();
+    match not_after.duration_since(SystemTime::now()) {
+        Ok(remaining) => remaining < *renew_before,
+        Err(_) => true, // already expired
+    }
+}
+
+/// Background task: checks every 12 hours and renews the cert when needed.
+async fn renewal_loop(state: Arc<TlsState>, acme_cfg: AcmeConfig, cf: CloudflareClient) {
+    let mut tick = tokio::time::interval(Duration::from_secs(12 * 3600));
+    tick.tick().await; // consume the immediate tick
+    loop {
+        tick.tick().await;
+        if should_renew(&state, &acme_cfg.renew_before) {
+            match mjolnir_gateway::acme::issue(&acme_cfg, &cf).await {
+                Ok(new_cert) => {
+                    if let Err(e) = state.swap_from_pem(
+                        new_cert.chain_pem.as_bytes(),
+                        new_cert.key_pem.as_bytes(),
+                        new_cert.not_after,
+                    ) {
+                        error!("acme.swap_failed: {}", e);
+                    } else {
+                        info!("acme.renewed: new fingerprint {}", new_cert.fingerprint_sha256);
+                    }
+                }
+                Err(e) => {
+                    error!("acme.renewal_failed: {}", e);
+                }
+            }
+        }
+    }
+}
+
+// ── ConnectionPool ────────────────────────────────────────────────────────────
 
 /// Cached QUIC connection with last-used timestamp for TTL eviction.
 struct CachedConnection {
@@ -111,7 +333,7 @@ impl ConnectionPool {
                 .cache
                 .iter()
                 .min_by_key(|e| e.last_used)
-                .map(|e| e.key().clone())
+                .map(|e| *e.key())
             {
                 self.cache.remove(&oldest);
                 debug!("Pool: evicted LRU connection for {}", oldest);
@@ -131,6 +353,8 @@ impl ConnectionPool {
         self.cache.remove(key);
     }
 }
+
+// ── ProxyError ────────────────────────────────────────────────────────────────
 
 /// Errors that can occur before the proxy starts bidirectional copying.
 #[derive(Debug)]
@@ -199,6 +423,8 @@ fn error_to_http_response(err: &ProxyError) -> Vec<u8> {
     )
     .into_bytes()
 }
+
+// ── Subdomain parsing ─────────────────────────────────────────────────────────
 
 /// Parsed subdomain info: the z32 node ID string and optional target port.
 struct SubdomainInfo {
@@ -269,13 +495,18 @@ fn resolve_ticket(z32_str: &str) -> Result<EndpointAddr, ProxyError> {
     Ok(EndpointAddr::new(pubkey))
 }
 
-/// Read from the TCP stream until we find the end of HTTP headers (\r\n\r\n).
+// ── Proxy logic ───────────────────────────────────────────────────────────────
+
+/// Read from the stream until we find the end of HTTP headers (\r\n\r\n).
 /// Returns the buffer containing all bytes read (headers + possibly start of body).
 /// Times out after `timeout` duration.
-async fn read_until_headers(
-    stream: &mut TcpStream,
+async fn read_until_headers<S>(
+    stream: &mut S,
     timeout: Duration,
-) -> Result<Vec<u8>, ProxyError> {
+) -> Result<Vec<u8>, ProxyError>
+where
+    S: AsyncRead + Unpin,
+{
     const MAX_HEADER_SIZE: usize = 8192;
     let mut buf = Vec::with_capacity(4096);
     let mut tmp = [0u8; 4096];
@@ -324,8 +555,8 @@ fn extract_host(header_bytes: &[u8]) -> Option<String> {
 
 /// Set up the proxy: read headers, parse subdomain, connect to VM via Iroh.
 /// Returns the header buffer (to be forwarded) and the QUIC send/recv streams.
-async fn setup_proxy(
-    stream: &mut TcpStream,
+async fn setup_proxy<S>(
+    stream: &mut S,
     ep: &Endpoint,
     pool: &ConnectionPool,
     cfg: &Config,
@@ -336,7 +567,10 @@ async fn setup_proxy(
         iroh::endpoint::RecvStream,
     ),
     ProxyError,
-> {
+>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     // Read HTTP headers (5s timeout for header reading)
     let header_buf = read_until_headers(stream, Duration::from_secs(5)).await?;
 
@@ -399,19 +633,33 @@ async fn setup_proxy(
     Ok((header_buf, send, recv))
 }
 
+/// Write an HTTP error response through `w` and shut down the write half.
+/// Errors are silently ignored — the connection is being torn down anyway.
+async fn write_error_and_shutdown<W>(w: &mut W, err: &ProxyError)
+where
+    W: AsyncWrite + Unpin,
+{
+    let _ = w.write_all(&error_to_http_response(err)).await;
+    let _ = w.shutdown().await;
+}
+
 /// Run the bidirectional proxy: forward buffered headers, wait for first response
 /// byte (with timeout), then copy in both directions.
 ///
-/// Returns `Err(ProxyError)` only if the error occurs before any data is sent to
-/// the client, so the caller can still send an HTTP error response.
-async fn run_proxy(
-    stream: TcpStream,
+/// On `ResponseTimeout` or `StreamError` the error response is written to the
+/// client stream internally before returning `Err`. The caller does not need to
+/// write anything on error.
+async fn run_proxy<S>(
+    stream: S,
     header_buf: Vec<u8>,
     mut quic_send: iroh::endpoint::SendStream,
     mut quic_recv: iroh::endpoint::RecvStream,
     response_timeout: Duration,
-) -> Result<(), (ProxyError, TcpStream)> {
-    let (mut tcp_read, mut tcp_write) = stream.into_split();
+) -> Result<(), ProxyError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut tcp_read, mut tcp_write) = tokio::io::split(stream);
 
     // Forward the already-read HTTP headers to the VM
     if let Err(e) = quic_send.write_all(&header_buf).await {
@@ -437,9 +685,8 @@ async fn run_proxy(
             Err(_) => Some(ProxyError::ResponseTimeout),
         };
         if let Some(e) = err {
-            // Reunite the split halves so caller can write an error response
-            let stream = tcp_read.reunite(tcp_write).expect("reunite failed");
-            return Err((e, stream));
+            write_error_and_shutdown(&mut tcp_write, &e).await;
+            return Err(e);
         }
     }
 
@@ -469,21 +716,25 @@ async fn run_proxy(
     Ok(())
 }
 
-/// Handle a single incoming TCP connection.
-async fn handle_connection(mut stream: TcpStream, peer: SocketAddr, ep: &Endpoint, pool: &ConnectionPool, cfg: &Config) {
+/// Handle a single incoming connection (plain TCP or TLS).
+async fn handle_connection<S>(mut stream: S, peer: SocketAddr, ep: &Endpoint, pool: &ConnectionPool, cfg: &Config)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let response_timeout = Duration::from_secs(cfg.response_timeout);
 
     match setup_proxy(&mut stream, ep, pool, cfg).await {
         Ok((header_buf, quic_send, quic_recv)) => {
             info!("{}: proxying", peer);
-            if let Err((e, mut stream)) = run_proxy(stream, header_buf, quic_send, quic_recv, response_timeout).await {
+            if let Err(e) = run_proxy(stream, header_buf, quic_send, quic_recv, response_timeout).await {
+                // run_proxy already wrote the error response to the client before returning.
                 warn!("{}: {}", peer, e);
-                let _ = stream.write_all(&error_to_http_response(&e)).await;
             }
         }
         Err(e) => {
             warn!("{}: {}", peer, e);
             let _ = stream.write_all(&error_to_http_response(&e)).await;
+            let _ = stream.shutdown().await;
         }
     }
 }
@@ -509,7 +760,113 @@ async fn shutdown_signal() {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
+    // Install ring crypto provider before any rustls use.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     let cfg = Config::parse();
+
+    // ── Startup validation ────────────────────────────────────────────────────
+
+    if cfg.tls_expiry_fail_secs == 0 {
+        warn!(
+            "GATEWAY_TLS_EXPIRY_FAIL_SECS=0 disables the Scenario-3 expiring-cert mitigation; \
+             production should set 86400 or higher"
+        );
+    }
+
+    // At least one listener must be enabled.
+    if cfg.listen.is_empty() && cfg.tls_listen.is_empty() {
+        error!("Both GATEWAY_LISTEN and GATEWAY_TLS_LISTEN are empty — no listeners configured, exiting");
+        std::process::exit(1);
+    }
+
+    let acme_enabled = cfg.acme == "enabled";
+
+    // Fail-fast: validate ACME config before doing anything expensive.
+    if acme_enabled {
+        validate_acme_config(&cfg)?;
+    }
+
+    // ── State dir (used by ACME) ──────────────────────────────────────────────
+
+    let state_dir = {
+        let base = std::env::var("STATE_DIRECTORY")
+            .unwrap_or_else(|_| "/var/lib/mjolnir-gateway".to_owned());
+        let dir = PathBuf::from(base).join("acme");
+        std::fs::create_dir_all(&dir)?;
+        dir
+    };
+
+    // ── Bind listeners ────────────────────────────────────────────────────────
+
+    let plain_listener: Option<TcpListener> = if cfg.listen.is_empty() {
+        info!("Plaintext listener disabled (GATEWAY_LISTEN is empty)");
+        None
+    } else {
+        let addr: SocketAddr = cfg.listen.parse()?;
+        let l = TcpListener::bind(addr).await?;
+        info!("Plaintext listener on {}", addr);
+        Some(l)
+    };
+
+    let tls_state: Option<Arc<TlsState>> = if cfg.tls_listen.is_empty() {
+        info!("TLS listener disabled (GATEWAY_TLS_LISTEN is empty)");
+        None
+    } else if acme_enabled {
+        // ── ACME branch ───────────────────────────────────────────────────────
+        let cf_client = CloudflareClient::new(cfg.cloudflare_api_token.clone())?;
+        let acme_cfg = AcmeConfig {
+            directory_url: cfg.acme_directory.clone(),
+            email: cfg.acme_email.clone(),
+            domains: cfg.acme_domains.iter().filter(|d| !d.is_empty()).cloned().collect(),
+            state_dir: state_dir.clone(),
+            renew_before: Duration::from_secs(cfg.acme_renew_before_secs),
+        };
+
+        let issued: IssuedCert = mjolnir_gateway::acme::load_or_issue(&acme_cfg, &cf_client).await?;
+        info!(
+            "ACME cert ready: expires {}, fingerprint {}",
+            humantime::format_rfc3339_seconds(issued.not_after),
+            issued.fingerprint_sha256
+        );
+
+        let fail_within = Duration::from_secs(cfg.tls_expiry_fail_secs);
+        let state = TlsState::from_pem_bytes(
+            issued.chain_pem.as_bytes(),
+            issued.key_pem.as_bytes(),
+            cfg.tls_session_cache,
+            fail_within,
+            issued.not_after,
+        )?;
+
+        // Spawn background renewal task.
+        tokio::spawn(renewal_loop(Arc::clone(&state), acme_cfg, cf_client));
+
+        Some(state)
+    } else {
+        // ── Static-cert branch ────────────────────────────────────────────────
+        let fail_within = Duration::from_secs(cfg.tls_expiry_fail_secs);
+        let state = TlsState::load(
+            cfg.tls_cert.clone(),
+            cfg.tls_key.clone(),
+            cfg.tls_session_cache,
+            fail_within,
+        )?;
+        Some(state)
+    };
+
+    let tls_listener: Option<TcpListener> = if cfg.tls_listen.is_empty() {
+        None
+    } else {
+        let addr: SocketAddr = cfg.tls_listen.parse()?;
+        let l = TcpListener::bind(addr).await?;
+        info!("TLS listener on {}", addr);
+        Some(l)
+    };
+
+    // ── Iroh endpoint + pool ──────────────────────────────────────────────────
 
     info!("Starting Iroh endpoint...");
     let endpoint = Endpoint::builder().bind().await?;
@@ -524,13 +881,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ep = Arc::new(endpoint);
     let cfg = Arc::new(cfg);
 
-    let listener = TcpListener::bind(cfg.listen).await?;
-    info!("Listening on {} (pool: max={}, ttl={}s)", cfg.listen, cfg.pool_max, cfg.pool_ttl);
+    // ── SIGHUP handler ────────────────────────────────────────────────────────
+
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+        .expect("failed to register SIGHUP handler");
+
+    // ── Accept loop ───────────────────────────────────────────────────────────
+
+    info!(
+        "Gateway ready (pool: max={}, ttl={}s)",
+        cfg.pool_max, cfg.pool_ttl
+    );
 
     loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, peer) = accept?;
+        // We need to optionally poll the two listeners. Using async blocks that
+        // resolve to a tagged enum lets us handle all cases cleanly.
+        enum Event {
+            Plain(std::io::Result<(tokio::net::TcpStream, SocketAddr)>),
+            Tls(std::io::Result<(tokio::net::TcpStream, SocketAddr)>),
+            Shutdown,
+            #[cfg(unix)]
+            Sighup,
+        }
+
+        let event = {
+            // Build futures for each optional listener.
+            let plain_fut = async {
+                match &plain_listener {
+                    Some(l) => Event::Plain(l.accept().await),
+                    None => std::future::pending().await,
+                }
+            };
+            let tls_fut = async {
+                match &tls_listener {
+                    Some(l) => Event::Tls(l.accept().await),
+                    None => std::future::pending().await,
+                }
+            };
+
+            #[cfg(unix)]
+            {
+                tokio::select! {
+                    e = plain_fut => e,
+                    e = tls_fut => e,
+                    _ = shutdown_signal() => Event::Shutdown,
+                    _ = sighup.recv() => Event::Sighup,
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::select! {
+                    e = plain_fut => e,
+                    e = tls_fut => e,
+                    _ = shutdown_signal() => Event::Shutdown,
+                }
+            }
+        };
+
+        match event {
+            Event::Plain(Ok((stream, peer))) => {
                 let ep = Arc::clone(&ep);
                 let pool = Arc::clone(&pool);
                 let cfg = Arc::clone(&cfg);
@@ -538,9 +948,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle_connection(stream, peer, &ep, &pool, &cfg).await;
                 });
             }
-            _ = shutdown_signal() => {
+            Event::Plain(Err(e)) => {
+                warn!("Plaintext accept error: {}", e);
+            }
+            Event::Tls(Ok((tcp_stream, peer))) => {
+                let tls = Arc::clone(tls_state.as_ref().expect("tls_state present when tls_listener present"));
+                let ep = Arc::clone(&ep);
+                let pool = Arc::clone(&pool);
+                let cfg = Arc::clone(&cfg);
+                tokio::spawn(async move {
+                    match tls.acceptor().accept(tcp_stream).await {
+                        Ok(tls_stream) => {
+                            handle_connection(tls_stream, peer, &ep, &pool, &cfg).await;
+                        }
+                        Err(e) => {
+                            warn!("{}: TLS handshake failed: {}", peer, e);
+                        }
+                    }
+                });
+            }
+            Event::Tls(Err(e)) => {
+                warn!("TLS accept error: {}", e);
+            }
+            Event::Shutdown => {
                 info!("Shutting down");
                 break;
+            }
+            #[cfg(unix)]
+            Event::Sighup => {
+                if let Some(ref tls) = tls_state {
+                    if acme_enabled {
+                        info!("SIGHUP received — forcing ACME cert renewal");
+                        // Fire-and-forget forced renewal; errors are logged inside.
+                        // We can't easily await here without restructuring the loop,
+                        // so we spawn a one-shot task.
+                        let tls_clone = Arc::clone(tls);
+                        let acme_cfg2 = AcmeConfig {
+                            directory_url: cfg.acme_directory.clone(),
+                            email: cfg.acme_email.clone(),
+                            domains: cfg.acme_domains.iter().filter(|d| !d.is_empty()).cloned().collect(),
+                            state_dir: state_dir.clone(),
+                            renew_before: Duration::from_secs(cfg.acme_renew_before_secs),
+                        };
+                        let cf2 = match CloudflareClient::new(cfg.cloudflare_api_token.clone()) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!("SIGHUP: failed to create CF client: {}", e);
+                                continue;
+                            }
+                        };
+                        tokio::spawn(async move {
+                            match mjolnir_gateway::acme::issue(&acme_cfg2, &cf2).await {
+                                Ok(cert) => {
+                                    if let Err(e) = tls_clone.swap_from_pem(
+                                        cert.chain_pem.as_bytes(),
+                                        cert.key_pem.as_bytes(),
+                                        cert.not_after,
+                                    ) {
+                                        error!("SIGHUP acme.swap_failed: {}", e);
+                                    } else {
+                                        info!("SIGHUP acme.renewed: fingerprint {}", cert.fingerprint_sha256);
+                                    }
+                                }
+                                Err(e) => error!("SIGHUP acme.issue_failed: {}", e),
+                            }
+                        });
+                    } else {
+                        info!("SIGHUP received — reloading TLS certificate");
+                        if let Err(e) = tls.reload() {
+                            warn!("TLS reload failed: {}", e);
+                        }
+                    }
+                } else {
+                    debug!("SIGHUP received but TLS is disabled — ignoring");
+                }
             }
         }
     }
@@ -551,6 +1032,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn generate_self_signed_pem(cn: &str) -> (Vec<u8>, Vec<u8>) {
+        use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+
+        let mut params = CertificateParams::default();
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, cn);
+        params.distinguished_name = dn;
+        params.not_before = rcgen::date_time_ymd(2024, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2099, 1, 1);
+
+        let kp = KeyPair::generate().expect("keygen");
+        let cert = params.self_signed(&kp).expect("self-sign");
+        (cert.pem().into_bytes(), kp.serialize_pem().into_bytes())
+    }
+
+    fn install_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    // ── Existing tests (unchanged) ────────────────────────────────────────────
 
     #[test]
     fn test_parse_subdomain_basic() {
@@ -707,5 +1211,178 @@ mod tests {
         let resp_str = String::from_utf8(resp).unwrap();
         assert!(resp_str.starts_with("HTTP/1.1 504 Gateway Timeout"));
         assert!(resp_str.contains("VM did not respond in time"));
+    }
+
+    /// 1c.ii — `write_error_and_shutdown` writes the HTTP error response to any
+    /// `AsyncWrite + Unpin` — exercised here over a `tokio::io::duplex` pair.
+    #[tokio::test]
+    async fn write_error_and_shutdown_sends_504_over_duplex() {
+        // Create an in-memory full-duplex pair. `server_side` is what the gateway
+        // writes to; `client_side` is what the "client" reads from.
+        let (client_side, server_side) = tokio::io::duplex(4096);
+        let (mut client_read, _client_write) = tokio::io::split(client_side);
+        let (_server_read, mut server_write) = tokio::io::split(server_side);
+
+        // Invoke the helper with a ResponseTimeout error.
+        write_error_and_shutdown(&mut server_write, &ProxyError::ResponseTimeout).await;
+
+        // Read whatever the client side received.
+        let mut received = Vec::new();
+        let _ = tokio::io::copy(&mut client_read, &mut received).await;
+
+        let response_str = String::from_utf8(received).expect("valid utf-8");
+        assert!(
+            response_str.starts_with("HTTP/1.1 504 Gateway Timeout"),
+            "expected 504 status line, got: {:?}",
+            &response_str[..response_str.len().min(80)]
+        );
+        assert!(
+            response_str.contains("VM did not respond in time"),
+            "expected body text in response"
+        );
+    }
+
+    // ── Task 1d new test ──────────────────────────────────────────────────────
+
+    /// Verify that `TlsState::reload` keeps the previous (working) cert loaded
+    /// when the reload fails due to corrupted cert files.
+    ///
+    /// Steps:
+    ///   1. Write a valid self-signed cert + key to temp files.
+    ///   2. Construct a `TlsState` — should succeed.
+    ///   3. Overwrite the cert file with garbage.
+    ///   4. Call `reload()` — must return `Err`.
+    ///   5. Call `acceptor()` — must still produce a working `TlsAcceptor`
+    ///      (the old config is still in the ArcSwap).
+    #[test]
+    fn tls_state_reload_keeps_previous_cert_on_failure() {
+        install_provider();
+
+        let (cert_pem, key_pem) = generate_self_signed_pem("reload-test");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, &key_pem).unwrap();
+
+        // Step 2: initial load must succeed.
+        let tls_state = TlsState::load(
+            cert_path.clone(),
+            key_path.clone(),
+            128,
+            Duration::from_secs(86400),
+        )
+        .expect("initial TlsState::load must succeed");
+
+        // Capture the pointer to the currently-loaded ServerConfig.
+        let config_before = Arc::as_ptr(&tls_state.config.load_full());
+
+        // Step 3: corrupt the cert file.
+        std::fs::write(&cert_path, b"this is not a valid PEM cert").unwrap();
+
+        // Step 4: reload must fail.
+        let reload_result = tls_state.reload();
+        assert!(
+            reload_result.is_err(),
+            "reload() must return Err when cert file is corrupt"
+        );
+
+        // Step 5: the ArcSwap still holds the original config — pointer unchanged.
+        let config_after = Arc::as_ptr(&tls_state.config.load_full());
+        assert_eq!(
+            config_before, config_after,
+            "reload failure must not replace the loaded ServerConfig"
+        );
+
+        // acceptor() must not panic and must produce a usable TlsAcceptor.
+        let _acceptor = tls_state.acceptor();
+    }
+
+    // ── Wave 3 new tests ──────────────────────────────────────────────────────
+
+    /// validate_acme_config returns Err naming the missing token when only
+    /// email and domains are provided.
+    #[test]
+    fn config_rejects_acme_enabled_without_token() {
+        let cfg = Config::parse_from([
+            "prog",
+            "--acme=enabled",
+            "--acme-email=x@y.com",
+            "--acme-domains=a.com",
+            // Intentionally omit --cloudflare-api-token
+        ]);
+        let result = validate_acme_config(&cfg);
+        assert!(result.is_err(), "expected Err when token is missing");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("CLOUDFLARE_API_TOKEN"),
+            "error should mention CLOUDFLARE_API_TOKEN, got: {msg}"
+        );
+    }
+
+    /// --acme-domains=a.com,b.com,*.c.com produces the expected Vec.
+    #[test]
+    fn config_parses_comma_separated_domains() {
+        let cfg = Config::parse_from([
+            "prog",
+            "--acme-domains=a.com,b.com,*.c.com",
+        ]);
+        assert_eq!(
+            cfg.acme_domains,
+            vec!["a.com", "b.com", "*.c.com"],
+            "acme_domains should parse comma-separated values"
+        );
+    }
+
+    /// should_renew returns true when the cert expires within renew_before.
+    #[test]
+    fn should_renew_returns_true_when_expiring_soon() {
+        install_provider();
+        let (cert_pem, key_pem) = generate_self_signed_pem("renew-soon");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, &key_pem).unwrap();
+
+        // Build a TlsState but then manually override not_after to be soon.
+        let state = TlsState::load(cert_path, key_path, 128, Duration::from_secs(60))
+            .expect("TlsState::load");
+
+        // Set not_after to 1 hour from now — less than renew_before of 30 days.
+        let expiring_soon = SystemTime::now() + Duration::from_secs(3600);
+        *state.not_after.write().unwrap() = expiring_soon;
+
+        let renew_before = Duration::from_secs(30 * 24 * 3600);
+        assert!(
+            should_renew(&state, &renew_before),
+            "should_renew must return true when cert expires soon"
+        );
+    }
+
+    /// should_renew returns false when the cert has plenty of time remaining.
+    #[test]
+    fn should_renew_returns_false_when_fresh() {
+        install_provider();
+        let (cert_pem, key_pem) = generate_self_signed_pem("renew-fresh");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, &key_pem).unwrap();
+
+        let state = TlsState::load(cert_path, key_path, 128, Duration::from_secs(60))
+            .expect("TlsState::load");
+
+        // Set not_after to 365 days from now — well beyond renew_before of 30 days.
+        let fresh = SystemTime::now() + Duration::from_secs(365 * 24 * 3600);
+        *state.not_after.write().unwrap() = fresh;
+
+        let renew_before = Duration::from_secs(30 * 24 * 3600);
+        assert!(
+            !should_renew(&state, &renew_before),
+            "should_renew must return false when cert is fresh"
+        );
     }
 }

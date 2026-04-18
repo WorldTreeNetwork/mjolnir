@@ -14,11 +14,14 @@ ExecStart=/usr/local/bin/mjolnir-gateway
 
 EnvironmentFile=-/etc/mjolnir/gateway.env
 
-# No elevated capabilities needed — gateway is pure network I/O
+# CAP_NET_BIND_SERVICE needed for :80 and :443 binding as unprivileged mjolnir user
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+StateDirectory=mjolnir-gateway
 
 Restart=on-failure
 RestartSec=5
