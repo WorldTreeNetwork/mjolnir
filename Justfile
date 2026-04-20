@@ -60,6 +60,16 @@ chaos-destructive: _require-host
 chaos-restart: _require-host
     mix test test/chaos/restart_test.exs --only chaos
 
+# Run scenario 2 only (BEAM SIGKILL preserves VMs)
+chaos-sigkill: _require-host
+    mix test test/chaos/sigkill_beam_test.exs --only chaos
+
+# Run scenario 3 only (server reboot — DESTRUCTIVE, ~60s downtime)
+chaos-reboot: _require-host
+    @echo "WARNING: server reboot scenario — host will be offline ~60s. Ctrl-C to abort."
+    @sleep 5
+    mix test test/chaos/reboot_test.exs --only chaos --include destructive
+
 iex:
     iex -S mix
 

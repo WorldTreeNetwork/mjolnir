@@ -168,4 +168,51 @@ defmodule Mjolnir.Chaos.Helpers do
       {out, code} -> {:error, {:sigkill_failed, code, String.trim(out)}}
     end
   end
+
+  def chaos(:reboot) do
+    # systemctl reboot returns quickly and schedules the reboot asynchronously.
+    # SSH connection will drop mid-command; treat non-zero exit as OK here
+    # since the disconnect itself is a success signal.
+    _ = ssh("systemctl reboot")
+    :ok
+  end
+
+  @doc """
+  Poll until SSH is answering again after a reboot. The host may reject
+  connections with "Connection refused" for 30-60s while boot progresses.
+  """
+  @spec wait_for_ssh(timeout :: non_neg_integer()) :: :ok | {:error, :timeout}
+  def wait_for_ssh(timeout_ms \\ 180_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_ssh(deadline)
+  end
+
+  defp do_wait_ssh(deadline) do
+    # -o ConnectTimeout=5 keeps each probe short so we spend the timeout
+    # budget on retries rather than waiting on one doomed handshake.
+    {_out, code} =
+      System.cmd(
+        "ssh",
+        [
+          "-o",
+          "ConnectTimeout=5",
+          "-o",
+          "StrictHostKeyChecking=accept-new",
+          host(),
+          "true"
+        ],
+        stderr_to_stdout: true
+      )
+
+    if code == 0 do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(2_000)
+        do_wait_ssh(deadline)
+      else
+        {:error, :timeout}
+      end
+    end
+  end
 end

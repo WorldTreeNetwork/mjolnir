@@ -59,7 +59,7 @@ defmodule Mjolnir.Chaos.RestartTest do
            "Kernel version differs after restart — did the rootfs get re-cloned?"
   end
 
-  defp kernel_output(%{"stdout" => s}), do: String.trim(s)
-  defp kernel_output(%{stdout: s}), do: String.trim(s)
+  defp kernel_output(%{"output" => s}), do: String.trim(s)
+  defp kernel_output(%{output: s}), do: String.trim(s)
   defp kernel_output(other), do: inspect(other)
 end
