@@ -19,8 +19,11 @@ set -euo pipefail
 #
 # Environment variables:
 #   DEV_MODE             - Set to 1 for development setup (skip /opt deploy, setup dev dirs)
-#   BTRFS_DEVICE         - Block device for BTRFS (will prompt if not set)
-#   USE_LOOPBACK         - Set to 1 to auto-create a loopback file instead of using a device
+#   BTRFS_DEVICE         - Block device for BTRFS (will prompt if not set). Recommended for prod.
+#   USE_LOOPBACK         - Set to 1 to opt-in to a loopback file instead of a dedicated device.
+#                          NOTE: The script no longer silently falls back to an existing btrfs.img;
+#                          loopback must be explicitly requested. A pre-existing image is treated
+#                          as a stale artifact and warned about.
 #   BTRFS_LOOPBACK_SIZE_GB - Size of loopback file in GB (default: 50)
 #   MJOLNIR_REPO         - Git repo URL (default: current directory or GitHub)
 #   MJOLNIR_BRANCH       - Git branch (default: main)
@@ -550,26 +553,60 @@ setup_btrfs() {
         return 0
     fi
 
-    # Determine device: explicit device, existing loopback, or create new loopback
+    # Stale-artifact guard: a leftover btrfs.img used to auto-trigger loopback mode.
+    # That regression trap is removed — loopback is now strictly opt-in via USE_LOOPBACK=1.
+    if [[ -f "$loopback_file" && -z "$device" && "${USE_LOOPBACK:-0}" != "1" ]]; then
+        log_warn "Found existing loopback file at $loopback_file (ignored)."
+        log_warn "To reuse it, set USE_LOOPBACK=1. To suppress this warning, move or delete the file."
+    fi
+
+    # Determine device
     if [[ -z "$device" ]]; then
-        # Check if loopback file already exists
-        if [[ -f "$loopback_file" ]]; then
-            log_info "Found existing loopback file at $loopback_file"
-            use_loopback=1
-        elif [[ "${USE_LOOPBACK:-0}" == "1" ]]; then
-            log_info "USE_LOOPBACK=1, will create loopback device"
+        if [[ "${USE_LOOPBACK:-0}" == "1" ]]; then
+            log_info "USE_LOOPBACK=1 — using loopback file at $loopback_file"
             use_loopback=1
         else
+            # Detect empty candidate disks (type=disk, no partitions, no FS signature)
+            local candidates=()
+            local disk size
+            while read -r disk; do
+                if [[ -z "$(wipefs -n "/dev/$disk" 2>/dev/null)" ]] \
+                   && [[ "$(lsblk -n "/dev/$disk" | wc -l)" -eq 1 ]]; then
+                    size=$(lsblk -ndo SIZE "/dev/$disk")
+                    candidates+=("/dev/$disk:$size")
+                fi
+            done < <(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print $1}')
+
             echo ""
-            log_info "No BTRFS_DEVICE specified. Options:"
+            log_info "BTRFS storage selection:"
             echo ""
-            echo "  1. Use a loopback file (recommended for dev/testing)"
-            echo "  2. Use a dedicated block device (recommended for production)"
+            echo "  Recommended: dedicated block device (production — true CoW, TRIM, no double FS)"
+            echo "  Dev/testing: loopback file (type 'loop' below, or rerun with USE_LOOPBACK=1)"
             echo ""
-            log_info "Available block devices:"
-            lsblk -d -o NAME,SIZE,TYPE,MOUNTPOINT | grep -E "disk|part" || true
-            echo ""
-            read -rp "Enter device (e.g., /dev/sdb) or 'loop' for loopback: " device
+
+            local default_dev=""
+            if [[ ${#candidates[@]} -gt 0 ]]; then
+                log_info "Detected empty candidate disks:"
+                local max_bytes=0 bytes d
+                for c in "${candidates[@]}"; do
+                    echo "  - ${c%:*} (${c##*:})"
+                    d="${c%:*}"
+                    bytes=$(blockdev --getsize64 "$d" 2>/dev/null || echo 0)
+                    if (( bytes > max_bytes )); then
+                        max_bytes=$bytes
+                        default_dev=$d
+                    fi
+                done
+                echo ""
+                read -rp "Enter device (default: $default_dev) or 'loop' for loopback: " device
+                device="${device:-$default_dev}"
+            else
+                log_warn "No empty block devices detected."
+                log_info "Available block devices:"
+                lsblk -do NAME,SIZE,TYPE,MOUNTPOINT | grep -E "disk|part" || true
+                echo ""
+                read -rp "Enter device (e.g., /dev/sdb) or 'loop' for loopback: " device
+            fi
 
             if [[ "$device" == "loop" ]]; then
                 use_loopback=1
@@ -657,10 +694,12 @@ EOF
         fi
     fi
 
-    # Create directory structure
-    # Note: We use regular directories for @base and @vms, not subvolumes,
-    # because Firecracker uses ext4 file images. BTRFS CoW cloning (cp --reflink)
-    # works on files within the same filesystem, giving us instant VM creation.
+    # Create top-level directory structure.
+    # These four are plain directories; the per-distro template under @base/<name>
+    # and per-VM rootfs under @vms/<uuid> are btrfs SUBVOLUMES, created by
+    # scripts/build-rootfs.sh and Mjolnir.BTRFS.clone_subvolume/2 at spawn time.
+    # Subvolumes are required (not just directories) so Cloud Hypervisor can share
+    # each rootfs over virtio-fs and so reflink clones give us instant VM creation.
     log_info "Creating BTRFS directory structure..."
     mkdir -p "$MJOLNIR_ROOT/btrfs/@base"
     mkdir -p "$MJOLNIR_ROOT/btrfs/@vms"
