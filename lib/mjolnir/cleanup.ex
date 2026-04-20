@@ -136,18 +136,38 @@ defmodule Mjolnir.Cleanup do
 
     case File.ls(vms_dir) do
       {:ok, entries} ->
-        Enum.each(entries, fn entry ->
-          path = Path.join(vms_dir, entry)
-          Logger.info("Removing stale VM directory: #{path}")
-
-          case Mjolnir.BTRFS.delete_subvolume(path) do
-            :ok -> :ok
-            {:error, _} -> File.rm_rf(path)
-          end
-        end)
+        Enum.each(entries, &maybe_remove_vm(vms_dir, &1))
 
       {:error, :enoent} ->
         :ok
     end
+  end
+
+  defp maybe_remove_vm(vms_dir, entry) do
+    path = Path.join(vms_dir, entry)
+
+    case safe_state_lookup(entry) do
+      {:ok, record} ->
+        Logger.info(
+          "Preserving VM subvolume #{entry} (intent=#{record.intent}) for reconcile"
+        )
+
+      :not_found ->
+        Logger.info("Removing stale VM directory: #{path}")
+
+        case Mjolnir.BTRFS.delete_subvolume(path) do
+          :ok -> :ok
+          {:error, _} -> File.rm_rf(path)
+        end
+    end
+  end
+
+  # StateStore may not be running in early boot or in test contexts that
+  # don't start the full application. Fall back to "delete" behavior if we
+  # can't consult the intent store — mirrors pre-durability semantics.
+  defp safe_state_lookup(uuid) do
+    Mjolnir.StateStore.get(uuid)
+  rescue
+    ArgumentError -> :not_found
   end
 end

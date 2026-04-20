@@ -40,7 +40,10 @@ defmodule Mjolnir.VM do
     # Secrets mode: :none (default) | :persistent (LUKS encrypted volume)
     secrets_mode: :none,
     # Inter-VM message queue (buffered during boot)
-    message_queue: []
+    message_queue: [],
+    # Resume mode: true when booting an existing VM from StateStore (skips
+    # rootfs clone + guest agent re-injection). Set by Mjolnir.Reconcile.
+    resume_mode: false
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode)
@@ -448,6 +451,45 @@ defmodule Mjolnir.VM do
     end
   end
 
+  @doc """
+  Resume a VM from a persisted StateStore record. Used by `Mjolnir.Reconcile`
+  at boot. Skips rootfs clone (uses existing `@vms/<uuid>` subvolume) and
+  skips guest-agent injection. Network/identity/iroh are re-pushed
+  idempotently to recover from any guest drift.
+  """
+  @spec resume(Mjolnir.StateStore.Record.t()) :: {:ok, t()} | {:error, term()}
+  def resume(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg}) do
+    opts = %{
+      id: uuid,
+      resume: true,
+      base_image: Map.get(cfg, "base_image"),
+      vcpus: Map.get(cfg, "vcpus"),
+      memory_mb: Map.get(cfg, "memory_mb"),
+      enable_iroh: Map.get(cfg, "enable_iroh"),
+      owner_id: Map.get(cfg, "owner_id"),
+      ssh_public_key: Map.get(cfg, "ssh_public_key"),
+      secrets_mode:
+        case Map.get(cfg, "secrets_mode") do
+          "persistent" -> :persistent
+          _ -> :none
+        end
+    }
+
+    case DynamicSupervisor.start_child(
+           Mjolnir.VMSupervisor,
+           {__MODULE__, opts}
+         ) do
+      {:ok, pid} ->
+        case GenServer.call(pid, :await_boot, 60_000) do
+          {:ok, vm} -> {:ok, vm}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ============================================================================
   # GenServer Implementation
   # ============================================================================
@@ -488,7 +530,8 @@ defmodule Mjolnir.VM do
       hypervisor: hypervisor,
       ssh_public_key: ssh_key,
       enable_iroh: enable_iroh,
-      owner_id: opts[:owner_id]
+      owner_id: opts[:owner_id],
+      resume_mode: opts[:resume] || false
     }
 
     {:ok, state, {:continue, :boot}}
@@ -503,13 +546,16 @@ defmodule Mjolnir.VM do
           Mjolnir.Vsock.Connection.deliver_message(new_state.vsock_conn, from_vm_id, payload)
         end
 
-        {:noreply,
-         %{
-           new_state
-           | state: :running,
-             boot_time: System.system_time(:millisecond),
-             message_queue: []
-         }}
+        running_state = %{
+          new_state
+          | state: :running,
+            boot_time: System.system_time(:millisecond),
+            message_queue: []
+        }
+
+        persist_running_state(running_state)
+
+        {:noreply, running_state}
 
       {:error, reason} ->
         Logger.error("VM #{state.id} failed to boot: #{inspect(reason)}")
@@ -568,6 +614,9 @@ defmodule Mjolnir.VM do
       {:ok, _metadata} ->
         original_config = restore_config(state)
         Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
+        # DormantRegistry now owns this VM's persisted state; remove the
+        # running-intent record so Mjolnir.Reconcile doesn't try to resume it.
+        _ = Mjolnir.StateStore.delete(state.id)
         Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
         {:stop, :normal, :ok, state}
 
@@ -745,16 +794,28 @@ defmodule Mjolnir.VM do
 
   @impl true
   def terminate(reason, state) do
-    Logger.info("VM #{state.id} terminating: #{inspect(reason)}")
+    Logger.info("VM #{state.id} terminating: #{inspect(reason)} (state=#{state.state})")
 
-    # Only run cleanup if we have resources to clean up (hypervisor_port or net_config set).
-    # Partial boot failures clean up their own resources via cleanup_partial_boot.
+    # Durability: preserve rootfs and StateStore record unless we're sure the
+    # VM should be gone forever. "Sure" = the VM was successfully running AND
+    # this exit is :normal (user-initiated VM.stop or handle_done dormant
+    # transition). Every other path — supervisor :shutdown, hypervisor crash,
+    # boot failure mid-resume — preserves so Mjolnir.Reconcile can retry.
+    preserve = preserve_rootfs?(reason, state)
+
     if state.hypervisor_port || state.net_config || state.rootfs_path do
-      cleanup(state)
+      cleanup(state, preserve_rootfs: preserve)
+    end
+
+    unless preserve do
+      _ = Mjolnir.StateStore.delete(state.id)
     end
 
     :ok
   end
+
+  defp preserve_rootfs?(:normal, %{state: :running}), do: false
+  defp preserve_rootfs?(_reason, _state), do: true
 
   # ============================================================================
   # Private Functions
@@ -775,7 +836,8 @@ defmodule Mjolnir.VM do
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
       vsock_cid: generate_vsock_cid(opts.id),
       snapshot: opts[:snapshot],
-      preserve_iroh_key: opts[:preserve_iroh_key] || false
+      preserve_iroh_key: opts[:preserve_iroh_key] || false,
+      resume: opts[:resume] || false
     }
   end
 
@@ -809,8 +871,8 @@ defmodule Mjolnir.VM do
     result =
       with :ok <- File.mkdir_p(socket_dir),
            {:ok, rootfs_path} <- clone_rootfs(state.id, base_image, state.config),
-           _ = boot_partial_put(:rootfs_path, rootfs_path),
-           _ = inject_guest_agent(rootfs_path),
+           _ = track_rootfs_for_cleanup(state, rootfs_path),
+           _ = maybe_inject_guest_agent(state, rootfs_path),
            virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id),
            {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.start(rootfs_path, virtiofsd_socket),
            _ = boot_partial_put(:virtiofsd_port, virtiofsd_port),
@@ -988,26 +1050,47 @@ defmodule Mjolnir.VM do
   end
 
   defp clone_rootfs(vm_id, base_image, config) do
-    # Clone from snapshot or base image
-    result =
-      if config.snapshot do
-        BTRFS.clone_from_snapshot(config.snapshot, vm_id)
-      else
-        BTRFS.clone(base_image, vm_id)
-      end
+    cond do
+      config[:resume] ->
+        # Resume mode: use the existing @vms/<uuid> subvolume left over from a
+        # previous mjolnir run. If it's missing, the VM can't be rehydrated —
+        # the caller (Mjolnir.Reconcile) should have checked first, so a missing
+        # rootfs here is a bug or a race with manual cleanup.
+        btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+        subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
+        rootfs_path = Path.join([btrfs_root, subdir, vm_id])
 
-    with {:ok, rootfs_path} <- result do
-      # Delete iroh key from snapshot clones to ensure unique network identity
-      if config.snapshot && !config.preserve_iroh_key do
-        case BTRFS.delete_iroh_key(rootfs_path) do
-          :ok -> :ok
-          {:error, reason} -> Logger.warning("Failed to delete iroh key: #{inspect(reason)}")
+        if File.exists?(rootfs_path) do
+          {:ok, rootfs_path}
+        else
+          {:error, {:resume_rootfs_missing, rootfs_path}}
         end
-      end
 
-      {:ok, rootfs_path}
+      config.snapshot ->
+        with {:ok, rootfs_path} <- BTRFS.clone_from_snapshot(config.snapshot, vm_id) do
+          unless config.preserve_iroh_key do
+            case BTRFS.delete_iroh_key(rootfs_path) do
+              :ok -> :ok
+              {:error, reason} -> Logger.warning("Failed to delete iroh key: #{inspect(reason)}")
+            end
+          end
+
+          {:ok, rootfs_path}
+        end
+
+      true ->
+        BTRFS.clone(base_image, vm_id)
     end
   end
+
+  defp maybe_inject_guest_agent(%__MODULE__{resume_mode: true}, _rootfs_path), do: :ok
+  defp maybe_inject_guest_agent(_state, rootfs_path), do: inject_guest_agent(rootfs_path)
+
+  # In resume mode, the subvolume was created by a previous mjolnir run and
+  # must NOT be torn down by cleanup_partial_boot on a retryable boot failure.
+  # Only track rootfs in boot_partial for fresh spawns.
+  defp track_rootfs_for_cleanup(%__MODULE__{resume_mode: true}, _rootfs_path), do: :ok
+  defp track_rootfs_for_cleanup(_state, rootfs_path), do: boot_partial_put(:rootfs_path, rootfs_path)
 
   defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path) do
     config = %{
@@ -1312,9 +1395,16 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp cleanup(state) do
+  defp cleanup(state, opts) do
+    preserve_rootfs = Keyword.get(opts, :preserve_rootfs, false)
+
+    # The hypervisor's cleanup/1 only deletes the subvolume when state.rootfs_path
+    # is set. Nilling it lets us keep the rest of the teardown (CH process, TAP,
+    # sockets, virtiofsd) while preserving rootfs for Mjolnir.Reconcile.
+    effective_state = if preserve_rootfs, do: %{state | rootfs_path: nil}, else: state
+
     if state.hypervisor do
-      state.hypervisor.cleanup(state)
+      state.hypervisor.cleanup(effective_state)
     else
       Logger.warning("No hypervisor set for VM #{state.id}, skipping cleanup")
     end
@@ -1322,6 +1412,45 @@ defmodule Mjolnir.VM do
     :ok
   rescue
     _ -> :ok
+  end
+
+  defp persist_running_state(state) do
+    record =
+      Mjolnir.StateStore.Record.new(state.id, :running,
+        spawn_config: %{
+          "vcpus" => state.config.vcpu_count,
+          "memory_mb" => state.config.mem_size_mib,
+          "base_image" => state.config.base_image,
+          "enable_iroh" => state.enable_iroh,
+          "owner_id" => state.owner_id,
+          "ssh_public_key" => state.ssh_public_key,
+          "secrets_mode" => Atom.to_string(state.secrets_mode)
+        },
+        identity: %{
+          "iroh_node_id" => state.iroh_node_id,
+          "hostname" => nil,
+          "ssh_authorized_keys_hash" => nil
+        },
+        runtime: %{
+          "ch_api_socket" => state.socket_path,
+          "vsock_uds" => state.vsock_path
+        },
+        last_boot_at: DateTime.utc_now()
+      )
+
+    case Mjolnir.StateStore.put(record) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # Durability failure is logged but does not fail the VM — the VM is
+        # running, we just won't be able to resurrect it on mjolnir restart.
+        Logger.warning(
+          "Failed to persist StateStore record for VM #{state.id}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
   end
 
   # ============================================================================

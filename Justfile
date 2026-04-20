@@ -40,6 +40,26 @@ format-check:
 test:
     mix test
 
+# ═══════════════════════════════════════════════════════════════════════
+# Chaos tests — run against MJOLNIR_HOST live server
+# ═══════════════════════════════════════════════════════════════════════
+
+# Run safe chaos scenarios (skips :destructive: server reboot, full disk, NAT wipe, etc.)
+chaos: _require-host
+    mix test --only chaos
+
+# Run ALL chaos scenarios including destructive ones — ONLY DO THIS IF YOU MEAN IT.
+# Destructive scenarios cause real host downtime (reboot, NAT flush, disk fill, etc.)
+chaos-destructive: _require-host
+    @echo "WARNING: about to run destructive chaos scenarios against {{host}}"
+    @echo "         these cause real host downtime. Ctrl-C now to abort."
+    @sleep 5
+    mix test --only chaos --include destructive
+
+# Run scenario 1 only (mjolnir restart preserves VMs)
+chaos-restart: _require-host
+    mix test test/chaos/restart_test.exs --only chaos
+
 iex:
     iex -S mix
 

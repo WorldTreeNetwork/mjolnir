@@ -21,6 +21,9 @@ config :mjolnir,
   # Sockets
   socket_dir: "/tmp/mjolnir",
 
+  # Durability: per-VM intent state (one JSON file per VM)
+  state_dir: "/var/lib/mjolnir/state",
+
   # HTTP API
   api_port: 4000,
 

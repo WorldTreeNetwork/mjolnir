@@ -37,7 +37,12 @@ DeviceAllow=/dev/net/tun rw
 KillMode=control-group
 TimeoutStopSec=30
 
-Restart=on-failure
+# Restart on ANY exit (including clean Type=exec stops and SIGKILL). This is
+# the durability contract: if BEAM dies for any reason, systemd brings it
+# back, and Mjolnir.Reconcile rehydrates VMs from /var/lib/mjolnir/state.
+# StartLimitBurst above still caps the restart rate (5 per 60s); if that
+# ceiling is hit, systemd gives up and alerts instead of flapping.
+Restart=always
 RestartSec=5
 
 StandardOutput=journal

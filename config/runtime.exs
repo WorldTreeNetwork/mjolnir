@@ -9,6 +9,10 @@ if socket_dir = System.get_env("MJOLNIR_SOCKET_DIR") do
   config :mjolnir, socket_dir: socket_dir
 end
 
+if state_dir = System.get_env("MJOLNIR_STATE_DIR") do
+  config :mjolnir, state_dir: state_dir
+end
+
 if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST", "false") == "true" do
   config :mjolnir, :auth, bypass_localhost: true
 end

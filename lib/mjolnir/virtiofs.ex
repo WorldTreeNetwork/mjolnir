@@ -105,21 +105,31 @@ defmodule Mjolnir.VirtioFS do
           [:binary, :exit_status, :stderr_to_stdout, args: args]
         )
 
-      # Wait for socket to be created (virtiofsd is ready)
-      case wait_for_socket(socket_path) do
+      # Wait for socket to be created (virtiofsd is ready). The port-aware
+      # wait drains stderr + detects early exit so we don't silently time
+      # out when virtiofsd crashes on startup.
+      case wait_for_socket_or_exit(socket_path, 5000, port) do
         :ok ->
           Logger.debug("virtiofsd socket ready: #{socket_path}")
           {:ok, port}
 
         {:error, reason} ->
           Logger.error("virtiofsd failed to create socket: #{inspect(reason)}")
-          Port.close(port)
+          safe_port_close(port)
           {:error, reason}
       end
     rescue
       e ->
         Logger.error("Failed to start virtiofsd: #{inspect(e)}")
         {:error, {:virtiofsd_start_failed, e}}
+    end
+  end
+
+  defp safe_port_close(port) do
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
     end
   end
 
@@ -226,21 +236,45 @@ defmodule Mjolnir.VirtioFS do
   # Private Functions
   # ============================================================================
 
-  defp wait_for_socket(socket_path, timeout \\ 5000) do
-    wait_for_socket(socket_path, timeout, System.monotonic_time(:millisecond))
+  # Port-aware wait: drains virtiofsd's stderr into the log, detects early
+  # exit (socket never created → {:virtiofsd_exited, status}), so failures
+  # are diagnosable instead of a silent :socket_timeout.
+  defp wait_for_socket_or_exit(socket_path, timeout, port) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_port(socket_path, deadline, port, [])
   end
 
-  defp wait_for_socket(socket_path, timeout, start_time) do
+  defp do_wait_port(socket_path, deadline, port, stderr_acc) do
     if File.exists?(socket_path) do
       :ok
     else
-      elapsed = System.monotonic_time(:millisecond) - start_time
+      remaining = max(0, deadline - System.monotonic_time(:millisecond))
 
-      if elapsed > timeout do
-        {:error, :socket_timeout}
-      else
-        Process.sleep(50)
-        wait_for_socket(socket_path, timeout, start_time)
+      receive do
+        {^port, {:data, data}} ->
+          do_wait_port(socket_path, deadline, port, [data | stderr_acc])
+
+        {^port, {:exit_status, status}} ->
+          stderr = stderr_acc |> Enum.reverse() |> IO.iodata_to_binary() |> String.trim()
+
+          if stderr != "" do
+            Logger.error("virtiofsd stderr: #{stderr}")
+          end
+
+          {:error, {:virtiofsd_exited, status, stderr}}
+      after
+        min(50, remaining) ->
+          if System.monotonic_time(:millisecond) >= deadline do
+            stderr = stderr_acc |> Enum.reverse() |> IO.iodata_to_binary() |> String.trim()
+
+            if stderr != "" do
+              Logger.warning("virtiofsd stderr (at timeout): #{stderr}")
+            end
+
+            {:error, :socket_timeout}
+          else
+            do_wait_port(socket_path, deadline, port, stderr_acc)
+          end
       end
     end
   end
