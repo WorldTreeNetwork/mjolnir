@@ -64,6 +64,10 @@ chaos-restart: _require-host
 chaos-sigkill: _require-host
     mix test test/chaos/sigkill_beam_test.exs --only chaos
 
+# Run scenario 4 only (single CH SIGKILL, Monitor auto-recovers)
+chaos-ch-sigkill: _require-host
+    mix test test/chaos/ch_sigkill_test.exs --only chaos
+
 # Run scenario 3 only (server reboot — DESTRUCTIVE, ~60s downtime)
 chaos-reboot: _require-host
     @echo "WARNING: server reboot scenario — host will be offline ~60s. Ctrl-C to abort."
@@ -150,6 +154,20 @@ vm-list:
 # Get VM details
 vm-info id:
     {{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}} | jq .
+
+# Probe health of a VM (L0-L4: ping, vsock, iroh, guest network, hypervisor API)
+vm-health id:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}}/health | jq .
+
+# Probe-and-heal a VM up to `level` (default 2: reconfigure network/identity/iroh)
+vm-heal id level="2":
+    {{_t}}curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/heal \
+        -H 'Content-Type: application/json' \
+        -d '{"max_level":{{level}}}' | jq .
+
+# Host-wide health check (KVM module, vsock module, IP forwarding, BTRFS mount, socket dir)
+host-health:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/health/host | jq .
 
 # Execute a command in a VM
 vm-exec id cmd:

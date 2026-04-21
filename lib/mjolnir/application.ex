@@ -54,7 +54,12 @@ defmodule Mjolnir.Application do
           id: Mjolnir.StartupReconcile,
           start: {Mjolnir.Startup, :run, [&Mjolnir.Reconcile.run/0]},
           restart: :temporary
-        }
+        },
+
+        # Periodic health monitor — every 30s, probe all registered VMs and
+        # auto-heal L1 degradations (Iroh rot, vsock drift) before a user-
+        # facing request exposes them. Emits EventBus events on :dead.
+        Mjolnir.Health.Monitor
       ] ++
         maybe_jwks_strategy() ++
         [

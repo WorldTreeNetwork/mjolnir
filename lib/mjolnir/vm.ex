@@ -428,6 +428,58 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  Live-probe the guest agent's Iroh status via vsock. Used by health checks
+  and by the resume-mode identity probe. Returns the same shape as the
+  internal await loop: `{:ok, %{ready: bool, node_id: ..., ticket: ...}}`.
+  """
+  @spec iroh_status(vm_id(), timeout()) :: {:ok, map()} | {:error, any()}
+  def iroh_status(vm_id, timeout \\ 3_000) do
+    call_vm(vm_id, {:probe_iroh_status, timeout}, timeout + 1_000)
+  end
+
+  @doc """
+  Re-push `configure_iroh(enable_iroh)` to the guest. Idempotent; used by
+  `Mjolnir.Health.IrohConnection.heal/1`.
+  """
+  @spec reconfigure_iroh(vm_id()) :: :ok | {:error, any()}
+  def reconfigure_iroh(vm_id) do
+    call_vm(vm_id, :reconfigure_iroh, 10_000)
+  end
+
+  @doc """
+  Re-push `configure_network(guest_ip)` to the guest. Idempotent; used by
+  `Mjolnir.Health.GuestNetwork.heal/1`.
+  """
+  @spec reconfigure_network(vm_id()) :: :ok | {:error, any()}
+  def reconfigure_network(vm_id) do
+    call_vm(vm_id, :reconfigure_network, 10_000)
+  end
+
+  @doc """
+  Tear down the current `Mjolnir.Vsock.Connection` GenServer and start a
+  fresh one. Used by `Mjolnir.Health.VsockConnection.heal/1` when the
+  connection has rotted.
+  """
+  @spec rebuild_vsock_connection(vm_id()) :: :ok | {:error, any()}
+  def rebuild_vsock_connection(vm_id) do
+    call_vm(vm_id, :rebuild_vsock_connection, 15_000)
+  end
+
+  defp call_vm(vm_id, msg, timeout) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        try do
+          GenServer.call(pid, msg, timeout)
+        catch
+          :exit, reason -> {:error, {:exit, reason}}
+        end
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
   Spawn a VM with a pre-assigned ID (used for restoring dormant VMs).
 
   Like `spawn/1` but uses the given `:id` from opts instead of generating a new UUID.
@@ -729,6 +781,72 @@ defmodule Mjolnir.VM do
     {:reply, result, state}
   end
 
+  def handle_call({:probe_iroh_status, timeout}, _from, state) do
+    reply =
+      if state.vsock_path do
+        case query_iroh_status(state.vsock_path) do
+          {:ok, _} = ok -> ok
+          {:error, _} = err -> err
+        end
+      else
+        {:error, :no_vsock_path}
+      end
+
+    _ = timeout
+    {:reply, reply, state}
+  end
+
+  def handle_call(:reconfigure_iroh, _from, state) do
+    reply =
+      if state.vsock_path do
+        configure_iroh(state.vsock_path, state.enable_iroh)
+      else
+        {:error, :no_vsock_path}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call(:reconfigure_network, _from, state) do
+    reply =
+      cond do
+        state.vsock_path == nil -> {:error, :no_vsock_path}
+        state.net_config == nil -> {:error, :no_net_config}
+        true -> configure_guest_network(state.vsock_path, state.net_config.guest_ip)
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call(:rebuild_vsock_connection, _from, state) do
+    # Stop the existing Vsock.Connection GenServer (if alive) and spin up a
+    # fresh one. The underlying UDS path is stable across the rebuild.
+    _ =
+      if state.vsock_conn && Process.alive?(state.vsock_conn) do
+        try do
+          GenServer.stop(state.vsock_conn, :normal, 1_000)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+
+    if state.vsock_path do
+      case Mjolnir.Vsock.Connection.start_link(%{
+             vm_id: state.id,
+             socket_path: state.vsock_path
+           }) do
+        {:ok, conn} ->
+          {:reply, :ok, %{state | vsock_conn: conn}}
+
+        {:error, reason} = err ->
+          {:reply, err, %{state | vsock_conn: nil}}
+          |> tap(fn _ -> Logger.error("Rebuild vsock conn failed: #{inspect(reason)}") end)
+      end
+    else
+      {:reply, {:error, :no_vsock_path}, state}
+    end
+  end
+
   def handle_call({:await_pty, timeout}, _from, state) do
     # If iroh is disabled, PTY is available over vsock immediately
     unless state.enable_iroh do
@@ -794,7 +912,9 @@ defmodule Mjolnir.VM do
 
   @impl true
   def terminate(reason, state) do
-    Logger.info("VM #{state.id} terminating: #{inspect(reason)} (state=#{state.state})")
+    Logger.warning(
+      "[vm-terminate] #{state.id} start reason=#{inspect(reason)} state=#{state.state}"
+    )
 
     # Durability: preserve rootfs and StateStore record unless we're sure the
     # VM should be gone forever. "Sure" = the VM was successfully running AND
@@ -803,14 +923,19 @@ defmodule Mjolnir.VM do
     # boot failure mid-resume — preserves so Mjolnir.Reconcile can retry.
     preserve = preserve_rootfs?(reason, state)
 
+    Logger.warning("[vm-terminate] #{state.id} preserve=#{preserve} → calling cleanup")
+
     if state.hypervisor_port || state.net_config || state.rootfs_path do
       cleanup(state, preserve_rootfs: preserve)
     end
+
+    Logger.warning("[vm-terminate] #{state.id} cleanup returned")
 
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
     end
 
+    Logger.warning("[vm-terminate] #{state.id} done")
     :ok
   end
 

@@ -169,6 +169,16 @@ defmodule Mjolnir.Chaos.Helpers do
     end
   end
 
+  def chaos({:sigkill_ch, vm_id}) when is_binary(vm_id) do
+    # Kill the cloud-hypervisor process for one specific VM (not all of them).
+    # The --api-socket arg carries the VM UUID, so pkill -f can match exactly.
+    case ssh("pkill -9 -f 'cloud-hypervisor.*#{vm_id}'") do
+      {_, 0} -> :ok
+      {_, 1} -> {:error, :no_process_matched}
+      {out, code} -> {:error, {:sigkill_failed, code, String.trim(out)}}
+    end
+  end
+
   def chaos(:reboot) do
     # systemctl reboot returns quickly and schedules the reboot asynchronously.
     # SSH connection will drop mid-command; treat non-zero exit as OK here

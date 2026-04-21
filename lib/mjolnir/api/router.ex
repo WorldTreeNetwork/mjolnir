@@ -168,6 +168,53 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # VM health report (per-VM probe & heal)
+  get "/api/vms/:id/health" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :read, fn _vm ->
+        case Mjolnir.Health.check(id) do
+          {:ok, report} -> json(conn, 200, encode_health_report(report))
+          {:error, :not_found} -> json(conn, 404, %{error: "not_found"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Trigger probe-and-heal up to max_level (default 2)
+  post "/api/vms/:id/heal" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :exec, fn _vm ->
+        max_level = Map.get(conn.body_params || %{}, "max_level", 2)
+
+        case Mjolnir.Health.heal(id, max_level: max_level) do
+          {:ok, report} -> json(conn, 200, encode_health_report(report))
+          {:error, :not_found} -> json(conn, 404, %{error: "not_found"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Host-wide health report (KVM, vsock module, IP forwarding, btrfs mount, ...)
+  get "/api/health/host" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      entries = Mjolnir.Health.check_host()
+      overall = Mjolnir.Health.Host |> host_overall(entries)
+      json(conn, 200, %{overall: overall, checks: Enum.map(entries, &encode_host_entry/1)})
+    else
+      conn
+    end
+  end
+
   # Execute command in VM
   post "/api/vms/:id/exec" do
     conn = require_scope(conn, "vms:exec")
@@ -724,5 +771,50 @@ defmodule Mjolnir.API.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
+  end
+
+  # Health response encoders — convert {:degraded, reason} / {:dead, reason}
+  # tuples into JSON-friendly maps, and roll up overall status.
+
+  defp encode_health_report(%{vm_id: id, overall: overall, checks: checks}) do
+    %{
+      vm_id: id,
+      overall: Atom.to_string(overall),
+      checks: Enum.map(checks, &encode_health_check/1)
+    }
+  end
+
+  defp encode_health_check(%{level: level, name: name, status: status} = entry) do
+    base = %{
+      level: level,
+      name: name,
+      status: encode_health_status(status)
+    }
+
+    case Map.get(entry, :action) do
+      nil -> base
+      action -> Map.put(base, :action, inspect(action))
+    end
+  end
+
+  defp encode_health_status(:ok), do: %{state: "ok"}
+  defp encode_health_status({:degraded, r}), do: %{state: "degraded", reason: inspect(r)}
+  defp encode_health_status({:dead, r}), do: %{state: "dead", reason: inspect(r)}
+
+  defp encode_host_entry(%{name: name, status: status} = entry) do
+    base = %{name: name, status: encode_health_status(status)}
+
+    case Map.get(entry, :detail) do
+      nil -> base
+      d -> Map.put(base, :detail, to_string(d))
+    end
+  end
+
+  defp host_overall(_mod, entries) do
+    cond do
+      Enum.any?(entries, fn e -> match?({:dead, _}, e.status) end) -> "dead"
+      Enum.any?(entries, fn e -> match?({:degraded, _}, e.status) end) -> "degraded"
+      true -> "ok"
+    end
   end
 end

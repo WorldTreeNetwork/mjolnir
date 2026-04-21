@@ -29,23 +29,38 @@ defmodule Mjolnir.Reconcile do
           | {:missing_rootfs, Record.t(), expected_path :: String.t()}
 
   @doc """
-  Entrypoint called by the supervision tree. Returns `:ok` once every record
-  has been attempted.
+  Entrypoint called by the supervision tree at boot, and periodically by
+  `Mjolnir.Health.Monitor`. Returns `:ok` once every record has been
+  attempted.
+
+  Idempotent: records whose VM is already registered in `Mjolnir.VMRegistry`
+  are skipped silently. This lets the Monitor call `run/0` every tick
+  without logging noise for the healthy case, while still catching any VM
+  whose GenServer died mid-flight (e.g. after a hypervisor_exit).
   """
   @spec run() :: :ok
   def run do
-    plan = build_plan(StateStore.list_by_intent(:running))
+    records = StateStore.list_by_intent(:running)
+    stranded = Enum.reject(records, &vm_registered?/1)
+    plan = build_plan(stranded)
 
     case plan do
       [] ->
-        Logger.info("Reconcile: no running-intent records, nothing to rehydrate")
+        :ok
 
       entries ->
-        Logger.info("Reconcile: rehydrating #{length(entries)} VM(s) from StateStore")
+        Logger.info("Reconcile: rehydrating #{length(entries)} stranded VM(s)")
         Enum.each(entries, &execute/1)
     end
 
     :ok
+  end
+
+  defp vm_registered?(%Record{uuid: uuid}) do
+    case Registry.lookup(Mjolnir.VMRegistry, uuid) do
+      [_ | _] -> true
+      [] -> false
+    end
   end
 
   @doc """
