@@ -1015,11 +1015,23 @@ defmodule Mjolnir.VM do
            :ok <- configure_vm(hypervisor, socket_path, config),
            :ok <- hypervisor.start_instance(socket_path),
            :ok <- wait_for_boot(vsock_path, state),
-           :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
-        # Inject SSH public key if provided
+           # In resume mode, probe what's already configured in the guest so we
+           # can skip idempotent re-pushes that would otherwise restart iroh,
+           # rewrite hostname, etc. Fresh spawns get an empty probe ⇒ always push.
+           probe = probe_resume_state_safe(state, vsock_path),
+           :ok <-
+             maybe_configure_network(
+               state,
+               probe,
+               vsock_path,
+               net_config.guest_ip
+             ) do
+        # Inject SSH public key if provided — skip in resume mode if the guest's
+        # authorized_keys already matches what we'd push.
         if state.ssh_public_key do
-          case configure_ssh(vsock_path, state.ssh_public_key) do
-            :ok -> Logger.info("SSH key injected for VM #{state.id}")
+          case maybe_configure_ssh(state, probe, vsock_path, state.ssh_public_key) do
+            :ok -> Logger.info("SSH keys ok for VM #{state.id}")
+            :skipped -> Logger.info("SSH keys match, skipped for VM #{state.id}")
             {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
           end
         end
@@ -1029,17 +1041,23 @@ defmodule Mjolnir.VM do
         host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
         api_url = "http://#{host_ip}:#{api_port}"
 
-        case configure_identity(vsock_path, state.id, api_url) do
-          :ok -> Logger.info("VM identity injected for VM #{state.id}")
+        case maybe_configure_identity(state, probe, vsock_path, state.id, api_url) do
+          :ok -> Logger.info("VM identity ok for VM #{state.id}")
+          :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
           {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
         end
 
-        # Tell guest agent whether to start Iroh
-        case configure_iroh(vsock_path, state.enable_iroh) do
+        # Tell guest agent whether to start Iroh. Skip the reconfigure in resume
+        # mode if the guest already reports iroh ready — this avoids restarting
+        # the iroh daemon and tearing down an otherwise-working endpoint.
+        case maybe_configure_iroh(state, probe, vsock_path, state.enable_iroh) do
           :ok ->
             Logger.info(
               "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
             )
+
+          :skipped ->
+            Logger.info("Iroh already ready on resume, skipped for VM #{state.id}")
 
           {:error, reason} ->
             Logger.warning("configure_iroh failed: #{inspect(reason)}")
@@ -1210,6 +1228,96 @@ defmodule Mjolnir.VM do
 
   defp maybe_inject_guest_agent(%__MODULE__{resume_mode: true}, _rootfs_path), do: :ok
   defp maybe_inject_guest_agent(_state, rootfs_path), do: inject_guest_agent(rootfs_path)
+
+  # --- Resume identity probe (option c) ---
+  #
+  # On resume, the guest already has network/ssh/identity/iroh configured from
+  # its last boot. Re-pushing everything is idempotent for network/identity/ssh
+  # but NOT for iroh (which restarts the daemon and tears down any live
+  # connections). Probing first and skipping matched re-pushes saves ~1s and,
+  # more importantly, preserves healthy iroh endpoints across resumes.
+
+  defp probe_resume_state_safe(%__MODULE__{resume_mode: false}, _vsock_path), do: %{}
+
+  defp probe_resume_state_safe(%__MODULE__{} = _state, vsock_path) do
+    cmd = """
+    echo "ROUTE=$(ip route show default 2>/dev/null | head -1 | awk '{print $3}')"
+    echo "SSH_HASH=$(sha256sum /root/.ssh/authorized_keys 2>/dev/null | cut -d' ' -f1)"
+    echo "IDENTITY=$([ -f /etc/mjolnir/vm.json ] && echo yes || echo no)"
+    """
+
+    request = %{
+      "type" => "exec",
+      "id" => :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower),
+      "command" => cmd
+    }
+
+    case vsock_request(vsock_path, request, 5_000) do
+      {:ok, %{"stdout" => output}} ->
+        parse_probe_output(output)
+
+      _ ->
+        %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  defp parse_probe_output(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.reduce(%{}, fn line, acc ->
+      case String.split(line, "=", parts: 2) do
+        [k, v] -> Map.put(acc, k, String.trim(v))
+        _ -> acc
+      end
+    end)
+  end
+
+  defp maybe_configure_network(%__MODULE__{resume_mode: true}, probe, vsock_path, guest_ip) do
+    case Map.get(probe, "ROUTE", "") do
+      "" -> configure_guest_network(vsock_path, guest_ip)
+      _ip -> :ok
+    end
+  end
+
+  defp maybe_configure_network(_state, _probe, vsock_path, guest_ip) do
+    configure_guest_network(vsock_path, guest_ip)
+  end
+
+  defp maybe_configure_ssh(%__MODULE__{resume_mode: true}, probe, vsock_path, ssh_key) do
+    expected =
+      :crypto.hash(:sha256, ssh_key <> "\n")
+      |> Base.encode16(case: :lower)
+
+    case Map.get(probe, "SSH_HASH") do
+      ^expected -> :skipped
+      _ -> configure_ssh(vsock_path, ssh_key)
+    end
+  end
+
+  defp maybe_configure_ssh(_state, _probe, vsock_path, ssh_key),
+    do: configure_ssh(vsock_path, ssh_key)
+
+  defp maybe_configure_identity(%__MODULE__{resume_mode: true}, probe, vsock_path, vm_id, api_url) do
+    case Map.get(probe, "IDENTITY") do
+      "yes" -> :skipped
+      _ -> configure_identity(vsock_path, vm_id, api_url)
+    end
+  end
+
+  defp maybe_configure_identity(_state, _probe, vsock_path, vm_id, api_url),
+    do: configure_identity(vsock_path, vm_id, api_url)
+
+  defp maybe_configure_iroh(%__MODULE__{resume_mode: true}, _probe, vsock_path, true) do
+    case query_iroh_status(vsock_path) do
+      {:ok, %{ready: true}} -> :skipped
+      _ -> configure_iroh(vsock_path, true)
+    end
+  end
+
+  defp maybe_configure_iroh(_state, _probe, vsock_path, enabled),
+    do: configure_iroh(vsock_path, enabled)
 
   # In resume mode, the subvolume was created by a previous mjolnir run and
   # must NOT be torn down by cleanup_partial_boot on a retryable boot failure.
