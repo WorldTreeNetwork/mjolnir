@@ -109,6 +109,9 @@ defmodule Mjolnir.Chaos.Helpers do
     api("POST", "/vms/#{vm_id}/heal", %{max_level: max_level})
   end
 
+  @doc "L5 escape hatch: destroy VM state and respawn from base image, same UUID."
+  def vm_nuke(vm_id), do: api("POST", "/vms/#{vm_id}/nuke", %{})
+
   @doc "Fetch host-wide health report."
   def host_health, do: api("GET", "/health/host")
 

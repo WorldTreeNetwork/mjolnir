@@ -202,6 +202,23 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # L5 escape hatch: destroy VM state and respawn with same UUID.
+  # Scoped under :stop because it's destructive of in-VM state.
+  post "/api/vms/:id/nuke" do
+    conn = require_scope(conn, "vms:stop")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :stop, fn _vm ->
+        case Mjolnir.Health.nuke(id) do
+          :ok -> json(conn, 200, %{ok: true})
+          {:error, reason} -> json(conn, 500, %{error: "nuke_failed", reason: inspect(reason)})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
   # Host-wide health report (KVM, vsock module, IP forwarding, btrfs mount, ...)
   get "/api/health/host" do
     conn = require_scope(conn, "vms:read")
