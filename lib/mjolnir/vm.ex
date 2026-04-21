@@ -808,11 +808,24 @@ defmodule Mjolnir.VM do
   end
 
   def handle_call(:reconfigure_network, _from, state) do
+    # Two-sided repair: host-side (TAP link, proxy_arp, /32 route) then
+    # guest-side (addr + default route via vsock). Each is idempotent;
+    # order matters because guest-side config is irrelevant while the host
+    # TAP is admin-down. The L2 probe pings 1.1.1.1 from inside the guest,
+    # which exercises both sides in one shot.
     reply =
       cond do
-        state.vsock_path == nil -> {:error, :no_vsock_path}
-        state.net_config == nil -> {:error, :no_net_config}
-        true -> configure_guest_network(state.vsock_path, state.net_config.guest_ip)
+        state.vsock_path == nil ->
+          {:error, :no_vsock_path}
+
+        state.net_config == nil ->
+          {:error, :no_net_config}
+
+        true ->
+          with :ok <- Mjolnir.Network.repair_tap(state.net_config),
+               :ok <- configure_guest_network(state.vsock_path, state.net_config.guest_ip) do
+            :ok
+          end
       end
 
     {:reply, reply, state}

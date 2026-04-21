@@ -22,32 +22,31 @@ defmodule Mjolnir.Health.GuestNetwork do
   def probe(%Mjolnir.VM{net_config: nil}), do: {:dead, :no_net_config}
 
   def probe(%Mjolnir.VM{} = vm) do
-    # Three things matter for guest networking:
-    # 1. There's a non-loopback interface (configure_network ran at boot).
-    # 2. A default route exists (configure_network installed it).
-    # 3. The link has carrier (host-side TAP is UP, not just the guest-side
-    #    interface). Carrier drops to 0 within ~200ms of `ip link set mj-X
-    #    down` on the host, which lets us detect TAP-level outages without
-    #    needing a reachable host IP (Mjolnir uses /32 routes with no host-
-    #    side TAP address, so there's no natural ICMP target).
+    # Two-phase probe, one shell round-trip:
     #
-    # The single-exec form keeps this cheap (~100ms round-trip).
-    # Default-route-presence check. This is a weak probe: it only catches
-    # the case where `configure_network` never ran or got wiped. It does
-    # NOT catch host-side TAP down (virtio-net doesn't propagate link
-    # state to the guest) or NAT misconfiguration (route still present,
-    # packets just drop). A stronger probe would ping an external target
-    # via NAT, but currently Mjolnir's NAT config doesn't allow that
-    # reliably on prod — see `docs/plans/durability.md` followups.
-    cmd = "ip route show default 2>/dev/null | head -1"
+    # 1. Default route exists? Fast check for "configure_network never ran /
+    #    got wiped inside the guest" — doesn't exercise the TAP or NAT.
+    # 2. Ping 1.1.1.1 with -W2? This exercises the host-side TAP link, the
+    #    /32 route on the host, and the MASQUERADE rule all together. It's
+    #    the load-bearing check: if any of those are broken, this fails.
+    #
+    # Echoing a token string per branch keeps parsing exit-code-independent.
+    # 2s ping timeout caps latency when TAP is admin-down (no carrier, no
+    # outgoing ARP), which would otherwise hang.
+    cmd = """
+    ip route show default 2>/dev/null | grep -q default || { echo NOROUTE; exit 0; }
+    ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 || { echo NOPING; exit 0; }
+    echo OK
+    """
 
     try do
-      case Mjolnir.VM.exec(vm.id, cmd, timeout: 5_000) do
+      case Mjolnir.VM.exec(vm.id, cmd, timeout: 8_000) do
         {:ok, out} ->
-          if String.contains?(out, "default") do
-            :ok
-          else
-            {:dead, {:no_default_route, String.trim(out)}}
+          case String.trim(out) do
+            "OK" -> :ok
+            "NOROUTE" -> {:dead, :no_default_route}
+            "NOPING" -> {:dead, :egress_blocked}
+            other -> {:dead, {:unexpected_probe_output, other}}
           end
 
         {:error, reason} ->

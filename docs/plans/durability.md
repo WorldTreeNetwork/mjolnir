@@ -328,6 +328,40 @@ Run with: `mix test --only chaos` (skipped by default; `chaos` tag added to `ExU
 
 ---
 
+## Followups
+
+### Vsock-closes-during-exec when TAP is admin-down (found 2026-04-21)
+
+Uncovered by the scenario 7 chaos test (`test/chaos/tap_down_test.exs`,
+currently skipped). Sequence:
+
+1. `ip link set mj-<uuid> down` on the host.
+2. Next `VM.exec/2` over vsock — the L2 `GuestNetwork` probe itself —
+   gets `{:tcp_closed, Port}` on the vsock UDS within ~100ms, even
+   though vsock is a separate transport from the TAP/virtio-net link.
+3. `Mjolnir.Vsock.Connection` terminates with `:connection_closed`
+   mid-`GenServer.call`; the VM GenServer re-raises the exit; terminate
+   is non-`:normal` so state is preserved and Reconcile tries to resume.
+4. Resume calls `Mjolnir.Network.create_tap/1` → `ip tuntap add` →
+   `EBUSY` because the admin-down interface still exists. Boot fails,
+   cleanup runs, next Reconcile tick eventually succeeds.
+
+Two root causes to fix, each fixable independently:
+
+- **a.** Vsock should survive TAP admin-down. Find what cross-links the
+  two — likely either Cloud Hypervisor reacting to virtio-net carrier
+  loss by tearing down the vsock backend, or the guest agent closing
+  its vsock listener when it detects carrier loss. Fix upstream.
+- **b.** `Network.create_tap/1` must tolerate a pre-existing interface.
+  Either make it idempotent (detect existing, skip create, re-assert
+  link up + route), or have Reconcile's resume path call
+  `Mjolnir.Network.repair_tap/1` instead when the TAP name already
+  exists on the host.
+
+Until both land, the L2 `GuestNetwork` probe is strong enough to catch
+NAT wipe and guest-side route drift, but the healing path for admin-down
+TAPs will trigger the cascade.
+
 ## Open questions
 
 1. **Systemd unit hardening.** Does `mjolnir.service` currently have `Restart=always`? If not, scenario 2 (BEAM SIGKILL → systemd restart) can't pass. Confirm and fix before step 5.

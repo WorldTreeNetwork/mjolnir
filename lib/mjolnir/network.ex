@@ -80,6 +80,26 @@ defmodule Mjolnir.Network do
   end
 
   @doc """
+  Idempotent host-side TAP repair.
+
+  Assumes the TAP device itself still exists (i.e. the case we recover from
+  is admin-down or a wiped /32 route, not a fully deleted TAP — that would
+  require re-attaching to cloud-hypervisor and is a deeper recovery).
+
+  Brings the TAP up, re-enables proxy_arp, and ensures the /32 route to the
+  guest is present via `ip route replace` (which is the idempotent form of
+  `ip route add`).
+  """
+  @spec repair_tap(net_config()) :: :ok | {:error, term()}
+  def repair_tap(%{tap_name: tap_name, guest_ip: guest_ip}) do
+    with :ok <- bring_tap_up(tap_name),
+         :ok <- enable_proxy_arp(tap_name),
+         :ok <- replace_route(guest_ip, tap_name) do
+      :ok
+    end
+  end
+
+  @doc """
   Delete a TAP interface and remove its route.
   """
   @spec delete_tap(String.t(), String.t()) :: :ok
@@ -317,6 +337,11 @@ defmodule Mjolnir.Network do
 
   defp add_route(guest_ip, tap_name) do
     run_cmd("ip", ["route", "add", "#{guest_ip}/32", "dev", tap_name])
+  end
+
+  # Idempotent version — kernel treats it as "add if missing, update if present".
+  defp replace_route(guest_ip, tap_name) do
+    run_cmd("ip", ["route", "replace", "#{guest_ip}/32", "dev", tap_name])
   end
 
   defp run_cmd(cmd, args) do

@@ -101,6 +101,14 @@ defmodule Mjolnir.Chaos.Helpers do
   @doc "Stop a VM."
   def vm_stop(vm_id), do: api("DELETE", "/vms/#{vm_id}")
 
+  @doc "Fetch per-VM health report."
+  def vm_health(vm_id), do: api("GET", "/vms/#{vm_id}/health")
+
+  @doc "Trigger probe-and-heal up to max_level (default 2) for a VM."
+  def vm_heal(vm_id, max_level \\ 2) do
+    api("POST", "/vms/#{vm_id}/heal", %{max_level: max_level})
+  end
+
   @doc "Fetch host-wide health report."
   def host_health, do: api("GET", "/health/host")
 
