@@ -1,0 +1,84 @@
+# Mjolnir Gateway TOML configuration.
+# Copy to /etc/mjolnir/gateway.toml. Override path via GATEWAY_CONFIG env var.
+#
+# When this file exists at gateway startup, TOML is authoritative and
+# /etc/mjolnir/gateway.env is ignored. Startup-only mode selection
+# (spec Decision 10) — a TOML file appearing later has no effect until
+# the next restart. SIGHUP reloads whichever mode was chosen at boot.
+
+# ── Listener addresses ────────────────────────────────────────────────────────
+# Both listeners are explicit opt-in. Omitting a key disables that listener;
+# empty string also disables. Binding to :80/:443 as an unprivileged user
+# requires CAP_NET_BIND_SERVICE on the systemd unit (already set).
+listen      = "0.0.0.0:80"
+listen_tls  = "0.0.0.0:443"
+
+# ── Proxy behavior ────────────────────────────────────────────────────────────
+vm_default_port         = 80    # target port when a VM URL omits -<port>
+connect_timeout_secs    = 15    # TCP/Iroh dial timeout (applies to both local + iroh backends)
+response_timeout_secs   = 0     # 0 = no timeout. Set low only if all backends are fast.
+pool_ttl_secs           = 300   # Iroh connection pool TTL (idle eviction)
+pool_max                = 256   # max Iroh connections in pool
+pool_probe_timeout_secs = 10    # first-byte probe on pool-hit reuse; 0 = disable
+
+# ── TLS expiry + session cache ────────────────────────────────────────────────
+tls_expiry_fail_secs = 86400    # refuse handshakes if cert expires within N secs (24h default)
+tls_session_cache    = 4096     # session resumption tickets kept in memory
+
+# ── ACME (Let's Encrypt DNS-01 via Cloudflare) ────────────────────────────────
+# Only Cloudflare DNS-01 is supported in this iteration (spec Decision 2).
+# When [acme].enabled = true, the gateway obtains + renews its own certs.
+# When disabled, use the [tls] static-cert path below.
+[acme]
+enabled            = true
+email              = "duke@worldtree.io"
+directory          = "https://acme-v02.api.letsencrypt.org/directory"
+renew_before_secs  = 2592000                                  # 30 days
+# One-line token; whitespace stripped. Never commit the actual token to git.
+# Falls back to CLOUDFLARE_API_TOKEN env var if this is unset.
+cloudflare_api_token_file = "/etc/mjolnir/cloudflare-token"
+# Optional: explicit SAN override. Usually leave unset — the SAN list is
+# auto-derived per [[domain]] (see spec Decision 7). Only set if you need
+# a cert shape the auto-derivation can't express.
+# domains = ["*.vm.worldtree.network", "vm.worldtree.network", "git.worldtree.network"]
+
+# ── Static TLS cert (only when [acme].enabled = false) ────────────────────────
+# [tls]
+# cert = "/etc/mjolnir/fullchain.pem"
+# key  = "/etc/mjolnir/privkey.pem"
+
+# ── Apex declarations ─────────────────────────────────────────────────────────
+# Each [[domain]] is an apex the gateway will accept requests for.
+# fallthrough controls what happens when no explicit [[route]] matches.
+
+# VM-fanout apex: every subdomain is an Iroh z32 node ID unless pinned by a
+# [[route]] below. Cert SAN auto-derives to {*.vm.worldtree.network, vm.worldtree.network}.
+[[domain]]
+suffix      = "vm.worldtree.network"
+fallthrough = "iroh"    # optional; this is the default
+
+# Hand-curated apex: only explicit [[route]] entries serve. Unmatched
+# subdomains return 404 with no Iroh decode attempt. Cert SAN auto-derives
+# to {worldtree.network, <each route subdomain>.worldtree.network} — NO
+# wildcard, reducing attack surface and enumeration leakage (spec Decision 7).
+[[domain]]
+suffix      = "worldtree.network"
+fallthrough = "none"
+
+# ── Local-backend routes ──────────────────────────────────────────────────────
+# Pin a (apex, subdomain) pair to a local TCP endpoint. Takes precedence
+# over the Iroh decode path. Subdomain strings are lowercased at load;
+# matching is case-insensitive.
+#
+# No header rewriting: the backend sees the request byte-identical to what
+# arrived at the gateway (no X-Forwarded-*, original Host preserved).
+[[route]]
+apex      = "worldtree.network"
+subdomain = "git"
+backend   = "127.0.0.1:3000"
+
+# IPv6 backends are supported:
+# [[route]]
+# apex      = "worldtree.network"
+# subdomain = "api"
+# backend   = "[::1]:8080"

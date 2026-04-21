@@ -52,33 +52,53 @@ fi
 
 MISE_ACTIVATE='eval "$($HOME/.local/bin/mise activate bash)"'
 
-# --- Preflight check for gateway environment config ---
+# --- Preflight check for gateway config (TOML preferred, env fallback) ---
 check_gateway_env() {
     local host="$1"
     local remote_code="$2"
 
     # Helper: color output if terminal supports it
-    local yellow='' red='' reset=''
+    local yellow='' red='' green='' reset=''
     if [ -t 1 ]; then
         yellow='\e[33m'
         red='\e[31m'
+        green='\e[32m'
         reset='\e[0m'
+    fi
+
+    # If /etc/mjolnir/gateway.toml exists, TOML is authoritative and env is
+    # ignored at startup (spec Decision 10). Skip the env preflight.
+    if ssh "$host" "[ -f /etc/mjolnir/gateway.toml ]" 2>/dev/null; then
+        printf "\n=== Gateway Config Preflight (TOML mode) ===\n"
+        printf "${green}/etc/mjolnir/gateway.toml present — TOML is authoritative.${reset}\n"
+        printf "${yellow}Note: /etc/mjolnir/gateway.env is ignored while TOML is present.${reset}\n"
+        # Lightweight parseability check; the gateway does full validation at startup.
+        # Python3 tomllib is available on recent distros (3.11+).
+        if ssh "$host" "python3 -c 'import tomllib; tomllib.loads(open(\"/etc/mjolnir/gateway.toml\").read())'" 2>/dev/null; then
+            printf "${green}TOML parses cleanly.${reset}\n"
+        else
+            printf "${red}WARN: /etc/mjolnir/gateway.toml failed to parse — gateway will refuse to start.${reset}\n"
+            printf "${red}Check gateway logs after deploy: journalctl -u mjolnir-gateway${reset}\n"
+        fi
+        printf "=== End Preflight Check ===\n\n"
+        return 0
     fi
 
     # Check if /etc/mjolnir/gateway.env exists on the host
     if ! ssh "$host" "[ -f /etc/mjolnir/gateway.env ]" 2>/dev/null; then
-        printf "${yellow}=== WARN: Gateway environment file not found ===${reset}\n"
-        printf "${yellow}/etc/mjolnir/gateway.env does not exist on the remote host.${reset}\n"
-        printf "${yellow}To set up the gateway environment:${reset}\n"
-        printf "${yellow}  1. On the host, create /etc/mjolnir/ if it does not exist${reset}\n"
-        printf "${yellow}  2. Copy $remote_code/systemd/gateway.env.example to /etc/mjolnir/gateway.env${reset}\n"
-        printf "${yellow}  3. Edit /etc/mjolnir/gateway.env and configure as needed${reset}\n"
-        printf "${yellow}  4. Re-run the deploy script${reset}\n"
+        printf "${yellow}=== WARN: Gateway config not found ===${reset}\n"
+        printf "${yellow}Neither /etc/mjolnir/gateway.toml nor /etc/mjolnir/gateway.env exists.${reset}\n"
+        printf "${yellow}To set up the gateway config, pick one:${reset}\n"
+        printf "${yellow}  TOML (preferred for multi-apex / local-routes):${reset}\n"
+        printf "${yellow}    cp $remote_code/systemd/gateway.toml.example /etc/mjolnir/gateway.toml${reset}\n"
+        printf "${yellow}  Env (legacy single-apex):${reset}\n"
+        printf "${yellow}    cp $remote_code/systemd/gateway.env.example /etc/mjolnir/gateway.env${reset}\n"
+        printf "${yellow}Then edit the file and re-run the deploy script.${reset}\n"
         printf "${yellow}Proceeding with deploy (gateway service may not start cleanly).${reset}\n"
         return 0
     fi
 
-    printf "\n=== Gateway Environment Preflight Check ===\n"
+    printf "\n=== Gateway Environment Preflight Check (env mode) ===\n"
 
     # Extract example keys
     local example_keys=$(ssh "$host" "grep -E '^[A-Z_]+=.*' '$remote_code/systemd/gateway.env.example' | cut -d= -f1 | sort -u" 2>/dev/null || echo "")
