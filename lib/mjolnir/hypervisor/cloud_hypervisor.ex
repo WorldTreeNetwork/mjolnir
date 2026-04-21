@@ -117,73 +117,120 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
 
   @impl true
   def cleanup(state) do
+    # IMPORTANT: Logger is async and may drop messages late in BEAM shutdown.
+    # These IO.puts-to-stderr writes are synchronous and land in journald
+    # directly via systemd's StandardError=journal. Timing markers let us
+    # diagnose shutdown hangs (see docs/plans/durability.md followups).
+    mark = fn label ->
+      Logger.warning(
+        "[ch-cleanup] #{state.id || "?"} #{label} @ #{System.monotonic_time(:millisecond)}"
+      )
+    end
+
+    mark.("start")
+
+    # NOTE: `state` is a `%Mjolnir.VM{}` struct. Use dot syntax for field
+    # access. `state[:key]` would raise ArgumentError because structs don't
+    # implement the Access behaviour, and that error would be silently eaten
+    # by the `rescue _ -> :ok` in `Mjolnir.VM.cleanup/2` — which is exactly
+    # what made cleanup a silent no-op and prod shutdowns hang for 30s
+    # until systemd SIGKILL. See docs/plans/durability.md.
+
     # Stop persistent vsock connection
-    if state[:vsock_conn] do
+    if state.vsock_conn do
+      mark.("vsock_conn stop begin")
       GenServer.stop(state.vsock_conn, :normal, 5000)
+      mark.("vsock_conn stopped")
     end
 
     # Kill Cloud Hypervisor if still running
-    if state[:hypervisor_port] do
+    if state.hypervisor_port do
+      mark.("ch kill begin")
+
       case Port.info(state.hypervisor_port, :os_pid) do
         {:os_pid, os_pid} ->
-          Port.close(state.hypervisor_port)
+          safe_port_close(state.hypervisor_port)
           System.cmd("kill", ["-9", to_string(os_pid)])
+          mark.("ch killed (pid=#{os_pid})")
 
         nil ->
-          :ok
+          mark.("ch already dead")
       end
     end
 
     # Stop virtiofsd if running
-    if state[:virtiofsd_port] do
+    if state.virtiofsd_port do
+      mark.("virtiofsd stop begin")
       Mjolnir.VirtioFS.stop(state.virtiofsd_port)
+      mark.("virtiofsd stopped")
     end
 
     # Clean up virtiofsd socket
-    if state[:id] do
+    if state.id do
+      mark.("virtiofsd socket rm begin")
       socket_dir = Application.get_env(:mjolnir, :socket_dir)
       virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id)
       Mjolnir.VirtioFS.cleanup(virtiofsd_socket)
+      mark.("virtiofsd socket rm done")
     end
 
     # Remove TAP interface and route
-    if state[:net_config] do
+    if state.net_config do
+      mark.("TAP delete begin")
+
       try do
-        Logger.debug("Cleaning up TAP #{state.net_config.tap_name}")
         Mjolnir.Network.delete_tap(state.net_config.tap_name, state.net_config.guest_ip)
+        mark.("TAP deleted")
       rescue
-        e -> Logger.warning("TAP cleanup failed for #{state[:id]}: #{inspect(e)}")
+        e ->
+          Logger.warning("TAP cleanup failed for #{state.id}: #{inspect(e)}")
+          mark.("TAP cleanup raised")
       end
     end
 
     # Remove socket files
-    if state[:socket_path], do: File.rm(state.socket_path)
-    if state[:vsock_path], do: File.rm(state.vsock_path)
+    if state.socket_path, do: File.rm(state.socket_path)
+    if state.vsock_path, do: File.rm(state.vsock_path)
 
     # Remove PTY link
-    if state[:id] do
+    if state.id do
       File.rm("/tmp/mjolnir-pty-#{state.id}")
     end
 
     # Remove Cloud Hypervisor log file
-    if state[:id] do
+    if state.id do
       File.rm("/tmp/cloud-hypervisor-#{state.id}.log")
     end
 
-    # Delete rootfs subvolume
-    if state[:rootfs_path] do
+    # Delete rootfs subvolume (skipped when state.rootfs_path is nil — the
+    # preserve-for-reconcile signal set by Mjolnir.VM.cleanup/2).
+    if state.rootfs_path do
+      mark.("subvolume delete begin")
+
       try do
         Mjolnir.BTRFS.delete_subvolume(state.rootfs_path)
+        mark.("subvolume deleted")
       rescue
-        e -> Logger.warning("Rootfs subvolume cleanup failed: #{inspect(e)}")
+        e ->
+          Logger.warning("Rootfs subvolume cleanup failed: #{inspect(e)}")
+          mark.("subvolume delete raised")
       end
     end
 
+    mark.("done")
     :ok
   rescue
     e ->
-      Logger.warning("Cleanup error for VM #{state[:id]}: #{inspect(e)}")
+      Logger.warning("Cleanup error for VM #{state.id}: #{inspect(e)}")
       :ok
+  end
+
+  defp safe_port_close(port) do
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
+    end
   end
 
   @impl true
