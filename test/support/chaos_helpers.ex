@@ -169,6 +169,25 @@ defmodule Mjolnir.Chaos.Helpers do
     end
   end
 
+  def chaos({:tap_down, vm_id}) when is_binary(vm_id) do
+    # Deterministic TAP name: "mj-" + first 8 chars of UUID, per Mjolnir.Network.tap_name/1
+    tap = "mj-" <> String.slice(vm_id, 0, 8)
+
+    case ssh("ip link set #{tap} down") do
+      {_, 0} -> :ok
+      {out, code} -> {:error, {:tap_down_failed, code, String.trim(out)}}
+    end
+  end
+
+  def chaos({:tap_up, vm_id}) when is_binary(vm_id) do
+    tap = "mj-" <> String.slice(vm_id, 0, 8)
+
+    case ssh("ip link set #{tap} up") do
+      {_, 0} -> :ok
+      {out, code} -> {:error, {:tap_up_failed, code, String.trim(out)}}
+    end
+  end
+
   def chaos({:sigkill_ch, vm_id}) when is_binary(vm_id) do
     # Kill the cloud-hypervisor process for one specific VM (not all of them).
     # The --api-socket arg carries the VM UUID, so pkill -f can match exactly.
