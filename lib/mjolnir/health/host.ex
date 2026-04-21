@@ -21,6 +21,7 @@ defmodule Mjolnir.Health.Host do
       check_kvm(),
       check_vsock_module(),
       check_ip_forward(),
+      check_nat(),
       check_btrfs_mount(),
       check_socket_dir(),
       check_state_dir()
@@ -33,6 +34,7 @@ defmodule Mjolnir.Health.Host do
     _ = heal_kvm()
     _ = heal_vsock_module()
     _ = heal_ip_forward()
+    _ = heal_nat()
     _ = heal_socket_dir()
     _ = heal_state_dir()
     :ok
@@ -91,6 +93,38 @@ defmodule Mjolnir.Health.Host do
     case System.cmd("sysctl", ["-w", "net.ipv4.ip_forward=1"], stderr_to_stdout: true) do
       {_, 0} -> :ok
       {out, code} -> {:error, {:sysctl_failed, code, out}}
+    end
+  end
+
+  # --- NAT masquerade ---
+  #
+  # VMs use private /32 addresses in 10.200.0.0/10 and rely on a host-wide
+  # MASQUERADE rule in iptables nat POSTROUTING for outbound traffic. If the
+  # rule is missing (wiped by `iptables -F`, stomped on by a `ufw reload`
+  # without our before.rules, etc.), guests can ping each other but nothing
+  # reaches the internet — the original "LLM hangs on second inference"
+  # signature.
+  #
+  # Heal strategy lives in `Mjolnir.Network.ensure_nat/1`: reload ufw when
+  # active (our rule lives in /etc/ufw/before.rules), otherwise add the rule
+  # directly via iptables.
+
+  defp check_nat do
+    if Mjolnir.Network.nat_rule_present?() do
+      entry("nat_masquerade", :ok)
+    else
+      entry("nat_masquerade", {:dead, :missing_masquerade_rule})
+    end
+  end
+
+  defp heal_nat do
+    case Mjolnir.Network.ensure_nat() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Health.Host: NAT heal failed: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 

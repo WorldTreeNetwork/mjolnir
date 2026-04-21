@@ -177,6 +177,123 @@ defmodule Mjolnir.Network do
     |> Keyword.get(:subnet, @default_subnet)
   end
 
+  @doc """
+  Is a MASQUERADE rule for the VM subnet present in iptables nat POSTROUTING?
+
+  The kernel canonicalizes `10.200.0.0/10` to `10.192.0.0/10` on display, so
+  we accept either form. Returns `false` on any iptables failure rather than
+  raising — the caller decides how to react.
+  """
+  @spec nat_rule_present?(String.t()) :: boolean()
+  def nat_rule_present?(subnet \\ network_range()) do
+    case System.cmd("sudo", ["-n", "iptables", "-t", "nat", "-S", "POSTROUTING"],
+           stderr_to_stdout: true
+         ) do
+      {out, 0} ->
+        canonical = canonical_subnet(subnet)
+
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.any?(fn line ->
+          String.contains?(line, "-j MASQUERADE") and
+            (String.contains?(line, " #{subnet} ") or String.contains?(line, " #{canonical} "))
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Ensure the VM-subnet MASQUERADE rule is installed and active.
+
+  If ufw manages the firewall, reload it — our rule lives in
+  `/etc/ufw/before.rules` (per `scripts/bootstrap-host-ubuntu.sh`), so reload
+  re-applies it. If ufw is not active, install the rule directly via
+  iptables. Idempotent.
+  """
+  @spec ensure_nat(keyword()) :: :ok | {:error, term()}
+  def ensure_nat(opts \\ []) do
+    subnet = Keyword.get(opts, :subnet, network_range())
+
+    if nat_rule_present?(subnet) do
+      :ok
+    else
+      install_nat_rule(subnet)
+    end
+  end
+
+  defp install_nat_rule(subnet) do
+    cond do
+      ufw_active?() ->
+        Logger.warning("NAT rule missing for #{subnet}; running `ufw reload`")
+
+        case System.cmd("sudo", ["-n", "ufw", "reload"], stderr_to_stdout: true) do
+          {_, 0} ->
+            if nat_rule_present?(subnet) do
+              :ok
+            else
+              {:error, {:ufw_reload_did_not_restore_rule, subnet}}
+            end
+
+          {out, code} ->
+            {:error, {:ufw_reload_failed, code, String.trim(out)}}
+        end
+
+      true ->
+        iface = external_iface()
+        Logger.warning("NAT rule missing for #{subnet}; adding via iptables (egress: #{iface})")
+
+        args = ["-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", iface, "-j", "MASQUERADE"]
+
+        case System.cmd("sudo", ["-n", "iptables" | args], stderr_to_stdout: true) do
+          {_, 0} -> :ok
+          {out, code} -> {:error, {:iptables_failed, code, String.trim(out)}}
+        end
+    end
+  end
+
+  defp ufw_active? do
+    case System.cmd("ufw", ["status"], stderr_to_stdout: true) do
+      {out, 0} -> String.contains?(out, "Status: active")
+      _ -> false
+    end
+  end
+
+  defp external_iface do
+    case System.cmd("ip", ["route", "show", "default"], stderr_to_stdout: true) do
+      {out, 0} ->
+        # "default via 45.76.76.1 dev enp1s0 proto static" → enp1s0
+        case Regex.run(~r/\bdev\s+(\S+)/, out) do
+          [_, dev] -> dev
+          _ -> "eth0"
+        end
+
+      _ ->
+        "eth0"
+    end
+  end
+
+  # Normalize 10.200.0.0/10 → 10.192.0.0/10 (kernel display form for /10 masks).
+  defp canonical_subnet(subnet) do
+    case String.split(subnet, "/") do
+      [base, "10"] ->
+        case String.split(base, ".") do
+          [a, b, c, d] ->
+            # For /10, mask zeros out the last 6 bits of the second octet.
+            b_int = String.to_integer(b)
+            masked = Bitwise.band(b_int, 0b11000000)
+            "#{a}.#{masked}.#{c}.#{d}/10"
+
+          _ ->
+            subnet
+        end
+
+      _ ->
+        subnet
+    end
+  end
+
   # Private helpers
 
   defp short_id(vm_id), do: String.slice(vm_id, 0, 8)

@@ -101,6 +101,12 @@ defmodule Mjolnir.Chaos.Helpers do
   @doc "Stop a VM."
   def vm_stop(vm_id), do: api("DELETE", "/vms/#{vm_id}")
 
+  @doc "Fetch host-wide health report."
+  def host_health, do: api("GET", "/health/host")
+
+  @doc "Trigger host-wide heal; returns the post-heal report."
+  def host_heal, do: api("POST", "/health/host/heal")
+
   @doc "Poll `/health` until it returns 2xx or timeout."
   @spec wait_for_mjolnir_up(timeout :: non_neg_integer()) :: :ok | {:error, :timeout}
   def wait_for_mjolnir_up(timeout_ms \\ 60_000) do
@@ -185,6 +191,18 @@ defmodule Mjolnir.Chaos.Helpers do
     case ssh("ip link set #{tap} up") do
       {_, 0} -> :ok
       {out, code} -> {:error, {:tap_up_failed, code, String.trim(out)}}
+    end
+  end
+
+  def chaos(:flush_nat) do
+    # Wipes ALL nat-table rules — MASQUERADE, PREROUTING, everything. This is
+    # the most aggressive host-level chaos we can do short of dropping the
+    # default route. Mjolnir's self-heal must detect and re-install the
+    # MASQUERADE rule (via ufw reload or raw iptables) for guests to regain
+    # internet egress.
+    case ssh("iptables -t nat -F") do
+      {_, 0} -> :ok
+      {out, code} -> {:error, {:flush_nat_failed, code, String.trim(out)}}
     end
   end
 

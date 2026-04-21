@@ -9,7 +9,7 @@ defmodule Mjolnir.Policy.CoverageTest do
   use ExUnit.Case, async: true
 
   @router_path "lib/mjolnir/api/router.ex"
-  @whitelisted_paths ["/api/health", "/api/health/host"]
+  @whitelisted_paths ["/api/health", "/api/health/host", "/api/health/host/heal"]
 
   # These patterns indicate policy enforcement is present.
   # Be specific to avoid false positives — generic patterns like "Enum.filter"
@@ -61,9 +61,12 @@ defmodule Mjolnir.Policy.CoverageTest do
     # Ensure we're not silently skipping enforcement. Whitelist rationale:
     # - /api/health: liveness probe for load balancers; must be unauthenticated.
     # - /api/health/host: host-wide health report (KVM module, IP forwarding,
-    #   btrfs mount, etc). Read-only and contains no per-VM secrets; gated by
-    #   require_scope("vms:read") but not a VM-scoped Policy call.
-    assert @whitelisted_paths == ["/api/health", "/api/health/host"],
+    #   btrfs mount, NAT rule, etc). Read-only and contains no per-VM secrets;
+    #   gated by require_scope("vms:read") but not a VM-scoped Policy call.
+    # - /api/health/host/heal: idempotent host-wide heal (sysctl, NAT, dirs).
+    #   Affects all VMs collectively, not any one VM. Gated by
+    #   require_scope("vms:exec"); no per-VM ownership check is meaningful.
+    assert @whitelisted_paths == ["/api/health", "/api/health/host", "/api/health/host/heal"],
            "Update this test when adding new whitelisted paths"
   end
 end

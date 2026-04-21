@@ -215,6 +215,20 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Trigger host-wide heal (sysctl, NAT rule, dirs, ...). Idempotent.
+  post "/api/health/host/heal" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      :ok = Mjolnir.Health.heal_host()
+      entries = Mjolnir.Health.check_host()
+      overall = host_overall(Mjolnir.Health.Host, entries)
+      json(conn, 200, %{overall: overall, checks: Enum.map(entries, &encode_host_entry/1)})
+    else
+      conn
+    end
+  end
+
   # Execute command in VM
   post "/api/vms/:id/exec" do
     conn = require_scope(conn, "vms:exec")
