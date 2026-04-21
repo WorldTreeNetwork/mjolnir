@@ -889,45 +889,121 @@ setup_directories() {
 setup_networking() {
     log_section "Setting Up VM Networking"
 
-    # VM subnet - 10.200.0.0/10 gives us ~4 million VMs
-    # Using 10.200.x.x avoids conflicts with common LAN ranges (10.0.x, 10.1.x)
+    # VM subnet - 10.200.0.0/10 gives us ~4 million VMs (10.192.0.0 – 10.255.255.255).
+    # Must match @default_subnet in lib/mjolnir/network.ex.
     local vm_subnet="10.200.0.0/10"
 
-    # Enable IP forwarding
+    # External interface (NIC holding the default route). Auto-detect; allow override.
+    local ext_iface="${MJOLNIR_EXT_IFACE:-$(ip route show default 2>/dev/null | awk '/^default/ {print $5; exit}')}"
+    if [[ -z "$ext_iface" ]]; then
+        log_error "Could not determine external interface (no default route found)."
+        log_error "Set MJOLNIR_EXT_IFACE=<name> and re-run."
+        exit 1
+    fi
+    log_info "External interface: $ext_iface"
+
+    # Enable IP forwarding, persist via /etc/sysctl.d (preferred over /etc/sysctl.conf on modern Ubuntu).
     log_info "Enabling IP forwarding..."
     echo 1 > /proc/sys/net/ipv4/ip_forward
-
-    # Make persistent
-    if ! grep -q "^net.ipv4.ip_forward" /etc/sysctl.conf 2>/dev/null; then
-        echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+    local sysctl_snippet=/etc/sysctl.d/99-mjolnir.conf
+    if [[ ! -f "$sysctl_snippet" ]] || ! grep -q '^net.ipv4.ip_forward' "$sysctl_snippet"; then
+        echo "net.ipv4.ip_forward = 1" > "$sysctl_snippet"
+        log_info "Wrote $sysctl_snippet"
     fi
 
-    # Add NAT rule for VM subnet (MASQUERADE rewrites source IP)
-    if ! iptables -t nat -C POSTROUTING -s "$vm_subnet" -j MASQUERADE 2>/dev/null; then
-        log_info "Adding NAT masquerade rule for $vm_subnet..."
-        iptables -t nat -A POSTROUTING -s "$vm_subnet" -j MASQUERADE
+    if ufw_is_active; then
+        setup_networking_ufw "$vm_subnet" "$ext_iface"
     else
-        log_info "NAT rule already exists"
+        setup_networking_iptables "$vm_subnet" "$ext_iface"
     fi
 
-    # Allow forwarding for VM traffic (both directions)
+    log_success "VM networking configured (subnet: $vm_subnet, egress: $ext_iface)"
+}
+
+ufw_is_active() {
+    command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qi '^Status: active'
+}
+
+# When ufw manages the firewall, raw `iptables` rules get silently wiped on every
+# `ufw reload` or reboot. Embed our NAT + FORWARD rules in /etc/ufw/before.rules so
+# ufw itself reapplies them on each reload.
+setup_networking_ufw() {
+    local vm_subnet="$1"
+    local ext_iface="$2"
+    local before=/etc/ufw/before.rules
+
+    log_info "ufw is active — integrating NAT rules into $before"
+    cp -a "$before" "${before}.bak-$(date +%Y%m%d-%H%M%S)"
+
+    # 1. Prepend *nat table block (idempotent via marker).
+    if ! grep -q '^# BEGIN MJOLNIR NAT' "$before"; then
+        local tmp
+        tmp=$(mktemp)
+        cat > "$tmp" <<NAT
+# BEGIN MJOLNIR NAT
+# NAT masquerade so VM subnet ${vm_subnet} can reach the internet.
+# Embedded in ufw before.rules so it survives \`ufw reload\` and reboots.
+*nat
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s ${vm_subnet} -o ${ext_iface} -j MASQUERADE
+COMMIT
+# END MJOLNIR NAT
+
+NAT
+        cat "$before" >> "$tmp"
+        mv "$tmp" "$before"
+        chmod 640 "$before"
+        chown root:root "$before"
+    fi
+
+    # 2. Inject FORWARD ACCEPTs into ufw-before-forward (idempotent via marker).
+    if ! grep -q 'MJOLNIR VM FORWARD' "$before"; then
+        local anchor='-A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
+        if ! grep -qF "$anchor" "$before"; then
+            log_error "Could not find anchor in $before; FORWARD rules not added."
+            return 1
+        fi
+        python3 - "$before" "$vm_subnet" <<'PY'
+import pathlib, sys
+path, subnet = pathlib.Path(sys.argv[1]), sys.argv[2]
+anchor = '-A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
+inject = (
+    '\n# MJOLNIR VM FORWARD — accept traffic to/from VM subnet\n'
+    f'-A ufw-before-forward -s {subnet} -j ACCEPT\n'
+    f'-A ufw-before-forward -d {subnet} -j ACCEPT\n'
+)
+txt = path.read_text()
+path.write_text(txt.replace(anchor, anchor + inject, 1))
+PY
+    fi
+
+    log_info "Reloading ufw to apply NAT rules..."
+    ufw reload
+}
+
+# Non-ufw path (e.g. minimal server, CI): write rules directly and persist via
+# iptables-persistent.
+setup_networking_iptables() {
+    local vm_subnet="$1"
+    local ext_iface="$2"
+
+    if ! iptables -t nat -C POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE 2>/dev/null; then
+        log_info "Adding NAT masquerade rule for $vm_subnet out $ext_iface..."
+        iptables -t nat -A POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE
+    fi
+
     if ! iptables -C FORWARD -s "$vm_subnet" -j ACCEPT 2>/dev/null; then
-        log_info "Adding FORWARD rules for VM traffic..."
+        log_info "Adding FORWARD rules for $vm_subnet..."
         iptables -A FORWARD -s "$vm_subnet" -j ACCEPT
         iptables -A FORWARD -d "$vm_subnet" -j ACCEPT
-    else
-        log_info "FORWARD rules already exist"
     fi
 
-    # Make iptables rules persistent
     if command -v netfilter-persistent &>/dev/null; then
         netfilter-persistent save 2>/dev/null || true
     elif command -v iptables-save &>/dev/null; then
         mkdir -p /etc/iptables
         iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
     fi
-
-    log_success "VM networking configured (subnet: $vm_subnet)"
 }
 
 setup_systemd_service() {
