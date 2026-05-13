@@ -24,6 +24,10 @@ config :mjolnir,
   # Durability: per-VM intent state (one JSON file per VM)
   state_dir: "/var/lib/mjolnir/state",
 
+  # Forge (host config reconciler) — see docs/plans/host-reconcile.md
+  forge_state_dir: "/var/lib/mjolnir/forge/state",
+  forge_declarations_path: "forge/declarations",
+
   # HTTP API
   api_port: 4000,
 

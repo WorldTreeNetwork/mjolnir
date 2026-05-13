@@ -7,6 +7,8 @@ config :mjolnir,
   btrfs_root: "/var/lib/mjolnir/btrfs-test",
   socket_dir: "/tmp/mjolnir-test",
   state_dir: "/tmp/mjolnir-test/state",
+  forge_state_dir: "/tmp/mjolnir-test/forge",
+  forge_declarations_path: "/tmp/mjolnir-test/forge-declarations",
   # Still uses @vms subdir within the test btrfs root
   vm_storage_subdir: "@vms",
   api_port: 4001

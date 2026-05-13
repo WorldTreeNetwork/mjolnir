@@ -59,7 +59,10 @@ defmodule Mjolnir.Application do
         # Periodic health monitor — every 30s, probe all registered VMs and
         # auto-heal L1 degradations (Iroh rot, vsock drift) before a user-
         # facing request exposes them. Emits EventBus events on :dead.
-        Mjolnir.Health.Monitor
+        Mjolnir.Health.Monitor,
+
+        # Forge: host config reconciler. See docs/plans/host-reconcile.md.
+        Mjolnir.Forge.Supervisor
       ] ++
         maybe_jwks_strategy() ++
         [

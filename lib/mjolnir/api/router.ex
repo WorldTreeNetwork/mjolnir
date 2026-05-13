@@ -790,6 +790,9 @@ defmodule Mjolnir.API.Router do
   # MCP endpoint — Model Context Protocol for AI agent access
   forward("/mcp", to: Mjolnir.MCP.Plug)
 
+  # Forge — host config reconciler. See docs/plans/host-reconcile.md.
+  forward("/api/forge", to: Mjolnir.Forge.API)
+
   match _ do
     json(conn, 404, %{error: "not_found"})
   end
