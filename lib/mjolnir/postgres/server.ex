@@ -348,9 +348,21 @@ defmodule Mjolnir.Postgres.Server do
   end
 
   defp pg_isready(config) do
+    # Explicit user/db prevent libpq from defaulting to the OS user, which is
+    # not in pg_ident.conf and causes a FATAL peer-auth log line on every
+    # readiness probe. pg_isready treats auth failures as "server is up",
+    # so the previous form worked — it just spammed the log.
     case System.cmd(
            config.pg_isready_bin,
-           ["-h", config.socket_dir, "-q"],
+           [
+             "-h",
+             config.socket_dir,
+             "-U",
+             config.bootstrap_role,
+             "-d",
+             config.db_name,
+             "-q"
+           ],
            stderr_to_stdout: true
          ) do
       {_, 0} -> true
