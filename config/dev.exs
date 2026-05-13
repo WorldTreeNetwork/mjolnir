@@ -14,7 +14,15 @@ config :mjolnir,
   socket_dir: "/tmp/mjolnir-dev",
 
   # Auto-inject current guest agent — path relative to project root (works for any checkout location)
-  guest_agent_bin: Path.join(File.cwd!(), "native/target/x86_64-unknown-linux-musl/release/mjolnir-agent")
+  guest_agent_bin:
+    Path.join(File.cwd!(), "native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"),
+
+  # OTP-managed Postgres sidecar — dev paths kept under the project so the
+  # dev BEAM can run as a normal user without /var/lib write perms.
+  pg_enabled: true,
+  pg_data_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/data"),
+  pg_socket_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/sock"),
+  pg_log_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/log")
 
 config :mjolnir, :auth,
   bypass_localhost: true,

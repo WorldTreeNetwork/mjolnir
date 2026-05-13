@@ -42,3 +42,21 @@ end
 if flush_delay = System.get_env("MJOLNIR_DORMANT_FLUSH_DELAY_MS") do
   config :mjolnir, dormant_flush_delay_ms: String.to_integer(flush_delay)
 end
+
+case System.get_env("MJOLNIR_PG_ENABLED") do
+  "true" -> config :mjolnir, pg_enabled: true
+  "false" -> config :mjolnir, pg_enabled: false
+  _ -> :ok
+end
+
+if pg_data_dir = System.get_env("MJOLNIR_PG_DATA_DIR") do
+  config :mjolnir, pg_data_dir: pg_data_dir
+end
+
+if pg_socket_dir = System.get_env("MJOLNIR_PG_SOCKET_DIR") do
+  config :mjolnir, pg_socket_dir: pg_socket_dir
+end
+
+if pg_run_as = System.get_env("MJOLNIR_PG_RUN_AS") do
+  config :mjolnir, pg_run_as: pg_run_as
+end

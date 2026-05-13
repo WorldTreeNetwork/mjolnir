@@ -46,7 +46,23 @@ config :mjolnir,
   default_ssh_public_key: nil,
 
   # Web gateway domain for Iroh-enabled VMs
-  gateway_domain: "vm.worldtree.network"
+  gateway_domain: "vm.worldtree.network",
+
+  # OTP-managed Postgres sidecar. See lib/mjolnir/postgres/. Disabled by
+  # default so unit tests and CI without local Postgres stay green; dev.exs
+  # and prod.exs flip it on. Override via MJOLNIR_PG_ENABLED at runtime.
+  pg_enabled: false,
+  pg_managed: true,
+  pg_data_dir: "/var/lib/mjolnir/pg",
+  pg_socket_dir: "/var/run/mjolnir",
+  pg_log_dir: "/var/log/mjolnir/pg",
+  pg_bin_dir: "/usr/bin",
+  pg_run_as: nil,
+  pg_bootstrap_role: "mjolnir_admin",
+  pg_roles: ["mjolnir_admin", "mjolnir_sites"],
+  pg_database: "mjolnir",
+  pg_pool_size: 10,
+  ecto_repos: [Mjolnir.Repo]
 
 # Auth defaults
 config :mjolnir, :auth,

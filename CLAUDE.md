@@ -114,7 +114,7 @@ These are the raw mix/cargo commands (the Justfile wraps most of these):
 ```bash
 mix deps.get          # Fetch dependencies
 mix compile           # Build the project
-mix test              # Run unit tests (101 tests, 0 failures as of 2026-02-26)
+mix test              # Run unit tests (~320 tests, 0 failures as of 2026-05-13)
 mix test --include integration   # Run with real VMs (needs KVM + root on server)
 mix test test/mjolnir_test.exs           # Run a single test file
 mix test test/mjolnir_test.exs:5         # Run a specific test by line number
@@ -227,14 +227,25 @@ Server kernel path: `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH). Legacy
 - `test/support/vm_case.ex` provides test case template that cleans up orphan VMs
 - `elixirc_paths` includes `test/support` only in test env
 
+### Postgres Sidecar
+
+An OTP-managed Postgres instance is supervised under `Mjolnir.Postgres.Supervisor` (children: `Server` → `Bootstrap` → `Migrator` → `Repo`). The Postgres OS process runs as an Erlang Port — no systemd unit, no `pg_ctl` daemon — listening only on a Unix socket. Connections use peer authentication with `pg_ident.conf` mapping the BEAM's OS user to the `mjolnir_admin` (migrations) and `mjolnir_sites` (app reads/writes) DB roles. The bootstrap role owns each schema; service roles get CRUD on their schema only via `ALTER DEFAULT PRIVILEGES` — they cannot DDL.
+
+**Design contract:** filesystem (SecretStore, Sites.Store) is the source of truth for signed envelopes and content-addressed blobs. Postgres holds **derived indexes** (`sites.head_index`, `sites.manifest_index`) that can be rebuilt from disk. Writes go to FS first, then best-effort upsert to PG.
+
+**Controlled by `:pg_enabled`** — false by default (so `mix test` and Macs-without-pg stay green), true in `config/dev.exs` and `config/prod.exs`. Override with `MJOLNIR_PG_ENABLED=true|false`. In prod, postgres drops privileges via `setpriv` to user `mjolnir_pg` (created by the host bootstrap script) because the postgres binary refuses to run as root.
+
+Modules: `lib/mjolnir/postgres/{server,bootstrap,migrator,supervisor,config}.ex`, `lib/mjolnir/repo.ex` (`Mjolnir.Repo` for app, `Mjolnir.Repo.Admin` for migrations only — not supervised). Migrations under `priv/repo/migrations/`. Index modules: `Mjolnir.Sites.HeadIndex`, `Mjolnir.Sites.ManifestIndex`.
+
 ### Test Harness
 
 See `docs/plans/test-harness-spec.md` for the full specification.
 
-- **Unit tests** (`mix test`): 101 tests, async, no infrastructure needed, run on macOS
+- **Unit tests** (`mix test`): ~325 tests, async, no infrastructure needed, run on macOS
 - **Integration tests** (`mix test --include integration`): Need KVM + root on server
+- **Postgres tests** (`mix test --include postgres`): Need `postgres` + `initdb` + `pg_isready` on PATH. Each test brings up its own ephemeral instance under `/tmp`.
 - **E2E tests** (`mix test --include e2e`): Future — full API lifecycle
-- Tags: `:integration`, `:cloud_hypervisor`, `:snapshot`, `:network`, `:slow`
+- Tags: `:integration`, `:postgres`, `:cloud_hypervisor`, `:snapshot`, `:network`, `:slow`
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
