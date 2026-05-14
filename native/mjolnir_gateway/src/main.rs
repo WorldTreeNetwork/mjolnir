@@ -20,8 +20,9 @@ use iroh::endpoint::{Connection, Endpoint};
 use iroh_base::{EndpointAddr, PublicKey};
 use mjolnir_gateway::acme::{AcmeConfig, IssuedCert};
 use mjolnir_gateway::cloudflare::CloudflareClient;
-use mjolnir_gateway::config::{self, Apex, Fallthrough};
+use mjolnir_gateway::config::{self, Apex, Fallthrough, SitesResolver};
 use mjolnir_gateway::route::RouteTable;
+use mjolnir_gateway::sites::{self as sites_mod, LookupResult};
 use mjolnir_gateway::tls::{load_server_config, load_server_config_from_bytes, TlsError};
 use mjolnir_protocol::TCP_FWD_ALPN;
 use std::net::SocketAddr;
@@ -709,6 +710,7 @@ struct AppCtx {
     pool: Arc<ConnectionPool>,
     routes: Arc<ArcSwap<RouteTable>>,
     iroh_cfg: Arc<IrohConfig>,
+    sites_resolver: Option<SitesResolver>,
 }
 
 /// Handle a single incoming connection (plain TCP or TLS). `sni_hostname`, when
@@ -788,6 +790,56 @@ where
                 "proxy decision"
             );
             handle_iroh_connection(stream, peer, ctx.clone(), subdomain, header_buf).await;
+        }
+        Disposition::Reject(ref e @ ProxyError::DomainMismatch) => {
+            // No configured apex matched — try the sites-alias resolver before
+            // falling through to 404.
+            if let Some(ref resolver) = ctx.sites_resolver {
+                // HTTP hostnames are case-insensitive; the Mjolnir-side index
+                // is keyed on lowercase fqdn, so normalise here before lookup.
+                let host_bare_owned = host_without_port(&host).to_ascii_lowercase();
+                let host_bare = host_bare_owned.as_str();
+                match sites_mod::lookup(resolver, host_bare).await {
+                    LookupResult::Hit(backend) => {
+                        info!(
+                            peer = %peer,
+                            host = %host_bare,
+                            route = "sites",
+                            "sites alias hit — forwarding to mjolnir backend"
+                        );
+                        let connect_timeout = ctx.iroh_cfg.connect_timeout;
+                        match dial_local(backend, connect_timeout).await {
+                            Ok(backend_stream) => {
+                                run_proxy_local(stream, backend_stream, header_buf).await;
+                            }
+                            Err(dial_err) => {
+                                warn!("{}: sites backend unreachable: {}", peer, dial_err);
+                                write_error_and_shutdown(&mut stream, &dial_err).await;
+                            }
+                        }
+                        return;
+                    }
+                    LookupResult::Miss => {
+                        // Fall through to the existing 404 below.
+                    }
+                    LookupResult::Error => {
+                        warn!(
+                            peer = %peer,
+                            host = %host,
+                            "sites resolver error"
+                        );
+                        // Fall through to the existing 404 below.
+                    }
+                }
+            }
+            warn!(
+                peer = %peer,
+                host = %host,
+                error = %e,
+                "proxy rejection"
+            );
+            let _ = stream.write_all(&error_to_http_response(e)).await;
+            let _ = stream.shutdown().await;
         }
         Disposition::Reject(e) => {
             warn!(
@@ -1060,6 +1112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         routes: route_table.clone(),
         iroh_cfg,
+        sites_resolver: loaded.sites_resolver.clone(),
     });
 
     // ── SIGHUP handler ────────────────────────────────────────────────────────
@@ -1291,6 +1344,7 @@ mod tests {
             },
             apexes,
             routes,
+            sites_resolver: None,
         }
     }
 
@@ -1788,6 +1842,7 @@ mod tests {
                 pool_probe_timeout: Duration::from_secs(5),
                 default_port: 80,
             }),
+            sites_resolver: None,
         });
 
         let (client_end, proxy_side) = tokio::io::duplex(8192);
@@ -1848,6 +1903,7 @@ mod tests {
                 pool_probe_timeout: Duration::from_secs(5),
                 default_port: 80,
             }),
+            sites_resolver: None,
         });
 
         // SNI says git.worldtree.network; Host header says admin.worldtree.network.

@@ -18,7 +18,12 @@ defmodule Mjolnir.Application do
     children =
       [
         # Durability: per-VM intent state, loaded into ETS before anything else runs
-        Mjolnir.StateStore
+        Mjolnir.StateStore,
+
+        # Signed-record key-value store for IdentiKey-rooted mutable state
+        # (site HEAD pointers, endpoint bindings, etc.). Starts early so it is
+        # available before Sites.Supervisor reads HEAD records.
+        Mjolnir.SecretStore
       ] ++
         maybe_postgres_children() ++
         [
@@ -64,7 +69,12 @@ defmodule Mjolnir.Application do
           Mjolnir.Health.Monitor,
 
           # Forge: host config reconciler. See docs/plans/host-reconcile.md.
-          Mjolnir.Forge.Supervisor
+          Mjolnir.Forge.Supervisor,
+
+          # IdentiKey static sites — content-addressed chunk store, Iroh endpoint
+          # binding, OpenTimestamps proof upgrader. See
+          # docs/plans/initiatives/identikey-sites.md.
+          Mjolnir.Sites.Supervisor
         ] ++
         maybe_jwks_strategy() ++
         [

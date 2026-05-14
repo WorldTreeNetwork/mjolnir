@@ -214,6 +214,55 @@ vm-message id payload:
     fi | jq .
 
 # ═══════════════════════════════════════════════════════════════════════
+# IdentiKey Sites — publish & inspect static-content snapshots
+# ═══════════════════════════════════════════════════════════════════════
+
+# Publish a directory as a public-mode IdentiKey site.
+# Example: just sites-publish ./blog abc123 blog
+sites-publish dir fp name sequence="1":
+    mix mjolnir.sites.publish {{dir}} \
+        --identikey-fp {{fp}} \
+        --site {{name}} \
+        --base-url {{_api}} \
+        --sequence {{sequence}}
+
+# Add a custom-domain alias for a site.
+# Example: just sites-alias-add blog.duke.io abc123 blog ./identity.json
+sites-alias-add fqdn fp site keypair_file sequence="1":
+    mix mjolnir.sites.alias add {{fqdn}} \
+        --identikey-fp {{fp}} \
+        --site {{site}} \
+        --keypair-file {{keypair_file}} \
+        --base-url {{_api}} \
+        --sequence {{sequence}}
+
+# Remove a custom-domain alias for a site (signed tombstone).
+sites-alias-remove fqdn fp site keypair_file sequence="9999999999":
+    mix mjolnir.sites.alias remove {{fqdn}} \
+        --identikey-fp {{fp}} \
+        --site {{site}} \
+        --keypair-file {{keypair_file}} \
+        --base-url {{_api}} \
+        --sequence {{sequence}}
+
+# Fetch the current HEAD record for a site
+sites-head fp name:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/head
+
+# Fetch a manifest envelope by snapshot hash
+sites-manifest hash:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/manifests/{{hash}}
+
+# Fetch an OpenTimestamps receipt by snapshot hash
+sites-ots hash:
+    {{_t}}curl -s --fail-with-body --output - {{_api}}/api/sites/manifests/{{hash}}/ots
+
+# Fetch a served file from a site (debug endpoint)
+# Example: just sites-get abc123 blog index.html
+sites-get fp name path:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/files/{{path}}
+
+# ═══════════════════════════════════════════════════════════════════════
 # Snapshots
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -63,6 +63,8 @@ pub struct FileConfig {
     pub acme: Option<AcmeSection>,
     #[serde(default)]
     pub tls: Option<TlsSection>,
+    #[serde(default)]
+    pub sites: Option<SitesSection>,
 
     #[serde(default, rename = "domain")]
     pub domains: Vec<DomainDecl>,
@@ -94,6 +96,14 @@ pub struct TlsSection {
     pub cert: Option<PathBuf>,
     #[serde(default)]
     pub key: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct SitesSection {
+    #[serde(default)]
+    pub mjolnir_api: Option<String>,
+    #[serde(default)]
+    pub mjolnir_backend: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -150,6 +160,16 @@ pub struct AcmeSettings {
     pub explicit_domains: Option<Vec<String>>,
 }
 
+/// Validated sites-alias resolver config. Present only when both `mjolnir_api`
+/// and `mjolnir_backend` are set in the `[sites]` section.
+#[derive(Debug, Clone)]
+pub struct SitesResolver {
+    /// Base URL of Mjolnir's HTTP API, e.g. `"http://127.0.0.1:4000"`.
+    pub api_url: String,
+    /// TCP address to forward bytes to on an alias hit.
+    pub backend: SocketAddr,
+}
+
 /// Fully-validated runtime config consumed by `main.rs`.
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
@@ -169,6 +189,7 @@ pub struct LoadedConfig {
     pub acme: AcmeSettings,
     pub apexes: Vec<Apex>,
     pub routes: Vec<Route>,
+    pub sites_resolver: Option<SitesResolver>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +448,7 @@ pub fn load_from_env() -> Result<LoadedConfig, ConfigError> {
         },
         apexes,
         routes: Vec::new(),
+        sites_resolver: None,
     })
 }
 
@@ -600,12 +622,30 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         ));
     }
 
+    // ── Sites resolver ────────────────────────────────────────────────────────
+    let sites_resolver = match file.sites {
+        Some(s) => match (s.mjolnir_api, s.mjolnir_backend) {
+            (Some(api_url), Some(backend_str)) => {
+                let backend = backend_str.parse::<SocketAddr>().map_err(|e| {
+                    ConfigError::InvalidAddr {
+                        addr: backend_str.clone(),
+                        source: e,
+                    }
+                })?;
+                Some(SitesResolver { api_url, backend })
+            }
+            _ => None,
+        },
+        None => None,
+    };
+
     info!(
         event = "config.loaded",
         source = ?source,
         apex_count = apexes.len(),
         route_count = routes.len(),
         acme = acme_settings.enabled,
+        sites = sites_resolver.is_some(),
         "gateway config loaded"
     );
 
@@ -626,6 +666,7 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         acme: acme_settings,
         apexes,
         routes,
+        sites_resolver,
     })
 }
 

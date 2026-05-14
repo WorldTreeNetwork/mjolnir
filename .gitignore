@@ -35,6 +35,7 @@ erl_crash.dump
 .omc
 .env
 boot-image/
+.mjolnir-dev/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

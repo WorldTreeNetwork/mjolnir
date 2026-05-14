@@ -48,6 +48,12 @@ config :mjolnir,
   # Web gateway domain for Iroh-enabled VMs
   gateway_domain: "vm.worldtree.network",
 
+  # IdentiKey sites — content-addressed chunk store + signed-record secret store.
+  # See docs/plans/initiatives/identikey-sites.md.
+  sites_root: "/var/lib/mjolnir/btrfs/@sites",
+  secret_store_root: "/var/lib/mjolnir/btrfs/@sites/keyspace",
+  sites_ots_upgrade_interval_ms: 30 * 60 * 1_000,
+
   # OTP-managed Postgres sidecar. See lib/mjolnir/postgres/. Disabled by
   # default so unit tests and CI without local Postgres stay green; dev.exs
   # and prod.exs flip it on. Override via MJOLNIR_PG_ENABLED at runtime.

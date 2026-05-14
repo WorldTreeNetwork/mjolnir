@@ -17,8 +17,14 @@ defmodule Mjolnir.API.Router do
   plug(Plug.Logger)
   plug(:maybe_parse_body)
   plug(Mjolnir.API.Auth)
+  plug(Mjolnir.API.VanityHostPlug)
   plug(:match)
   plug(:dispatch)
+
+  # IdentiKey Sites — raw-binary endpoints for publishing/serving signed
+  # snapshots. The body parser is bypassed for this prefix in
+  # `maybe_parse_body/2` so envelopes/ciphertext/outboards arrive intact.
+  forward("/api/sites", to: Mjolnir.API.SitesRouter)
 
   # Health check — no auth required (skipped by Auth plug)
   get "/api/health" do
@@ -799,6 +805,7 @@ defmodule Mjolnir.API.Router do
 
   @parsers_opts Plug.Parsers.init(parsers: [:json], json_decoder: Jason)
   defp maybe_parse_body(%{path_info: ["mcp" | _]} = conn, _opts), do: conn
+  defp maybe_parse_body(%{path_info: ["api", "sites" | _]} = conn, _opts), do: conn
   defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
 
   defp json(conn, status, body) do

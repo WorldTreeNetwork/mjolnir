@@ -11,6 +11,8 @@ config :mjolnir,
   forge_declarations_path: "/tmp/mjolnir-test/forge-declarations",
   # Still uses @vms subdir within the test btrfs root
   vm_storage_subdir: "@vms",
-  api_port: 4001
+  api_port: 4001,
+  sites_root: "/tmp/mjolnir-test/sites",
+  secret_store_root: "/tmp/mjolnir-test/sites/keyspace"
 
 config :mjolnir, :auth, bypass_localhost: true
