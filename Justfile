@@ -358,6 +358,42 @@ gateway-restart: _require-host
     ssh {{host}} "systemctl restart mjolnir-gateway"
 
 # ═══════════════════════════════════════════════════════════════════════
+# Forge (host config reconciler)  — see docs/plans/host-reconcile.md
+# ═══════════════════════════════════════════════════════════════════════
+
+# Forge: list managed hosts (running + declared)
+forge-hosts:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/forge/hosts | jq .
+
+# Forge: start a Host worker (defaults: transport=local, auto_apply=false)
+forge-host-add host_id transport="local":
+    #!/usr/bin/env bash
+    body=$(jq -n --arg h "{{host_id}}" --arg t "{{transport}}" '{host:$h, transport:$t, auto_apply:false}')
+    if [ -n "{{host}}" ]; then
+        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-" | jq .
+    else
+        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-  | jq .
+    fi
+
+# Forge: re-observe + diff for a host (read-only; no host changes)
+forge-plan host_id="self":
+    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/plan?host={{host_id}}" | jq .
+
+# Forge: apply safe actions (:new, :drifted, :missing, :prune) for a host
+forge-apply host_id="self":
+    #!/usr/bin/env bash
+    body=$(jq -n --arg h "{{host_id}}" '{host:$h, keys:"all_safe"}')
+    if [ -n "{{host}}" ]; then
+        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @-" | jq .
+    else
+        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @- | jq .
+    fi
+
+# Forge: list Store records (optionally filtered by host/kind/status)
+forge-state host_id="" kind="" status_filter="":
+    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/state?host={{host_id}}&kind={{kind}}&status={{status_filter}}" | jq .
+
+# ═══════════════════════════════════════════════════════════════════════
 # MCP Smoke Tests
 # ═══════════════════════════════════════════════════════════════════════
 

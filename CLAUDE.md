@@ -195,6 +195,23 @@ Mjolnir.Supervisor (one_for_one)
 
 - **`Mjolnir.Vsock.Protocol`** — Wire protocol with channel multiplexing: 1-byte channel ID + 4-byte big-endian length prefix + payload. Channel 0 = JSON control, channels 1-255 = binary PTY streams.
 
+### Forge — Host Config Reconciler (`lib/mjolnir/forge/`)
+
+Declarative host configuration with three-way diff (declared/owned/observed), ownership tracking that makes prune first-class, and a JSON-per-record + ETS store mirroring `Mjolnir.StateStore`. Design: `docs/plans/host-reconcile.md`. v0 supports `systemd_unit` and `file` kinds, `:local` transport only (SSH stubbed).
+
+- **`Mjolnir.Forge.Supervisor`** — mounts Store, Declarations, HostRegistry, HostSupervisor under `Mjolnir.Supervisor`.
+- **`Mjolnir.Forge.Store`** — JSON+ETS records under `forge_state_dir/<host>/<safe_key>.json`. Identity is `{host, kind, resource_id}`. Atomic write+fsync+rename; bad files quarantined.
+- **`Mjolnir.Forge.Resource`** — behaviour with `kind/0`, `canonical/1`, `observe_path/1`, `parse_observed/1`, `apply/3`, `delete/2`. `Resource.observe/4` dispatches on transport (`:local | :ssh`).
+- **`Mjolnir.Forge.Canonical`** — sorted-key JSON + SHA-256. No CBOR, no blake3 NIF — hash is for equality only.
+- **`Mjolnir.Forge.Diff.compute/3`** — pure 3-way matrix → status entries. Auto-adopts on exact match.
+- **`Mjolnir.Forge.Declaration` + `Declarations`** — DSL macros (`systemd_unit/2`, `file/2`) accumulating into `@forge_resources`; loader scans `forge/declarations/*.exs` and exposes `for_host/1` / `declared_map/1` / `reload/0`.
+- **`Mjolnir.Forge.Host`** — per-host worker; `plan/1` + `apply/2` are on-demand. `:conflict` and `:unmanaged` never auto-resolve. `auto_apply` defaults to false.
+- **`Mjolnir.Forge.API`** — Plug forwarded from `Mjolnir.API.Router` at `/api/forge/*`. v0 endpoints: `GET /hosts`, `POST /hosts`, `GET /plan?host=H`, `POST /apply`, `GET /state`.
+
+Justfile shortcuts: `just forge-hosts`, `just forge-plan [host_id]`, `just forge-apply [host_id]`, `just forge-state`, `just forge-host-add HOST [transport]`.
+
+Sandbox mode: when `:forge_systemd_units_dir` is set to anything other than `/etc/systemd/system`, SystemdUnit writes/removes files but skips all `systemctl` shell-outs. Used by `config/test.exs` and the integration test suite.
+
 ### Guest Agent (Rust, `native/mjolnir_guest_agent/`)
 
 Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC.

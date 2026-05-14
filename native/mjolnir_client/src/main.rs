@@ -14,6 +14,7 @@ mod api;
 mod auth;
 mod config;
 mod connect;
+mod forge;
 mod mcp;
 mod server;
 
@@ -258,6 +259,14 @@ enum Command {
         api: Option<String>,
     },
 
+    // --- Forge (host config reconciler) ---
+    /// Host configuration reconciler
+    #[command(next_help_heading = "Forge (host config)")]
+    Forge {
+        #[command(subcommand)]
+        cmd: ForgeCmd,
+    },
+
     // --- Server admin ---
     /// Server administration (SSH)
     #[command(next_help_heading = "Server")]
@@ -343,6 +352,93 @@ enum TicketAction {
         /// Direct IP hint(s) (ip:port, repeatable)
         #[arg(long)]
         ip: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForgeCmd {
+    /// Show the reconciliation plan for a host (observe + diff)
+    Plan {
+        /// Forge host name
+        #[arg(long)]
+        host: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Apply pending changes for a host
+    Apply {
+        /// Forge host name
+        #[arg(long)]
+        host: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Apply all safe (non-destructive) changes
+        #[arg(long)]
+        all_safe: bool,
+        /// Apply a specific resource (KIND/ID, e.g. tap/mj-abc123)
+        #[arg(long)]
+        resource: Option<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Show stored reconciliation state
+    State {
+        /// Filter by host
+        #[arg(long)]
+        host: Option<String>,
+        /// Filter by resource kind
+        #[arg(long)]
+        kind: Option<String>,
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Manage forge hosts
+    Hosts {
+        #[command(subcommand)]
+        cmd: HostsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostsCmd {
+    /// List all forge hosts
+    List {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Register a new forge host
+    Add {
+        /// Host name (e.g. "self" or "root@1.2.3.4")
+        host: String,
+        /// Transport type: local or ssh
+        #[arg(long, default_value = "local")]
+        transport: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
     },
 }
 
@@ -495,6 +591,55 @@ async fn main() {
             let profile_name = cli.profile.as_deref().unwrap_or("default");
             mcp::run_mcp_server(profile_name, &profile, &api).await
         }
+
+        // --- Forge ---
+        Command::Forge { cmd } => match cmd {
+            ForgeCmd::Plan { host, api, token } => {
+                match forge::plan(api, token, host, &profile).await {
+                    Ok(all_converged) => {
+                        if all_converged {
+                            Ok(())
+                        } else {
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            ForgeCmd::Apply {
+                host,
+                yes,
+                all_safe,
+                resource,
+                api,
+                token,
+            } => match forge::apply(api, token, host, yes, all_safe, resource, &profile).await {
+                Ok(all_ok) => {
+                    if all_ok {
+                        Ok(())
+                    } else {
+                        std::process::exit(2);
+                    }
+                }
+                Err(e) => Err(e),
+            },
+            ForgeCmd::State {
+                host,
+                kind,
+                status,
+                api,
+                token,
+            } => forge::state(api, token, host, kind, status, &profile).await,
+            ForgeCmd::Hosts { cmd } => match cmd {
+                HostsCmd::List { api, token } => forge::hosts_list(api, token, &profile).await,
+                HostsCmd::Add {
+                    host,
+                    transport,
+                    api,
+                    token,
+                } => forge::hosts_add(api, token, host, transport, &profile).await,
+            },
+        },
 
         // --- Server admin (sync — blocks tokio runtime, which is fine for CLI) ---
         Command::Server { action } => server::run(action, &profile),

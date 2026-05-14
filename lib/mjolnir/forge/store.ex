@@ -249,7 +249,8 @@ defmodule Mjolnir.Forge.Store do
   # this is how new resource kinds register themselves to be loadable from
   # the on-disk store after a restart.
   @kind_modules %{
-    "systemd_unit" => Mjolnir.Forge.Resource.SystemdUnit
+    "systemd_unit" => Mjolnir.Forge.Resource.SystemdUnit,
+    "file" => Mjolnir.Forge.Resource.File
   }
 
   @spec kind_to_module(String.t()) :: module() | nil

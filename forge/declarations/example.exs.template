@@ -1,0 +1,62 @@
+# Example Forge declaration. Copy this to `<host>.exs` to activate.
+#
+# Each declaration module declares which host it manages (`host:` option) and
+# uses the `systemd_unit/2` and `file/2` DSL macros to describe the desired
+# state. The Mjolnir.Forge subsystem will diff this against the host's actual
+# state and let you apply changes via `mjolnir forge apply` (or via
+# `just forge-apply <host>`).
+#
+# Workflow:
+#
+#   1. Copy this file:                cp example.exs.template self.exs
+#   2. Edit declarations for your host
+#   3. Reload:                        bin/mjolnir rpc 'Mjolnir.Forge.Declarations.reload/0'
+#                                     (or restart the app)
+#   4. Plan:                          just forge-plan self
+#   5. Apply (with confirmation):     just forge-apply self
+#
+# The `host:` value can be `"self"` (the Mjolnir server itself, local
+# transport) or a user@host string for SSH transport (v1 — not yet wired).
+
+defmodule Forge.Declarations.Example do
+  use Mjolnir.Forge.Declaration, host: "self"
+
+  # systemd unit — file at /etc/systemd/system/<id>, daemon-reloaded +
+  # enabled + restarted on apply. v0 diffs the source bytes only.
+  systemd_unit "example.service" do
+    source """
+    [Unit]
+    Description=Example service managed by Forge
+    After=network.target
+
+    [Service]
+    ExecStart=/usr/bin/true
+    Restart=on-failure
+
+    [Install]
+    WantedBy=multi-user.target
+    """
+
+    enabled true
+    state :running
+  end
+
+  # Generic file — content + mode + owner. Diff includes all five fields
+  # (path/source/mode/owner/group). Path is the resource ID.
+  file "/etc/motd" do
+    source "Welcome to a Forge-managed host.\n"
+    mode 0o644
+  end
+
+  # An owned config file with stricter perms.
+  file "/etc/example/config.yaml" do
+    source """
+    listen: 0.0.0.0:8080
+    log_level: info
+    """
+
+    mode 0o600
+    owner "root"
+    group "root"
+  end
+end

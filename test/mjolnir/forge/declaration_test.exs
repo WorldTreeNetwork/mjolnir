@@ -60,4 +60,68 @@ defmodule Mjolnir.Forge.DeclarationTest do
       end
     end
   end
+
+  # file/2 macro tests
+
+  defmodule HostWithFile do
+    use Mjolnir.Forge.Declaration, host: "test-host-file"
+
+    file "/etc/motd" do
+      source "Welcome\n"
+      mode 0o644
+    end
+
+    file "/etc/issue" do
+      source "My host\n"
+      mode 0o600
+      owner "root"
+      group "root"
+    end
+  end
+
+  test "file/2 macro accumulates File resources in declaration order" do
+    [first, second] = HostWithFile.__forge_resources__()
+    assert {Mjolnir.Forge.Resource.File, "/etc/motd", _} = first
+    assert {Mjolnir.Forge.Resource.File, "/etc/issue", _} = second
+  end
+
+  test "file/2 macro sets path, source, mode, owner, group in content" do
+    [{_, "/etc/motd", content}, {_, "/etc/issue", content2}] = HostWithFile.__forge_resources__()
+    assert content.path == "/etc/motd"
+    assert content.source == "Welcome\n"
+    assert content.mode == 0o644
+    assert content.owner == nil
+    assert content.group == nil
+
+    assert content2.mode == 0o600
+    assert content2.owner == "root"
+    assert content2.group == "root"
+  end
+
+  test "file/2 defaults mode to 0o644 when not specified" do
+    defmodule HostFileDefaults do
+      use Mjolnir.Forge.Declaration, host: "test-host-file-defaults"
+
+      file "/tmp/test" do
+        source "hello"
+      end
+    end
+
+    [{_, _, content}] = HostFileDefaults.__forge_resources__()
+    assert content.mode == 0o644
+    assert content.owner == nil
+    assert content.group == nil
+  end
+
+  test "file/2 unknown fields raise CompileError" do
+    assert_raise CompileError, ~r/unsupported call/, fn ->
+      defmodule HostFileBad do
+        use Mjolnir.Forge.Declaration, host: "bad-file"
+
+        file "/tmp/x" do
+          bad_field "value"
+        end
+      end
+    end
+  end
 end

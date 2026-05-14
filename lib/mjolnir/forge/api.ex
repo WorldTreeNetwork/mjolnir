@@ -85,9 +85,9 @@ defmodule Mjolnir.Forge.API do
   ## State
 
   get "/state" do
-    host = conn.query_params["host"]
-    kind = conn.query_params["kind"]
-    status = conn.query_params["status"]
+    host = blank_to_nil(conn.query_params["host"])
+    kind = blank_to_nil(conn.query_params["kind"])
+    status = blank_to_nil(conn.query_params["status"])
 
     records =
       Store.list()
@@ -179,6 +179,10 @@ defmodule Mjolnir.Forge.API do
       updated_at: encode_dt(r.updated_at)
     }
   end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(s) when is_binary(s), do: s
 
   defp hex(nil), do: nil
   defp hex(bin) when is_binary(bin), do: Base.encode16(bin, case: :lower)
