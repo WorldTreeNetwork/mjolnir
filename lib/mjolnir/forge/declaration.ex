@@ -31,7 +31,8 @@ defmodule Mjolnir.Forge.Declaration do
     host = Keyword.fetch!(opts, :host)
 
     quote do
-      import Mjolnir.Forge.Declaration, only: [systemd_unit: 2, file: 2]
+      import Mjolnir.Forge.Declaration,
+        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2]
       Module.register_attribute(__MODULE__, :forge_resources, accumulate: true)
       @forge_host unquote(host)
       @before_compile Mjolnir.Forge.Declaration
@@ -130,6 +131,104 @@ defmodule Mjolnir.Forge.Declaration do
     push =
       quote do
         @forge_resources {Mjolnir.Forge.Resource.File, unquote(path), content}
+      end
+
+    {:__block__, [], [init] ++ assigns ++ [push]}
+  end
+
+  @doc """
+  Declare a sysctl kernel parameter.
+
+  Block fields:
+    * `value <binary>` — the desired parameter value (required)
+
+  Example:
+
+      sysctl "net.ipv4.ip_forward" do
+        value "1"
+      end
+  """
+  defmacro sysctl(key, do: block) do
+    stmts =
+      case block do
+        {:__block__, _, list} -> list
+        single -> [single]
+      end
+
+    init =
+      quote do
+        content = %{value: nil}
+      end
+
+    assigns =
+      Enum.map(stmts, fn
+        {:value, _meta, [val]} ->
+          quote do
+            content = Map.put(content, :value, unquote(val))
+          end
+
+        other ->
+          raise CompileError,
+            description:
+              "unsupported call in sysctl/2 block: #{Macro.to_string(other)}. " <>
+                "Allowed: value."
+      end)
+
+    push =
+      quote do
+        @forge_resources {Mjolnir.Forge.Resource.Sysctl, unquote(key), content}
+      end
+
+    {:__block__, [], [init] ++ assigns ++ [push]}
+  end
+
+  @doc """
+  Declare an apt package.
+
+  Block fields:
+    * `state :installed | :removed | :held` — desired package state (default `:installed`)
+    * `version <binary>` — pin to a specific version (default `nil` = latest)
+
+  Example:
+
+      apt_package "nginx" do
+        state :installed
+      end
+
+      apt_package "cloud-hypervisor" do
+        state :held
+        version "50.0"
+      end
+  """
+  defmacro apt_package(name, do: block) do
+    stmts =
+      case block do
+        {:__block__, _, list} -> list
+        single -> [single]
+      end
+
+    init =
+      quote do
+        content = %{state: :installed, version: nil}
+      end
+
+    assigns =
+      Enum.map(stmts, fn
+        {field, _meta, [value]} when field in [:state, :version] ->
+          quote do
+            content = Map.put(content, unquote(field), unquote(value))
+          end
+
+        other ->
+          raise CompileError,
+            description:
+              "unsupported call in apt_package/2 block: #{Macro.to_string(other)}. " <>
+                "Allowed: state/version."
+      end)
+
+    push =
+      quote do
+        @forge_resources {Mjolnir.Forge.Resource.AptPackage, unquote(name), content}
       end
 
     {:__block__, [], [init] ++ assigns ++ [push]}
