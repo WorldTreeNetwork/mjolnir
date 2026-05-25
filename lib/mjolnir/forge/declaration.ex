@@ -32,7 +32,7 @@ defmodule Mjolnir.Forge.Declaration do
 
     quote do
       import Mjolnir.Forge.Declaration,
-        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2, user: 2, ufw_nat: 2]
+        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2, user: 2, ufw_nat: 2, iptables: 2]
       Module.register_attribute(__MODULE__, :forge_resources, accumulate: true)
       @forge_host unquote(host)
       @before_compile Mjolnir.Forge.Declaration
@@ -337,6 +337,60 @@ defmodule Mjolnir.Forge.Declaration do
     push =
       quote do
         @forge_resources {Mjolnir.Forge.Resource.UfwNat, unquote(id), content}
+      end
+
+    {:__block__, [], [init] ++ assigns ++ [push]}
+  end
+
+  @doc """
+  Declare iptables rules for a specific table and chain.
+
+  Block fields:
+    * `table <binary>` — iptables table: "nat", "filter", "mangle", "raw" (default "filter")
+    * `chain <binary>` — chain name: "INPUT", "FORWARD", "POSTROUTING", etc. (required)
+    * `rules [<binary>, ...]` — list of rule specs without the `-A CHAIN` prefix (required)
+
+  Example:
+
+      iptables "mjolnir-forward" do
+        table "filter"
+        chain "FORWARD"
+        rules [
+          "-i mj-+ -o mj-+ -j ACCEPT",
+          "-i mj-+ -o enp1s0 -j ACCEPT",
+          "-i enp1s0 -o mj-+ -m state --state RELATED,ESTABLISHED -j ACCEPT"
+        ]
+      end
+  """
+  defmacro iptables(name, do: block) do
+    stmts =
+      case block do
+        {:__block__, _, list} -> list
+        single -> [single]
+      end
+
+    init =
+      quote do
+        content = %{table: "filter", chain: nil, rules: []}
+      end
+
+    assigns =
+      Enum.map(stmts, fn
+        {field, _meta, [value]} when field in [:table, :chain, :rules] ->
+          quote do
+            content = Map.put(content, unquote(field), unquote(value))
+          end
+
+        other ->
+          raise CompileError,
+            description:
+              "unsupported call in iptables/2 block: #{Macro.to_string(other)}. " <>
+                "Allowed: table/chain/rules."
+      end)
+
+    push =
+      quote do
+        @forge_resources {Mjolnir.Forge.Resource.Iptables, unquote(name), content}
       end
 
     {:__block__, [], [init] ++ assigns ++ [push]}
