@@ -57,6 +57,10 @@ if pg_socket_dir = System.get_env("MJOLNIR_PG_SOCKET_DIR") do
   config :mjolnir, pg_socket_dir: pg_socket_dir
 end
 
+if pg_bin_dir = System.get_env("MJOLNIR_PG_BIN_DIR") do
+  config :mjolnir, pg_bin_dir: pg_bin_dir
+end
+
 if pg_run_as = System.get_env("MJOLNIR_PG_RUN_AS") do
   config :mjolnir, pg_run_as: pg_run_as
 end

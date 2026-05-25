@@ -34,7 +34,7 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       "--api-socket",
       socket_path,
       "--log-file",
-      "/tmp/cloud-hypervisor-#{vm_id}.log"
+      Path.join(Path.dirname(socket_path), "cloud-hypervisor-#{vm_id}.log")
     ]
 
     port =
@@ -192,14 +192,11 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
     if state.socket_path, do: File.rm(state.socket_path)
     if state.vsock_path, do: File.rm(state.vsock_path)
 
-    # Remove PTY link
+    # Remove PTY link and Cloud Hypervisor log file
     if state.id do
-      File.rm("/tmp/mjolnir-pty-#{state.id}")
-    end
-
-    # Remove Cloud Hypervisor log file
-    if state.id do
-      File.rm("/tmp/cloud-hypervisor-#{state.id}.log")
+      socket_dir = Application.get_env(:mjolnir, :socket_dir, "/tmp/mjolnir")
+      File.rm(Path.join(socket_dir, "pty-#{state.id}"))
+      File.rm(Path.join(socket_dir, "cloud-hypervisor-#{state.id}.log"))
     end
 
     # Delete rootfs subvolume (skipped when state.rootfs_path is nil — the

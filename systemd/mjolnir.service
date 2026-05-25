@@ -1,15 +1,12 @@
 [Unit]
 Description=Mjolnir MicroVM Fabric
-After=network.target local-fs.target mjolnir-loopback.service
+After=network.target local-fs.target
 Requires=local-fs.target
-Wants=mjolnir-loopback.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
 Type=exec
-User=mjolnir
-Group=mjolnir
 WorkingDirectory=/opt/mjolnir
 
 ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir start
@@ -17,39 +14,48 @@ ExecStop=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir stop
 
 EnvironmentFile=/etc/mjolnir/env
 
-# CAP_NET_ADMIN: TAP interfaces, ip-route, nftables
-# CAP_SYS_ADMIN: BTRFS subvolume create/snapshot/delete
-# /dev/kvm and /dev/net/tun are 0666 — no caps needed for those
-AmbientCapabilities=CAP_NET_ADMIN
-PrivateTmp=true
+# --- Filesystem hardening ---
+# strict: /usr, /boot, /efi read-only; only ReadWritePaths are writable
+ProtectSystem=strict
 ProtectHome=true
-ProtectSystem=true
-ReadWritePaths=/var/lib/mjolnir /etc/mjolnir
+ReadWritePaths=/var/lib/mjolnir /etc/mjolnir /etc/systemd/system /tmp/mjolnir /var/run/mjolnir /var/log/mjolnir
 
-RuntimeDirectory=mjolnir
-RuntimeDirectoryMode=0750
+# --- Process constraints ---
+# NoNewPrivileges off: postgres sidecar uses setpriv --reuid to drop to mjolnir_pg
+NoNewPrivileges=no
+# PrivateTmp off: UDS sockets in /tmp/mjolnir shared with CH/virtiofsd child processes
+PrivateTmp=no
+# PrivateMounts off: virtiofsd shares host BTRFS mounts with guest VMs
+PrivateMounts=no
 
-# Allow KVM and TUN explicitly (belt-and-suspenders alongside filesystem perms)
+# --- Kernel protections ---
+# Off: health checks run modprobe kvm/vhost_vsock and sysctl ip_forward at boot
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectControlGroups=true
+
+# --- Device access ---
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
 
+# --- Resource limits ---
+RuntimeDirectory=mjolnir
+RuntimeDirectoryMode=0750
+LimitNOFILE=65536
+
+# --- Lifecycle ---
 # Kill the entire cgroup (VMs, virtiofsd, all child processes) on service stop
 KillMode=control-group
 TimeoutStopSec=30
 
-# Restart on ANY exit (including clean Type=exec stops and SIGKILL). This is
-# the durability contract: if BEAM dies for any reason, systemd brings it
-# back, and Mjolnir.Reconcile rehydrates VMs from /var/lib/mjolnir/state.
-# StartLimitBurst above still caps the restart rate (5 per 60s); if that
-# ceiling is hit, systemd gives up and alerts instead of flapping.
+# Restart on ANY exit. Mjolnir.Reconcile rehydrates VMs from StateStore on boot.
+# StartLimitBurst caps restart rate (5 per 60s); beyond that systemd alerts.
 Restart=always
 RestartSec=5
 
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=mjolnir
-
-LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
