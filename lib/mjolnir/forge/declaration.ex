@@ -32,7 +32,7 @@ defmodule Mjolnir.Forge.Declaration do
 
     quote do
       import Mjolnir.Forge.Declaration,
-        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2]
+        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2, user: 2, ufw_nat: 2]
       Module.register_attribute(__MODULE__, :forge_resources, accumulate: true)
       @forge_host unquote(host)
       @before_compile Mjolnir.Forge.Declaration
@@ -229,6 +229,114 @@ defmodule Mjolnir.Forge.Declaration do
     push =
       quote do
         @forge_resources {Mjolnir.Forge.Resource.AptPackage, unquote(name), content}
+      end
+
+    {:__block__, [], [init] ++ assigns ++ [push]}
+  end
+
+  @doc """
+  Declare a Linux user account.
+
+  Block fields:
+    * `state :present | :absent` — whether the user should exist (default `:present`)
+    * `uid <integer>` — explicit UID (default `nil` = system-assigned)
+    * `shell <binary>` — login shell (default `nil` = system default)
+    * `home <binary>` — home directory path (default `nil` = system default)
+    * `groups [<binary>, ...]` — supplementary groups (default `nil`)
+    * `system true | false` — create as system user (default `false`)
+
+  Example:
+
+      user "mjolnir_pg" do
+        state :present
+        system true
+        shell "/usr/sbin/nologin"
+        home "/nonexistent"
+      end
+  """
+  defmacro user(name, do: block) do
+    stmts =
+      case block do
+        {:__block__, _, list} -> list
+        single -> [single]
+      end
+
+    init =
+      quote do
+        content = %{state: :present, uid: nil, shell: nil, home: nil, groups: nil, system: false}
+      end
+
+    assigns =
+      Enum.map(stmts, fn
+        {field, _meta, [value]} when field in [:state, :uid, :shell, :home, :groups, :system] ->
+          quote do
+            content = Map.put(content, unquote(field), unquote(value))
+          end
+
+        other ->
+          raise CompileError,
+            description:
+              "unsupported call in user/2 block: #{Macro.to_string(other)}. " <>
+                "Allowed: state/uid/shell/home/groups/system."
+      end)
+
+    push =
+      quote do
+        @forge_resources {Mjolnir.Forge.Resource.User, unquote(name), content}
+      end
+
+    {:__block__, [], [init] ++ assigns ++ [push]}
+  end
+
+  @doc """
+  Declare a NAT rule block for `/etc/ufw/before.rules`.
+
+  The block is managed as a marker-delimited section inside before.rules,
+  so multiple `ufw_nat` resources can coexist without clobbering each other.
+
+  Block fields:
+    * `rules <binary>` — the iptables *nat rules (required)
+
+  Example:
+
+      ufw_nat "mjolnir-vm-nat" do
+        rules \"\"\"
+        *nat
+        :POSTROUTING ACCEPT [0:0]
+        -A POSTROUTING -s 10.192.0.0/10 -o enp1s0 -j MASQUERADE
+        COMMIT
+        \"\"\"
+      end
+  """
+  defmacro ufw_nat(id, do: block) do
+    stmts =
+      case block do
+        {:__block__, _, list} -> list
+        single -> [single]
+      end
+
+    init =
+      quote do
+        content = %{rules: nil}
+      end
+
+    assigns =
+      Enum.map(stmts, fn
+        {:rules, _meta, [value]} ->
+          quote do
+            content = Map.put(content, :rules, unquote(value))
+          end
+
+        other ->
+          raise CompileError,
+            description:
+              "unsupported call in ufw_nat/2 block: #{Macro.to_string(other)}. " <>
+                "Allowed: rules."
+      end)
+
+    push =
+      quote do
+        @forge_resources {Mjolnir.Forge.Resource.UfwNat, unquote(id), content}
       end
 
     {:__block__, [], [init] ++ assigns ++ [push]}
