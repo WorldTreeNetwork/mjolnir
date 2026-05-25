@@ -169,7 +169,7 @@ defmodule Mjolnir.Sites.Crypto do
     # row1: [k0, k1, k2, k3]
     # row2: [k4, k5, k6, k7]
     # row3: [n0, n1, n2, n3]
-    {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3} =
+    {a0, a1, a2, a3, _b0, _b1, _b2, _b3, _c0, _c1, _c2, _c3, d0, d1, d2, d3} =
       chacha20_rounds(
         s0, s1, s2, s3,
         k0, k1, k2, k3,

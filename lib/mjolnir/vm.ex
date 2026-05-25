@@ -966,7 +966,7 @@ defmodule Mjolnir.VM do
   defp build_config(opts) do
     %{
       vm_id: opts.id,
-      kernel_path: Application.get_env(:mjolnir, :kernel_path),
+      kernel_path: Application.get_env(:mjolnir, :ch_kernel_path),
       # Set during boot
       rootfs_path: "",
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),

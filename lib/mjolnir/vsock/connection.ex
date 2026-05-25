@@ -2,8 +2,8 @@ defmodule Mjolnir.Vsock.Connection do
   @moduledoc """
   Manages vsock connection to a guest VM.
 
-  vsock uses Unix domain sockets on the host side, where the hypervisor
-  (Cloud Hypervisor or Firecracker) acts as a proxy to the guest's vsock device.
+  vsock uses Unix domain sockets on the host side, where Cloud Hypervisor
+  acts as a proxy to the guest's vsock device.
   """
 
   use GenServer

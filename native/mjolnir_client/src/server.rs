@@ -17,8 +17,6 @@ pub enum ServerCommand {
         /// SSH host (user@ip). Uses profile host if not specified.
         host: Option<String>,
         #[arg(long)]
-        skip_firecracker: bool,
-        #[arg(long)]
         use_loopback: bool,
         #[arg(long)]
         skip_rootfs: bool,
@@ -103,7 +101,6 @@ pub fn run(cmd: ServerCommand, profile: &Profile) -> Result<()> {
 
         ServerCommand::Setup {
             host: host_override,
-            skip_firecracker,
             use_loopback,
             skip_rootfs,
         } => {
@@ -111,7 +108,6 @@ pub fn run(cmd: ServerCommand, profile: &Profile) -> Result<()> {
             cmd_setup(
                 &effective_host,
                 profile,
-                skip_firecracker,
                 use_loopback,
                 skip_rootfs,
             )
@@ -222,7 +218,6 @@ fn walk_up_for_project(start: &std::path::Path, max_levels: usize) -> Option<Pat
 fn cmd_setup(
     host: &str,
     profile: &Profile,
-    skip_firecracker: bool,
     use_loopback: bool,
     skip_rootfs: bool,
 ) -> Result<()> {
@@ -265,9 +260,6 @@ fn cmd_setup(
 
     // Build environment variable prefix for the bootstrap script.
     let mut env_parts = Vec::new();
-    if skip_firecracker {
-        env_parts.push("SKIP_FIRECRACKER=1");
-    }
     if use_loopback {
         env_parts.push("USE_LOOPBACK=1");
     }

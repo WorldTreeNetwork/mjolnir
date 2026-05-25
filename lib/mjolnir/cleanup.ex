@@ -9,7 +9,7 @@ defmodule Mjolnir.Cleanup do
 
   require Logger
 
-  @hypervisor_process_names ["firecracker", "cloud-hypervisor", "virtiofsd"]
+  @hypervisor_process_names ["cloud-hypervisor", "virtiofsd"]
 
   def sweep do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
@@ -58,11 +58,6 @@ defmodule Mjolnir.Cleanup do
 
   defp parse_hypervisor_process(line) do
     cond do
-      # Firecracker: --id <vm_id>
-      match = Regex.run(~r/^\s*(\d+)\s+\d+\s+.*--id\s+(\S+)/, line) ->
-        [_, pid, vm_id] = match
-        {String.to_integer(pid), vm_id}
-
       # Cloud Hypervisor: --api-socket /path/<uuid>.sock
       match =
           Regex.run(

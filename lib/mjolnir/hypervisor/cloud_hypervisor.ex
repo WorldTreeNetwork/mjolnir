@@ -6,14 +6,8 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
 
   Cloud Hypervisor is a modern, lightweight VMM built in Rust, focused on
   running cloud workloads with minimal overhead. It supports virtio-vsock
-  for host-guest communication and provides a REST API over Unix sockets.
-
-  ## Key Differences from Firecracker
-
-  - Single `vm.create` call with full config vs. Firecracker's multi-step PUT sequence
-  - Binary name: `cloud-hypervisor` vs. `firecracker`
-  - Vsock socket path: `{socket_dir}/{vm_id}_vsock` (CH convention)
-  - Supports virtio-fs for shared filesystem access (future use)
+  for host-guest communication, virtio-fs for shared filesystem access,
+  and provides a REST API over Unix sockets.
 
   Pinned to Cloud Hypervisor v50.0.
   """
@@ -48,14 +42,6 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
 
   @impl true
   def configure_vm(socket_path, config) do
-    # Use CH-specific kernel if configured (CH needs PVH boot support)
-    ch_kernel = Application.get_env(:mjolnir, :ch_kernel_path)
-
-    config =
-      if ch_kernel && File.exists?(ch_kernel),
-        do: Map.put(config, :kernel_path, ch_kernel),
-        else: config
-
     # Use initramfs if configured (two-phase boot: initramfs → virtiofs rootfs)
     # Boot args must omit root=/rootfstype= when initramfs handles mounting (TC6)
     config =

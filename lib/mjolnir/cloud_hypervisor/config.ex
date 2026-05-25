@@ -2,8 +2,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
   @moduledoc """
   Builds Cloud Hypervisor VM configuration.
 
-  Cloud Hypervisor uses a single unified configuration payload for `vm.create`,
-  unlike Firecracker's separate endpoint approach.
+  Cloud Hypervisor uses a single unified configuration payload for `vm.create`.
 
   Uses virtio-fs for rootfs sharing (via virtiofsd) instead of virtio-blk disk images.
   The virtio-fs tag `myfs` is used consistently across CH config, boot_args, and guest fstab.

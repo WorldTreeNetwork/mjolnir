@@ -73,7 +73,7 @@ defmodule Mjolnir.API.SitesRouterTest do
   end
 
   # Build a *signed* HEAD record serialized to bytes.
-  defp signed_head_bytes(keypair, manifest_bytes, fp, name \\ "blog", seq \\ 1) do
+  defp signed_head_bytes(keypair, manifest_bytes, fp, name, seq) do
     head = %HeadRecord{
       version: 1,
       identikey_fp: fp,
@@ -337,7 +337,7 @@ defmodule Mjolnir.API.SitesRouterTest do
     assert Jason.decode!(conn.resp_body)["ok"] == true
   end
 
-  test "PUT alias rejects identikey mismatch", %{keypair: kp, fp: fp} do
+  test "PUT alias rejects identikey mismatch", %{keypair: _kp, fp: fp} do
     other_kp = IdentiKey.gen_keypair()
     other_fp = IdentiKey.fingerprint(other_kp)
     :ok = SecretStore.put(other_fp, "identity/pubkey",

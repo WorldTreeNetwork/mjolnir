@@ -204,7 +204,7 @@ defmodule Mjolnir.Sites.Publisher do
     end
   end
 
-  defp post_head(base_url, fp, name, snapshot_hash, sequence, keypair \\ nil) do
+  defp post_head(base_url, fp, name, snapshot_hash, sequence, keypair) do
     unsigned_head = %HeadRecord{
       version: 1,
       identikey_fp: fp,

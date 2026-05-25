@@ -3,9 +3,7 @@ defmodule Mjolnir.Hypervisor do
   Behaviour defining the hypervisor abstraction layer for Mjolnir.
 
   This module provides a pluggable interface for different hypervisor backends.
-  Cloud Hypervisor is the default and actively used implementation. Firecracker
-  support is retained but deprecated (it lacks virtio-fs, which is required for
-  the current BTRFS subvolume + virtio-fs storage architecture).
+  Cloud Hypervisor is the sole implementation.
 
   ## Configuration
 
@@ -39,7 +37,7 @@ defmodule Mjolnir.Hypervisor do
     - `:vm_id` - VM identifier
     - `:socket_path` - API socket path
     - `:serial_path` - Serial console path (optional)
-    - `:cloud_hypervisor_bin` or `:firecracker_bin` - Path to hypervisor binary
+    - `:cloud_hypervisor_bin` - Path to hypervisor binary
     - `:wrapper_script` - Path to console wrapper script (optional)
 
   ## Returns
@@ -177,7 +175,7 @@ defmodule Mjolnir.Hypervisor do
 
   ## Returns
 
-  - Process name string (e.g., "cloud-hypervisor", "firecracker")
+  - Process name string (e.g., "cloud-hypervisor")
   """
   @callback process_name() :: String.t()
 

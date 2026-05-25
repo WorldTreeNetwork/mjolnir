@@ -7,7 +7,7 @@ config :logger, level: :info
 config :mjolnir,
   # Shared resources (read-only, installed by bootstrap)
   btrfs_root: "/var/lib/mjolnir/btrfs",
-  kernel_path: "/var/lib/mjolnir/vmlinux",
+  ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",
 
   # Dev-specific paths (isolated from prod)
   vm_storage_subdir: "@vms-dev",

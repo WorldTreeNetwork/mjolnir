@@ -21,7 +21,6 @@ defmodule Mjolnir.CleanupTest do
       names = Cleanup.hypervisor_process_names()
       assert "virtiofsd" in names
       assert "cloud-hypervisor" in names
-      assert "firecracker" in names
     end
   end
 

@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # This script:
 # 1. Checks system suitability (KVM, architecture, etc.)
-# 2. Installs all dependencies (Erlang, Elixir, Rust, Firecracker, Cloud Hypervisor)
+# 2. Installs all dependencies (Erlang, Elixir, Rust, Cloud Hypervisor)
 # 3. Clones and compiles Mjolnir
 # 4. Sets up BTRFS storage
 # 5. Builds guest agent and rootfs
@@ -29,7 +29,6 @@ set -euo pipefail
 #   MJOLNIR_BRANCH       - Git branch (default: main)
 #   SKIP_BTRFS           - Set to 1 to skip BTRFS setup (use existing)
 #   SKIP_ROOTFS          - Set to 1 to skip rootfs build
-#   SKIP_FIRECRACKER     - Set to 1 to skip Firecracker installation (CH-only setup)
 
 # =============================================================================
 # Configuration
@@ -37,7 +36,6 @@ set -euo pipefail
 
 MJOLNIR_ROOT="/var/lib/mjolnir"
 MJOLNIR_CODE="/opt/mjolnir"
-FC_VERSION="1.5.0"
 CH_VERSION="50.0"
 # Minimum versions (used for validation)
 MIN_ELIXIR_VERSION="1.15"
@@ -338,36 +336,6 @@ install_rust() {
     fi
 
     log_success "Rust ready: $(rustc --version)"
-}
-
-install_firecracker() {
-    log_section "Installing Firecracker"
-
-    # Check if already installed with correct version
-    if command -v firecracker &>/dev/null; then
-        local current_fc
-        current_fc=$(firecracker --version 2>/dev/null | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+' || echo "0")
-        if [[ "$current_fc" == "$FC_VERSION" ]]; then
-            log_success "Firecracker v$current_fc already installed"
-            return 0
-        fi
-    fi
-
-    local arch
-    arch=$(uname -m)
-
-    local url="https://github.com/firecracker-microvm/firecracker/releases/download/v${FC_VERSION}/firecracker-v${FC_VERSION}-${arch}.tgz"
-
-    log_info "Downloading Firecracker v${FC_VERSION}..."
-    curl -L "$url" | tar xz -C /tmp
-
-    mv "/tmp/release-v${FC_VERSION}-${arch}/firecracker-v${FC_VERSION}-${arch}" /usr/local/bin/firecracker
-    mv "/tmp/release-v${FC_VERSION}-${arch}/jailer-v${FC_VERSION}-${arch}" /usr/local/bin/jailer
-
-    chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer
-    rm -rf "/tmp/release-v${FC_VERSION}-${arch}"
-
-    log_success "Firecracker installed: $(firecracker --version)"
 }
 
 install_cloud_hypervisor() {
@@ -1151,12 +1119,6 @@ main() {
     install_base_packages
     install_erlang_elixir
     install_rust
-
-    if [[ "${SKIP_FIRECRACKER:-0}" != "1" ]]; then
-        install_firecracker
-    else
-        log_info "Skipping Firecracker installation (SKIP_FIRECRACKER=1)"
-    fi
 
     install_cloud_hypervisor
 

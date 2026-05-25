@@ -3,9 +3,8 @@ defmodule Mjolnir.CloudHypervisor.Client do
   HTTP client for Cloud Hypervisor's Unix socket API.
 
   Cloud Hypervisor (v50.0) exposes a REST API over a Unix domain socket.
-  Unlike Firecracker's multi-step configuration, Cloud Hypervisor uses a
-  single `vm.create` call with the full VM configuration, then `vm.boot`
-  to start the instance.
+  A single `vm.create` call sends the full VM configuration, then `vm.boot`
+  starts the instance.
 
   ## API Reference
 
