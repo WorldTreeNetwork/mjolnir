@@ -136,7 +136,7 @@ defmodule Mjolnir.Forge.Host do
   end
 
   defp select_for_apply(entries, :all_safe) do
-    Enum.filter(entries, &(&1.status in [:new, :drifted, :missing, :prune]))
+    Enum.filter(entries, &(&1.status in [:new, :drifted, :missing, :prune, :converged]))
   end
 
   defp select_for_apply(entries, keys) when is_list(keys) do
@@ -188,6 +188,28 @@ defmodule Mjolnir.Forge.Host do
       err ->
         {{kind, id}, err}
     end
+  end
+
+  # Adopt without side-effects: declared == observed but no owned record yet.
+  defp apply_entry(%{status: :converged, kind: kind, id: id, declared_hash: hash}, %{host: host}) do
+    now = DateTime.utc_now()
+
+    record =
+      case Store.get(host, kind.kind(), id) do
+        {:ok, r} -> %{r | owned_hash: hash, applied_at: now, status: :converged}
+        :not_found ->
+          Record.new(host, kind.kind(), id,
+            status: :converged,
+            declared_hash: hash,
+            owned_hash: hash,
+            observed_hash: hash,
+            applied_at: now,
+            observed_at: now
+          )
+      end
+
+    _ = Store.put(record)
+    {{kind, id}, :ok}
   end
 
   defp apply_entry(%{kind: kind, id: id, status: status}, _state) do
