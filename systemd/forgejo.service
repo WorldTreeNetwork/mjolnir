@@ -1,0 +1,27 @@
+[Unit]
+Description=Forgejo (Worldtree self-hosted git)
+After=syslog.target network.target
+Requires=network.target
+
+[Service]
+Type=notify
+User=git
+Group=git
+WorkingDirectory=/var/lib/forgejo
+ExecStart=/usr/local/bin/forgejo web --config /etc/forgejo/app.ini
+Restart=always
+RestartSec=2s
+Environment=USER=git HOME=/home/git FORGEJO_WORK_DIR=/var/lib/forgejo
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/forgejo
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

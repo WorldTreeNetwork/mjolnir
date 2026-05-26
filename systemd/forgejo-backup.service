@@ -1,0 +1,11 @@
+[Unit]
+Description=Forgejo → Backblaze B2 backup
+After=network-online.target forgejo.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/forgejo-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
