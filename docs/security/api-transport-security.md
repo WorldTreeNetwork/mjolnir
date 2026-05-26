@@ -1,6 +1,6 @@
 # API Transport Security
 
-This guide covers Mjolnir's HTTP API authentication, authorization, and secure transport patterns.
+This guide covers Mjolnir's HTTP API authentication, authorization, and secure transport patterns — including known limitations and security considerations.
 
 ## Architecture Overview
 
@@ -10,40 +10,30 @@ This guide covers Mjolnir's HTTP API authentication, authorization, and secure t
 │ (your Mac)  │
 └──────┬──────┘
        │
-       │ SSH tunnel (encrypted)
+       │ SSH tunnel (encrypted transport)
        │ ssh root@server "curl http://localhost:4000/..."
        │
        ▼
-   ┌────────────────────────────────┐
-   │  Server (Mjolnir @ 45.76...)   │
-   │                                 │
-   │  ┌──────────────────────┐       │
-   │  │ Mjolnir HTTP API     │       │
-   │  │ localhost:4000       │       │
-   │  │ (no TLS)             │       │
-   │  │ ├─ JWT auth (remote) │       │
-   │  │ └─ localhost bypass  │       │
-   │  └──────────────────────┘       │
-   │           │                     │
-   │           ▼                     │
-   │  ┌──────────────────────┐       │
-   │  │ Mjolnir VM Mgmt      │       │
-   │  │ (spawn, exec, stop)  │       │
-   │  └──────────────────────┘       │
-   └────────────────────────────────┘
+   ┌────────────────────────────────────┐
+   │  Server (Mjolnir @ 45.76...)       │
+   │                                     │
+   │  ┌──────────────────────────┐       │
+   │  │ Mjolnir HTTP API         │       │
+   │  │ localhost:4000           │       │
+   │  │ (NO TLS — relies on SSH) │       │
+   │  │ ├─ JWT auth (optional)   │       │
+   │  │ └─ localhost bypass      │       │
+   │  └──────────────────────────┘       │
+   └────────────────────────────────────┘
 ```
 
-The API is **HTTP-only, localhost-bound**. All remote access must use SSH tunneling. This design ensures:
-- No TLS overhead for localhost calls
-- Impossible to accidentally expose API to internet
-- SSH key infrastructure provides transport security
-- Simpler auth (JWT optional if using SSH)
+The API is **HTTP-only, localhost-bound**. All remote access must use SSH tunneling. This design ensures the API cannot be accidentally exposed to the internet, but introduces security trade-offs (see "Security Limitations" below).
 
 ## Authentication Methods
 
 ### 1. JWT Bearer Token (Remote Access)
 
-For clients connecting via SSH tunnel or from untrusted networks, use JWT:
+For clients connecting via SSH tunnel, use JWT:
 
 ```bash
 # Get a token (production: use OIDC issuer)
@@ -60,6 +50,7 @@ ssh root@server "curl -H 'Authorization: Bearer $TOKEN' \
 - **Issuer**: Configurable via `MJOLNIR_AUTH_ISSUER` environment variable
 - **Verification**: `lib/mjolnir/auth/token.ex` validates signature and `sub` (subject/user ID)
 - **Scopes**: Token claims include `scope` field (currently unused; all authenticated users get full access)
+- **Expiry**: Currently NOT enforced (⚠️ TODO: add `exp` claim validation)
 
 **Justfile integration**:
 ```bash
@@ -86,10 +77,7 @@ curl http://localhost:4000/api/vms | jq .
 config :mjolnir, :auth, bypass_localhost: true  # ONLY for trusted localhost SSH
 ```
 
-**Security note**: Localhost bypass is safe if:
-- SSH server uses key auth (no password login)
-- SSH access is restricted to trusted users
-- SSH tunnels are not forwarded (`ssh -N`, no shell)
+⚠️ **SECURITY WARNING**: See "Security Limitations" section below.
 
 ### 3. Health Endpoint (No Auth)
 
@@ -155,67 +143,132 @@ ssh root@45.76.77.97 "curl -X POST http://localhost:4000/api/vms ..."
 
 3. **SSH key authentication**: No passwords; keypair-based auth to server
 
-### Security Properties
+### Security Properties & Limitations
 
-✅ **Encrypted in transit**: SSH tunneling encrypts all API traffic
-✅ **No API exposure**: API never leaves localhost
+✅ **Encrypted in transit**: SSH tunneling encrypts HTTP traffic at the transport layer
+✅ **No API exposure**: API never leaves localhost on the server
 ✅ **Key-based auth**: SSH keys are per-server, can be rotated
-✅ **Audit trail**: SSH logs show which user ran which command
 
-❌ **Limited to SSH keys**: If SSH key is compromised, attacker has full API access
-❌ **No per-VM granularity**: SSH access = full Mjolnir access (unless JWT auth is layered)
+⚠️ **SSH Key Compromise = Full API Access**: If an attacker obtains your SSH private key (`~/.ssh/mjolnir_45.76.77.97`), they have unrestricted access to **all API endpoints** and can manage **all VMs**.
 
-## Tokens & Key Management
+⚠️ **No Application-Level Encryption**: The HTTP layer itself is unencrypted. If the SSH tunnel is compromised or misconfigured, JWT tokens are exposed as plaintext.
 
-### JWT Token Lifecycle
+⚠️ **Tunnel Misconfiguration Risk**: SSH forwarding can expose the API if misused:
+   ```bash
+   # ❌ DANGEROUS: Remote forwarding exposes API on bastion
+   ssh -R 8000:localhost:4000 bastion
+   # Now bastion users can: curl http://localhost:8000/api/vms
+   
+   # ❌ DANGEROUS: Agent forwarding allows hijacking
+   ssh -A bastion
+   # Attacker on bastion can hijack SSH agent, access production
+   ```
 
+## Security Limitations
+
+### Critical Limitation 1: SSH Key is the Only Barrier
+
+**What this means:**
+- Entire security model depends on SSH private key (`~/.ssh/mjolnir_*`)
+- No secondary authentication (MFA, OTP, etc.)
+- Compromised key = unrestricted API access
+
+**Attacks:**
+1. **Key Theft** — GitHub commit, laptop theft, CI/CD exposure
+2. **Key Exposure** — Stored in plaintext in `~/.ssh`, `.env`, `.bashrc`
+3. **Supply Chain** — CI/CD pipelines contain deploy keys
+4. **Shared Keys** — Team members use same key (no per-user audit)
+
+**Mitigation:**
+- Use unique SSH keys per operator (not shared team keys)
+- Rotate SSH keys monthly, immediately on suspected compromise
+- Store keys with restricted permissions (`chmod 600`)
+- Never commit keys to version control
+- Use SSH passphrases or passkeys (hardware tokens)
+- Never use SSH agent forwarding with production access
+
+### Critical Limitation 2: No TLS on the API Itself
+
+**What this means:**
+- API accepts HTTP (not HTTPS)
+- JWT bearer tokens are sent in plaintext over the HTTP channel
+- SSH tunnel provides the only encryption
+
+**Risk scenario:**
 ```
-1. Issue (at auth issuer)
-   │
-   ├─ User authenticates (OIDC, email, etc.)
-   └─ Issuer signs JWT with private key
-      
-2. Use (in curl)
-   │
-   └─ Client includes token in Authorization header
-      
-3. Verify (at Mjolnir API)
-   │
-   └─ API verifies signature with issuer's public key
-      └─ If valid, extract user_id and grant access
+1. Operator accidentally sets up remote forwarding: ssh -R 8000:localhost:4000 bastion
+   (intended as temporary, forgotten)
+2. Attacker on bastion or bastion network can:
+   curl http://localhost:8000/api/vms -H "Authorization: Bearer $JWT"
+3. JWT token is visible in plaintext HTTP traffic
+4. If token doesn't have short expiry, attacker has persistent access
 ```
 
-**Token expiry**: Not currently enforced (TODO: add exp claim validation)
-**Token rotation**: Issue new token on each auth; old tokens still valid until exp
+**Mitigation:**
+- Implement TLS on the API itself (even self-signed for internal use)
+- Use short-lived tokens (exp claim, < 1 hour validity)
+- Never use remote SSH forwarding (-R flag)
+- Never use SSH agent forwarding (-A flag)
 
-**Justfile token injection**:
-```bash
-# If $MJOLNIR_TOKEN is set, use it automatically
-export MJOLNIR_TOKEN="eyJhbGc..."
-just vm-spawn  # Injects token in Authorization header
+### Critical Limitation 3: No Per-Request Audit Trail
+
+**What this means:**
+- All SSH tunnel requests appear as `user_id="localhost"` in logs
+- No automatic recording of WHO made WHICH API call
+- Hard to detect unauthorized access after the fact
+
+**Example:**
+```
+SSH tunnel: ssh -i ~/.ssh/mjolnir root@45.76.77.97
+Inside tunnel: curl http://localhost:4000/api/vms
+Log entry: {"user_id": "localhost", "action": "vms:read", ...}
+           ↑ No indication of which SSH user issued this
 ```
 
-### SSH Key Management
+**Mitigation:**
+- Extract user from JWT claims and log it
+- Audit SSH command history (`~/.bash_history`, `syslog`)
+- Monitor `/var/log/auth.log` for SSH connections
+- Use SSH command wrapper to log all curl calls
 
-**Per-server**: Create unique SSH keys for each Mjolnir server
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/mjolnir_45.76.77.97 -C "mjolnir"
-# Add public key to ~/.ssh/authorized_keys on server
-ssh -i ~/.ssh/mjolnir_45.76.77.97 root@45.76.77.97
+### Critical Limitation 4: Localhost Bypass is Dangerous
+
+**What this means:**
+```elixir
+config :mjolnir, :auth, bypass_localhost: true
 ```
 
-**Justfile config** (`.env` file):
-```
-MJOLNIR_HOST=root@45.76.77.97
-```
+When enabled:
+- **Anyone who can SSH to the server** (legitimate ops + attackers with stolen key) gets **FULL API ACCESS**
+- **No JWT token required**
+- **No audit trail** of which user issued which command (all appear as "localhost")
 
-Justfile uses `ssh` from your shell, so it respects `~/.ssh/config`:
-```ssh-config
-Host mjolnir-prod
-    HostName 45.76.77.97
-    User root
-    IdentityFile ~/.ssh/mjolnir_45.76.77.97
-```
+**Risk scenarios:**
+1. **Attacker with stolen SSH key**: Can run `curl http://localhost:4000/api/vms` without needing JWT
+2. **Accidental exposure**: Bypass left enabled "temporarily" but never removed
+3. **Privilege escalation**: Non-root attacker gains root SSH access, then uses API
+4. **CI/CD compromise**: Deploy script has bypass enabled + SSH key in CI environment
+
+**Mitigation:**
+- **NEVER enable in production**
+- If you MUST enable for emergency access:
+  1. Document WHY, WHO, and FOR HOW LONG
+  2. Disable immediately after use
+  3. Audit all API calls made during the window (`grep localhost /var/log/mjolnir/api.log`)
+  4. Rotate SSH keys after emergency access
+- Do NOT store `bypass_localhost: true` in `config/prod.exs`
+
+### Additional Limitation 5: No Rate Limiting
+
+**What this means:**
+- No per-user rate limits on API calls
+- No per-IP rate limits
+- Brute force is theoretically unchecked (though JWT requirement helps)
+
+**Mitigation:**
+- Rely on SSH key security (per Limitation 1)
+- Implement rate limiting at the HTTP server layer if needed
+- Monitor API access logs for unusual patterns
 
 ## Request/Response Security
 
@@ -262,6 +315,101 @@ Example response:
   "memory_mb": 1024
 }
 ```
+
+## Best Practices
+
+### SSH Key Management
+
+1. **Generate unique keys per server**
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/mjolnir_45.76.77.97 -C "mjolnir"
+   ```
+
+2. **Restrict key permissions**
+   ```bash
+   chmod 600 ~/.ssh/mjolnir_45.76.77.97
+   ```
+
+3. **Use passphrases or hardware keys**
+   ```bash
+   # Generate with passphrase prompt
+   ssh-keygen -t ed25519 -f ~/.ssh/mjolnir_45.76.77.97
+   ```
+
+4. **Rotate monthly**
+   ```bash
+   # Generate new key
+   ssh-keygen -t ed25519 -f ~/.ssh/mjolnir_45.76.77.97_new
+   # Add public key to server authorized_keys
+   # Test new key
+   # Remove old key from server authorized_keys
+   # Delete old private key
+   rm ~/.ssh/mjolnir_45.76.77.97_old
+   ```
+
+5. **Monitor SSH access**
+   ```bash
+   # On server, watch for unauthorized connections
+   tail -f /var/log/auth.log | grep "Accepted publickey"
+   ```
+
+### Token Management
+
+1. **Use short expiry times**
+   ```bash
+   # Request token with < 1 hour validity
+   # Implement automatic refresh
+   ```
+
+2. **Don't store tokens in shell environment**
+   ```bash
+   # ❌ Bad: stored in ~/.bashrc, visible with `env`
+   export MJOLNIR_TOKEN="eyJ..."
+   
+   # ✅ Better: pass as argument, use credential files with restricted permissions
+   just --set MJOLNIR_TOKEN vm-spawn
+   ```
+
+3. **Use temporary files with restricted access**
+   ```bash
+   TOKEN=$(curl -X POST ... | jq -r .access_token)
+   # Keep in memory, pass to SSH command
+   ssh -i ~/.ssh/mjolnir root@server \
+     "curl -H 'Authorization: Bearer $TOKEN' http://localhost:4000/api/vms"
+   ```
+
+### SSH Best Practices
+
+1. **Never use agent forwarding**
+   ```bash
+   # ❌ DANGEROUS
+   ssh -A root@bastion
+   
+   # ✅ Safe
+   ssh -i ~/.ssh/mjolnir root@45.76.77.97
+   ```
+
+2. **Never use remote forwarding**
+   ```bash
+   # ❌ DANGEROUS (exposes API on remote host)
+   ssh -R 8000:localhost:4000 bastion
+   
+   # ✅ Safe (local-only)
+   ssh -L 8000:localhost:4000 root@45.76.77.97
+   # Then: curl http://localhost:8000/api/vms (on your Mac)
+   ```
+
+3. **Restrict SSH access in ~/.ssh/config**
+   ```ssh-config
+   Host mjolnir-prod
+     HostName 45.76.77.97
+     User root
+     IdentityFile ~/.ssh/mjolnir_45.76.77.97
+     IdentitiesOnly yes          # Only try specified key
+     AddKeysToAgent no           # Don't add to SSH agent
+     StrictHostKeyChecking yes   # Reject unknown hosts
+     UserKnownHostsFile ~/.ssh/mjolnir_known_hosts
+   ```
 
 ## Common Patterns
 
@@ -336,9 +484,34 @@ systemctl status mjolnir
 systemctl restart mjolnir
 ```
 
+## Security Roadmap
+
+### Near Term (Recommended)
+
+- [ ] **Token Expiry Enforcement** — Validate JWT `exp` claim
+- [ ] **Per-Request Logging** — Extract user from JWT and log it
+- [ ] **SSH Passphrase Support** — Prompt for passphrases, don't store in memory
+- [ ] **SSH Key Rotation Automation** — Tooling to rotate keys monthly
+
+### Medium Term
+
+- [ ] **TLS on API itself** — Self-signed certs for internal use, or mutual TLS
+- [ ] **Request Signing** — Cryptographic signatures on API calls (in addition to JWT)
+- [ ] **Rate Limiting** — Per-user and per-IP rate limits
+- [ ] **Audit Logging** — Centralized, tamper-proof audit trail
+
+### Long Term
+
+- [ ] **Centralized Auth** — OAuth2 / OIDC for multi-user, revocation without key rotation
+- [ ] **mTLS** — Mutual TLS between clients and API
+- [ ] **API Gateway** — Separate gateway for TLS termination, rate limiting, etc.
+- [ ] **Hardware MFA** — FIDO2 keys for operator authentication
+
 ## References
 
 - `lib/mjolnir/api/auth.ex` — Auth plug implementation
 - `lib/mjolnir/api/router.ex` — Endpoint definitions
 - `lib/mjolnir/policy/` — Authorization policies
 - [OWASP API Security](https://owasp.org/www-project-api-security/)
+- [SSH Best Practices](https://man.openbsd.org/ssh_config)
+- [JWT Best Practices](https://tools.ietf.org/html/rfc8949)
