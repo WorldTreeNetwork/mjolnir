@@ -18,7 +18,7 @@ EnvironmentFile=/etc/mjolnir/env
 # strict: /usr, /boot, /efi read-only; only ReadWritePaths are writable
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/mjolnir /etc/mjolnir /etc/systemd/system /tmp/mjolnir /var/run/mjolnir /var/log/mjolnir
+ReadWritePaths=/var/lib/mjolnir /etc/mjolnir /etc/systemd/system /etc/ufw /etc/sysctl.d /tmp/mjolnir /var/run/mjolnir /var/log/mjolnir
 
 # --- Process constraints ---
 # NoNewPrivileges off: postgres sidecar uses setpriv --reuid to drop to mjolnir_pg
