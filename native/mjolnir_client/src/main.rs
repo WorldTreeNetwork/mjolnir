@@ -408,6 +408,24 @@ enum ForgeCmd {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    /// Show or follow the reconciliation event/audit feed
+    Events {
+        /// Follow live events (SSE stream) instead of printing a snapshot
+        #[arg(long)]
+        tail: bool,
+        /// Resume cursor — only events after this id
+        #[arg(long)]
+        since: Option<String>,
+        /// Max events to show in snapshot mode (ignored with --tail)
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Manage forge hosts
     Hosts {
         #[command(subcommand)]
@@ -630,6 +648,19 @@ async fn main() {
                 api,
                 token,
             } => forge::state(api, token, host, kind, status, &profile).await,
+            ForgeCmd::Events {
+                tail,
+                since,
+                limit,
+                api,
+                token,
+            } => {
+                if tail {
+                    forge::events_tail(api, token, since, &profile).await
+                } else {
+                    forge::events(api, token, since, limit, &profile).await
+                }
+            }
             ForgeCmd::Hosts { cmd } => match cmd {
                 HostsCmd::List { api, token } => forge::hosts_list(api, token, &profile).await,
                 HostsCmd::Add {

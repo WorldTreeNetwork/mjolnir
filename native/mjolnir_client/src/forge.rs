@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::io::Write;
+use std::time::Duration;
 
 use crate::config::Profile;
 
@@ -420,4 +421,176 @@ pub async fn state(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// events — audit feed + live SSE tail
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+pub struct ForgeEvent {
+    pub id: Option<i64>,
+    pub ts: String,
+    pub host: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub kind: Option<String>,
+    pub resource_id: Option<String>,
+    pub status: Option<String>,
+    #[serde(default)]
+    pub detail: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct EventsResponse {
+    pub events: Vec<ForgeEvent>,
+}
+
+fn color_for_type(t: &str) -> &'static str {
+    match t {
+        "probe" => "\x1b[2m",   // dim
+        "drift" => "\x1b[33m",  // yellow
+        "apply" => "\x1b[32m",  // green
+        "adopt" => "\x1b[36m",  // cyan
+        "ignore" => "\x1b[34m", // blue
+        _ => "\x1b[0m",
+    }
+}
+
+fn print_event(e: &ForgeEvent) {
+    let resource = match (&e.kind, &e.resource_id) {
+        (Some(k), Some(id)) => format!("{}/{}", k, id),
+        _ => String::new(),
+    };
+    let status = e.status.as_deref().unwrap_or("");
+    println!(
+        "{} {}{:<7}{} {:<14} {:<28} {}",
+        e.ts,
+        color_for_type(&e.event_type),
+        e.event_type,
+        RESET,
+        e.host,
+        resource,
+        status,
+    );
+}
+
+/// Print recent audit events (most recent `limit`, or everything after `since`).
+pub async fn events(
+    api: Option<String>,
+    token: Option<String>,
+    since: Option<String>,
+    limit: Option<u32>,
+    profile: &Profile,
+) -> Result<()> {
+    let client = crate::api::api_client(&token).await;
+    let base = crate::config::resolve_api(&api, profile);
+    let base = base.trim_end_matches('/');
+
+    let mut query: Vec<(&str, String)> = Vec::new();
+    if let Some(ref s) = since {
+        query.push(("since", s.clone()));
+    }
+    if let Some(l) = limit {
+        query.push(("limit", l.to_string()));
+    }
+
+    let resp: EventsResponse = client
+        .get(format!("{}/api/forge/events", base))
+        .query(&query)
+        .send()
+        .await
+        .context("failed to fetch forge events")?
+        .error_for_status()
+        .context("forge events request failed")?
+        .json()
+        .await
+        .context("failed to parse forge events response")?;
+
+    if resp.events.is_empty() {
+        eprintln!("No events.");
+        return Ok(());
+    }
+
+    for e in &resp.events {
+        print_event(e);
+    }
+
+    Ok(())
+}
+
+/// Follow the live SSE stream, printing frames as they arrive. Reconnects from
+/// the last-seen cursor on disconnect. Runs until interrupted (Ctrl-C).
+pub async fn events_tail(
+    api: Option<String>,
+    token: Option<String>,
+    since: Option<String>,
+    profile: &Profile,
+) -> Result<()> {
+    use futures_util::StreamExt;
+
+    let client = crate::api::api_client(&token).await;
+    let base = crate::config::resolve_api(&api, profile);
+    let base = base.trim_end_matches('/');
+
+    let mut cursor = since;
+
+    loop {
+        let mut req = client.get(format!("{}/api/forge/events/stream", base));
+        if let Some(ref c) = cursor {
+            req = req.query(&[("since", c)]);
+        }
+
+        let resp = match req.send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("stream connect failed: {e}; retrying in 2s");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        let mut stream = resp.bytes_stream();
+        let mut buf = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("stream read error: {e}");
+                    break;
+                }
+            };
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+
+            // SSE frames are separated by a blank line ("\n\n").
+            while let Some(idx) = buf.find("\n\n") {
+                let frame: String = buf.drain(..idx + 2).collect();
+                if let Some(event) = parse_sse_frame(&frame, &mut cursor) {
+                    print_event(&event);
+                }
+            }
+        }
+
+        eprintln!("stream ended; reconnecting in 2s...");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Parse one SSE frame. Updates `cursor` from the `id:` line and returns the
+/// decoded event from the `data:` line. Comment frames (heartbeats) yield None.
+fn parse_sse_frame(frame: &str, cursor: &mut Option<String>) -> Option<ForgeEvent> {
+    let mut data: Option<&str> = None;
+
+    for line in frame.lines() {
+        if let Some(rest) = line.strip_prefix("id:") {
+            *cursor = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("data:") {
+            data = Some(rest.trim());
+        }
+        // Lines starting with ':' (comments/keepalives) and 'event:' are ignored.
+    }
+
+    data.and_then(|d| serde_json::from_str::<ForgeEvent>(d).ok())
 }

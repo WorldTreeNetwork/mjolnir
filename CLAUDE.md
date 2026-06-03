@@ -196,18 +196,21 @@ Mjolnir.Supervisor (one_for_one)
 
 ### Forge — Host Config Reconciler (`lib/mjolnir/forge/`)
 
-Declarative host configuration with three-way diff (declared/owned/observed), ownership tracking that makes prune first-class, and a JSON-per-record + ETS store mirroring `Mjolnir.StateStore`. Design: `docs/plans/host-reconcile.md`. v0 supports `systemd_unit` and `file` kinds, `:local` transport only (SSH stubbed).
+Declarative host configuration with three-way diff (declared/owned/observed), ownership tracking that makes prune first-class, and a JSON-per-record + ETS store mirroring `Mjolnir.StateStore`. Design: `docs/plans/host-reconcile.md`. Resource kinds: `systemd_unit`, `file`, `sysctl`, `apt_package`, `user`, `ufw_nat`, `iptables`. `:local` transport only (SSH stubbed).
 
-- **`Mjolnir.Forge.Supervisor`** — mounts Store, Declarations, HostRegistry, HostSupervisor under `Mjolnir.Supervisor`.
+- **`Mjolnir.Forge.Supervisor`** — mounts Store, EventBus, AuditLog, Declarations, HostRegistry, HostSupervisor under `Mjolnir.Supervisor`.
 - **`Mjolnir.Forge.Store`** — JSON+ETS records under `forge_state_dir/<host>/<safe_key>.json`. Identity is `{host, kind, resource_id}`. Atomic write+fsync+rename; bad files quarantined.
 - **`Mjolnir.Forge.Resource`** — behaviour with `kind/0`, `canonical/1`, `observe_path/1`, `parse_observed/1`, `apply/3`, `delete/2`. `Resource.observe/4` dispatches on transport (`:local | :ssh`).
 - **`Mjolnir.Forge.Canonical`** — sorted-key JSON + SHA-256. No CBOR, no blake3 NIF — hash is for equality only.
 - **`Mjolnir.Forge.Diff.compute/3`** — pure 3-way matrix → status entries. Auto-adopts on exact match.
 - **`Mjolnir.Forge.Declaration` + `Declarations`** — DSL macros (`systemd_unit/2`, `file/2`) accumulating into `@forge_resources`; loader scans `forge/declarations/*.exs` and exposes `for_host/1` / `declared_map/1` / `reload/0`.
-- **`Mjolnir.Forge.Host`** — per-host worker; `plan/1` + `apply/2` are on-demand. `:conflict` and `:unmanaged` never auto-resolve. `auto_apply` defaults to false.
-- **`Mjolnir.Forge.API`** — Plug forwarded from `Mjolnir.API.Router` at `/api/forge/*`. v0 endpoints: `GET /hosts`, `POST /hosts`, `GET /plan?host=H`, `POST /apply`, `GET /state`.
+- **`Mjolnir.Forge.Host`** — per-host worker; `plan/1` + `apply/2` are on-demand. `:conflict` and `:unmanaged` never auto-resolve. `auto_apply` defaults to false. Emits `:probe`/`:drift` events on plan, `:apply`/`:adopt` on apply.
+- **`Mjolnir.Forge.EventBus`** — `:pg` pub/sub mirroring `Mjolnir.EventBus` (no Phoenix.PubSub). Subscribe `:all` or `{:host, h}`; receive `{:forge_event, event}`.
+- **`Mjolnir.Forge.AuditLog`** — GenServer owning an append-only JSONL log at `<forge_state_dir>/_events/audit.jsonl`. Stamps a strictly-monotonic `id` (the SSE resume cursor); `since/1` + `recent/1` for replay. Best-effort durability (no per-line fsync). `_events` is a reserved dir name the Store skips.
+- **`Mjolnir.Forge.Events`** — the `Event` struct + `emit/1` (audit-append-then-publish) + JSON/SSE serialization + `probe`/`drift`/`apply_outcome` builders. `:ignore` type defined but not yet triggered (lands with the adopt/ignore endpoints).
+- **`Mjolnir.Forge.API`** — Plug forwarded from `Mjolnir.API.Router` at `/api/forge/*`. Endpoints: `GET /hosts`, `POST /hosts`, `GET /plan?host=H`, `POST /apply`, `GET /state`, `GET /events?since=&limit=`, `GET /events/stream?since=` (SSE, `text/event-stream`, 15s heartbeat).
 
-Justfile shortcuts: `just forge-hosts`, `just forge-plan [host_id]`, `just forge-apply [host_id]`, `just forge-state`, `just forge-host-add HOST [transport]`.
+Justfile shortcuts: `just forge-hosts`, `just forge-plan [host_id]`, `just forge-apply [host_id]`, `just forge-state`, `just forge-events [since] [limit]`, `just forge-events-tail [since]`, `just forge-host-add HOST [transport]`. CLI: `mjolnir forge events [--tail] [--since <id>] [--limit N]`.
 
 Sandbox mode: when `:forge_systemd_units_dir` is set to anything other than `/etc/systemd/system`, SystemdUnit writes/removes files but skips all `systemctl` shell-outs. Used by `config/test.exs` and the integration test suite.
 

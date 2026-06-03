@@ -9,7 +9,7 @@ iroh = "0.96"
 iroh-base = "0.96"
 tokio = { version = "1", features = ["full", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1"

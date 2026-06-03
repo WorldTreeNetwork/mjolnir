@@ -14,7 +14,7 @@ defmodule Mjolnir.Forge.APITest do
   import Plug.Test
   import Plug.Conn
 
-  alias Mjolnir.Forge.{Declarations, Store, Supervisor}
+  alias Mjolnir.Forge.{Declarations, Events, Store, Supervisor}
 
   @opts Mjolnir.Forge.API.init([])
 
@@ -368,6 +368,7 @@ defmodule Mjolnir.Forge.APITest do
         {host_a, "a.service", "[Unit]\nDescription=A\n"},
         {host_b, "b.service", "[Unit]\nDescription=B\n"}
       ])
+
       start_host(host_a)
       start_host(host_b)
       # Trigger plan to populate store rows
@@ -429,6 +430,126 @@ defmodule Mjolnir.Forge.APITest do
       conn = call(:get, "/hosts/deep/nested/path")
       assert conn.status == 404
       assert json_body(conn)["error"] == "not_found"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GET /events  (non-streaming audit replay)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /events" do
+    test "returns 200 with an empty events list when nothing has happened" do
+      conn = call(:get, "/events")
+      assert conn.status == 200
+      assert json_body(conn)["events"] == []
+    end
+
+    test "a plan pass produces a probe event in the feed", %{decls_dir: decls_dir} do
+      host = "api-events-probe-#{System.unique_integer([:positive])}"
+      write_decl(decls_dir, host, "ev.service", "[Unit]\nDescription=Ev\n")
+      start_host(host)
+      call(:get, "/plan?host=#{URI.encode(host)}")
+
+      events = json_body(call(:get, "/events"))["events"]
+      assert Enum.any?(events, &(&1["type"] == "probe" and &1["host"] == host))
+    end
+
+    test "a plan pass over a declared-but-absent unit produces a drift event",
+         %{decls_dir: decls_dir} do
+      host = "api-events-drift-#{System.unique_integer([:positive])}"
+      write_decl(decls_dir, host, "drift.service", "[Unit]\nDescription=Drift\n")
+      start_host(host)
+      call(:get, "/plan?host=#{URI.encode(host)}")
+
+      events = json_body(call(:get, "/events"))["events"]
+      drift = Enum.find(events, &(&1["type"] == "drift" and &1["resource_id"] == "drift.service"))
+      assert drift != nil
+      assert drift["status"] == "new"
+      assert drift["kind"] == "systemd_unit"
+    end
+
+    test "?since=<id> returns only events after that cursor", %{decls_dir: decls_dir} do
+      host = "api-events-since-#{System.unique_integer([:positive])}"
+      write_decl(decls_dir, host, "since.service", "[Unit]\nDescription=Since\n")
+      start_host(host)
+      call(:get, "/plan?host=#{URI.encode(host)}")
+
+      all = json_body(call(:get, "/events"))["events"]
+      assert length(all) > 0
+      cursor = all |> List.last() |> Map.fetch!("id")
+
+      after_cursor = json_body(call(:get, "/events?since=#{cursor}"))["events"]
+      assert Enum.all?(after_cursor, &(&1["id"] > cursor))
+    end
+
+    test "each event carries id, ts, host, and type", %{decls_dir: decls_dir} do
+      host = "api-events-shape-#{System.unique_integer([:positive])}"
+      write_decl(decls_dir, host, "shape.service", "[Unit]\nDescription=Shape\n")
+      start_host(host)
+      call(:get, "/plan?host=#{URI.encode(host)}")
+
+      [event | _] = json_body(call(:get, "/events"))["events"]
+      assert is_integer(event["id"])
+      assert is_binary(event["ts"])
+      assert is_binary(event["host"])
+      assert is_binary(event["type"])
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GET /events/stream  (Server-Sent Events)
+  # ---------------------------------------------------------------------------
+
+  describe "GET /events/stream" do
+    test "sets text/event-stream headers, replays backlog, and streams live frames" do
+      host = "api-stream-#{System.unique_integer([:positive])}"
+      # Backlog: one event already in the audit log before the client connects.
+      backlog = Events.emit(host: host, type: :probe, detail: %{counts: %{}, total: 0})
+
+      task = Task.async(fn -> call(:get, "/events/stream?since=#{backlog.id - 1}") end)
+
+      # Give the handler time to subscribe and replay the backlog.
+      Process.sleep(150)
+
+      # Live: published after the client is subscribed.
+      Events.emit(
+        host: host,
+        type: :drift,
+        kind: "systemd_unit",
+        resource_id: "live.service",
+        status: "new"
+      )
+
+      Process.sleep(150)
+      send(task.pid, :close)
+      conn = Task.await(task, 2_000)
+
+      assert conn.status == 200
+      assert Plug.Conn.get_resp_header(conn, "content-type") == ["text/event-stream"]
+      # Backlog probe + live drift both rendered as SSE frames.
+      assert conn.resp_body =~ "event: probe"
+      assert conn.resp_body =~ "event: drift"
+      assert conn.resp_body =~ "live.service"
+      assert conn.resp_body =~ "id: #{backlog.id}"
+    end
+
+    test "without ?since= it skips backlog and only streams live frames" do
+      host = "api-stream-live-#{System.unique_integer([:positive])}"
+      # This event predates the connection and must NOT be replayed.
+      _old = Events.emit(host: host, type: :probe)
+
+      task = Task.async(fn -> call(:get, "/events/stream") end)
+      Process.sleep(150)
+
+      Events.emit(host: host, type: :apply, resource_id: "new.service", status: "new")
+      Process.sleep(150)
+      send(task.pid, :close)
+      conn = Task.await(task, 2_000)
+
+      assert conn.status == 200
+      assert conn.resp_body =~ "event: apply"
+      # No backlog replay → the earlier probe is absent.
+      refute conn.resp_body =~ "event: probe"
     end
   end
 end

@@ -393,6 +393,14 @@ forge-apply host_id="self":
 forge-state host_id="" kind="" status_filter="":
     {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/state?host={{host_id}}&kind={{kind}}&status={{status_filter}}" | jq .
 
+# Forge: recent reconciliation events (audit feed); since="" shows last `limit`
+forge-events since="" limit="100":
+    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/events?since={{since}}&limit={{limit}}" | jq .
+
+# Forge: follow the live event stream (SSE; Ctrl-C to stop). Resume with since=<id>
+forge-events-tail since="":
+    {{_t}}curl -sN "{{_api}}/api/forge/events/stream?since={{since}}"
+
 # ═══════════════════════════════════════════════════════════════════════
 # MCP Smoke Tests
 # ═══════════════════════════════════════════════════════════════════════

@@ -4,6 +4,8 @@ defmodule Mjolnir.Forge.Supervisor do
 
       Mjolnir.Forge.Supervisor (one_for_one)
       ├── Mjolnir.Forge.Store           — JSON+ETS resource records
+      ├── Mjolnir.Forge.EventBus         — :pg pub/sub for reconciliation events
+      ├── Mjolnir.Forge.AuditLog         — append-only JSONL event log + replay
       ├── Mjolnir.Forge.Declarations     — loads forge/declarations/*.exs
       ├── Mjolnir.Forge.HostRegistry     — host_id → Host pid lookup
       └── Mjolnir.Forge.HostSupervisor   — DynamicSupervisor spawning Host workers
@@ -20,6 +22,8 @@ defmodule Mjolnir.Forge.Supervisor do
   def init(_opts) do
     children = [
       Mjolnir.Forge.Store,
+      Mjolnir.Forge.EventBus,
+      Mjolnir.Forge.AuditLog,
       Mjolnir.Forge.Declarations,
       {Registry, keys: :unique, name: Mjolnir.Forge.HostRegistry},
       {DynamicSupervisor, strategy: :one_for_one, name: Mjolnir.Forge.HostSupervisor}

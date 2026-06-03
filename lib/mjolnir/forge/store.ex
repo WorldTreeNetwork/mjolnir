@@ -105,7 +105,10 @@ defmodule Mjolnir.Forge.Store do
         {:reply, :ok, state}
 
       {:error, reason} = err ->
-        Logger.error("Forge.Store put failed for #{inspect(Record.key(record))}: #{inspect(reason)}")
+        Logger.error(
+          "Forge.Store put failed for #{inspect(Record.key(record))}: #{inspect(reason)}"
+        )
+
         {:reply, err, state}
     end
   end
@@ -204,6 +207,8 @@ defmodule Mjolnir.Forge.Store do
   end
 
   defp load_host_dir("_quarantine"), do: :ok
+  # Reserved for Forge.AuditLog's JSONL event log — not a host record dir.
+  defp load_host_dir("_events"), do: :ok
 
   defp load_host_dir(host_dir_name) do
     dir = Path.join(state_dir(), host_dir_name)

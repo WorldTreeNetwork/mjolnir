@@ -19,7 +19,7 @@ defmodule Mjolnir.Forge.Host do
   use GenServer
   require Logger
 
-  alias Mjolnir.Forge.{Declarations, Diff, Resource, Store}
+  alias Mjolnir.Forge.{Declarations, Diff, Events, Resource, Store}
   alias Mjolnir.Forge.Store.Record
 
   @type host :: String.t()
@@ -67,16 +67,28 @@ defmodule Mjolnir.Forge.Host do
   end
 
   @impl true
-  def handle_call(:plan, _from, state) do
+  def handle_call(:plan, _from, %__MODULE__{host: host} = state) do
     entries = do_plan(state)
+    # Observability: one probe summary + a drift event per out-of-sync resource.
+    # Emitted only here, not from the internal re-plan inside :apply, so a
+    # single apply doesn't double-report drift it just resolved.
+    _ = Events.probe(host, entries)
+    _ = Events.drift(host, entries)
     {:reply, entries, state}
   end
 
-  def handle_call({:apply, keys}, _from, state) do
+  def handle_call({:apply, keys}, _from, %__MODULE__{host: host} = state) do
     entries = do_plan(state)
     selected = select_for_apply(entries, keys)
-    results = Enum.map(selected, &apply_entry(&1, state))
-    # Re-plan after to refresh store rows.
+
+    results =
+      Enum.map(selected, fn entry ->
+        result = apply_entry(entry, state)
+        _ = Events.apply_outcome(host, entry, elem(result, 1))
+        result
+      end)
+
+    # Re-plan after to refresh store rows (no events — see :plan above).
     _ = do_plan(state)
     {:reply, results, state}
   end
@@ -99,8 +111,12 @@ defmodule Mjolnir.Forge.Host do
     for {kind, id} = key <- keys, into: %{} do
       result =
         case Resource.observe(kind, transport, host, id) do
-          {:present, _} = ok -> ok
-          :missing -> :missing
+          {:present, _} = ok ->
+            ok
+
+          :missing ->
+            :missing
+
           {:error, reason} ->
             Logger.warning(
               "Forge.Host #{host}: observe #{inspect(kind)}/#{id} failed: #{inspect(reason)}"
@@ -115,6 +131,7 @@ defmodule Mjolnir.Forge.Host do
 
   defp upsert(%{kind: kind, id: id, status: status} = entry, host) do
     now = DateTime.utc_now()
+
     existing =
       case Store.get(host, kind.kind(), id) do
         {:ok, r} -> r
@@ -170,7 +187,9 @@ defmodule Mjolnir.Forge.Host do
 
         record =
           case Store.get(host, kind.kind(), id) do
-            {:ok, r} -> %{r | owned_hash: hash, applied_at: now, status: :converged}
+            {:ok, r} ->
+              %{r | owned_hash: hash, applied_at: now, status: :converged}
+
             :not_found ->
               Record.new(host, kind.kind(), id,
                 status: :converged,
@@ -196,7 +215,9 @@ defmodule Mjolnir.Forge.Host do
 
     record =
       case Store.get(host, kind.kind(), id) do
-        {:ok, r} -> %{r | owned_hash: hash, applied_at: now, status: :converged}
+        {:ok, r} ->
+          %{r | owned_hash: hash, applied_at: now, status: :converged}
+
         :not_found ->
           Record.new(host, kind.kind(), id,
             status: :converged,
