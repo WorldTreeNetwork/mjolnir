@@ -152,6 +152,28 @@ defmodule Mjolnir.Forge.AdoptIgnoreTest do
       conn = call(:post, "/adopt", %{"host" => @host})
       assert conn.status == 400
     end
+
+    test "422 hand_managed when the resource is declared in a hand-written file",
+         %{units_dir: units_dir, n: n} do
+      id = "hand-#{n}.service"
+      File.write!(Path.join(units_dir, id), "[Unit]\nDescription=Hand on disk\n")
+
+      decl = """
+      defmodule Hand#{n} do
+        use Mjolnir.Forge.Declaration, host: "#{@host}"
+        systemd_unit "#{id}" do
+          source "[Unit]\\nDescription=Hand declared\\n"
+        end
+      end
+      """
+
+      File.write!(Path.join(Declarations.path(), "#{@host}.exs"), decl)
+      :ok = Declarations.reload()
+
+      conn = call(:post, "/adopt", %{"host" => @host, "kind" => "systemd_unit", "id" => id})
+      assert conn.status == 422
+      assert json_body(conn)["reason"] =~ "hand_managed"
+    end
   end
 
   describe "POST /ignore" do

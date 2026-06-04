@@ -25,13 +25,13 @@ sha2 = "0.10"
 rand = "0.8"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+similar = "2"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["term", "signal"] }
 libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
-crossterm = "0.28"
 
 [[bin]]
 name = "mjolnir"

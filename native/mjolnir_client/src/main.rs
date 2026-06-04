@@ -15,6 +15,7 @@ mod auth;
 mod config;
 mod connect;
 mod forge;
+mod forge_tui;
 mod mcp;
 mod server;
 
@@ -431,6 +432,18 @@ enum ForgeCmd {
         #[command(subcommand)]
         cmd: HostsCmd,
     },
+    /// Launch the interactive forge TUI
+    Tui {
+        /// Forge host name
+        #[arg(long, default_value = "self")]
+        host: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -670,6 +683,9 @@ async fn main() {
                     token,
                 } => forge::hosts_add(api, token, host, transport, &profile).await,
             },
+            ForgeCmd::Tui { host, api, token } => {
+                forge_tui::run(api, token, host, &profile).await
+            }
         },
 
         // --- Server admin (sync — blocks tokio runtime, which is fine for CLI) ---

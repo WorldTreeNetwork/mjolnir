@@ -150,7 +150,8 @@ defmodule Mjolnir.Forge.Host do
         %__MODULE__{host: host, transport: transport} = state
       ) do
     reply =
-      with {:present, content} <- Resource.observe(kind, transport, host, id),
+      with :ok <- refuse_if_hand_managed(host, kind, id),
+           {:present, content} <- Resource.observe(kind, transport, host, id),
            {:ok, _path} <- Authoring.write(host, kind, id, content),
            :ok <- Declarations.reload() do
         # The resource is now declared and matches the host → `:converged`,
@@ -301,6 +302,16 @@ defmodule Mjolnir.Forge.Host do
 
   defp sticky_ignore(%{status: :ignored}, :unmanaged), do: :ignored
   defp sticky_ignore(_existing, status), do: status
+
+  # Adopt/overwrite may only author files Forge owns. If the resource is already
+  # declared in a hand-written `.exs`, refuse rather than create a duplicate
+  # `.adopted.exs` for the same key (the user should edit their file instead).
+  defp refuse_if_hand_managed(host, kind, id) do
+    case Declarations.source_path(host, kind.kind(), id) do
+      nil -> :ok
+      path -> if Authoring.forge_owned?(path), do: :ok, else: {:error, :hand_managed}
+    end
+  end
 
   defp ignored?(host, %{kind: kind, id: id}) do
     match?({:ok, %{status: :ignored}}, Store.get(host, kind.kind(), id))
