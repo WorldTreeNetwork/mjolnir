@@ -18,6 +18,14 @@ defmodule Mjolnir.Forge.Declarations do
   @spec for_host(String.t()) :: [{module(), String.t(), map()}]
   def for_host(host), do: GenServer.call(__MODULE__, {:for_host, host})
 
+  @doc """
+  Absolute path of the `.exs` file a resource was declared in, or `nil` if the
+  resource isn't declared. `kind` is the string form (e.g. `"systemd_unit"`).
+  Used by the TUI's `e:edit` and overwrite-from-observed.
+  """
+  @spec source_path(String.t(), String.t(), String.t()) :: String.t() | nil
+  def source_path(host, kind, id), do: GenServer.call(__MODULE__, {:source_path, host, kind, id})
+
   @doc "Hosts that have at least one declaration."
   @spec hosts() :: [String.t()]
   def hosts, do: GenServer.call(__MODULE__, :hosts)
@@ -47,10 +55,14 @@ defmodule Mjolnir.Forge.Declarations do
 
   @impl true
   def handle_call({:for_host, host}, _from, state) do
-    {:reply, Map.get(state, host, []), state}
+    {:reply, Map.get(state.by_host, host, []), state}
   end
 
-  def handle_call(:hosts, _from, state), do: {:reply, Map.keys(state), state}
+  def handle_call({:source_path, host, kind, id}, _from, state) do
+    {:reply, Map.get(state.sources, {host, kind, id}), state}
+  end
+
+  def handle_call(:hosts, _from, state), do: {:reply, Map.keys(state.by_host), state}
 
   def handle_call(:reload, _from, _state) do
     {:reply, :ok, load_safely()}
@@ -58,13 +70,18 @@ defmodule Mjolnir.Forge.Declarations do
 
   ## Internals
 
+  @empty %{by_host: %{}, sources: %{}}
+
   defp load_safely do
     try do
       load()
     rescue
       e ->
-        Logger.error("Forge.Declarations load failed: #{Exception.format(:error, e, __STACKTRACE__)}")
-        %{}
+        Logger.error(
+          "Forge.Declarations load failed: #{Exception.format(:error, e, __STACKTRACE__)}"
+        )
+
+        @empty
     end
   end
 
@@ -73,21 +90,32 @@ defmodule Mjolnir.Forge.Declarations do
 
     case File.ls(dir) do
       {:ok, files} ->
-        files
-        |> Enum.filter(&String.ends_with?(&1, ".exs"))
-        |> Enum.flat_map(&load_file(Path.join(dir, &1)))
-        |> Enum.group_by(
-          fn {host, _kind, _id, _content} -> host end,
-          fn {_host, kind, id, content} -> {kind, id, content} end
-        )
+        rows =
+          files
+          |> Enum.filter(&String.ends_with?(&1, ".exs"))
+          |> Enum.flat_map(&load_file(Path.join(dir, &1)))
+
+        by_host =
+          Enum.group_by(
+            rows,
+            fn {host, _kind, _id, _content, _src} -> host end,
+            fn {_host, kind, id, content, _src} -> {kind, id, content} end
+          )
+
+        sources =
+          for {host, kind, id, _content, src} <- rows, into: %{} do
+            {{host, kind.kind(), id}, src}
+          end
+
+        %{by_host: by_host, sources: sources}
 
       {:error, :enoent} ->
         Logger.info("Forge.Declarations: #{dir} does not exist (no declarations loaded)")
-        %{}
+        @empty
 
       {:error, reason} ->
         Logger.error("Forge.Declarations could not list #{dir}: #{inspect(reason)}")
-        %{}
+        @empty
     end
   end
 
@@ -96,7 +124,7 @@ defmodule Mjolnir.Forge.Declarations do
       [{mod, _bin} | _] = Code.compile_file(path)
       host = mod.__forge_host__()
       resources = mod.__forge_resources__()
-      Enum.map(resources, fn {kind, id, content} -> {host, kind, id, content} end)
+      Enum.map(resources, fn {kind, id, content} -> {host, kind, id, content, path} end)
     rescue
       e ->
         Logger.error(

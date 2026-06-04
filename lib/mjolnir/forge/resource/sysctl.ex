@@ -90,6 +90,11 @@ defmodule Mjolnir.Forge.Resource.Sysctl do
     end
   end
 
+  @impl true
+  def to_declaration(key, %{value: value}) do
+    Mjolnir.Forge.Resource.render_block("sysctl", key, [{:value, inspect(value)}])
+  end
+
   defp conf_path(id) do
     safe_name = String.replace(id, ".", "_")
     Path.join(sysctl_dir(), "99-forge-#{safe_name}.conf")

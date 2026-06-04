@@ -110,6 +110,92 @@ defmodule Mjolnir.Forge.API do
     json(conn, 200, %{records: records})
   end
 
+  ## Discovery
+
+  # Enumerate undeclared resources across enumerable kinds, classify them, and
+  # upsert into the store. Returns the discovered (`:unmanaged`) entries so the
+  # TUI can surface adoptable resources alongside the reconciler view.
+  get "/discover" do
+    case fetch_host(conn) do
+      {:ok, host} ->
+        entries = Host.discover(host) |> Enum.map(&entry_to_map/1)
+        json(conn, 200, %{host: host, entries: entries})
+
+      {:error, code, msg} ->
+        json(conn, code, %{error: msg})
+    end
+  end
+
+  ## Diff / adopt / ignore
+
+  # Materialized declared-vs-observed content for one resource (the diff view).
+  get "/diff" do
+    with {:ok, host} <- fetch_host(conn),
+         {:ok, kind_mod} <- fetch_kind(conn, conn.query_params["kind"]),
+         {:ok, id} <- fetch_id(conn.query_params["id"]) do
+      case Host.diff_one(host, {kind_mod, id}) do
+        nil ->
+          json(conn, 404, %{error: "not_found"})
+
+        entry ->
+          json(conn, 200, %{
+            host: host,
+            kind: kind_mod.kind(),
+            id: id,
+            status: Atom.to_string(entry.status),
+            declared: render_content(kind_mod, entry.declared_content),
+            observed: render_content(kind_mod, entry.observed_content)
+          })
+      end
+    else
+      {:error, code, msg} -> json(conn, code, %{error: msg})
+    end
+  end
+
+  # Adopt an unmanaged resource: author a declaration from observed state +
+  # take ownership. Body: {host, kind, id}.
+  post "/adopt" do
+    with {:ok, host, kind_mod, id} <- fetch_body_key(conn) do
+      case Host.adopt(host, {kind_mod, id}) do
+        :ok ->
+          json(conn, 200, %{host: host, kind: kind_mod.kind(), id: id, result: "ok"})
+
+        {:error, reason} ->
+          json(conn, 422, %{error: "adopt_failed", reason: inspect(reason)})
+      end
+    else
+      {:error, code, msg} -> json(conn, code, %{error: msg})
+    end
+  end
+
+  # Mark an unmanaged resource ignored. Body: {host, kind, id}.
+  post "/ignore" do
+    with {:ok, host, kind_mod, id} <- fetch_body_key(conn) do
+      case Host.ignore(host, {kind_mod, id}) do
+        :ok ->
+          json(conn, 200, %{host: host, kind: kind_mod.kind(), id: id, result: "ignored"})
+
+        {:error, reason} ->
+          json(conn, 422, %{error: "ignore_failed", reason: inspect(reason)})
+      end
+    else
+      {:error, code, msg} -> json(conn, code, %{error: msg})
+    end
+  end
+
+  # Declaration source file for a resource (the TUI's `e:edit`). `path` is null
+  # when the resource isn't declared.
+  get "/decl-path" do
+    with {:ok, host} <- fetch_host(conn),
+         {:ok, kind_mod} <- fetch_kind(conn, conn.query_params["kind"]),
+         {:ok, id} <- fetch_id(conn.query_params["id"]) do
+      path = Declarations.source_path(host, kind_mod.kind(), id)
+      json(conn, 200, %{host: host, kind: kind_mod.kind(), id: id, path: path})
+    else
+      {:error, code, msg} -> json(conn, code, %{error: msg})
+    end
+  end
+
   ## Events
 
   # Recent audit events as a JSON array. `?since=<id>` returns everything after
@@ -236,6 +322,43 @@ defmodule Mjolnir.Forge.API do
       "" -> {:error, 400, "host query param required"}
       host -> {:ok, host}
     end
+  end
+
+  defp fetch_kind(_conn, kind) when is_binary(kind) and kind != "" do
+    case Store.kind_to_module(kind) do
+      nil -> {:error, 400, "unknown kind: #{kind}"}
+      mod -> {:ok, mod}
+    end
+  end
+
+  defp fetch_kind(_conn, _), do: {:error, 400, "kind is required"}
+
+  defp fetch_id(id) when is_binary(id) and id != "", do: {:ok, id}
+  defp fetch_id(_), do: {:error, 400, "id is required"}
+
+  # Parse a {host, kind, id} body into a resolved {host, kind_module, id}.
+  defp fetch_body_key(conn) do
+    body = conn.body_params || %{}
+
+    with %{"host" => host, "kind" => kind, "id" => id}
+         when is_binary(host) and host != "" and is_binary(id) and id != "" <- body,
+         {:ok, kind_mod} <- fetch_kind(conn, kind) do
+      {:ok, host, kind_mod, id}
+    else
+      {:error, _, _} = err -> err
+      _ -> {:error, 400, "host, kind, and id are required"}
+    end
+  end
+
+  # Render a resource's content to its canonical text form for the diff view.
+  # nil content (declared/observed absent) → nil; a serialization error is
+  # surfaced rather than crashing the request.
+  defp render_content(_kind_mod, nil), do: nil
+
+  defp render_content(kind_mod, content) do
+    kind_mod.canonical(content)
+  rescue
+    _ -> nil
   end
 
   defp parse_apply_keys(%{"keys" => "all_safe"}), do: {:ok, :all_safe}

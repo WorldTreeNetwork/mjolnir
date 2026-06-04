@@ -74,6 +74,20 @@ defmodule Mjolnir.Forge.Resource.File do
     end
   end
 
+  @impl true
+  def to_declaration(path, content) do
+    fields =
+      [
+        {:source, inspect(content[:source])},
+        content[:mode] && {:mode, "0o" <> Integer.to_string(content.mode, 8)},
+        content[:owner] && {:owner, inspect(content.owner)},
+        content[:group] && {:group, inspect(content.group)}
+      ]
+      |> Enum.filter(& &1)
+
+    Mjolnir.Forge.Resource.render_block("file", path, fields)
+  end
+
   # Always re-assert the declared mode. No shortcut for 0o644 — leaving it
   # out would mean a file that drifted to 0o755 wouldn't get reset on apply.
   defp set_mode(_path, nil), do: :ok

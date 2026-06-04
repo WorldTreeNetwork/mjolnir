@@ -95,6 +95,32 @@ defmodule Mjolnir.Forge.Resource.AptPackage do
     end
   end
 
+  @impl true
+  def to_declaration(name, %{state: state} = content) do
+    fields =
+      [
+        {:state, inspect(state)},
+        content[:version] && {:version, inspect(content.version)}
+      ]
+      |> Enum.filter(& &1)
+
+    Mjolnir.Forge.Resource.render_block("apt_package", name, fields)
+  end
+
+  @impl true
+  def enumerate(_host) do
+    if sandbox?() do
+      list_sandbox_ids()
+    else
+      # Manually-installed packages only — enumerating every dependency would
+      # bury the signal under hundreds of auto-installed packages.
+      case System.cmd("apt-mark", ["showmanual"], stderr_to_stdout: true) do
+        {out, 0} -> String.split(out, "\n", trim: true)
+        {_, _} -> []
+      end
+    end
+  end
+
   # -- Real apt commands --
 
   defp install(pkg, nil) do
@@ -139,6 +165,11 @@ defmodule Mjolnir.Forge.Resource.AptPackage do
     end
 
     :ok
+  end
+
+  defp list_sandbox_ids do
+    ensure_sandbox_table()
+    :ets.tab2list(@sandbox_table) |> Enum.map(fn {id, _content} -> id end)
   end
 
   defp probe_sandbox(id) do

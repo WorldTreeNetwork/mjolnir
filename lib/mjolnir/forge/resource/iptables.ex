@@ -95,7 +95,8 @@ defmodule Mjolnir.Forge.Resource.Iptables do
           rule_args = OptionParser.split(rule)
 
           # Check if rule exists
-          check = System.cmd("iptables", ["-t", table, "-C", chain | rule_args], stderr_to_stdout: true)
+          check =
+            System.cmd("iptables", ["-t", table, "-C", chain | rule_args], stderr_to_stdout: true)
 
           case check do
             {_, 0} ->
@@ -103,7 +104,9 @@ defmodule Mjolnir.Forge.Resource.Iptables do
 
             {_, _} ->
               # Rule doesn't exist, add it
-              case System.cmd("iptables", ["-t", table, "-A", chain | rule_args], stderr_to_stdout: true) do
+              case System.cmd("iptables", ["-t", table, "-A", chain | rule_args],
+                     stderr_to_stdout: true
+                   ) do
                 {_, 0} -> acc
                 {out, code} -> [{:add_failed, rule, code, out} | acc]
               end
@@ -124,6 +127,15 @@ defmodule Mjolnir.Forge.Resource.Iptables do
     else
       delete_by_id(id)
     end
+  end
+
+  @impl true
+  def to_declaration(name, %{table: table, chain: chain, rules: rules}) do
+    Mjolnir.Forge.Resource.render_block("iptables", name, [
+      {:table, inspect(table)},
+      {:chain, inspect(chain)},
+      {:rules, inspect(rules)}
+    ])
   end
 
   # In production, delete needs the content to know which rules to remove.

@@ -126,6 +126,49 @@ defmodule Mjolnir.Forge.Resource.User do
     end
   end
 
+  @impl true
+  def to_declaration(name, %{state: state} = content) do
+    fields =
+      [
+        {:state, inspect(state)},
+        content[:uid] && {:uid, inspect(content.uid)},
+        content[:shell] && {:shell, inspect(content.shell)},
+        content[:home] && {:home, inspect(content.home)},
+        content[:groups] && {:groups, inspect(content.groups)},
+        content[:system] && {:system, inspect(content.system)}
+      ]
+      |> Enum.filter(& &1)
+
+    Mjolnir.Forge.Resource.render_block("user", name, fields)
+  end
+
+  @impl true
+  def enumerate(_host) do
+    if sandbox?() do
+      list_sandbox_ids()
+    else
+      # Regular accounts only (uid 1000..64999) — skip system users and the
+      # nobody sentinel so discovery surfaces the handful of real accounts.
+      case System.cmd("getent", ["passwd"], stderr_to_stdout: true) do
+        {out, 0} -> out |> String.split("\n", trim: true) |> Enum.flat_map(&regular_user/1)
+        {_, _} -> []
+      end
+    end
+  end
+
+  defp regular_user(line) do
+    case String.split(line, ":") do
+      [name, _pass, uid | _] ->
+        case Integer.parse(uid) do
+          {n, _} when n >= 1000 and n < 65000 -> [name]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
   # -- Real commands --
 
   defp user_exists?(username) do
@@ -205,6 +248,11 @@ defmodule Mjolnir.Forge.Resource.User do
     end
 
     :ok
+  end
+
+  defp list_sandbox_ids do
+    ensure_sandbox_table()
+    :ets.tab2list(@sandbox_table) |> Enum.map(fn {id, _content} -> id end)
   end
 
   defp probe_sandbox(id) do

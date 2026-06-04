@@ -79,6 +79,32 @@ defmodule Mjolnir.Forge.Resource.SystemdUnit do
     if systemctl_active?() and result == :ok, do: reload_daemon(), else: result
   end
 
+  @impl true
+  def to_declaration(id, %{source: source} = content) do
+    fields =
+      [
+        {:source, inspect(source)},
+        content[:enabled] != nil && {:enabled, inspect(content.enabled)},
+        content[:state] != nil && {:state, inspect(content.state)}
+      ]
+      |> Enum.filter(& &1)
+
+    Mjolnir.Forge.Resource.render_block("systemd_unit", id, fields)
+  end
+
+  @impl true
+  def enumerate(_host) do
+    dir = units_dir()
+
+    case File.ls(dir) do
+      {:ok, names} ->
+        Enum.filter(names, &File.regular?(Path.join(dir, &1)))
+
+      {:error, _} ->
+        []
+    end
+  end
+
   defp systemctl_active?, do: units_dir() == @default_units_dir
 
   defp maybe_enable(_id, false), do: :ok

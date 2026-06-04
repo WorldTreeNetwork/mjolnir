@@ -255,7 +255,12 @@ defmodule Mjolnir.Forge.Store do
   # the on-disk store after a restart.
   @kind_modules %{
     "systemd_unit" => Mjolnir.Forge.Resource.SystemdUnit,
-    "file" => Mjolnir.Forge.Resource.File
+    "file" => Mjolnir.Forge.Resource.File,
+    "sysctl" => Mjolnir.Forge.Resource.Sysctl,
+    "apt_package" => Mjolnir.Forge.Resource.AptPackage,
+    "user" => Mjolnir.Forge.Resource.User,
+    "ufw_nat" => Mjolnir.Forge.Resource.UfwNat,
+    "iptables" => Mjolnir.Forge.Resource.Iptables
   }
 
   @spec kind_to_module(String.t()) :: module() | nil

@@ -19,7 +19,7 @@ defmodule Mjolnir.Forge.Host do
   use GenServer
   require Logger
 
-  alias Mjolnir.Forge.{Declarations, Diff, Events, Resource, Store}
+  alias Mjolnir.Forge.{Authoring, Declarations, Diff, Events, Resource, Store}
   alias Mjolnir.Forge.Store.Record
 
   @type host :: String.t()
@@ -52,6 +52,39 @@ defmodule Mjolnir.Forge.Host do
           [{{module(), String.t()}, :ok | {:error, term()}}]
   def apply(host, keys), do: GenServer.call(name_for(host), {:apply, keys}, :infinity)
 
+  @doc """
+  Recompute and return the single diff entry for `{kind_module, id}` (with
+  materialized content), or `nil` if the resource is neither declared nor
+  owned. Emits no events — this is a detail fetch for the diff view.
+  """
+  @spec diff_one(host(), {module(), String.t()}) :: Diff.entry() | nil
+  def diff_one(host, key), do: GenServer.call(name_for(host), {:diff_one, key}, 30_000)
+
+  @doc """
+  Adopt an unmanaged resource: re-observe it, author a `.adopted.exs`
+  declaration from the observed content, reload declarations, and take
+  ownership. Returns `:ok` or `{:error, reason}`. Emits an `:adopt` event.
+  """
+  @spec adopt(host(), {module(), String.t()}) :: :ok | {:error, term()}
+  def adopt(host, key), do: GenServer.call(name_for(host), {:adopt, key}, :infinity)
+
+  @doc """
+  Mark a resource `:ignored` so it stops being surfaced as `:unmanaged`. The
+  mark is sticky across re-plans until the resource becomes declared. Emits an
+  `:ignore` event.
+  """
+  @spec ignore(host(), {module(), String.t()}) :: :ok | {:error, term()}
+  def ignore(host, key), do: GenServer.call(name_for(host), {:ignore, key}, :infinity)
+
+  @doc """
+  Host-wide discovery: enumerate every enumerable kind, keep the ids that are
+  neither declared nor owned, observe + classify them (`:unmanaged`), and
+  upsert them into the store so `/state` and the TUI can surface them. Returns
+  the discovered entries. Emits no events — discovery is a read.
+  """
+  @spec discover(host()) :: [Diff.entry()]
+  def discover(host), do: GenServer.call(name_for(host), :discover, 60_000)
+
   ## GenServer
 
   @impl true
@@ -71,10 +104,99 @@ defmodule Mjolnir.Forge.Host do
     entries = do_plan(state)
     # Observability: one probe summary + a drift event per out-of-sync resource.
     # Emitted only here, not from the internal re-plan inside :apply, so a
-    # single apply doesn't double-report drift it just resolved.
+    # single apply doesn't double-report drift it just resolved. Ignored
+    # resources are suppressed — the user already said "leave it alone".
     _ = Events.probe(host, entries)
-    _ = Events.drift(host, entries)
+    _ = Events.drift(host, Enum.reject(entries, &ignored?(host, &1)))
     {:reply, entries, state}
+  end
+
+  def handle_call(
+        {:diff_one, key},
+        _from,
+        %__MODULE__{host: host, transport: transport} = state
+      ) do
+    # Single-key diff: observe the named resource directly rather than filtering
+    # do_plan, so it works even for resources the plan doesn't enumerate (an
+    # undeclared, unowned unit the user wants to inspect/adopt).
+    entry =
+      single_diff(Declarations.declared_map(host), Store.owned_map(host), transport, host, key)
+
+    {:reply, entry, state}
+  end
+
+  def handle_call(:discover, _from, %__MODULE__{host: host, transport: transport} = state) do
+    declared = Declarations.declared_map(host)
+    owned = Store.owned_map(host)
+    known = MapSet.union(MapSet.new(Map.keys(declared)), MapSet.new(Map.keys(owned)))
+
+    entries =
+      for mod <- Resource.enumerable_kinds(),
+          id <- Resource.enumerate(mod, transport, host),
+          key = {mod, id},
+          not MapSet.member?(known, key),
+          entry = single_diff(declared, owned, transport, host, key),
+          not is_nil(entry) do
+        entry
+      end
+
+    Enum.each(entries, &upsert(&1, host))
+    {:reply, entries, state}
+  end
+
+  def handle_call(
+        {:adopt, {kind, id} = key},
+        _from,
+        %__MODULE__{host: host, transport: transport} = state
+      ) do
+    reply =
+      with {:present, content} <- Resource.observe(kind, transport, host, id),
+           {:ok, _path} <- Authoring.write(host, kind, id, content),
+           :ok <- Declarations.reload() do
+        # The resource is now declared and matches the host → `:converged`,
+        # which apply_entry takes ownership of (no side effects). Route through
+        # the apply path so the :adopt event + store update stay consistent.
+        entry = do_plan(state) |> Enum.find(fn e -> {e.kind, e.id} == key end)
+
+        case entry do
+          nil ->
+            {:error, :not_present_after_adopt}
+
+          entry ->
+            {_key, outcome} = result = apply_entry(entry, state)
+            _ = Events.apply_outcome(host, entry, elem(result, 1))
+            _ = do_plan(state)
+            outcome
+        end
+      else
+        :missing -> {:error, :not_observed}
+        {:error, _} = err -> err
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:ignore, {kind, id}}, _from, %__MODULE__{host: host} = state) do
+    now = DateTime.utc_now()
+
+    record =
+      case Store.get(host, kind.kind(), id) do
+        {:ok, r} -> %{r | status: :ignored}
+        :not_found -> Record.new(host, kind.kind(), id, status: :ignored, observed_at: now)
+      end
+
+    reply = Store.put(record)
+
+    _ =
+      Events.emit(
+        host: host,
+        type: :ignore,
+        kind: kind.kind(),
+        resource_id: id,
+        status: "ignored"
+      )
+
+    {:reply, reply, state}
   end
 
   def handle_call({:apply, keys}, _from, %__MODULE__{host: host} = state) do
@@ -138,6 +260,10 @@ defmodule Mjolnir.Forge.Host do
         :not_found -> nil
       end
 
+    # A resource the user ignored stays ignored as long as it's still
+    # unmanaged. Once it gains a declaration the computed status takes over.
+    status = sticky_ignore(existing, status)
+
     record =
       Record.new(host, kind.kind(), id,
         status: status,
@@ -150,6 +276,34 @@ defmodule Mjolnir.Forge.Host do
       )
 
     Store.put(record)
+  end
+
+  # One resource's diff entry: pull its declared/owned slices from the
+  # already-computed maps and observe it live. Shared by diff_one and discover.
+  defp single_diff(declared, owned, transport, host, {kind, id} = key) do
+    single_observed =
+      case Resource.observe(kind, transport, host, id) do
+        {:present, _} = obs -> %{key => obs}
+        _ -> %{}
+      end
+
+    Diff.compute(take(declared, key), take(owned, key), single_observed)
+    |> Enum.find(fn e -> e.kind == kind and e.id == id end)
+  end
+
+  # Single-entry submap: `%{key => value}` if present, else `%{}`.
+  defp take(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> %{key => value}
+      :error -> %{}
+    end
+  end
+
+  defp sticky_ignore(%{status: :ignored}, :unmanaged), do: :ignored
+  defp sticky_ignore(_existing, status), do: status
+
+  defp ignored?(host, %{kind: kind, id: id}) do
+    match?({:ok, %{status: :ignored}}, Store.get(host, kind.kind(), id))
   end
 
   defp select_for_apply(entries, :all_safe) do

@@ -122,6 +122,11 @@ defmodule Mjolnir.Forge.Resource.UfwNat do
     end
   end
 
+  @impl true
+  def to_declaration(id, %{rules: rules}) do
+    Mjolnir.Forge.Resource.render_block("ufw_nat", id, [{:rules, inspect(rules)}])
+  end
+
   # -- Block manipulation --
 
   defp begin_marker(id), do: "# BEGIN FORGE-NAT: #{id}"
