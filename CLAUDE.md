@@ -61,9 +61,12 @@ just build-client     # Build TypeScript client
 **Deploy** — rsync code to server, build release, restart service:
 
 ```bash
-just deploy           # Code only
-just deploy-full      # Code + rebuild guest agent
-just deploy-rootfs    # Code + rebuild rootfs disk image
+just deploy           # Code + rebuild guest agent
+just deploy-boot      # Code + agent + initramfs
+just deploy-rootfs    # Rebuild base rootfs (arch or ubuntu-24.04)
+just deploy-runner    # Build + deploy Forgejo runner with VM backend
+just deploy-gateway   # Code + rebuild web gateway
+just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 ```
 
 **VM Operations** — manage VMs via the HTTP API (SSH-tunneled):
@@ -256,11 +259,34 @@ An OTP-managed Postgres instance is supervised under `Mjolnir.Postgres.Superviso
 
 Modules: `lib/mjolnir/postgres/{server,bootstrap,migrator,supervisor,config}.ex`, `lib/mjolnir/repo.ex` (`Mjolnir.Repo` for app, `Mjolnir.Repo.Admin` for migrations only — not supervised). Migrations under `priv/repo/migrations/`. Index modules: `Mjolnir.Sites.HeadIndex`, `Mjolnir.Sites.ManifestIndex`.
 
+### Forgejo Runner — VM-Sandboxed CI (`native/forgejo-runner/`, `lib/mjolnir/runner/`)
+
+Forgejo Actions workflows execute inside Mjolnir microVMs instead of Docker containers. Architecture: a patched fork of the Go `forgejo-runner` binary (managed as an Erlang Port by `Runner.Server`) calls the Mjolnir HTTP API to spawn/exec/stop VMs per job.
+
+- **Go executor**: `native/forgejo-runner/pkg/mjolnir/executor.go` — implements act's `container.Container` interface
+- **Elixir supervisor**: `lib/mjolnir/runner/{server,config,supervisor}.ex` — Port lifecycle, feature-flagged via `:runner_enabled`
+- **Deploy**: `just deploy-runner` (clones upstream, patches, builds, installs systemd service)
+- **Labels**: `ubuntu-24.04:mjolnir:ubuntu-24.04` — `runs-on: ubuntu-24.04` routes to VM backend
+- **Server paths**: binary at `/usr/local/bin/forgejo-runner-mjolnir`, state at `/var/lib/mjolnir/runner/`
+- **Logs**: `journalctl -u forgejo-runner`
+
+Multi-VirtioFS support (`lib/mjolnir/virtiofs.ex`) allows mounting additional host directories (e.g., repo) read-only into CI VMs via `extra_mounts` API parameter. Paths validated against `allowed_mount_prefixes` config.
+
+### Syslog Infrastructure (`lib/mjolnir/syslog/`)
+
+Universal syslog-over-vsock transport for VM log output. The guest agent (`src/syslog.rs`) binds `/dev/log` inside the VM and forwards messages as framed binary on vsock channel 2.
+
+- **`Syslog.Listener`** — receives channel 2 data from VMs, buffers partial lines, dispatches to Router
+- **`Syslog.Parser`** — RFC 3164 parsing (priority, facility, severity, tag, message)
+- **`Syslog.Router`** — routes parsed messages to sinks (`:eventbus`, `:logger`)
+- **`Syslog.Supervisor`** — conditional on `config :mjolnir, :syslog, enabled: true`
+- Tests: `test/mjolnir/syslog/parser_test.exs` (18 tests)
+
 ### Test Harness
 
 See `docs/plans/test-harness-spec.md` for the full specification.
 
-- **Unit tests** (`mix test`): ~325 tests, async, no infrastructure needed, run on macOS
+- **Unit tests** (`mix test`): ~613 tests, async, no infrastructure needed, run on macOS
 - **Integration tests** (`mix test --include integration`): Need KVM + root on server
 - **Postgres tests** (`mix test --include postgres`): Need `postgres` + `initdb` + `pg_isready` on PATH. Each test brings up its own ephemeral instance under `/tmp`.
 - **E2E tests** (`mix test --include e2e`): Future — full API lifecycle
