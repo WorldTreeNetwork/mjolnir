@@ -26,6 +26,7 @@ HOST=""
 BUILD_AGENT=false
 BUILD_ROOTFS=false
 BUILD_GATEWAY=false
+BUILD_RUNNER=false
 AGENT_IROH=true
 
 for arg in "$@"; do
@@ -34,6 +35,7 @@ for arg in "$@"; do
         --no-iroh) AGENT_IROH=false ;;
         --rootfs) BUILD_ROOTFS=true ;;
         --gateway) BUILD_GATEWAY=true ;;
+        --runner) BUILD_RUNNER=true ;;
         -*) echo "Unknown flag: $arg"; exit 1 ;;
         *) HOST="$arg" ;;
     esac
@@ -211,6 +213,34 @@ if $BUILD_GATEWAY; then
     ssh "$HOST" "install -m755 $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/mjolnir-gateway"
 fi
 
+# --- Build Forgejo runner with Mjolnir VM backend (optional) ---
+if $BUILD_RUNNER; then
+    echo ""
+    echo "--- Building Forgejo runner (Mjolnir VM backend) ---"
+
+    # Clone upstream runner if not already present
+    ssh "$HOST" "if [ ! -d /opt/forgejo-runner-build/.git ]; then git clone https://code.forgejo.org/forgejo/runner.git /opt/forgejo-runner-build; fi"
+
+    # Copy our VM executor package into the runner's act tree
+    ssh "$HOST" "mkdir -p /opt/forgejo-runner-build/act/container/mjolnir"
+    scp "$PROJECT_ROOT/native/forgejo-runner/act-inlined/vm.go" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/vm.go" 2>/dev/null || \
+        rsync -avz "$PROJECT_ROOT/native/forgejo-runner/act-inlined/" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/"
+
+    # Apply the patch (idempotent — checks if already applied)
+    ssh "$HOST" "cd /opt/forgejo-runner-build && \
+        if ! grep -q 'mjolnirPrefix' act/runner/run_context.go 2>/dev/null; then \
+            python3 /opt/mjolnir/scripts/patch-runner.py; \
+        else \
+            echo 'Patch already applied'; \
+        fi"
+
+    # Build
+    ssh "$HOST" "cd /opt/forgejo-runner-build && go build -o /usr/local/bin/forgejo-runner-mjolnir ."
+
+    # Install systemd service
+    ssh "$HOST" "cp $REMOTE_CODE/systemd/forgejo-runner.service /etc/systemd/system/forgejo-runner.service && systemctl daemon-reload"
+fi
+
 # --- Build Elixir release ---
 echo ""
 echo "--- Building Elixir release ---"
@@ -236,9 +266,17 @@ if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/nu
     ssh "$HOST" "systemctl restart mjolnir-gateway && sleep 1 && systemctl status mjolnir-gateway --no-pager"
 fi
 
+# --- Restart runner if installed ---
+if $BUILD_RUNNER || ssh "$HOST" "systemctl is-enabled forgejo-runner 2>/dev/null" | grep -q enabled; then
+    echo ""
+    echo "--- Restarting forgejo-runner service ---"
+    ssh "$HOST" "systemctl restart forgejo-runner && sleep 1 && systemctl status forgejo-runner --no-pager"
+fi
+
 echo ""
 echo "=== Deploy complete ==="
 echo ""
 echo "Logs:         ssh $HOST journalctl -u mjolnir -f"
 echo "Gateway logs: ssh $HOST journalctl -u mjolnir-gateway -f"
+echo "Runner logs:  ssh $HOST journalctl -u forgejo-runner -f"
 echo "Remote shell: ssh $HOST /opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"

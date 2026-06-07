@@ -122,6 +122,10 @@ deploy-rootfs distro="arch": _require-host
 build-ci-image: _require-host
     ssh {{host}} "cd /opt/mjolnir && sudo bash scripts/build-ci-image.sh /var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04"
 
+# Deploy code + build Forgejo runner with Mjolnir VM backend
+deploy-runner: _require-host
+    ./scripts/deploy.sh {{host}} --runner
+
 # Deploy code + rebuild web gateway binary
 deploy-gateway: _require-host
     ./scripts/deploy.sh {{host}} --gateway

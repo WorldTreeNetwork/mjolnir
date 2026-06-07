@@ -1,0 +1,18 @@
+[Unit]
+Description=Forgejo Actions Runner (Mjolnir VM backend)
+Documentation=https://forgejo.org/docs/latest/admin/actions/
+After=forgejo.service mjolnir.service
+Wants=mjolnir.service
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/mjolnir/runner
+ExecStart=/usr/local/bin/forgejo-runner-mjolnir daemon --config /var/lib/mjolnir/runner/config.yaml
+Environment=MJOLNIR_API_BASE=http://127.0.0.1:4000
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Install]
+WantedBy=multi-user.target
