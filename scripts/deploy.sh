@@ -226,13 +226,10 @@ if $BUILD_RUNNER; then
     scp "$PROJECT_ROOT/native/forgejo-runner/act-inlined/vm.go" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/vm.go" 2>/dev/null || \
         rsync -avz "$PROJECT_ROOT/native/forgejo-runner/act-inlined/" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/"
 
-    # Apply the patch (idempotent — checks if already applied)
+    # Apply patches (idempotent — each checks if already applied)
     ssh "$HOST" "cd /opt/forgejo-runner-build && \
-        if ! grep -q 'mjolnirPrefix' act/runner/run_context.go 2>/dev/null; then \
-            python3 /opt/mjolnir/scripts/patch-runner.py; \
-        else \
-            echo 'Patch already applied'; \
-        fi"
+        python3 /opt/mjolnir/scripts/patch-runner.py && \
+        python3 /opt/mjolnir/scripts/patch-runner-labels.py"
 
     # Build
     ssh "$HOST" "cd /opt/forgejo-runner-build && go build -o /usr/local/bin/forgejo-runner-mjolnir ."
