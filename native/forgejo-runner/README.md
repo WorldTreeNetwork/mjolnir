@@ -1,43 +1,81 @@
-# forgejo-runner (Mjolnir fork)
+# forgejo-runner (Mjolnir VM backend)
 
-A fork of the [Forgejo runner](https://code.forgejo.org/forgejo/runner) that adds a
-**Mjolnir VM executor backend** — CI jobs run inside lightweight microVMs instead of
-Docker containers.
+A Mjolnir microVM execution backend for the [Forgejo runner](https://code.forgejo.org/forgejo/runner).
+CI jobs run inside lightweight Cloud Hypervisor microVMs instead of Docker containers.
 
-## Relationship to the main codebase
-
-The Mjolnir Elixir application (`../../`) exposes an HTTP API at `localhost:4000` that
-manages Cloud Hypervisor microVMs. This runner fork talks to that API to spawn an
-isolated VM per CI job, execute workflow steps inside it via vsock-backed exec, and
-tear it down when the job finishes.
+## Architecture
 
 ```
-Forgejo → runner (this repo) → Mjolnir API → Cloud Hypervisor microVM
+Forgejo → forgejo-runner (patched) → Mjolnir API → Cloud Hypervisor microVM
+                                      localhost:4000
 ```
 
-The `pkg/mjolnir` package contains:
+The `pkg/mjolnir` package implements the upstream act `container.Container` interface,
+routing all execution through the Mjolnir HTTP API:
 
-- `executor.go` — scaffold for the act `ContainerExecutor` interface implementation
-- `client.go`   — stdlib-only HTTP client for the Mjolnir API
+- `executor.go` — `VMEnvironment` implementing all 13 `Container` methods
+- `client.go` — stdlib-only HTTP client for the Mjolnir API (spawn, exec, stop)
 
-## Build
+## How it works
+
+1. Runner receives a job with `runs-on: ubuntu-24.04`
+2. Label `ubuntu-24.04` maps to `mjolnir:ci-ubuntu-24.04` (VM backend + base image)
+3. `VMEnvironment.Create()` spawns a VM via `POST /api/vms`
+4. Each workflow step runs via `POST /api/vms/:id/exec`
+5. `VMEnvironment.Remove()` destroys the VM via `DELETE /api/vms/:id`
+
+## Integration
+
+The upstream runner needs a small patch to recognize `mjolnir:` labels
+(similar to the existing `lxc:` prefix support). See `patches/0001-add-mjolnir-vm-backend.patch`.
+
+### Apply the patch
+
+```bash
+# Clone the upstream runner
+git clone https://code.forgejo.org/forgejo/runner.git forgejo-runner-upstream
+cd forgejo-runner-upstream
+
+# Add this package as a local dependency
+echo 'replace worldtree.network/mjolnir/forgejo-runner => /path/to/mjolnir/native/forgejo-runner' >> go.mod
+go get worldtree.network/mjolnir/forgejo-runner
+
+# Apply the patch (adds IsMjolnirEnv, startMjolnirEnvironment to run_context.go)
+# The patch is documented, not a raw diff — apply the changes manually to:
+#   act/runner/run_context.go
+
+# Build
+go build -o forgejo-runner-mjolnir .
+```
+
+### Register the runner
+
+```bash
+forgejo-runner-mjolnir register \
+  --instance http://127.0.0.1:3000 \
+  --token <token> \
+  --name mjolnir-vm-runner \
+  --labels "ubuntu-24.04:mjolnir:ci-ubuntu-24.04"
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MJOLNIR_API_BASE` | `http://127.0.0.1:4000` | Mjolnir API URL |
+| `MJOLNIR_VM_IMAGE` | `ci-ubuntu-24.04` | Default base image |
+
+## Build (this package only)
 
 ```bash
 go build ./...
 ```
 
-Requires Go 1.21+. No external dependencies (stdlib only for now).
+## Current status
 
-## Status
-
-Currently scaffolding only. The full fork integration with the
-[act](https://github.com/nektos/act) executor interface is pending.
-
-Planned lifecycle per CI job:
-
-1. **SpawnVM** — `POST /api/vms` with base image + optional extra virtio-fs mounts
-2. **ExecStep** — `POST /api/vms/:id/exec` for each workflow step
-3. **Teardown** — `DELETE /api/vms/:id`
-
-The upstream Forgejo runner fork (vendoring act, registering with Forgejo, polling
-for jobs) will be layered on top once the executor interface is settled.
+- [x] `container.Container` interface fully implemented (`VMEnvironment`)
+- [x] Compile-time interface verification against upstream types
+- [x] HTTP client for Mjolnir API (spawn, exec, stop, status)
+- [x] Patch documented for upstream runner integration
+- [ ] Full fork build with patched runner (manual patch application)
+- [ ] E2E test with VM-sandboxed workflow execution

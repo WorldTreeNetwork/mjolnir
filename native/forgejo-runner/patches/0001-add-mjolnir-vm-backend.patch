@@ -1,0 +1,107 @@
+From: Mjolnir <dev@worldtree.network>
+Subject: [PATCH] Add Mjolnir VM execution backend
+
+Adds a `mjolnir:` label prefix (like the existing `lxc:` prefix) that
+routes job execution through a Mjolnir microVM instead of Docker or
+the host. The VM is spawned via the Mjolnir HTTP API, commands run via
+exec, and the VM is destroyed on job completion.
+
+Label format: `mjolnir:<base-image>` (e.g., `mjolnir:ci-ubuntu-24.04`)
+
+To use, register the runner with:
+  forgejo-runner register --labels "ubuntu-24.04:mjolnir:ci-ubuntu-24.04"
+
+Then workflows with `runs-on: ubuntu-24.04` will execute inside a
+Mjolnir VM using the `ci-ubuntu-24.04` base image.
+
+---
+
+--- a/act/runner/run_context.go
++++ b/act/runner/run_context.go
+@@ -17,6 +17,7 @@ import (
+ 	"code.forgejo.org/forgejo/runner/v12/act/common"
+ 	"code.forgejo.org/forgejo/runner/v12/act/container"
+ 	"code.forgejo.org/forgejo/runner/v12/act/model"
++	"worldtree.network/mjolnir/forgejo-runner/pkg/mjolnir"
+ )
+
+ // In func (rc *RunContext) startContainer():
+@@ -901,6 +902,9 @@ func (rc *RunContext) startContainer() common.Executor {
+ 	return func(ctx context.Context) error {
+ 		if rc.IsHostEnv(ctx) {
++			if rc.IsMjolnirEnv(ctx) {
++				return rc.startMjolnirEnvironment()(ctx)
++			}
+ 			return rc.startHostEnvironment()(ctx)
+ 		}
+ 		return rc.startJobContainer()(ctx)
+@@ -940,6 +944,10 @@ func (rc *RunContext) IsHostEnv(ctx context.Context) bool {
+-	return rc.IsBareHostEnv(ctx) || rc.IsLXCHostEnv(ctx)
++	return rc.IsBareHostEnv(ctx) || rc.IsLXCHostEnv(ctx) || rc.IsMjolnirEnv(ctx)
+ }
+
++const mjolnirPrefix = "mjolnir:"
++
++func (rc *RunContext) IsMjolnirEnv(ctx context.Context) bool {
++	platform := rc.runsOnImage(ctx)
++	return strings.HasPrefix(platform, mjolnirPrefix)
++}
++
++func (rc *RunContext) GetMjolnirImage(ctx context.Context) string {
++	platform := rc.runsOnImage(ctx)
++	return strings.TrimPrefix(platform, mjolnirPrefix)
++}
++
++func (rc *RunContext) startMjolnirEnvironment() common.Executor {
++	return func(ctx context.Context) error {
++		logger := common.Logger(ctx)
++		rawLogger := logger.WithField("raw_output", true)
++		logWriter := common.NewLineWriter(rc.commandHandler(ctx), func(s string) bool {
++			if rc.Config.LogOutput {
++				rawLogger.Infof("%s", s)
++			} else {
++				rawLogger.Debugf("%s", s)
++			}
++			return true
++		})
++
++		baseImage := rc.GetMjolnirImage(ctx)
++		apiBase := os.Getenv("MJOLNIR_API_BASE")
++		if apiBase == "" {
++			apiBase = "http://127.0.0.1:4000"
++		}
++
++		logger.Infof("Starting Mjolnir VM environment (image: %s, api: %s)", baseImage, apiBase)
++
++		randName := common.MustRandName(8)
++		vm := mjolnir.NewVMEnvironment(apiBase, mjolnir.SpawnConfig{
++			BaseImage: baseImage,
++		}, randName)
++
++		// Replace log writer
++		vm.ReplaceLogWriter(logWriter, logWriter)
++
++		rc.JobContainer = vm
++		rc.cleanUpJobContainer = func(ctx context.Context) error {
++			return vm.Remove()(ctx)
++		}
++
++		for k, v := range vm.GetRunnerContext(ctx) {
++			if v, ok := v.(string); ok {
++				rc.Env[fmt.Sprintf("RUNNER_%s", strings.ToUpper(k))] = v
++			}
++		}
++
++		return common.NewPipelineExecutor(
++			vm.Create(nil, nil),
++		)(ctx)
++	}
++}
++
+--- a/go.mod
++++ b/go.mod
+@@ add to require block:
++require worldtree.network/mjolnir/forgejo-runner v0.0.0
++
+@@ add replace directive:
++replace worldtree.network/mjolnir/forgejo-runner => /opt/mjolnir/native/forgejo-runner
