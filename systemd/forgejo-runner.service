@@ -9,6 +9,7 @@ Type=simple
 WorkingDirectory=/var/lib/mjolnir/runner
 ExecStart=/usr/local/bin/forgejo-runner-mjolnir daemon --config /var/lib/mjolnir/runner/config.yaml
 Environment=MJOLNIR_API_BASE=http://127.0.0.1:4000
+Environment=FORGEJO_HOST_URL=http://10.255.255.1:3000
 Restart=on-failure
 RestartSec=5
 StartLimitBurst=5
