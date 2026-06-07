@@ -86,6 +86,10 @@ clean:
 build-client:
     ./scripts/build-client.sh
 
+# Build the forked Forgejo runner
+build-runner:
+    cd native/forgejo-runner && go build ./...
+
 # ═══════════════════════════════════════════════════════════════════════
 # Deploy
 # ═══════════════════════════════════════════════════════════════════════
@@ -113,6 +117,10 @@ deploy-rootfs distro="arch": _require-host
     ssh {{host}} "cd /opt/mjolnir && \
         AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent \
         bash scripts/build-rootfs-{{distro}}.sh /var/lib/mjolnir/btrfs/@base/{{distro}}"
+
+# Build CI base image on the server (@base/ci-ubuntu-24.04)
+build-ci-image: _require-host
+    ssh {{host}} "cd /opt/mjolnir && sudo bash scripts/build-ci-image.sh /var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04"
 
 # Deploy code + rebuild web gateway binary
 deploy-gateway: _require-host

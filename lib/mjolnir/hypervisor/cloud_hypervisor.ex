@@ -151,12 +151,32 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       mark.("virtiofsd stopped")
     end
 
+    # Stop extra virtiofsd instances if running
+    extra_ports = state.extra_virtiofsd_ports || []
+
+    if extra_ports != [] do
+      mark.("extra virtiofsd stop begin")
+
+      Enum.each(extra_ports, fn {tag, port, _sock} ->
+        mark.("extra virtiofsd[#{tag}] stop")
+        Mjolnir.VirtioFS.stop(port)
+      end)
+
+      mark.("extra virtiofsd stopped")
+    end
+
     # Clean up virtiofsd socket
     if state.id do
       mark.("virtiofsd socket rm begin")
       socket_dir = Application.get_env(:mjolnir, :socket_dir)
       virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id)
       Mjolnir.VirtioFS.cleanup(virtiofsd_socket)
+
+      # Clean up extra virtiofsd sockets
+      Enum.each(extra_ports, fn {_tag, _port, sock} ->
+        Mjolnir.VirtioFS.cleanup(sock)
+      end)
+
       mark.("virtiofsd socket rm done")
     end
 

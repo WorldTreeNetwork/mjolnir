@@ -23,6 +23,7 @@ defmodule Mjolnir.VM do
     :serial_path,
     :rootfs_path,
     :virtiofsd_port,
+    :extra_virtiofsd_ports,
     :net_config,
     :state,
     :boot_time,
@@ -46,10 +47,12 @@ defmodule Mjolnir.VM do
     resume_mode: false
   ]
 
-  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode)
+  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts)
 
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
+  @type extra_mount :: %{required(:tag) => String.t(), required(:shared_dir) => String.t(), optional(:opts) => keyword()}
+
   @type spawn_opts :: %{
           optional(:base_image) => String.t(),
           optional(:vcpus) => pos_integer(),
@@ -58,7 +61,8 @@ defmodule Mjolnir.VM do
           optional(:snapshot) => String.t(),
           optional(:preserve_iroh_key) => boolean(),
           optional(:enable_iroh) => boolean(),
-          optional(:owner_id) => String.t() | nil
+          optional(:owner_id) => String.t() | nil,
+          optional(:extra_mounts) => list(extra_mount())
         }
 
   # ============================================================================
@@ -918,6 +922,39 @@ defmodule Mjolnir.VM do
     {:noreply, %{state | virtiofsd_port: nil}}
   end
 
+  def handle_info({port, {:data, data}}, state) when is_port(port) do
+    extra_ports = state.extra_virtiofsd_ports || []
+
+    case Enum.find(extra_ports, fn {_tag, p, _sock} -> p == port end) do
+      {tag, _port, _sock} ->
+        Logger.debug("virtiofsd[#{tag}] output: #{data}")
+        {:noreply, state}
+
+      nil ->
+        Logger.debug("Unknown port data: #{inspect(data)}")
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({port, {:exit_status, status}}, state) when is_port(port) do
+    extra_ports = state.extra_virtiofsd_ports || []
+
+    case Enum.find(extra_ports, fn {_tag, p, _sock} -> p == port end) do
+      {tag, _port, sock} ->
+        Logger.warning(
+          "virtiofsd[#{tag}] exited with status #{status} for VM #{state.id}"
+        )
+
+        updated = Enum.reject(extra_ports, fn {_t, p, _s} -> p == port end)
+        # Clean up the socket
+        Mjolnir.VirtioFS.cleanup(sock)
+        {:noreply, %{state | extra_virtiofsd_ports: updated}}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -1014,6 +1051,10 @@ defmodule Mjolnir.VM do
            virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id),
            {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.start(rootfs_path, virtiofsd_socket),
            _ = boot_partial_put(:virtiofsd_port, virtiofsd_port),
+           extra_mounts = Map.get(state.config, :extra_mounts, []),
+           {:ok, extra_virtiofsd_ports} <-
+             Mjolnir.VirtioFS.start_many(socket_dir, state.id, extra_mounts),
+           _ = boot_partial_put(:extra_virtiofsd_ports, extra_virtiofsd_ports),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
            {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
@@ -1023,7 +1064,11 @@ defmodule Mjolnir.VM do
              Map.merge(state.config, %{
                rootfs_path: rootfs_path,
                network_interface: net_config,
-               virtiofsd_socket: virtiofsd_socket
+               virtiofsd_socket: virtiofsd_socket,
+               extra_fs:
+                 Enum.map(extra_virtiofsd_ports, fn {tag, _port, sock} ->
+                   %{tag: tag, socket: sock}
+                 end)
              }),
            :ok <- configure_vm(hypervisor, socket_path, config),
            :ok <- hypervisor.start_instance(socket_path),
@@ -1104,6 +1149,7 @@ defmodule Mjolnir.VM do
              net_config: net_config,
              hypervisor_port: hv_port,
              virtiofsd_port: virtiofsd_port,
+             extra_virtiofsd_ports: extra_virtiofsd_ports,
              iroh_node_id: iroh_info[:node_id],
              iroh_json: iroh_info[:ticket],
              ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
@@ -1153,6 +1199,17 @@ defmodule Mjolnir.VM do
     if partial[:virtiofsd_port] do
       try do
         Mjolnir.VirtioFS.stop(partial.virtiofsd_port)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    # Stop extra virtiofsd instances if started
+    if partial[:extra_virtiofsd_ports] do
+      try do
+        Enum.each(partial.extra_virtiofsd_ports, fn {_tag, port, _sock} ->
+          Mjolnir.VirtioFS.stop(port)
+        end)
       rescue
         _ -> :ok
       end

@@ -1,0 +1,19 @@
+[Unit]
+Description=Syslog to host vsock forwarder
+Documentation=https://github.com/IdentiKey/mjolnir
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/syslog-vsock-forwarder
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=5
+StartLimitIntervalSec=30
+# socat exits if the vsock connection is refused (host not listening yet).
+# Restart will retry until the host catches up.
+
+[Install]
+WantedBy=basic.target

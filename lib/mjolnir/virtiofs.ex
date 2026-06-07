@@ -64,6 +64,17 @@ defmodule Mjolnir.VirtioFS do
   """
   @spec start(String.t(), String.t(), keyword()) :: {:ok, port()} | {:error, term()}
   def start(shared_dir, socket_path, opts \\ []) do
+    start(shared_dir, socket_path, "myfs", opts)
+  end
+
+  @doc """
+  Start a virtiofsd daemon process with an explicit tag.
+
+  Same as `start/3` but accepts a tag name used for logging. The tag is
+  included in the socket path when using `socket_path/3`.
+  """
+  @spec start(String.t(), String.t(), String.t(), keyword()) :: {:ok, port()} | {:error, term()}
+  def start(shared_dir, socket_path, _tag, opts) do
     unless File.dir?(shared_dir) do
       {:error, {:shared_dir_not_found, shared_dir}}
     else
@@ -175,18 +186,69 @@ defmodule Mjolnir.VirtioFS do
   end
 
   @doc """
+  Start multiple virtiofsd instances for a VM.
+
+  Takes a list of mount descriptors and starts a virtiofsd for each one,
+  returning a list of `{tag, port, socket_path}` tuples on success.
+
+  Stops already-started instances and returns an error if any fails.
+
+  ## Example
+
+      mounts = [
+        %{tag: "repo", shared_dir: "/var/lib/forgejo/data/repos/owner/repo.git", opts: []},
+        %{tag: "cache", shared_dir: "/var/cache/ci", opts: [thread_pool_size: 2]}
+      ]
+      {:ok, [{tag, port, socket_path}, ...]} = Mjolnir.VirtioFS.start_many(socket_dir, vm_id, mounts)
+  """
+  @spec start_many(String.t(), String.t(), list(map())) ::
+          {:ok, list({String.t(), port(), String.t()})} | {:error, term()}
+  def start_many(_socket_dir, _vm_id, []), do: {:ok, []}
+
+  def start_many(socket_dir, vm_id, mounts) do
+    Enum.reduce_while(mounts, {:ok, []}, fn %{tag: tag, shared_dir: shared_dir} = mount, {:ok, acc} ->
+      opts = Map.get(mount, :opts, [])
+      sock = socket_path(socket_dir, vm_id, tag)
+
+      case start(shared_dir, sock, tag, opts) do
+        {:ok, port} ->
+          {:cont, {:ok, [{tag, port, sock} | acc]}}
+
+        {:error, reason} ->
+          # Stop already-started instances before returning error
+          Enum.each(acc, fn {_t, p, _s} -> stop(p) end)
+          {:halt, {:error, {:extra_virtiofsd_failed, tag, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, list} -> {:ok, Enum.reverse(list)}
+      error -> error
+    end
+  end
+
+  @doc """
   Generate the socket path for a VM's virtiofsd instance.
 
   Follows the convention: `{socket_dir}/{vm_id}_virtiofs.sock`
+
+  An optional tag parameter generates `{vm_id}_{tag}_virtiofs.sock`.
 
   ## Example
 
       socket_path = Mjolnir.VirtioFS.socket_path("/tmp/sockets", "abc123")
       # => "/tmp/sockets/abc123_virtiofs.sock"
+
+      socket_path = Mjolnir.VirtioFS.socket_path("/tmp/sockets", "abc123", "repo")
+      # => "/tmp/sockets/abc123_repo_virtiofs.sock"
   """
   @spec socket_path(String.t(), String.t()) :: String.t()
   def socket_path(socket_dir, vm_id) do
     Path.join(socket_dir, "#{vm_id}_virtiofs.sock")
+  end
+
+  @spec socket_path(String.t(), String.t(), String.t()) :: String.t()
+  def socket_path(socket_dir, vm_id, tag) do
+    Path.join(socket_dir, "#{vm_id}_#{tag}_virtiofs.sock")
   end
 
   @doc """
@@ -204,9 +266,10 @@ defmodule Mjolnir.VirtioFS do
   end
 
   @doc """
-  Clean up virtiofsd socket file.
+  Clean up virtiofsd socket file(s).
 
-  Removes the vhost-user socket file if it exists. Safe to call even
+  Accepts either a single socket path string or a list of socket path strings.
+  Removes each vhost-user socket file if it exists. Safe to call even
   if the socket doesn't exist.
 
   Called during VM teardown after the virtiofsd process has been stopped.
@@ -214,8 +277,14 @@ defmodule Mjolnir.VirtioFS do
   ## Example
 
       Mjolnir.VirtioFS.cleanup("/tmp/sockets/vm123_virtiofs.sock")
+      Mjolnir.VirtioFS.cleanup(["/tmp/sockets/vm123_virtiofs.sock", "/tmp/sockets/vm123_repo_virtiofs.sock"])
   """
-  @spec cleanup(String.t()) :: :ok
+  @spec cleanup(String.t() | list(String.t())) :: :ok
+  def cleanup(socket_paths) when is_list(socket_paths) do
+    Enum.each(socket_paths, &cleanup/1)
+    :ok
+  end
+
   def cleanup(socket_path) do
     case File.rm(socket_path) do
       :ok ->

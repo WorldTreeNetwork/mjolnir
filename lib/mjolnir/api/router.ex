@@ -99,6 +99,39 @@ defmodule Mjolnir.API.Router do
           _ -> Map.put(opts, :_validation_error, "secrets_mode must be 'persistent', 'ephemeral', or 'none'")
         end
 
+      opts =
+        case conn.body_params["extra_mounts"] do
+          nil ->
+            opts
+
+          mounts when is_list(mounts) ->
+            parsed =
+              Enum.reduce_while(mounts, {:ok, []}, fn mount, {:ok, acc} ->
+                with tag when is_binary(tag) and tag != "" <- Map.get(mount, "tag"),
+                     path when is_binary(path) and path != "" <- Map.get(mount, "path"),
+                     {:ok, safe_tag} <- Validation.validate_safe_name(tag, "extra_mounts tag"),
+                     {:ok, safe_path} <- validate_mount_path(path) do
+                  entry = %{
+                    tag: safe_tag,
+                    shared_dir: safe_path,
+                    opts: []
+                  }
+
+                  {:cont, {:ok, [entry | acc]}}
+                else
+                  _ -> {:halt, {:error, "extra_mounts entries must have string 'tag' and 'path' fields"}}
+                end
+              end)
+
+            case parsed do
+              {:ok, entries} -> Map.put(opts, :extra_mounts, Enum.reverse(entries))
+              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+            end
+
+          _ ->
+            Map.put(opts, :_validation_error, "extra_mounts must be an array")
+        end
+
       # Short-circuit on any validation error (base_image, snapshot, etc.)
       if opts[:_validation_error] do
         json(conn, 400, %{error: opts[:_validation_error]})
@@ -848,6 +881,25 @@ defmodule Mjolnir.API.Router do
     case Map.get(entry, :detail) do
       nil -> base
       d -> Map.put(base, :detail, to_string(d))
+    end
+  end
+
+  defp validate_mount_path(path) do
+    allowed = Application.get_env(:mjolnir, :allowed_mount_prefixes, [])
+    expanded = Path.expand(path)
+
+    cond do
+      allowed == [] ->
+        {:error, "extra_mounts disabled: no allowed_mount_prefixes configured"}
+
+      String.contains?(expanded, "..") ->
+        {:error, "mount path must not contain '..'"}
+
+      Enum.any?(allowed, &String.starts_with?(expanded, &1)) ->
+        {:ok, expanded}
+
+      true ->
+        {:error, "mount path not in allowed prefix list"}
     end
   end
 

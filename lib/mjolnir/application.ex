@@ -76,6 +76,8 @@ defmodule Mjolnir.Application do
           # docs/plans/initiatives/identikey-sites.md.
           Mjolnir.Sites.Supervisor
         ] ++
+        maybe_syslog_children() ++
+        maybe_runner_children() ++
         maybe_jwks_strategy() ++
         [
           # HTTP API
@@ -105,6 +107,24 @@ defmodule Mjolnir.Application do
   defp maybe_postgres_children do
     if Application.get_env(:mjolnir, :pg_enabled, false) do
       [Mjolnir.Postgres.Supervisor]
+    else
+      []
+    end
+  end
+
+  defp maybe_syslog_children do
+    syslog_config = Application.get_env(:mjolnir, :syslog, [])
+
+    if Keyword.get(syslog_config, :enabled, true) do
+      [Mjolnir.Syslog.Supervisor]
+    else
+      []
+    end
+  end
+
+  defp maybe_runner_children do
+    if Application.get_env(:mjolnir, :runner_enabled, false) do
+      [Mjolnir.Runner.Supervisor]
     else
       []
     end

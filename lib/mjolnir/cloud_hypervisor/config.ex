@@ -34,6 +34,9 @@ defmodule Mjolnir.CloudHypervisor.Config do
     field(:snapshot, String.t(), default: nil)
     # Path to the virtiofsd vhost-user socket for this VM
     field(:virtiofsd_socket, String.t(), default: nil)
+    # Extra virtio-fs mounts beyond the primary rootfs. Each entry is a map:
+    # %{tag: String.t(), socket: String.t()}
+    field(:extra_fs, list(map()), default: [])
     # Initramfs image path for two-phase boot (nil = legacy direct virtiofs boot)
     field(:initramfs_path, String.t(), default: nil)
     # Preserve iroh key from snapshot (default: false, generates unique key)
@@ -120,14 +123,24 @@ defmodule Mjolnir.CloudHypervisor.Config do
   end
 
   def fs_config(%__MODULE__{} = config) do
-    [
-      %{
-        "tag" => "myfs",
-        "socket" => config.virtiofsd_socket,
-        "num_queues" => 1,
-        "queue_size" => 1024
-      }
-    ]
+    primary = %{
+      "tag" => "myfs",
+      "socket" => config.virtiofsd_socket,
+      "num_queues" => 1,
+      "queue_size" => 1024
+    }
+
+    extra =
+      Enum.map(config.extra_fs, fn %{tag: tag, socket: socket} ->
+        %{
+          "tag" => tag,
+          "socket" => socket,
+          "num_queues" => 1,
+          "queue_size" => 1024
+        }
+      end)
+
+    [primary | extra]
   end
 
   @doc """

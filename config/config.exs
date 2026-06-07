@@ -52,6 +52,18 @@ config :mjolnir,
   secret_store_root: "/var/lib/mjolnir/btrfs/@sites/keyspace",
   sites_ots_upgrade_interval_ms: 30 * 60 * 1_000,
 
+  # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
+  # tests and dev machines without the binary stay green. Operator enables in
+  # prod via runner_enabled: true or MJOLNIR_RUNNER_ENABLED=true.
+  runner_enabled: false,
+  runner_binary_path: "/usr/local/bin/forgejo-runner-mjolnir",
+  runner_config_path: "/etc/mjolnir/runner.yml",
+  runner_state_dir: "/var/lib/mjolnir/runner",
+  runner_forgejo_url: "http://127.0.0.1:3000",
+  runner_labels: ["ubuntu-24.04:host"],
+  runner_max_concurrent_jobs: 1,
+  runner_log_level: "info",
+
   # OTP-managed Postgres sidecar. See lib/mjolnir/postgres/. Disabled by
   # default so unit tests and CI without local Postgres stay green; dev.exs
   # and prod.exs flip it on. Override via MJOLNIR_PG_ENABLED at runtime.
@@ -67,6 +79,18 @@ config :mjolnir,
   pg_database: "mjolnir",
   pg_pool_size: 10,
   ecto_repos: [Mjolnir.Repo]
+
+# Allowed host paths for extra_mounts in VM spawn API. Empty = disabled.
+# In prod, set to e.g. ["/var/lib/forgejo/data/repositories"].
+config :mjolnir,
+  allowed_mount_prefixes: []
+
+# Syslog-over-vsock transport. VMs stream syslog via vsock channel 2.
+# See lib/mjolnir/syslog/.
+config :mjolnir, :syslog,
+  enabled: true,
+  vsock_channel: 2,
+  sinks: [:eventbus, :logger]
 
 # Auth defaults
 config :mjolnir, :auth,
