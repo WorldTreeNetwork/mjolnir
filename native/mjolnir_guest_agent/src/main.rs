@@ -15,6 +15,8 @@ mod pty;
 #[cfg(feature = "full")]
 mod secrets;
 #[cfg(feature = "full")]
+mod syslog;
+#[cfg(feature = "full")]
 mod tmux;
 mod vsock;
 

@@ -512,6 +512,13 @@ async fn handle_vsock_connection(
     });
     *bridge_holder.write().await = Some(bridge.clone());
 
+    // Spawn syslog forwarder: reads /dev/log, sends on vsock channel 2
+    #[cfg(feature = "full")]
+    let syslog_handle = {
+        let syslog_tx = write_tx.clone();
+        tokio::spawn(crate::syslog::run_syslog_forwarder(syslog_tx))
+    };
+
     // We need to multiplex reading from the stream and writing queued
     // frames. We can't use tokio::io::split (shared internal mutex), so
     // we buffer incoming data and use select! to interleave read/write.
@@ -650,6 +657,10 @@ async fn handle_vsock_connection(
             }
         }
     }
+
+    // Stop syslog forwarder
+    #[cfg(feature = "full")]
+    syslog_handle.abort();
 
     // Clear bridge on disconnect — pending requests will fail via dropped oneshot senders
     info!("Clearing agent bridge");

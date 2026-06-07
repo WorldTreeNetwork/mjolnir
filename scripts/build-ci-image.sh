@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # This image is designed for running CI jobs (Forgejo Actions, etc.) inside
 # Mjolnir microVMs. It includes build tools, VCS, runtimes, and a non-root
-# "runner" user, plus systemd services for virtio-fs workspace mounts and
-# vsock syslog forwarding to the host.
+# "runner" user, plus a systemd service for virtio-fs workspace mounts.
+# Syslog forwarding is handled natively by the Mjolnir guest agent.
 #
 # Usage: sudo ./scripts/build-ci-image.sh [output-path]
 # Example: sudo ./scripts/build-ci-image.sh /var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04
@@ -113,9 +113,11 @@ chroot "$R" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
 #   VCS            — git, git-lfs
 #   Network        — curl, wget, ca-certificates
 #   Runtimes       — nodejs, npm, python3 + pip + venv
-#   Utilities      — jq, unzip, zip, xz-utils, file, sudo, socat
-#   Syslog         — busybox-syslogd (provides /sbin/syslogd)
+#   Utilities      — jq, unzip, zip, xz-utils, file, sudo
 #   SSH            — openssh-client (for actions that clone over SSH)
+#
+# Note: syslog forwarding is handled by the Mjolnir guest agent (vsock ch2),
+# so no socat or busybox-syslogd is needed.
 
 echo ""
 echo "--- Installing CI packages ---"
@@ -142,8 +144,6 @@ chroot "$R" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     xz-utils \
     file \
     sudo \
-    socat \
-    busybox-syslogd \
     openssh-client \
     iproute2"
 
@@ -221,15 +221,10 @@ exit 0
 MOUNTEOF
 chmod +x "$R/usr/local/bin/mount-extra-fs.sh"
 
-# ── syslog-vsock-forwarder ────────────────────────────────────────────────────
-#
-# Bridges /dev/log (local syslog socket) → vsock CID 2 port 5001 (host).
-# The host-side listener is Mjolnir's vsock syslog receiver.
-
-cp "$CI_ASSETS/syslog-vsock-forwarder.sh" "$R/usr/local/bin/syslog-vsock-forwarder"
-chmod +x "$R/usr/local/bin/syslog-vsock-forwarder"
-
 # ── Systemd services ──────────────────────────────────────────────────────────
+#
+# Note: syslog forwarding is handled natively by the Mjolnir guest agent
+# (binds /dev/log, forwards over vsock channel 2). No separate service needed.
 
 echo ""
 echo "--- Installing systemd services ---"
@@ -237,10 +232,6 @@ echo "--- Installing systemd services ---"
 # mount-workspace: mount virtio-fs shares at boot
 cp "$CI_ASSETS/mount-workspace.service" "$R/etc/systemd/system/mount-workspace.service"
 chroot "$R" systemctl enable mount-workspace.service
-
-# syslog-vsock: forward syslog to host over vsock
-cp "$CI_ASSETS/syslog-vsock.service" "$R/etc/systemd/system/syslog-vsock.service"
-chroot "$R" systemctl enable syslog-vsock.service
 
 # ── Network setup script ──────────────────────────────────────────────────────
 #
