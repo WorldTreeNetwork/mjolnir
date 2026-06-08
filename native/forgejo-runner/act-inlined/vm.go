@@ -4,14 +4,15 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,11 @@ import (
 )
 
 var _ container.Container = (*VMEnvironment)(nil)
+
+// Default BTRFS root for VM subvolumes. The VM rootfs is at
+// <btrfsRoot>/@vms/<vmID>/ on the host filesystem, directly writable
+// since the Go runner runs on the same host.
+const defaultBTRFSRoot = "/var/lib/mjolnir/btrfs"
 
 type SpawnConfig struct {
 	BaseImage   string  `json:"base_image,omitempty"`
@@ -45,23 +51,42 @@ type ExecResult struct {
 }
 
 type VMEnvironment struct {
-	apiBase string
-	config  SpawnConfig
-	vmID    string
-	name    string
-	stdout  io.Writer
-	stderr  io.Writer
-	mu      sync.Mutex
+	apiBase  string
+	config   SpawnConfig
+	vmID     string
+	name     string
+	stdout   io.Writer
+	stderr   io.Writer
+	mu       sync.Mutex
+	btrfsRoot string
 }
 
 func NewVMEnvironment(apiBase string, config SpawnConfig, name string) *VMEnvironment {
-	return &VMEnvironment{
-		apiBase: apiBase,
-		config:  config,
-		name:    name,
-		stdout:  os.Stdout,
-		stderr:  os.Stderr,
+	btrfs := os.Getenv("MJOLNIR_BTRFS_ROOT")
+	if btrfs == "" {
+		btrfs = defaultBTRFSRoot
 	}
+	return &VMEnvironment{
+		apiBase:   apiBase,
+		config:    config,
+		name:      name,
+		stdout:    os.Stdout,
+		stderr:    os.Stderr,
+		btrfsRoot: btrfs,
+	}
+}
+
+// rootfsPath returns the host-side path to the VM's rootfs directory.
+func (v *VMEnvironment) rootfsPath() string {
+	return filepath.Join(v.btrfsRoot, "@vms", v.vmID)
+}
+
+// hostPath translates a container-side path to the host-side rootfs path.
+// e.g., "/workspace/src/.forgejo/actions/foo" → "<btrfs>/@vms/<id>/workspace/src/.forgejo/actions/foo"
+func (v *VMEnvironment) hostPath(containerPath string) string {
+	// Strip leading slash to make it relative
+	rel := strings.TrimPrefix(containerPath, "/")
+	return filepath.Join(v.rootfsPath(), rel)
 }
 
 func (v *VMEnvironment) Create(capAdd, capDrop []string) common.Executor {
@@ -93,29 +118,60 @@ func (v *VMEnvironment) Create(capAdd, capDrop []string) common.Executor {
 }
 
 func (v *VMEnvironment) Pull(_ bool) common.Executor {
-	return func(_ context.Context) error { return nil }
+	return common.Executor(func(_ context.Context) error { return nil })
 }
 func (v *VMEnvironment) Start(_ bool) common.Executor {
-	return func(_ context.Context) error { return nil }
+	return common.Executor(func(_ context.Context) error { return nil })
 }
 func (v *VMEnvironment) UpdateFromImageEnv(_ *map[string]string) common.Executor {
-	return func(_ context.Context) error { return nil }
+	return common.Executor(func(_ context.Context) error { return nil })
 }
 
 func (v *VMEnvironment) Exec(command []string, env map[string]string, user, workdir string) common.Executor {
 	return func(ctx context.Context) error {
 		cmd := strings.Join(command, " ")
 		if workdir == "" {
-			workdir = "/workspace/src"
+			workdir = "/"
 		}
-		shellCmd := fmt.Sprintf("cd %s && %s", sq(workdir), cmd)
+
+		// Write env vars to a file on the host-side rootfs, then source
+		// it inside the VM before running the command. This avoids command
+		// length limits and shell quoting issues with inline exports.
+		if len(env) > 0 && v.vmID != "" {
+			envFile := v.hostPath("/.forgejo/.env.sh")
+			os.MkdirAll(filepath.Dir(envFile), 0o755)
+			var buf bytes.Buffer
+			var keys []string
+			for k := range env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				// Skip env var names that are invalid in shell (contain hyphens, etc.)
+				if !isValidShellVarName(k) {
+					continue
+				}
+				buf.WriteString(fmt.Sprintf("export %s=%s\n", k, sq(env[k])))
+			}
+			os.WriteFile(envFile, buf.Bytes(), 0o644)
+		}
+
+		var sourcePrefix string
+		if len(env) > 0 {
+			sourcePrefix = ". /.forgejo/.env.sh && "
+		}
+
+		shellCmd := fmt.Sprintf("%scd %s && %s 2>&1", sourcePrefix, sq(workdir), cmd)
+		fmt.Fprintf(os.Stderr, "[mjolnir-exec] vmID=%s workdir=%s cmd=%s envCount=%d shellLen=%d\n", v.vmID, workdir, cmd, len(env), len(shellCmd))
 		if user != "" && user != "root" {
 			shellCmd = fmt.Sprintf("su -c %s %s", sq(shellCmd), user)
 		}
-		result, err := v.execCmd(ctx, shellCmd, env)
+		result, err := v.execCmd(ctx, shellCmd, nil)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "[mjolnir-exec] ERROR: %v\n", err)
 			return err
 		}
+		fmt.Fprintf(os.Stderr, "[mjolnir-exec] result: exit=%d outLen=%d stderr=%.500s out=%.200s\n", result.ExitCode, len(result.Output), result.Stderr, result.Output)
 		v.mu.Lock()
 		w := v.stdout
 		v.mu.Unlock()
@@ -123,28 +179,38 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			io.WriteString(w, result.Output)
 		}
 		if result.ExitCode != 0 {
+			if w != nil && result.Stderr != "" {
+				io.WriteString(w, result.Stderr)
+			}
 			return fmt.Errorf("exit code %d", result.ExitCode)
 		}
 		return nil
 	}
 }
 
+// Copy writes individual files directly to the VM's rootfs on the host.
 func (v *VMEnvironment) Copy(destPath string, files ...*container.FileEntry) common.Executor {
 	return func(ctx context.Context) error {
 		for _, f := range files {
-			fp := filepath.Join(destPath, f.Name)
-			encoded := base64.StdEncoding.EncodeToString([]byte(f.Body))
-			cmd := fmt.Sprintf("mkdir -p %s && echo %s | base64 -d > %s && chmod %o %s",
-				sq(filepath.Dir(fp)), encoded, sq(fp), f.Mode, sq(fp))
-			if _, err := v.execCmd(ctx, cmd, nil); err != nil {
-				return fmt.Errorf("copy %s: %w", f.Name, err)
+			fp := v.hostPath(filepath.Join(destPath, f.Name))
+			if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+				return fmt.Errorf("mkdir %s: %w", filepath.Dir(fp), err)
+			}
+			if err := os.WriteFile(fp, []byte(f.Body), os.FileMode(f.Mode)); err != nil {
+				return fmt.Errorf("write %s: %w", fp, err)
 			}
 		}
 		return nil
 	}
 }
 
+// CopyTarStream extracts a tar stream directly to the VM's rootfs on the host.
 func (v *VMEnvironment) CopyTarStream(ctx context.Context, destPath string, tarStream io.Reader) error {
+	hostDest := v.hostPath(destPath)
+	if err := os.MkdirAll(hostDest, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", hostDest, err)
+	}
+
 	tr := tar.NewReader(tarStream)
 	for {
 		hdr, err := tr.Next()
@@ -154,38 +220,97 @@ func (v *VMEnvironment) CopyTarStream(ctx context.Context, destPath string, tarS
 		if err != nil {
 			return err
 		}
-		fp := filepath.Join(destPath, hdr.Name)
-		if hdr.Typeflag == tar.TypeDir {
-			v.execCmd(ctx, fmt.Sprintf("mkdir -p %s", sq(fp)), nil)
-		} else if hdr.Typeflag == tar.TypeReg {
-			var buf bytes.Buffer
-			io.Copy(&buf, tr)
-			encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
-			cmd := fmt.Sprintf("mkdir -p %s && echo %s | base64 -d > %s && chmod %o %s",
-				sq(filepath.Dir(fp)), encoded, sq(fp), hdr.Mode, sq(fp))
-			v.execCmd(ctx, cmd, nil)
+		fp := filepath.Join(hostDest, hdr.Name)
+
+		// Prevent path traversal
+		if !strings.HasPrefix(filepath.Clean(fp), filepath.Clean(hostDest)) {
+			continue
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			os.MkdirAll(fp, os.FileMode(hdr.Mode)|0o755)
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(fp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return fmt.Errorf("create %s: %w", fp, err)
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return fmt.Errorf("write %s: %w", fp, err)
+			}
+			out.Close()
+		case tar.TypeSymlink:
+			os.Symlink(hdr.Linkname, fp)
 		}
 	}
 	return nil
 }
 
+// CopyDir copies a host directory directly into the VM's rootfs.
 func (v *VMEnvironment) CopyDir(destPath, srcPath string, _ bool) common.Executor {
 	return func(ctx context.Context) error {
-		_, err := v.execCmd(ctx, fmt.Sprintf("mkdir -p %s", sq(destPath)), nil)
-		return err
+		hostDest := v.hostPath(destPath)
+		if err := os.MkdirAll(hostDest, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", hostDest, err)
+		}
+		// Use cp -a for full recursive copy preserving permissions
+		fmt.Fprintf(os.Stderr, "[mjolnir-copydir] src=%s dest=%s hostDest=%s\n", srcPath, destPath, hostDest)
+
+		// Check source exists
+		if _, err := os.Stat(srcPath); err != nil {
+			fmt.Fprintf(os.Stderr, "[mjolnir-copydir] ERROR: source does not exist: %s: %v\n", srcPath, err)
+			return fmt.Errorf("copydir source missing: %s: %w", srcPath, err)
+		}
+
+		cmd := exec.CommandContext(ctx, "cp", "-a", srcPath+"/.", hostDest+"/")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "[mjolnir-copydir] ERROR: cp failed: %s\n", string(out))
+			return fmt.Errorf("cp -a %s → %s: %w (%s)", srcPath, hostDest, err, string(out))
+		}
+
+		// Verify dest
+		count := 0
+		filepath.Walk(hostDest, func(_ string, _ os.FileInfo, _ error) error { count++; return nil })
+		fmt.Fprintf(os.Stderr, "[mjolnir-copydir] OK: copied %d entries to %s\n", count, hostDest)
+		return nil
 	}
 }
 
 func (v *VMEnvironment) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
-	result, err := v.execCmd(ctx, fmt.Sprintf("tar cf - -C %s . 2>/dev/null | base64", sq(srcPath)), nil)
+	hostSrc := v.hostPath(srcPath)
+
+	info, err := os.Stat(hostSrc)
 	if err != nil {
-		return nil, err
+		// File doesn't exist — return empty tar (the runner may read state
+		// files like SUMMARY.md or pathcmd.txt that haven't been created yet)
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		tw.Close()
+		return io.NopCloser(&buf), nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(result.Output))
-	if err != nil {
-		return nil, fmt.Errorf("decode archive: %w", err)
+
+	var buf bytes.Buffer
+	if info.IsDir() {
+		cmd := exec.CommandContext(ctx, "tar", "cf", "-", "-C", hostSrc, ".")
+		cmd.Stdout = &buf
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("tar %s: %w", hostSrc, err)
+		}
+	} else {
+		// Single file — tar it from its parent directory
+		dir := filepath.Dir(hostSrc)
+		name := filepath.Base(hostSrc)
+		cmd := exec.CommandContext(ctx, "tar", "cf", "-", "-C", dir, name)
+		cmd.Stdout = &buf
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("tar %s: %w", hostSrc, err)
+		}
 	}
-	return io.NopCloser(bytes.NewReader(decoded)), nil
+	return io.NopCloser(&buf), nil
 }
 
 func (v *VMEnvironment) UpdateFromEnv(srcPath string, env *map[string]string) common.Executor {
@@ -193,11 +318,13 @@ func (v *VMEnvironment) UpdateFromEnv(srcPath string, env *map[string]string) co
 		if env == nil {
 			return nil
 		}
-		result, err := v.execCmd(ctx, fmt.Sprintf("cat %s 2>/dev/null || true", sq(srcPath)), nil)
+		// Read env file directly from rootfs
+		hostSrc := v.hostPath(srcPath)
+		data, err := os.ReadFile(hostSrc)
 		if err != nil {
-			return nil
+			return nil // file not existing is fine
 		}
-		for _, line := range strings.Split(result.Output, "\n") {
+		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
@@ -239,10 +366,15 @@ func (v *VMEnvironment) IsHealthy(_ context.Context) (time.Duration, error) { re
 
 // ExecutionsEnvironment methods
 
-func (v *VMEnvironment) ToContainerPath(p string) string     { return filepath.Join("/workspace/src", p) }
-func (v *VMEnvironment) GetName() string                     { return v.name }
-func (v *VMEnvironment) GetRoot() string                     { return "/workspace/src" }
-func (v *VMEnvironment) GetActPath() string                  { return "/workspace/src/.forgejo" }
+func (v *VMEnvironment) ToContainerPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join("/", p)
+}
+func (v *VMEnvironment) GetName() string    { return v.name }
+func (v *VMEnvironment) GetRoot() string    { return "/" }
+func (v *VMEnvironment) GetActPath() string { return "/.forgejo" }
 func (v *VMEnvironment) BackendID() string                   { return "mjolnir-vm" }
 func (v *VMEnvironment) GetPathVariableName() string         { return "PATH" }
 func (v *VMEnvironment) DefaultPathVariable() string         { return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" }
@@ -276,6 +408,22 @@ func (v *VMEnvironment) execCmd(ctx context.Context, cmd string, env map[string]
 	var r ExecResult
 	json.Unmarshal(raw, &r)
 	return r, nil
+}
+
+func isValidShellVarName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	for i, c := range name {
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_' {
+			continue
+		}
+		if i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func sq(s string) string {
