@@ -218,18 +218,15 @@ if $BUILD_RUNNER; then
     echo ""
     echo "--- Building Forgejo runner (Mjolnir VM backend) ---"
 
-    # Clone upstream runner if not already present
-    ssh "$HOST" "if [ ! -d /opt/forgejo-runner-build/.git ]; then git clone https://code.forgejo.org/forgejo/runner.git /opt/forgejo-runner-build; fi"
+    RUNNER_REPO="http://10.255.255.1:3000/identikey/forgejo-runner.git"
+    RUNNER_BRANCH="mjolnir"
 
-    # Copy our VM executor package into the runner's act tree
-    ssh "$HOST" "mkdir -p /opt/forgejo-runner-build/act/container/mjolnir"
-    scp "$PROJECT_ROOT/native/forgejo-runner/act-inlined/vm.go" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/vm.go" 2>/dev/null || \
-        rsync -avz "$PROJECT_ROOT/native/forgejo-runner/act-inlined/" "$HOST:/opt/forgejo-runner-build/act/container/mjolnir/"
-
-    # Apply patches (idempotent — each checks if already applied)
-    ssh "$HOST" "cd /opt/forgejo-runner-build && \
-        python3 /opt/mjolnir/scripts/patch-runner.py && \
-        python3 /opt/mjolnir/scripts/patch-runner-labels.py"
+    # Clone or update the fork
+    ssh "$HOST" "if [ ! -d /opt/forgejo-runner-build/.git ]; then \
+        git clone -b $RUNNER_BRANCH $RUNNER_REPO /opt/forgejo-runner-build; \
+    else \
+        cd /opt/forgejo-runner-build && git fetch origin && git checkout $RUNNER_BRANCH && git reset --hard origin/$RUNNER_BRANCH; \
+    fi"
 
     # Build
     ssh "$HOST" "cd /opt/forgejo-runner-build && go build -o /usr/local/bin/forgejo-runner-mjolnir ."
