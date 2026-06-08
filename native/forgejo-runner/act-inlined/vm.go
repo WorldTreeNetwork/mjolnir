@@ -154,11 +154,11 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			os.MkdirAll(v.hostPath(ws), 0o777)
 		}
 
-		// Write env vars to a file on the host-side rootfs, then source
-		// it inside the VM before running the command. This avoids command
-		// length limits and shell quoting issues with inline exports.
+		// Write env vars to a file on the host-side rootfs. The file
+		// persists across exec calls so post-steps see the same env.
+		// Only rewrite when new env vars are provided.
+		envFile := v.hostPath("/.forgejo/.env.sh")
 		if len(env) > 0 && v.vmID != "" {
-			envFile := v.hostPath("/.forgejo/.env.sh")
 			os.MkdirAll(filepath.Dir(envFile), 0o755)
 			var buf bytes.Buffer
 			var keys []string
@@ -167,7 +167,6 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				// Skip env var names that are invalid in shell (contain hyphens, etc.)
 				if !isValidShellVarName(k) {
 					continue
 				}
@@ -176,15 +175,19 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			os.WriteFile(envFile, buf.Bytes(), 0o644)
 		}
 
-		var sourcePrefix string
-		if len(env) > 0 {
-			sourcePrefix = ". /.forgejo/.env.sh && "
-		}
+		// Write the full command to a script on the rootfs and execute it.
+		// This avoids quoting issues and lets us use bash features
+		// (PIPESTATUS, process substitution for syslog tee).
+		scriptContent := fmt.Sprintf(`#!/bin/bash
+[ -f /.forgejo/.env.sh ] && . /.forgejo/.env.sh
+cd %s
+%s 2>&1
+echo __MJOLNIR_EXIT=$?
+`, workdir, cmd)
+		scriptPath := v.hostPath("/.forgejo/.exec.sh")
+		os.WriteFile(scriptPath, []byte(scriptContent), 0o755)
 
-		// Wrap command to always exit 0 so stdout is captured by the API
-		// (Mjolnir API drops stdout on non-zero exit). Real exit code is
-		// extracted from the last line of output: __MJOLNIR_EXIT=N
-		shellCmd := fmt.Sprintf("%scd %s && { %s 2>&1; echo __MJOLNIR_EXIT=$?; }", sourcePrefix, sq(workdir), cmd)
+		shellCmd := "bash /.forgejo/.exec.sh"
 		// fmt.Fprintf(os.Stderr, "[mjolnir-exec] vmID=%s workdir=%s cmd=%s envCount=%d shellLen=%d\n", v.vmID, workdir, cmd, len(env), len(shellCmd))
 		if user != "" && user != "root" {
 			shellCmd = fmt.Sprintf("su -c %s %s", sq(shellCmd), user)
