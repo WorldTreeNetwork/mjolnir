@@ -109,6 +109,20 @@ func (v *VMEnvironment) Create(capAdd, capDrop []string) common.Executor {
 
 		for i := 0; i < 30; i++ {
 			if _, err := v.execCmd(ctx, "true", nil); err == nil {
+				// Pre-create essential directories and files on the rootfs.
+				// The runner expects these before any action runs.
+				for _, dir := range []string{
+					"/.forgejo/workflow",
+					"/workspace/src",
+				} {
+					os.MkdirAll(v.hostPath(dir), 0o777)
+				}
+				// Create empty event.json — the runner doesn't write this
+				// via Copy(); actions/checkout reads it from GITHUB_EVENT_PATH.
+				eventPath := v.hostPath("/.forgejo/workflow/event.json")
+				if _, err := os.Stat(eventPath); os.IsNotExist(err) {
+					os.WriteFile(eventPath, []byte("{}"), 0o644)
+				}
 				return nil
 			}
 			time.Sleep(time.Second)
@@ -132,6 +146,12 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 		cmd := strings.Join(command, " ")
 		if workdir == "" {
 			workdir = "/"
+		}
+
+		// Ensure GITHUB_WORKSPACE directory exists on the rootfs.
+		// The checkout action requires it before running.
+		if ws, ok := env["GITHUB_WORKSPACE"]; ok && ws != "" && v.vmID != "" {
+			os.MkdirAll(v.hostPath(ws), 0o777)
 		}
 
 		// Write env vars to a file on the host-side rootfs, then source
@@ -161,8 +181,11 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			sourcePrefix = ". /.forgejo/.env.sh && "
 		}
 
-		shellCmd := fmt.Sprintf("%scd %s && %s 2>&1", sourcePrefix, sq(workdir), cmd)
-		fmt.Fprintf(os.Stderr, "[mjolnir-exec] vmID=%s workdir=%s cmd=%s envCount=%d shellLen=%d\n", v.vmID, workdir, cmd, len(env), len(shellCmd))
+		// Wrap command to always exit 0 so stdout is captured by the API
+		// (Mjolnir API drops stdout on non-zero exit). Real exit code is
+		// extracted from the last line of output: __MJOLNIR_EXIT=N
+		shellCmd := fmt.Sprintf("%scd %s && { %s 2>&1; echo __MJOLNIR_EXIT=$?; }", sourcePrefix, sq(workdir), cmd)
+		// fmt.Fprintf(os.Stderr, "[mjolnir-exec] vmID=%s workdir=%s cmd=%s envCount=%d shellLen=%d\n", v.vmID, workdir, cmd, len(env), len(shellCmd))
 		if user != "" && user != "root" {
 			shellCmd = fmt.Sprintf("su -c %s %s", sq(shellCmd), user)
 		}
@@ -171,18 +194,26 @@ func (v *VMEnvironment) Exec(command []string, env map[string]string, user, work
 			fmt.Fprintf(os.Stderr, "[mjolnir-exec] ERROR: %v\n", err)
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[mjolnir-exec] result: exit=%d outLen=%d stderr=%.500s out=%.200s\n", result.ExitCode, len(result.Output), result.Stderr, result.Output)
+
+		// Parse real exit code from __MJOLNIR_EXIT=N suffix
+		output := result.Output
+		realExit := 0
+		if idx := strings.LastIndex(output, "__MJOLNIR_EXIT="); idx >= 0 {
+			exitLine := strings.TrimSpace(output[idx+len("__MJOLNIR_EXIT="):])
+			fmt.Sscanf(exitLine, "%d", &realExit)
+			output = output[:idx]
+		}
+
+		// fmt.Fprintf(os.Stderr, "[mjolnir-exec] result: realExit=%d outLen=%d out=%.300s\n", realExit, len(output), output)
+
 		v.mu.Lock()
 		w := v.stdout
 		v.mu.Unlock()
-		if w != nil && result.Output != "" {
-			io.WriteString(w, result.Output)
+		if w != nil && output != "" {
+			io.WriteString(w, output)
 		}
-		if result.ExitCode != 0 {
-			if w != nil && result.Stderr != "" {
-				io.WriteString(w, result.Stderr)
-			}
-			return fmt.Errorf("exit code %d", result.ExitCode)
+		if realExit != 0 {
+			return fmt.Errorf("exit code %d", realExit)
 		}
 		return nil
 	}
@@ -193,6 +224,7 @@ func (v *VMEnvironment) Copy(destPath string, files ...*container.FileEntry) com
 	return func(ctx context.Context) error {
 		for _, f := range files {
 			fp := v.hostPath(filepath.Join(destPath, f.Name))
+			// fmt.Fprintf(os.Stderr, "[mjolnir-copy] %s (%d bytes, mode %o)\n", filepath.Join(destPath, f.Name), len(f.Body), f.Mode)
 			if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 				return fmt.Errorf("mkdir %s: %w", filepath.Dir(fp), err)
 			}
@@ -258,24 +290,10 @@ func (v *VMEnvironment) CopyDir(destPath, srcPath string, _ bool) common.Executo
 			return fmt.Errorf("mkdir %s: %w", hostDest, err)
 		}
 		// Use cp -a for full recursive copy preserving permissions
-		fmt.Fprintf(os.Stderr, "[mjolnir-copydir] src=%s dest=%s hostDest=%s\n", srcPath, destPath, hostDest)
-
-		// Check source exists
-		if _, err := os.Stat(srcPath); err != nil {
-			fmt.Fprintf(os.Stderr, "[mjolnir-copydir] ERROR: source does not exist: %s: %v\n", srcPath, err)
-			return fmt.Errorf("copydir source missing: %s: %w", srcPath, err)
-		}
-
 		cmd := exec.CommandContext(ctx, "cp", "-a", srcPath+"/.", hostDest+"/")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "[mjolnir-copydir] ERROR: cp failed: %s\n", string(out))
 			return fmt.Errorf("cp -a %s → %s: %w (%s)", srcPath, hostDest, err, string(out))
 		}
-
-		// Verify dest
-		count := 0
-		filepath.Walk(hostDest, func(_ string, _ os.FileInfo, _ error) error { count++; return nil })
-		fmt.Fprintf(os.Stderr, "[mjolnir-copydir] OK: copied %d entries to %s\n", count, hostDest)
 		return nil
 	}
 }
