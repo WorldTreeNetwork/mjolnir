@@ -4,8 +4,8 @@ set -euo pipefail
 # Build a minimal Ubuntu 24.04 BTRFS subvolume rootfs for Cloud Hypervisor VMs
 # with virtio-fs. The output is a directory (BTRFS subvolume), not an ext4 file.
 #
-# Usage: sudo ./scripts/build-rootfs.sh [output-path]
-# Example: sudo ./scripts/build-rootfs.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04
+# Usage: sudo ./scripts/build-rootfs-ubuntu-24.04.sh [output-path]
+# Example: sudo ./scripts/build-rootfs-ubuntu-24.04.sh /var/lib/mjolnir/btrfs/@base/ubuntu-24.04
 
 OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/ubuntu-24.04}"
 AGENT_BIN="${AGENT_BIN:-}"
