@@ -56,5 +56,7 @@ if [[ "${1:-}" == "--install" ]]; then
 else
     echo "Install with:"
     echo "  $0 --install"
-    echo "  # or manually: cp $(pwd)/$BINARY /usr/local/bin/mjolnir"
+    echo "  # or manually:"
+    echo "  #   cp $(pwd)/$BINARY /usr/local/bin/mjolnir"
+    echo "  #   ln -sf mjolnir /usr/local/bin/mj   # 'mj' shorthand"
 fi
