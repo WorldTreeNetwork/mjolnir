@@ -78,6 +78,23 @@ defmodule Mjolnir.API.SitesRouter do
     end
   end
 
+  ## Identity registration
+
+  # Deposit the self-authenticating `identity/pubkey` bootstrap record so that
+  # subsequent signed records (HEAD, alias) under this fingerprint can be
+  # verified. The body is `{"pubkey": "<base64 ed25519>"}` with no signature;
+  # SecretStore.put verifies that fingerprint(pubkey) == fp. Idempotent.
+  put "/:fp/identity" do
+    with {:ok, bytes, conn} <- read_full_body(conn),
+         :ok <- SecretStore.put(fp, "identity/pubkey", bytes) do
+      json(conn, 201, %{ok: true, identikey_fp: fp})
+    else
+      {:error, :fingerprint_mismatch} -> json(conn, 400, %{error: "fingerprint_mismatch"})
+      {:error, :missing_pubkey} -> json(conn, 400, %{error: "missing_pubkey"})
+      {:error, reason} -> json(conn, 400, %{error: inspect(reason)})
+    end
+  end
+
   ## HEAD pointer
 
   post "/:fp/:name/head" do

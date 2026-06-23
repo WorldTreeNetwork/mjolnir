@@ -393,6 +393,37 @@ defmodule Mjolnir.API.SitesRouterTest do
     assert 404 == call(:get, "/aliases/lookup?host=#{fqdn}").status
   end
 
+  ## Identity registration
+
+  describe "PUT /:fp/identity" do
+    test "registers a fresh self-authenticating identity, unblocking signed HEADs" do
+      kp = IdentiKey.gen_keypair()
+      fp = IdentiKey.fingerprint(kp)
+      reg = Jason.encode!(%{"pubkey" => Base.encode64(kp.ed25519_public)})
+
+      # Before registration a signed HEAD under a brand-new fp is rejected.
+      mbytes = sample_manifest(fp) |> Manifest.serialize()
+      head = signed_head_bytes(kp, mbytes, fp, "blog", 1)
+      assert call(:post, "/#{fp}/blog/head", head).status in [400, 500]
+
+      # Registering the bootstrap record self-authenticates (fingerprint match)...
+      assert call(:put, "/#{fp}/identity", reg).status == 201
+
+      # ...and now the same signed HEAD verifies.
+      assert call(:post, "/#{fp}/blog/head", head).status == 200
+    end
+
+    test "rejects a pubkey whose fingerprint does not match the path fp" do
+      kp = IdentiKey.gen_keypair()
+      wrong_fp = IdentiKey.fingerprint(IdentiKey.gen_keypair())
+      reg = Jason.encode!(%{"pubkey" => Base.encode64(kp.ed25519_public)})
+
+      conn = call(:put, "/#{wrong_fp}/identity", reg)
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "fingerprint_mismatch"
+    end
+  end
+
   ## Alias test helper
 
   defp signed_alias_bytes(keypair, fp, site_name, fqdn, seq \\ 1) do

@@ -139,7 +139,8 @@ defmodule Mjolnir.Sites.Publisher do
     {manifest, chunks} = build_snapshot(dir, identikey_fp, site_name, opts)
     manifest_bytes = Manifest.serialize(manifest)
 
-    with {:ok, snapshot_hash, missing} <-
+    with :ok <- maybe_register_identity(base_url, identikey_fp, keypair),
+         {:ok, snapshot_hash, missing} <-
            post_snapshot(base_url, identikey_fp, site_name, manifest_bytes),
          :ok <- upload_missing_chunks(base_url, missing, chunks),
          {:ok, _seq} <-
@@ -151,6 +152,27 @@ defmodule Mjolnir.Sites.Publisher do
   # ---------------------------------------------------------------------------
   # HTTP helpers
   # ---------------------------------------------------------------------------
+
+  # Deposit the self-authenticating identity/pubkey record so the server can
+  # verify the signed HEAD record that follows. Idempotent — re-registering the
+  # same key is a no-op. Skipped entirely for unsigned publishes (no keypair).
+  defp maybe_register_identity(_base_url, _fp, nil), do: :ok
+
+  defp maybe_register_identity(base_url, fp, %{ed25519_public: pub}) do
+    body = Jason.encode!(%{"pubkey" => Base.encode64(pub)})
+    url = "#{base_url}/api/sites/#{fp}/identity"
+
+    case Req.put(url, body: body, headers: [{"content-type", "application/json"}]) do
+      {:ok, %{status: status}} when status in [200, 201] ->
+        :ok
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:identity_register_failed, status, body}}
+
+      {:error, reason} ->
+        {:error, {:http_error, reason}}
+    end
+  end
 
   defp post_snapshot(base_url, fp, name, manifest_bytes) do
     url = "#{base_url}/api/sites/#{fp}/#{name}/snapshot"
