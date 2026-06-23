@@ -51,7 +51,7 @@ defmodule Mjolnir.Chaos.TapDownTest do
   test "TAP admin-down is detected by GuestNetwork and healed" do
     assert :ok = wait_for_mjolnir_up(30_000)
 
-    {:ok, spawned} = spawn_vm(%{base_image: "arch"})
+    {:ok, spawned} = spawn_vm(%{base_image: "ubuntu-24.04"})
     vm_id = spawned["id"]
     IO.puts("[chaos:tap-down] spawned VM #{vm_id}")
 

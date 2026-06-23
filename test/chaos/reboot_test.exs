@@ -22,7 +22,7 @@ defmodule Mjolnir.Chaos.RebootTest do
   test "server reboot preserves VMs" do
     assert :ok = wait_for_mjolnir_up(30_000), "mjolnir not responding before test"
 
-    {:ok, spawned} = spawn_vm(%{base_image: "arch"})
+    {:ok, spawned} = spawn_vm(%{base_image: "ubuntu-24.04"})
     vm_id = spawned["id"]
     assert is_binary(vm_id)
     IO.puts("[chaos:reboot] spawned VM #{vm_id}")

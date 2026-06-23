@@ -23,7 +23,7 @@ defmodule Mjolnir.Chaos.NukeTest do
   test "nuke destroys in-VM state and respawns with same UUID + IP" do
     assert :ok = wait_for_mjolnir_up(30_000)
 
-    {:ok, spawned} = spawn_vm(%{base_image: "arch"})
+    {:ok, spawned} = spawn_vm(%{base_image: "ubuntu-24.04"})
     vm_id = spawned["id"]
     original_ip = spawned["guest_ip"]
     IO.puts("[chaos:nuke] spawned VM #{vm_id} at #{original_ip}")

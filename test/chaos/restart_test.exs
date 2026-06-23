@@ -23,7 +23,7 @@ defmodule Mjolnir.Chaos.RestartTest do
     assert :ok = wait_for_mjolnir_up(30_000), "mjolnir not responding to /health before test"
 
     # 2. Spawn a fresh VM, remember its UUID
-    {:ok, spawned} = spawn_vm(%{base_image: "arch"})
+    {:ok, spawned} = spawn_vm(%{base_image: "ubuntu-24.04"})
     vm_id = spawned["id"] || spawned[:id]
     assert is_binary(vm_id), "spawn response missing id: #{inspect(spawned)}"
 

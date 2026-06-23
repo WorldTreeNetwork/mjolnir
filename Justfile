@@ -112,8 +112,8 @@ deploy-boot: _require-host
         cp /opt/mjolnir/boot-image/initramfs.img /var/lib/mjolnir/boot/initramfs.img && \
         chmod 644 /var/lib/mjolnir/boot/initramfs.img"
 
-# Rebuild base rootfs image on server (distro: arch, ubuntu-24.04)
-deploy-rootfs distro="arch": _require-host
+# Rebuild base rootfs image on server (distro: ubuntu-24.04, arch)
+deploy-rootfs distro="ubuntu-24.04": _require-host
     ssh {{host}} "cd /opt/mjolnir && \
         AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent \
         bash scripts/build-rootfs-{{distro}}.sh /var/lib/mjolnir/btrfs/@base/{{distro}}"

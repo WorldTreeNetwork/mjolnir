@@ -24,7 +24,7 @@ defmodule Mjolnir.Chaos.CHSigkillTest do
   test "SIGKILL on a single CH process self-heals via Monitor" do
     assert :ok = wait_for_mjolnir_up(30_000)
 
-    {:ok, spawned} = spawn_vm(%{base_image: "arch"})
+    {:ok, spawned} = spawn_vm(%{base_image: "ubuntu-24.04"})
     vm_id = spawned["id"]
     assert is_binary(vm_id)
     IO.puts("[chaos:ch-sigkill] spawned VM #{vm_id}")
