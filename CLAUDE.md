@@ -37,11 +37,11 @@ cargo install just         # or via cargo
 cp .env.example .env
 # Edit .env and set MJOLNIR_HOST=root@45.76.77.97
 
-# 3. Verify
-just health                # Should return {"status":"ok"}
+# 3. Verify (VM/health ops go through the `mj` binary, not just)
+mj doctor                  # API reachable + host health (KVM, vsock, forwarding, BTRFS)
 ```
 
-You can also pass the host inline: `just host=root@1.2.3.4 health`
+You can also pass the host inline to server recipes: `just host=root@1.2.3.4 status`
 
 ### Command Reference
 
@@ -69,35 +69,26 @@ just deploy-gateway   # Code + rebuild web gateway
 just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 ```
 
-**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel:
+**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface:
 
 ```bash
-mj spawn                               # Spawn a new VM
-mj spawn --snapshot my-snapshot        # Spawn from a snapshot
-mj list                                # List running VMs
-mj info <id>                           # Get VM details
-mj exec <id> "uname -a"                # Execute a command in a VM
-mj kill <id>                           # Stop and destroy a VM
-mj url <id>                            # Get the web gateway URL
-mj connect <id>                        # Interactive PTY
-mj snapshot <id> my-snap               # Snapshot a VM
-mj snapshots                           # List all snapshots
+mj spawn                               # Spawn a VM (--snapshot <name>, --memory <mb>, --connect)
+mj list [--dormant]                    # List running VMs (--dormant also shows parked)
+mj info <id>                           # Detailed status
+mj exec <id> "uname -a"                # Run a command
+mj kill <id> | mj kill --all           # Destroy one VM, or all of them
+mj url <id>                            # Web gateway URL
+mj connect <id>                        # Interactive PTY (WebSocket)
+mj message <id> '{"k":"v"}'            # Send a payload in; wakes a dormant VM
+mj doctor [<id>] [--fix]               # Health probe (no id = API + host); --fix heals
+mj ticket get <id> [--wait]            # Connection ticket (--wait blocks for PTY readiness)
+mj snapshot create <id> <name>         # Checkpoint a VM
+mj snapshot list                       # List snapshots
+mj snapshot show <name>                # Snapshot metadata
+mj snapshot rm <name>                  # Delete a snapshot
 ```
 
-**VM Diagnostics** — the Justfile keeps the probes/ops not yet ported to `mj` (see mjolnir-bmc); these still ride the SSH tunnel:
-
-```bash
-just vm-health <id>                    # L0-L4 probe (ping/vsock/iroh/net/hypervisor)
-just vm-heal <id>                      # Probe-and-heal a VM
-just vm-stop-all                       # Stop all running VMs
-just vm-ticket <id>                    # Get Iroh connection ticket
-just vm-await-pty <id>                 # Wait for PTY readiness
-just vm-message <id> '{"key":"val"}'   # Send a message to a VM
-just snap-info my-snap                 # Get snapshot metadata
-just snap-delete my-snap               # Delete a snapshot
-just dormant                           # List dormant VMs
-just health                            # API health check
-```
+Add `--json` to any reporting command for the raw server response. Run `mj --help` for the full surface (connections via `mj iroh`, `mj config`, `mj forge`, `mj server`).
 
 **Server Management** — SSH into the server:
 
@@ -116,9 +107,7 @@ just bootstrap        # Bootstrap a fresh server
 
 ### How It Works
 
-The remaining Justfile VM **diagnostics** use **SSH-wrapped curl**: `ssh host "curl localhost:4000/..."`. This is required because the API auth bypass only works for connections from `127.0.0.1` — direct curl from your Mac would get `401`. The SSH tunnel makes curl appear as localhost on the server. (The `mj` binary avoids this entirely: it authenticates to the public API with a bearer token.)
-
-For diagnostics that need a JSON request body (e.g. `vm-message`), local `jq` constructs the JSON safely and pipes it through SSH to curl's stdin (`-d @-`), avoiding shell quoting issues.
+The Justfile is for **server operations** — deploy, build, host management — plus the **IdentiKey Sites** recipes. Those Sites recipes still use **SSH-wrapped curl** (`ssh host "curl localhost:4000/..."`) because the API auth bypass only trusts `127.0.0.1`; the SSH tunnel makes curl appear as localhost on the server. VM and snapshot operations are **not** in the Justfile — they live in the `mj` binary, which authenticates to the public API with a bearer token and needs no SSH tunnel.
 
 ## Build & Development Commands
 

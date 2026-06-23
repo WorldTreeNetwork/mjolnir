@@ -52,10 +52,10 @@ ssh root@server "curl -H 'Authorization: Bearer $TOKEN' \
 - **Scopes**: Token claims include `scope` field (currently unused; all authenticated users get full access)
 - **Expiry**: Currently NOT enforced (⚠️ TODO: add `exp` claim validation)
 
-**Justfile integration**:
+**`mj` integration**:
 ```bash
 # Automatic JWT injection (if $MJOLNIR_TOKEN env var set)
-just host=user@server vm-spawn
+mj spawn
 # Internally: ssh user@server "curl -H 'Authorization: Bearer $MJOLNIR_TOKEN' ..."
 ```
 
@@ -122,10 +122,10 @@ end
 The Justfile automates SSH tunneling. Internally, commands like:
 
 ```bash
-just host=root@45.76.77.97 vm-spawn
+mj spawn
 ```
 
-Execute:
+Execute (internally):
 
 ```bash
 ssh root@45.76.77.97 "curl -X POST http://localhost:4000/api/vms ..."
@@ -416,17 +416,15 @@ Example response:
 ### Spawn VM with Custom SSH Key
 
 ```bash
-just vm-spawn  # Interactive prompt for SSH public key
-# OR
-just vm-spawn ssh_public_key='ssh-ed25519 AAAA...'
+mj spawn
 ```
 
-The public key is injected via vsock at boot time; guest agent writes it to `/root/.ssh/authorized_keys`.
+`mj spawn` reads your SSH public key automatically from `mj config` or `~/.ssh` — no explicit key argument needed. The key is injected via vsock at boot time; guest agent writes it to `/root/.ssh/authorized_keys`.
 
 ### List VMs Owned by User
 
 ```bash
-just vm-list | jq '.vms[] | select(.owner_id == "alice")'
+mj list --json | jq '.vms[] | select(.owner_id == "alice")'
 ```
 
 ### Monitor API Performance
@@ -458,10 +456,10 @@ jq -R 'split(".") | .[1] | @base64d | fromjson' <<< "$MJOLNIR_TOKEN"
 **Fix**:
 ```bash
 # Check VM owner
-just vm-info <id> | jq .owner_id
+mj info <id> | jq .owner_id
 
 # Only owner can execute
-just vm-exec <id> "whoami"  # If not owner, fails
+mj exec <id> "whoami"  # If not owner, fails
 ```
 
 ### "SSH: Connection refused"

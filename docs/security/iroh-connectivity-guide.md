@@ -11,10 +11,10 @@ When you spawn a VM with `enable_iroh: true`, the guest agent automatically:
 4. Returns a z32-encoded 52-character ticket for connection
 
 ```bash
-# Via Justfile
-just vm-spawn                    # Returns web_url with ticket
-just vm-await-pty <id>          # Waits for Iroh endpoint online
-just vm-ticket <id>             # Get ticket as z32 string
+# Via mj CLI
+mj spawn                         # Returns web_url with ticket
+mj ticket get <id> --wait        # Waits for Iroh endpoint online
+mj ticket get <id>               # Get ticket as z32 string
 
 # Via API
 POST /api/vms {"enable_iroh": true}
@@ -69,9 +69,9 @@ By default, any client knowing your z32 ticket can connect. The ticket is derive
 The guest agent stores its keypair at `/etc/mjolnir/iroh.key` (32 bytes, raw binary). When you snapshot a VM:
 
 ```bash
-just snap-create <id> my-snapshot      # Default: generates NEW key for next spawn
-just vm-spawn-from my-snapshot \
-  --preserve-iroh-key                  # Keep original key from snapshot
+mj snapshot create <id> my-snapshot        # Default: generates NEW key for next spawn
+mj spawn --snapshot my-snapshot \
+  --preserve-iroh-key                      # Keep original key from snapshot
 ```
 
 Use `preserve_iroh_key: true` if you want downstream VMs to have the same Iroh identity (useful for access control—existing clients remain authorized).
@@ -115,7 +115,7 @@ Then deploy with `just deploy-full --agent`.
 **Exposure**: Shell access, TCP port forwarding (depending on guest firewall)
 **Mitigation**:
 - Treat tickets like SSH private keys — don't commit to repos
-- Rotate VM / generate new ticket if leaked: `just vm-stop <id> && just vm-spawn`
+- Rotate VM / generate new ticket if leaked: `mj kill <id> && mj spawn`
 - Use guest-side firewall rules to restrict inbound ports
 - Short-lived tickets: snapshot → spawn fresh with new key regularly
 

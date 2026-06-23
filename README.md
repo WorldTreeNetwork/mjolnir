@@ -48,10 +48,11 @@ mj exec <vm_id> "uname -a"       # run a one-shot command
 mj connect <vm_id>               # interactive terminal over WebSocket PTY
 mj iroh connect <ticket>         # interactive terminal over Iroh QUIC (P2P, NAT-traversing)
 mj iroh ssh <ticket>             # SSH into the VM through an Iroh tunnel
-mj snapshot <vm_id> my-snap      # checkpoint a running VM
-mj snapshots                     # list snapshots
+mj snapshot create <vm_id> my-snap  # checkpoint a running VM
+mj snapshot list                 # list snapshots
 mj spawn --snapshot my-snap      # restore from a snapshot
-mj kill <vm_id>                  # stop and destroy
+mj kill <vm_id>                  # stop and destroy (or `mj kill --all`)
+mj doctor <vm_id>                # health probe (--fix to repair); no id checks API + host
 mj status                        # show current auth + config
 ```
 
@@ -61,26 +62,22 @@ Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-s
 
 ## Operate it
 
-If you have **SSH access** to the server, the `just` control plane handles **deploys, host management, and VM diagnostics** from your Mac. It tunnels API calls over SSH (the API auth-bypass only trusts `127.0.0.1`, so curl has to appear as localhost on the box). For everyday VM lifecycle — spawn / list / exec / kill / snapshot — prefer the **`mj` binary above**: it goes through the public API with token auth and needs no SSH.
+VM and snapshot operations all live in the **`mj` binary above** — including health (`mj doctor`), repair (`mj doctor --fix`), and dormant VMs (`mj list --dormant`). The `just` control plane is for **server operations**: deploying, building, and host management. If you have **SSH access** to the server, point `just` at it:
 
 ```bash
 # 1. Point just at your server
 cp .env.example .env             # then edit: MJOLNIR_HOST=root@your-server-ip
 
-# 2. Verify the connection
-just health                      # -> {"status":"ok"}
-
-# 3. Deploy, manage, diagnose
+# 2. Deploy, manage, inspect
 just deploy                      # rsync code, rebuild guest agent, restart service
 just logs                        # follow journald logs (live)
-just vm-health <vm_id>           # L0-L4 health probe (ping/vsock/iroh/net/hypervisor)
-just vm-heal <vm_id>             # probe-and-heal
-just dormant                     # list dormant VMs
+just status                      # systemctl status mjolnir
+just server-networking           # IP forwarding, NAT rules, TAP interfaces
 ```
 
-You can also pass the host inline without `.env`: `just host=root@1.2.3.4 health`.
+You can also pass the host inline without `.env`: `just host=root@1.2.3.4 status`.
 
-Run `just --list` for everything — deploys, host management, VM diagnostics, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`). VM lifecycle ops live in `mj` (see above).
+Run `just --list` for everything — deploys, host management, IdentiKey Sites, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`). VM lifecycle and health live in `mj` (see above); a quick `mj doctor` confirms the server is reachable and healthy.
 
 ---
 
@@ -187,7 +184,7 @@ sudo usermod -aG kvm $USER && newgrp kvm
 grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualization"
 ```
 
-**`just` commands fail** — check `MJOLNIR_HOST` is set (`.env`) and `just health` returns ok.
+**`just` commands fail** — check `MJOLNIR_HOST` is set (`.env`). To confirm the server is reachable and healthy, run `mj doctor`.
 
 ---
 

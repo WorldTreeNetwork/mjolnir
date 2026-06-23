@@ -215,11 +215,11 @@ Mjolnir.Health.heal_host()
 - `POST /vms/<id>/nuke` → L5 rebuild
 - `GET /health/host` → host-wide report
 
-**Justfile surface:**
-- `just vm-health <id>` — pretty-printed check
-- `just vm-heal <id> level=3` — heal to level
-- `just vm-nuke <id>` — escape hatch
-- `just host-health` — host-wide
+**CLI surface:**
+- `mj doctor <id>` — pretty-printed check
+- `mj doctor <id> --fix --max-level 3` — heal to level
+- `(nuke: POST /api/vms/<id>/nuke — no mj command yet)` — escape hatch
+- `mj doctor` — host-wide
 
 ### Monitor loop
 
@@ -255,7 +255,7 @@ Ordered by implementation + pass order. Each is an ExUnit test under `test/chaos
 
 | # | Tags | Scenario | Trigger | Assertion |
 |---|---|---|---|---|
-| 1 | `:chaos` | Mjolnir restart | `ssh mjolnir systemctl restart mjolnir` | Pre-existing VM UUIDs reappear; `vm-exec uname -a` succeeds on each; IPs unchanged |
+| 1 | `:chaos` | Mjolnir restart | `ssh mjolnir systemctl restart mjolnir` | Pre-existing VM UUIDs reappear; `mj exec <id> "uname -a"` succeeds on each; IPs unchanged |
 | 2 | `:chaos` | BEAM SIGKILL | `ssh mjolnir pkill -9 beam.smp` | Systemd restarts mjolnir; scenario 1 assertions |
 | 3 | `:chaos, :destructive` | Server reboot | `ssh mjolnir systemctl reboot`; wait for ssh | Scenario 1 assertions after boot. ~60s host downtime. |
 | 4 | `:chaos` | CH child SIGKILL (one VM) | `pkill -9 -f "cloud-hypervisor.*<uuid>"` | That VM's `GenServer` exits → `Reconcile` or `Health.Monitor` rebuilds it; other VMs untouched |

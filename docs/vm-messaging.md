@@ -30,10 +30,10 @@ POST /api/vms/{target_vm_id}/messages
 
 **Auth scope:** `vms:exec`
 
-**Justfile shortcut:**
+**CLI shortcut:**
 
 ```bash
-just vm-message <vm-id> '{"from_vm_id": "external", "payload": {"type": "wake"}}'
+mj message <vm-id> '{"type": "wake"}'
 ```
 
 ---
@@ -190,7 +190,7 @@ The registry uses atomic writes (temp file → rename → fsync) with a configur
 
 ```bash
 # 1. Spawn a VM
-just vm-spawn
+mj spawn
 # → {"id": "abc-123", ...}
 
 # 2. The workload inside finishes and signals done.
@@ -198,7 +198,7 @@ just vm-spawn
 #    VM snapshots itself and goes dormant.
 
 # 3. Some time later, send it a message:
-just vm-message abc-123 '{"from_vm_id": "external", "payload": {"task": "resume"}}'
+mj message abc-123 '{"task": "resume"}'
 # → {"ok": true}
 
 # 4. Behind the scenes:
@@ -208,6 +208,6 @@ just vm-message abc-123 '{"from_vm_id": "external", "payload": {"task": "resume"
 #    - VM is now running again
 
 # 5. Verify it's back:
-just vm-info abc-123
+mj info abc-123
 # → {"id": "abc-123", "state": "running", ...}
 ```

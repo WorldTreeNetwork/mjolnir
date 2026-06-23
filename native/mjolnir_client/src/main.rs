@@ -28,6 +28,10 @@ struct Cli {
     #[arg(long, global = true, env = "MJOLNIR_PROFILE")]
     profile: Option<String>,
 
+    /// Emit raw JSON instead of formatted output (where supported)
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -56,6 +60,9 @@ enum Command {
     },
     /// List running VMs
     List {
+        /// Also list dormant (parked) VMs
+        #[arg(long)]
+        dormant: bool,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -87,10 +94,43 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
-    /// Stop and destroy a VM
+    /// Stop and destroy a VM (or all with --all)
     Kill {
         /// VM ID or ticket
+        id: Option<String>,
+        /// Stop every running VM
+        #[arg(long)]
+        all: bool,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Send a JSON payload into a VM (wakes a dormant VM)
+    Message {
+        /// VM ID or ticket
         id: String,
+        /// JSON payload, e.g. '{"key":"val"}'
+        payload: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Diagnose VM/host health; --fix to repair
+    Doctor {
+        /// VM ID or ticket (omit to check API + host)
+        id: Option<String>,
+        /// Repair degraded/dead checks (heal)
+        #[arg(long)]
+        fix: bool,
+        /// Cap the heal level (VM only; default 2)
+        #[arg(long)]
+        max_level: Option<u32>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -135,91 +175,12 @@ enum Command {
         action: IrohCommand,
     },
 
-    // --- Hidden backward-compat aliases ---
-    /// Connect to VM shell via Iroh (use 'iroh connect' instead)
-    #[command(hide = true)]
-    Shell {
-        /// Ticket (z32 node ID), hex node ID, or full iroh JSON
-        ticket: String,
-        /// Relay URL hint
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s) (ip:port, repeatable)
-        #[arg(long)]
-        ip: Vec<String>,
-    },
-    /// Connect to VM PTY (use 'connect' instead)
-    #[command(hide = true)]
-    Pty {
-        /// VM ID (UUID)
-        id: String,
-        /// Mjolnir API base URL
-        #[arg(long)]
-        api: Option<String>,
-        /// Bearer token for API auth
-        #[arg(long, env = "MJOLNIR_TOKEN")]
-        token: Option<String>,
-    },
-    /// SSH via Iroh (use 'iroh ssh' instead)
-    #[command(hide = true, name = "ssh")]
-    SshAlias {
-        /// Ticket
-        ticket: String,
-        /// SSH user (default: root)
-        #[arg(long, default_value = "root")]
-        user: String,
-        /// Relay URL hint
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s)
-        #[arg(long)]
-        ip: Vec<String>,
-        /// Extra args passed to ssh
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        ssh_args: Vec<String>,
-    },
-    /// TCP proxy via Iroh (use 'iroh proxy' instead)
-    #[command(hide = true, name = "proxy")]
-    ProxyAlias {
-        /// Ticket
-        ticket: String,
-        /// Target port (default: 22)
-        #[arg(long, default_value = "22")]
-        port: u16,
-        /// Relay URL hint
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s)
-        #[arg(long)]
-        ip: Vec<String>,
-    },
-
     // --- Snapshots ---
-    /// Create a snapshot of a running VM
+    /// Manage snapshots (create / list / show / rm)
     #[command(next_help_heading = "Snapshots")]
     Snapshot {
-        /// VM ID or ticket
-        id: String,
-        /// Snapshot name
-        name: String,
-        /// Mjolnir API base URL
-        #[arg(long)]
-        api: Option<String>,
-        /// Bearer token for API auth
-        #[arg(long, env = "MJOLNIR_TOKEN")]
-        token: Option<String>,
-        /// Compact the snapshot (reclaim freed blocks)
-        #[arg(long)]
-        compact: bool,
-    },
-    /// List available snapshots
-    Snapshots {
-        /// Mjolnir API base URL
-        #[arg(long)]
-        api: Option<String>,
-        /// Bearer token for API auth
-        #[arg(long, env = "MJOLNIR_TOKEN")]
-        token: Option<String>,
+        #[command(subcommand)]
+        action: SnapshotAction,
     },
 
     // --- Auth ---
@@ -324,6 +285,57 @@ enum IrohCommand {
 }
 
 #[derive(Subcommand)]
+enum SnapshotAction {
+    /// Checkpoint a running VM
+    Create {
+        /// VM ID or ticket
+        id: String,
+        /// Snapshot name
+        name: String,
+        /// Compact the snapshot (reclaim freed blocks)
+        #[arg(long)]
+        compact: bool,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// List available snapshots
+    List {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Show metadata for a snapshot
+    Show {
+        /// Snapshot name
+        name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Delete a snapshot
+    Rm {
+        /// Snapshot name
+        name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ConfigAction {
     /// Set a config value
     Set {
@@ -338,6 +350,23 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum TicketAction {
+    /// Fetch a VM's connection ticket (--wait blocks for PTY readiness)
+    Get {
+        /// VM ID or ticket
+        id: String,
+        /// Block until the PTY is ready before returning
+        #[arg(long)]
+        wait: bool,
+        /// Timeout in ms when waiting (default: 30000)
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Decode iroh JSON to compact ticket (z32)
     Decode {
         /// Iroh JSON EndpointAddr string
@@ -479,6 +508,7 @@ enum HostsCmd {
 async fn main() {
     let cli = Cli::parse();
     let profile = config::resolve_profile(&cli.profile);
+    let json = cli.json;
 
     let result: anyhow::Result<()> = match cli.command {
         // --- VM Operations ---
@@ -488,23 +518,64 @@ async fn main() {
             token,
             memory,
             snapshot,
+        } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot).await,
+        Command::List {
+            dormant,
+            api,
+            token,
+        } => api::cmd_list(&profile, &api, &token, dormant, json).await,
+        Command::Info { id, api, token } => api::cmd_info(&profile, &api, &token, &id, json).await,
+        Command::Exec {
+            id,
+            cmd,
+            api,
+            token,
+        } => api::cmd_exec(&profile, &api, &token, &id, &cmd).await,
+        Command::Kill {
+            id,
+            all,
+            api,
+            token,
         } => {
-            api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot).await
+            if all {
+                api::cmd_kill_all(&profile, &api, &token).await
+            } else {
+                match id {
+                    Some(id) => api::cmd_kill(&profile, &api, &token, &id).await,
+                    None => Err(anyhow::anyhow!("provide a VM id or --all")),
+                }
+            }
         }
-        Command::List { api, token } => api::cmd_list(&profile, &api, &token).await,
-        Command::Info { id, api, token } => api::cmd_info(&profile, &api, &token, &id).await,
-        Command::Exec { id, cmd, api, token } => {
-            api::cmd_exec(&profile, &api, &token, &id, &cmd).await
-        }
-        Command::Kill { id, api, token } => api::cmd_kill(&profile, &api, &token, &id).await,
-        Command::Url { id, api, token, port } => {
-            api::cmd_url(&profile, &api, &token, &id, port).await
-        }
+        Command::Message {
+            id,
+            payload,
+            api,
+            token,
+        } => api::cmd_message(&profile, &api, &token, &id, &payload, json).await,
+        Command::Doctor {
+            id,
+            fix,
+            max_level,
+            api,
+            token,
+        } => match id {
+            Some(id) => api::cmd_doctor(&profile, &api, &token, &id, fix, max_level, json).await,
+            None => api::cmd_doctor_host(&profile, &api, &token, fix, json).await,
+        },
+        Command::Url {
+            id,
+            api,
+            token,
+            port,
+        } => api::cmd_url(&profile, &api, &token, &id, port).await,
 
         // --- Connections ---
-        Command::Connect { id, api, token, session } => {
-            connect::cmd_connect(&profile, &api, &token, &id, session).await
-        }
+        Command::Connect {
+            id,
+            api,
+            token,
+            session,
+        } => connect::cmd_connect(&profile, &api, &token, &id, session).await,
         Command::Iroh { action } => match action {
             IrohCommand::Connect { ticket, relay, ip } => {
                 match connect::resolve_addr(&ticket, relay, &ip) {
@@ -527,39 +598,25 @@ async fn main() {
             } => connect::cmd_proxy(&ticket, port, relay, &ip).await,
         },
 
-        // --- Hidden backward-compat aliases ---
-        Command::Shell { ticket, relay, ip } => {
-            match connect::resolve_addr(&ticket, relay, &ip) {
-                Ok(addr) => connect::connect_to_vm(addr, None).await,
-                Err(e) => Err(e),
-            }
-        }
-        Command::Pty { id, api, token } => {
-            connect::cmd_connect(&profile, &api, &token, &id, None).await
-        }
-        Command::SshAlias {
-            ticket,
-            user,
-            relay,
-            ip,
-            ssh_args,
-        } => connect::cmd_ssh(&ticket, &user, relay, &ip, &ssh_args),
-        Command::ProxyAlias {
-            ticket,
-            port,
-            relay,
-            ip,
-        } => connect::cmd_proxy(&ticket, port, relay, &ip).await,
-
         // --- Snapshots ---
-        Command::Snapshot {
-            id,
-            name,
-            api,
-            token,
-            compact,
-        } => api::cmd_snapshot(&profile, &api, &token, &id, &name, compact).await,
-        Command::Snapshots { api, token } => api::cmd_snapshots(&profile, &api, &token).await,
+        Command::Snapshot { action } => match action {
+            SnapshotAction::Create {
+                id,
+                name,
+                compact,
+                api,
+                token,
+            } => api::cmd_snapshot_create(&profile, &api, &token, &id, &name, compact, json).await,
+            SnapshotAction::List { api, token } => {
+                api::cmd_snapshots(&profile, &api, &token, json).await
+            }
+            SnapshotAction::Show { name, api, token } => {
+                api::cmd_snapshot_show(&profile, &api, &token, &name, json).await
+            }
+            SnapshotAction::Rm { name, api, token } => {
+                api::cmd_snapshot_rm(&profile, &api, &token, &name, json).await
+            }
+        },
 
         // --- Auth ---
         Command::Login { issuer, api } => {
@@ -594,6 +651,13 @@ async fn main() {
 
         // --- Ticket ---
         Command::Ticket { action } => match action {
+            TicketAction::Get {
+                id,
+                wait,
+                timeout,
+                api,
+                token,
+            } => api::cmd_ticket_get(&profile, &api, &token, &id, wait, timeout, json).await,
             TicketAction::Decode { json } => {
                 match serde_json::from_str::<iroh::EndpointAddr>(&json) {
                     Ok(addr) => {
@@ -683,9 +747,7 @@ async fn main() {
                     token,
                 } => forge::hosts_add(api, token, host, transport, &profile).await,
             },
-            ForgeCmd::Tui { host, api, token } => {
-                forge_tui::run(api, token, host, &profile).await
-            }
+            ForgeCmd::Tui { host, api, token } => forge_tui::run(api, token, host, &profile).await,
         },
 
         // --- Server admin (sync — blocks tokio runtime, which is fine for CLI) ---

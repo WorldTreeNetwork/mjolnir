@@ -110,7 +110,7 @@ defmodule Mjolnir.Reconcile do
   defp execute({:missing_rootfs, %Record{uuid: uuid}, path}) do
     Logger.warning(
       "Reconcile: VM #{uuid} has :running record but rootfs is missing at #{path}. " <>
-        "Record kept for manual investigation — inspect with `just vm-info` " <>
+        "Record kept for manual investigation — inspect with `mj info <id>` " <>
         "or delete via StateStore.delete/1 if known-lost."
     )
   end

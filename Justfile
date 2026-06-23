@@ -138,68 +138,6 @@ bootstrap: _require-host
         cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh'
 
 # ═══════════════════════════════════════════════════════════════════════
-# VM Diagnostics (SSH-tunneled curl to localhost:4000)
-# ═══════════════════════════════════════════════════════════════════════
-#
-# VM LIFECYCLE OPS HAVE MOVED TO THE `mj` BINARY (native/mjolnir_client):
-#   mj spawn [--snapshot S] [--memory MB]   (was: just vm-spawn / vm-spawn-from)
-#   mj list                                 (was: just vm-list)
-#   mj info <id>                            (was: just vm-info)
-#   mj exec <id> "<cmd>"                    (was: just vm-exec)
-#   mj kill <id>                            (was: just vm-stop)
-#   mj url <id>                             (was: just vm-url)
-#   mj snapshot <id> <name>                 (was: just snap-create)
-#   mj snapshots                            (was: just snap-list)
-# mj talks to the public API with token auth (`mj login` / `mj status`), so it
-# works from anywhere — no SSH tunnel needed.
-#
-# The recipes below are diagnostics/ops NOT YET ported to mj — see mjolnir-bmc.
-
-# Check API health
-health:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/health | jq .
-
-# Host-wide health check (KVM module, vsock module, IP forwarding, BTRFS mount, socket dir)
-host-health:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/health/host | jq .
-
-# Probe health of a VM (L0-L4: ping, vsock, iroh, guest network, hypervisor API)
-vm-health id:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}}/health | jq .
-
-# Probe-and-heal a VM up to `level` (default 2: reconfigure network/identity/iroh)
-vm-heal id level="2":
-    {{_t}}curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/heal \
-        -H 'Content-Type: application/json' \
-        -d '{"max_level":{{level}}}' | jq .
-
-# Stop all running VMs
-vm-stop-all:
-    #!/bin/bash
-    for id in $({{_t}}curl -s {{_api}}/api/vms | jq -r '.vms[].id'); do
-        echo "Stopping $id..."
-        {{_t}}curl -s -X DELETE "{{_api}}/api/vms/$id" | jq .
-    done
-
-# Get Iroh connection ticket for a VM
-vm-ticket id:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}}/ticket | jq .
-
-# Wait for PTY readiness
-vm-await-pty id:
-    {{_t}}curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/await-pty -H 'Content-Type: application/json' -d '{}' | jq .
-
-# Send a message to a VM (payload is JSON, e.g. '{"key":"val"}')
-vm-message id payload:
-    #!/bin/bash
-    body=$(jq -n --argjson p '{{payload}}' '{payload: $p}')
-    if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/messages -H 'Content-Type: application/json' -d @-"
-    else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/messages -H 'Content-Type: application/json' -d @-
-    fi | jq .
-
-# ═══════════════════════════════════════════════════════════════════════
 # IdentiKey Sites — publish & inspect static-content snapshots
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -247,25 +185,6 @@ sites-ots hash:
 # Example: just sites-get abc123 blog index.html
 sites-get fp name path:
     {{_t}}curl -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/files/{{path}}
-
-# ═══════════════════════════════════════════════════════════════════════
-# Snapshots
-# ═══════════════════════════════════════════════════════════════════════
-#
-# Create/list have moved to mj:  mj snapshot <id> <name>  /  mj snapshots
-# The recipes below are not yet ported to mj — see mjolnir-bmc.
-
-# Get snapshot details
-snap-info name:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/snapshots/{{name}} | jq .
-
-# Delete a snapshot
-snap-delete name:
-    {{_t}}curl -s --fail-with-body -X DELETE {{_api}}/api/snapshots/{{name}} | jq .
-
-# List dormant VMs
-dormant:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/dormant | jq .
 
 # ═══════════════════════════════════════════════════════════════════════
 # Server Management

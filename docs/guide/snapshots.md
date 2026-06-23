@@ -167,12 +167,10 @@ disks started identical.
 
 ## 8. Deleting snapshots
 
-The `mj` CLI creates and lists snapshots but does not yet delete them. Removal is done through
-the control plane or the API:
+Delete a snapshot with `mj snapshot rm`:
 
 ```bash
-# Via the just control plane (SSH-tunneled):
-just snap-delete node-env
+mj snapshot rm node-env
 
 # Or directly against the API:
 #   DELETE /api/snapshots/node-env
@@ -192,7 +190,7 @@ VMs already hold their own references to the shared blocks; the data they need w
 | List snapshots | `mj snapshots` |
 | Spawn a VM from a snapshot | `mj spawn --snapshot <name>` |
 | Spawn from a snapshot + connect | `mj spawn --snapshot <name> --connect` |
-| Delete a snapshot | `just snap-delete <name>` *(control plane / API, not `mj`)* |
+| Delete a snapshot | `mj snapshot rm <name>` |
 
 ---
 

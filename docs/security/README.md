@@ -171,7 +171,7 @@ Mjolnir's security model is **defense-in-depth** with three independent layers:
 
 - [ ] **Suspected VM Compromise**
   - [ ] Snapshot VM (preserve evidence)
-  - [ ] Stop VM immediately (`just vm-stop <id>`)
+  - [ ] Stop VM immediately (`mj kill <id>`)
   - [ ] Rotate Iroh keypair if secret injection was used
   - [ ] Review vsock logs for suspicious commands
   - [ ] Check iptables logs for unauthorized network activity

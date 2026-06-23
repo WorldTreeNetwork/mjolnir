@@ -90,7 +90,84 @@ struct ExecResponse {
     stderr: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct HealthStatus {
+    pub state: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HealthCheck {
+    pub level: u32,
+    pub name: String,
+    pub status: HealthStatus,
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HealthReport {
+    pub overall: String,
+    pub checks: Vec<HealthCheck>,
+}
+
+#[derive(Deserialize)]
+pub struct HostCheck {
+    pub name: String,
+    pub status: HealthStatus,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HostHealth {
+    pub overall: String,
+    pub checks: Vec<HostCheck>,
+}
+
+#[derive(Deserialize)]
+pub struct TicketResponse {
+    pub ticket: String,
+}
+
+#[derive(Deserialize)]
+pub struct DormantEntry {
+    pub vm_id: String,
+    #[serde(default)]
+    pub snapshot_name: Option<String>,
+    #[serde(default)]
+    pub dormant_since: Option<String>,
+    #[serde(default)]
+    pub pending_messages: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct DormantResponse {
+    pub dormant: Vec<DormantEntry>,
+}
+
 // --- Helpers ---
+
+/// Send a request and return the raw response body as text, surfacing the
+/// server's error body in the message on non-2xx (more useful than
+/// `error_for_status`, which discards the body). Used by all commands that
+/// support `--json` passthrough.
+async fn send_text(req: reqwest::RequestBuilder, ctx: &str) -> Result<String> {
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("{}: failed to send request", ctx))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .with_context(|| format!("{}: failed to read response body", ctx))?;
+    if !status.is_success() {
+        anyhow::bail!("{}: server returned {} — {}", ctx, status, body.trim());
+    }
+    Ok(body)
+}
 
 pub async fn api_client(token: &Option<String>) -> reqwest::Client {
     let effective = crate::auth::resolve_token(token).await;
@@ -228,6 +305,90 @@ pub async fn cmd_list(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    dormant: bool,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let list_body = send_text(client.get(format!("{}/api/vms", base)), "VM list").await?;
+    let dormant_body = if dormant {
+        Some(send_text(client.get(format!("{}/api/dormant", base)), "dormant list").await?)
+    } else {
+        None
+    };
+
+    if json {
+        match &dormant_body {
+            Some(d) => {
+                let combined = serde_json::json!({
+                    "vms": serde_json::from_str::<serde_json::Value>(&list_body)?,
+                    "dormant": serde_json::from_str::<serde_json::Value>(d)?,
+                });
+                println!("{}", serde_json::to_string_pretty(&combined)?);
+            }
+            None => println!("{}", list_body),
+        }
+        return Ok(());
+    }
+
+    let resp: ListResponse =
+        serde_json::from_str(&list_body).context("failed to parse VM list response")?;
+
+    if resp.vms.is_empty() {
+        eprintln!("No VMs running.");
+    } else {
+        println!(
+            "{:<54} {:<10} {:<16} {:<6} {}",
+            "TICKET", "STATE", "IP", "SHELL", "ID"
+        );
+        for vm in &resp.vms {
+            println!(
+                "{:<54} {:<10} {:<16} {:<6} {}",
+                vm.ticket.as_deref().unwrap_or("-"),
+                vm.state,
+                vm.guest_ip.as_deref().unwrap_or("-"),
+                if vm.shell_ready == Some(true) {
+                    "ready"
+                } else {
+                    "-"
+                },
+                vm.id,
+            );
+        }
+    }
+
+    if let Some(d) = dormant_body {
+        let dorm: DormantResponse =
+            serde_json::from_str(&d).context("failed to parse dormant list response")?;
+        if dorm.dormant.is_empty() {
+            eprintln!("\nNo dormant VMs.");
+        } else {
+            println!(
+                "\n{:<38} {:<24} {:<10} {}",
+                "ID", "SNAPSHOT", "MESSAGES", "DORMANT SINCE"
+            );
+            for e in &dorm.dormant {
+                println!(
+                    "{:<38} {:<24} {:<10} {}",
+                    e.vm_id,
+                    e.snapshot_name.as_deref().unwrap_or("-"),
+                    e.pending_messages.unwrap_or(0),
+                    e.dormant_since.as_deref().unwrap_or("-"),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Stop and destroy every running VM.
+pub async fn cmd_kill_all(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
 ) -> Result<()> {
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
@@ -249,25 +410,9 @@ pub async fn cmd_list(
         return Ok(());
     }
 
-    // Header
-    println!(
-        "{:<54} {:<10} {:<16} {:<6} {}",
-        "TICKET", "STATE", "IP", "SHELL", "ID"
-    );
-
     for vm in &resp.vms {
-        println!(
-            "{:<54} {:<10} {:<16} {:<6} {}",
-            vm.ticket.as_deref().unwrap_or("-"),
-            vm.state,
-            vm.guest_ip.as_deref().unwrap_or("-"),
-            if vm.shell_ready == Some(true) {
-                "ready"
-            } else {
-                "-"
-            },
-            vm.id,
-        );
+        send_text(client.delete(format!("{}/api/vms/{}", base, vm.id)), "kill").await?;
+        eprintln!("Killed {}", vm.id);
     }
 
     Ok(())
@@ -278,6 +423,7 @@ pub async fn cmd_info(
     api_flag: &Option<String>,
     token: &Option<String>,
     id_or_ticket: &str,
+    json: bool,
 ) -> Result<()> {
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
@@ -285,16 +431,12 @@ pub async fn cmd_info(
 
     let id = resolve_vm_id(&client, base, id_or_ticket).await?;
 
-    let resp: VmInfo = client
-        .get(format!("{}/api/vms/{}", base, &id))
-        .send()
-        .await
-        .context("failed to fetch VM info")?
-        .error_for_status()
-        .context("VM info request failed")?
-        .json()
-        .await
-        .context("failed to parse VM info response")?;
+    let body = send_text(client.get(format!("{}/api/vms/{}", base, &id)), "VM info").await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let resp: VmInfo = serde_json::from_str(&body).context("failed to parse VM info response")?;
 
     println!("VM Information");
     println!("═══════════════════════════════════════════════════════");
@@ -369,13 +511,14 @@ pub async fn cmd_kill(
     Ok(())
 }
 
-pub async fn cmd_snapshot(
+pub async fn cmd_snapshot_create(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     id_or_ticket: &str,
     name: &str,
     compact: bool,
+    json: bool,
 ) -> Result<()> {
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
@@ -396,17 +539,19 @@ pub async fn cmd_snapshot(
         body["compact"] = serde_json::Value::Bool(true);
     }
 
-    let resp: SnapshotCreateResponse = client
-        .post(format!("{}/api/vms/{}/snapshots", base, &id))
-        .json(&body)
-        .send()
-        .await
-        .context("failed to send snapshot request")?
-        .error_for_status()
-        .context("snapshot request failed")?
-        .json()
-        .await
-        .context("failed to parse snapshot response")?;
+    let resp_body = send_text(
+        client
+            .post(format!("{}/api/vms/{}/snapshots", base, &id))
+            .json(&body),
+        "snapshot create",
+    )
+    .await?;
+    if json {
+        println!("{}", resp_body);
+        return Ok(());
+    }
+    let resp: SnapshotCreateResponse =
+        serde_json::from_str(&resp_body).context("failed to parse snapshot response")?;
 
     let size_mb = resp.size_bytes / 1024 / 1024;
     eprintln!("Snapshot '{}' created successfully", resp.name);
@@ -421,21 +566,19 @@ pub async fn cmd_snapshots(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    json: bool,
 ) -> Result<()> {
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
 
-    let resp: SnapshotsResponse = client
-        .get(format!("{}/api/snapshots", base))
-        .send()
-        .await
-        .context("failed to fetch snapshots")?
-        .error_for_status()
-        .context("snapshots request failed")?
-        .json()
-        .await
-        .context("failed to parse snapshots response")?;
+    let body = send_text(client.get(format!("{}/api/snapshots", base)), "snapshots").await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let resp: SnapshotsResponse =
+        serde_json::from_str(&body).context("failed to parse snapshots response")?;
 
     if resp.snapshots.is_empty() {
         eprintln!("No snapshots found.");
@@ -456,6 +599,62 @@ pub async fn cmd_snapshots(
         );
     }
 
+    Ok(())
+}
+
+pub async fn cmd_snapshot_show(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let body = send_text(
+        client.get(format!("{}/api/snapshots/{}", base, name)),
+        "snapshot",
+    )
+    .await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let m: SnapshotMetadata =
+        serde_json::from_str(&body).context("failed to parse snapshot response")?;
+    let size_mb = m.size_bytes / 1024 / 1024;
+    println!("Snapshot");
+    println!("═══════════════════════════════════════════════════════");
+    println!("Name:         {}", m.name);
+    println!("Source VM:    {}", m.source_vm_id);
+    println!("Created At:    {}", m.created_at);
+    println!("Size:         {} MB", size_mb);
+    Ok(())
+}
+
+pub async fn cmd_snapshot_rm(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let body = send_text(
+        client.delete(format!("{}/api/snapshots/{}", base, name)),
+        "snapshot delete",
+    )
+    .await?;
+    if json {
+        println!("{}", body);
+    } else {
+        eprintln!("Deleted snapshot {}", name);
+    }
     Ok(())
 }
 
@@ -498,7 +697,10 @@ pub async fn cmd_url(
             }
         }
         None => {
-            anyhow::bail!("VM {} does not have Iroh enabled (no web URL available)", id);
+            anyhow::bail!(
+                "VM {} does not have Iroh enabled (no web URL available)",
+                id
+            );
         }
     }
 
@@ -544,5 +746,228 @@ pub async fn cmd_exec(
         std::process::exit(code);
     }
 
+    Ok(())
+}
+
+// --- Health / doctor ---
+
+fn paint_state(state: &str) -> &'static str {
+    match state {
+        "ok" => "\x1b[32mok\x1b[0m",
+        "degraded" => "\x1b[33mdegraded\x1b[0m",
+        "dead" => "\x1b[31mdead\x1b[0m",
+        _ => "\x1b[90m?\x1b[0m",
+    }
+}
+
+/// `mj doctor <id>` — probe a VM's health ladder (L0..); with `--fix`, heal
+/// degraded/dead checks up to `max_level` (default 2). Read-only without --fix.
+/// Exits non-zero if the VM is not fully healthy after the run.
+pub async fn cmd_doctor(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    fix: bool,
+    max_level: Option<u32>,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let body = if fix {
+        send_text(
+            client
+                .post(format!("{}/api/vms/{}/heal", base, &id))
+                .json(&serde_json::json!({ "max_level": max_level.unwrap_or(2) })),
+            "heal",
+        )
+        .await?
+    } else {
+        send_text(
+            client.get(format!("{}/api/vms/{}/health", base, &id)),
+            "health",
+        )
+        .await?
+    };
+
+    if json {
+        println!("{}", body);
+        let report: HealthReport = serde_json::from_str(&body)?;
+        if report.overall != "ok" {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    let report: HealthReport =
+        serde_json::from_str(&body).context("failed to parse health report")?;
+
+    println!("VM {}  —  {}", id, paint_state(&report.overall));
+    println!("───────────────────────────────────────────────────────");
+    for c in &report.checks {
+        let mut line = format!(
+            "  L{} {:<20} {}",
+            c.level,
+            c.name,
+            paint_state(&c.status.state)
+        );
+        if let Some(r) = &c.status.reason {
+            line.push_str(&format!("  ({})", r));
+        }
+        if let Some(a) = &c.action {
+            line.push_str(&format!("  → {}", a));
+        }
+        println!("{}", line);
+    }
+
+    if report.overall != "ok" {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `mj doctor` (no id) — check API reachability + host health (KVM, vsock,
+/// IP forwarding, BTRFS mount, ...); with `--fix`, run the host heal.
+pub async fn cmd_doctor_host(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    fix: bool,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let api_body = send_text(client.get(format!("{}/api/health", base)), "API health").await?;
+    let host_body = if fix {
+        send_text(
+            client.post(format!("{}/api/health/host/heal", base)),
+            "host heal",
+        )
+        .await?
+    } else {
+        send_text(
+            client.get(format!("{}/api/health/host", base)),
+            "host health",
+        )
+        .await?
+    };
+
+    if json {
+        let combined = serde_json::json!({
+            "api": serde_json::from_str::<serde_json::Value>(&api_body)?,
+            "host": serde_json::from_str::<serde_json::Value>(&host_body)?,
+        });
+        println!("{}", serde_json::to_string_pretty(&combined)?);
+        let host: HostHealth = serde_json::from_str(&host_body)?;
+        if host.overall != "ok" {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    let host: HostHealth =
+        serde_json::from_str(&host_body).context("failed to parse host health")?;
+
+    println!("API {}  —  reachable ({})", paint_state("ok"), base);
+    println!("Host  —  {}", paint_state(&host.overall));
+    println!("───────────────────────────────────────────────────────");
+    for c in &host.checks {
+        let mut line = format!("  {:<24} {}", c.name, paint_state(&c.status.state));
+        if let Some(d) = &c.detail {
+            line.push_str(&format!("  ({})", d));
+        }
+        if let Some(r) = &c.status.reason {
+            line.push_str(&format!("  ({})", r));
+        }
+        println!("{}", line);
+    }
+
+    if host.overall != "ok" {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// `mj message <id> <json>` — deliver a JSON payload into a VM; wakes a
+/// dormant VM if it is parked.
+pub async fn cmd_message(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    payload: &str,
+    json: bool,
+) -> Result<()> {
+    let payload_value: serde_json::Value =
+        serde_json::from_str(payload).context("payload must be valid JSON")?;
+
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let body = send_text(
+        client
+            .post(format!("{}/api/vms/{}/messages", base, &id))
+            .json(&serde_json::json!({ "payload": payload_value })),
+        "message",
+    )
+    .await?;
+
+    if json {
+        println!("{}", body);
+    } else {
+        eprintln!("Delivered message to {}", id);
+    }
+    Ok(())
+}
+
+/// `mj ticket get <id>` — fetch a VM's connection ticket; with `--wait`,
+/// block until the PTY is ready first (the await-pty path).
+pub async fn cmd_ticket_get(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    wait: bool,
+    timeout: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let body = if wait {
+        send_text(
+            client
+                .post(format!("{}/api/vms/{}/await-pty", base, &id))
+                .json(&serde_json::json!({ "timeout": timeout.unwrap_or(30000) })),
+            "await-pty",
+        )
+        .await?
+    } else {
+        send_text(
+            client.get(format!("{}/api/vms/{}/ticket", base, &id)),
+            "ticket",
+        )
+        .await?
+    };
+
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let tr: TicketResponse =
+        serde_json::from_str(&body).context("failed to parse ticket response")?;
+    println!("{}", tr.ticket);
     Ok(())
 }
