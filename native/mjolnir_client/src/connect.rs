@@ -559,7 +559,7 @@ pub fn cmd_ssh(
 
     // Build the ProxyCommand with shell-safe quoting
     let mut proxy_cmd = format!(
-        "{} proxy {} --port 22",
+        "{} iroh proxy {} --port 22",
         shell_quote(&self_exe.to_string_lossy()),
         shell_quote(ticket),
     );
