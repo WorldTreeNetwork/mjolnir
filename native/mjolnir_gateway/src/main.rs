@@ -17,7 +17,7 @@
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use iroh::endpoint::{Connection, Endpoint};
-use iroh_base::{EndpointAddr, PublicKey};
+use iroh::{EndpointAddr, PublicKey};
 use mjolnir_gateway::acme::{AcmeConfig, IssuedCert};
 use mjolnir_gateway::cloudflare::CloudflareClient;
 use mjolnir_gateway::config::{self, Apex, Fallthrough, SitesResolver};
@@ -1092,7 +1092,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Iroh endpoint + pool ──────────────────────────────────────────────────
     info!("Starting Iroh endpoint...");
-    let endpoint = Endpoint::builder().bind().await?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
     endpoint.online().await;
     info!("Iroh endpoint ready");
 
@@ -1446,7 +1446,7 @@ mod tests {
 
     #[test]
     fn test_z32_roundtrip() {
-        let secret = iroh_base::SecretKey::generate(&mut rand::rng());
+        let secret = iroh::SecretKey::generate();
         let key = secret.public();
         let z32_str = z32::encode(key.as_bytes());
         assert_eq!(z32_str.len(), 52);
@@ -1828,7 +1828,7 @@ mod tests {
         );
         let table = Arc::new(ArcSwap::from_pointee(RouteTable::from_config(&cfg)));
 
-        let ep = iroh::endpoint::Endpoint::builder()
+        let ep = iroh::endpoint::Endpoint::builder(iroh::endpoint::presets::N0)
             .bind()
             .await
             .expect("iroh endpoint");
@@ -1889,7 +1889,7 @@ mod tests {
             vec![route("worldtree.network", "git", "127.0.0.1:1")],
         );
         let table = Arc::new(ArcSwap::from_pointee(RouteTable::from_config(&cfg)));
-        let ep = iroh::endpoint::Endpoint::builder()
+        let ep = iroh::endpoint::Endpoint::builder(iroh::endpoint::presets::N0)
             .bind()
             .await
             .expect("iroh endpoint");

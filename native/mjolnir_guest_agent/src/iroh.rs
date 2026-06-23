@@ -52,7 +52,7 @@ pub async fn run_iroh_server(
     );
 
     // Build endpoint
-    let endpoint = Endpoint::builder()
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
         .secret_key(secret_key)
         .alpns(vec![SHELL_ALPN.to_vec(), TCP_FWD_ALPN.to_vec(), SECRET_INJECT_ALPN.to_vec()])
         .bind()
@@ -102,7 +102,7 @@ fn load_or_generate_key(
         Ok((key, false))
     } else {
         info!("Generating new key (file {:?} not found)", path);
-        let key = SecretKey::generate(&mut rand::rng());
+        let key = SecretKey::generate();
 
         // Try to save (might fail if /etc/mjolnir doesn't exist, that's ok)
         if let Some(parent) = path.parent() {

@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use iroh::endpoint::Endpoint;
-use iroh_base::{EndpointAddr, PublicKey, RelayUrl};
+use iroh::{EndpointAddr, PublicKey, RelayUrl};
 use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
 #[cfg(unix)]
 use nix::sys::termios;
@@ -147,7 +147,7 @@ pub fn format_addr_info(addr: &EndpointAddr) -> String {
 pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
-    let endpoint = Endpoint::builder().bind().await.context("Failed to bind Iroh endpoint")?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await.context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
     let conn = endpoint.connect(addr, SHELL_ALPN).await.context("Failed to connect to VM")?;
@@ -513,7 +513,7 @@ pub async fn cmd_proxy(
 ) -> Result<()> {
     let addr = resolve_addr(ticket, relay, ips)?;
 
-    let endpoint = Endpoint::builder().bind().await.context("Failed to bind Iroh endpoint")?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await.context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
     let conn = endpoint.connect(addr, TCP_FWD_ALPN).await.context("Failed to connect to VM")?;

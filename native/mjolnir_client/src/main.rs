@@ -595,7 +595,7 @@ async fn main() {
         // --- Ticket ---
         Command::Ticket { action } => match action {
             TicketAction::Decode { json } => {
-                match serde_json::from_str::<iroh_base::EndpointAddr>(&json) {
+                match serde_json::from_str::<iroh::EndpointAddr>(&json) {
                     Ok(addr) => {
                         println!("{}", connect::format_addr_info(&addr));
                         Ok(())
