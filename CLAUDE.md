@@ -69,24 +69,34 @@ just deploy-gateway   # Code + rebuild web gateway
 just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 ```
 
-**VM Operations** — manage VMs via the HTTP API (SSH-tunneled):
+**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel:
 
 ```bash
-just vm-spawn                          # Spawn a new VM
-just vm-spawn-from my-snapshot         # Spawn from a snapshot
-just vm-list                           # List running VMs
-just vm-info <id>                      # Get VM details
-just vm-exec <id> "uname -a"          # Execute a command in a VM
-just vm-stop <id>                      # Stop a VM
+mj spawn                               # Spawn a new VM
+mj spawn --snapshot my-snapshot        # Spawn from a snapshot
+mj list                                # List running VMs
+mj info <id>                           # Get VM details
+mj exec <id> "uname -a"                # Execute a command in a VM
+mj kill <id>                           # Stop and destroy a VM
+mj url <id>                            # Get the web gateway URL
+mj connect <id>                        # Interactive PTY
+mj snapshot <id> my-snap               # Snapshot a VM
+mj snapshots                           # List all snapshots
+```
+
+**VM Diagnostics** — the Justfile keeps the probes/ops not yet ported to `mj` (see mjolnir-bmc); these still ride the SSH tunnel:
+
+```bash
+just vm-health <id>                    # L0-L4 probe (ping/vsock/iroh/net/hypervisor)
+just vm-heal <id>                      # Probe-and-heal a VM
 just vm-stop-all                       # Stop all running VMs
 just vm-ticket <id>                    # Get Iroh connection ticket
 just vm-await-pty <id>                 # Wait for PTY readiness
 just vm-message <id> '{"key":"val"}'   # Send a message to a VM
-just snap-create <id> my-snap          # Snapshot a VM
-just snap-list                         # List all snapshots
 just snap-info my-snap                 # Get snapshot metadata
 just snap-delete my-snap               # Delete a snapshot
 just dormant                           # List dormant VMs
+just health                            # API health check
 ```
 
 **Server Management** — SSH into the server:
@@ -106,9 +116,9 @@ just bootstrap        # Bootstrap a fresh server
 
 ### How It Works
 
-All VM/snapshot commands use **SSH-wrapped curl**: `ssh host "curl localhost:4000/..."`. This is required because the API auth bypass only works for connections from `127.0.0.1` — direct curl from your Mac would get `401`. The SSH tunnel makes curl appear as localhost on the server.
+The remaining Justfile VM **diagnostics** use **SSH-wrapped curl**: `ssh host "curl localhost:4000/..."`. This is required because the API auth bypass only works for connections from `127.0.0.1` — direct curl from your Mac would get `401`. The SSH tunnel makes curl appear as localhost on the server. (The `mj` binary avoids this entirely: it authenticates to the public API with a bearer token.)
 
-For commands that need JSON request bodies (`vm-exec`, `vm-spawn-from`, `snap-create`, `vm-message`), local `jq` constructs the JSON safely and pipes it through SSH to curl's stdin (`-d @-`), avoiding shell quoting issues.
+For diagnostics that need a JSON request body (e.g. `vm-message`), local `jq` constructs the JSON safely and pipes it through SSH to curl's stdin (`-d @-`), avoiding shell quoting issues.
 
 ## Build & Development Commands
 

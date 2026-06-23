@@ -138,34 +138,30 @@ bootstrap: _require-host
         cd /opt/mjolnir && SKIP_FIRECRACKER=1 USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh'
 
 # ═══════════════════════════════════════════════════════════════════════
-# VM Operations (SSH-tunneled curl to localhost:4000)
+# VM Diagnostics (SSH-tunneled curl to localhost:4000)
 # ═══════════════════════════════════════════════════════════════════════
+#
+# VM LIFECYCLE OPS HAVE MOVED TO THE `mj` BINARY (native/mjolnir_client):
+#   mj spawn [--snapshot S] [--memory MB]   (was: just vm-spawn / vm-spawn-from)
+#   mj list                                 (was: just vm-list)
+#   mj info <id>                            (was: just vm-info)
+#   mj exec <id> "<cmd>"                    (was: just vm-exec)
+#   mj kill <id>                            (was: just vm-stop)
+#   mj url <id>                             (was: just vm-url)
+#   mj snapshot <id> <name>                 (was: just snap-create)
+#   mj snapshots                            (was: just snap-list)
+# mj talks to the public API with token auth (`mj login` / `mj status`), so it
+# works from anywhere — no SSH tunnel needed.
+#
+# The recipes below are diagnostics/ops NOT YET ported to mj — see mjolnir-bmc.
 
 # Check API health
 health:
     {{_t}}curl -s --fail-with-body {{_api}}/api/health | jq .
 
-# Spawn a new VM
-vm-spawn:
-    {{_t}}curl -s --fail-with-body -X POST {{_api}}/api/vms -H 'Content-Type: application/json' -d '{}' | jq .
-
-# Spawn a VM from a named snapshot
-vm-spawn-from snapshot:
-    #!/bin/bash
-    body=$(jq -n --arg s '{{snapshot}}' '{snapshot: $s}')
-    if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/vms -H 'Content-Type: application/json' -d @-"
-    else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/vms -H 'Content-Type: application/json' -d @-
-    fi | jq .
-
-# List running VMs
-vm-list:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/vms | jq .
-
-# Get VM details
-vm-info id:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}} | jq .
+# Host-wide health check (KVM module, vsock module, IP forwarding, BTRFS mount, socket dir)
+host-health:
+    {{_t}}curl -s --fail-with-body {{_api}}/api/health/host | jq .
 
 # Probe health of a VM (L0-L4: ping, vsock, iroh, guest network, hypervisor API)
 vm-health id:
@@ -177,24 +173,6 @@ vm-heal id level="2":
         -H 'Content-Type: application/json' \
         -d '{"max_level":{{level}}}' | jq .
 
-# Host-wide health check (KVM module, vsock module, IP forwarding, BTRFS mount, socket dir)
-host-health:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/health/host | jq .
-
-# Execute a command in a VM
-vm-exec id cmd:
-    #!/bin/bash
-    body=$(jq -n --arg cmd '{{cmd}}' '{command: $cmd}')
-    if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/exec -H 'Content-Type: application/json' -d @-"
-    else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/exec -H 'Content-Type: application/json' -d @-
-    fi | jq .
-
-# Stop a VM
-vm-stop id:
-    {{_t}}curl -s --fail-with-body -X DELETE {{_api}}/api/vms/{{id}} | jq .
-
 # Stop all running VMs
 vm-stop-all:
     #!/bin/bash
@@ -202,10 +180,6 @@ vm-stop-all:
         echo "Stopping $id..."
         {{_t}}curl -s -X DELETE "{{_api}}/api/vms/$id" | jq .
     done
-
-# Get the web gateway URL for a VM
-vm-url id:
-    @{{_t}}curl -s --fail-with-body {{_api}}/api/vms/{{id}} | jq -r '.web_url // empty'
 
 # Get Iroh connection ticket for a VM
 vm-ticket id:
@@ -277,20 +251,9 @@ sites-get fp name path:
 # ═══════════════════════════════════════════════════════════════════════
 # Snapshots
 # ═══════════════════════════════════════════════════════════════════════
-
-# Create a named snapshot of a VM
-snap-create id name:
-    #!/bin/bash
-    body=$(jq -n --arg n '{{name}}' '{name: $n}')
-    if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/snapshots -H 'Content-Type: application/json' -d @-"
-    else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/vms/{{id}}/snapshots -H 'Content-Type: application/json' -d @-
-    fi | jq .
-
-# List all snapshots
-snap-list:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/snapshots | jq .
+#
+# Create/list have moved to mj:  mj snapshot <id> <name>  /  mj snapshots
+# The recipes below are not yet ported to mj — see mjolnir-bmc.
 
 # Get snapshot details
 snap-info name:

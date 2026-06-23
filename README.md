@@ -61,7 +61,7 @@ Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-s
 
 ## Operate it
 
-If you have **SSH access** to the server, the `just` control plane is the fastest way to drive it from your Mac. It tunnels API calls over SSH (the API auth-bypass only trusts `127.0.0.1`, so curl has to appear as localhost on the box).
+If you have **SSH access** to the server, the `just` control plane handles **deploys, host management, and VM diagnostics** from your Mac. It tunnels API calls over SSH (the API auth-bypass only trusts `127.0.0.1`, so curl has to appear as localhost on the box). For everyday VM lifecycle — spawn / list / exec / kill / snapshot — prefer the **`mj` binary above**: it goes through the public API with token auth and needs no SSH.
 
 ```bash
 # 1. Point just at your server
@@ -70,18 +70,17 @@ cp .env.example .env             # then edit: MJOLNIR_HOST=root@your-server-ip
 # 2. Verify the connection
 just health                      # -> {"status":"ok"}
 
-# 3. Drive VMs
-just vm-spawn                    # spawn, prints JSON (vm_id, iroh_ticket, …)
-just vm-list                     # list running VMs
-just vm-exec <vm_id> "uname -a"  # run a command
-just vm-info <vm_id>             # details
-just snap-create <vm_id> my-snap # snapshot
-just vm-stop <vm_id>             # stop
+# 3. Deploy, manage, diagnose
+just deploy                      # rsync code, rebuild guest agent, restart service
+just logs                        # follow journald logs (live)
+just vm-health <vm_id>           # L0-L4 health probe (ping/vsock/iroh/net/hypervisor)
+just vm-heal <vm_id>             # probe-and-heal
+just dormant                     # list dormant VMs
 ```
 
 You can also pass the host inline without `.env`: `just host=root@1.2.3.4 health`.
 
-Run `just --list` for everything — VM ops, snapshots, deploys, host management, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`).
+Run `just --list` for everything — deploys, host management, VM diagnostics, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`). VM lifecycle ops live in `mj` (see above).
 
 ---
 
