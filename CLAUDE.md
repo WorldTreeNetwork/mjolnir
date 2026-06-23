@@ -179,7 +179,7 @@ Mjolnir.Supervisor (one_for_one)
 
 - **`Mjolnir.VM`** — GenServer managing a single VM's lifecycle (spawn → boot → running → stop/dormant). Each VM is a `:transient` process under the DynamicSupervisor (exits `:normal` on boot failure to prevent restart loops). Public API: `spawn/1`, `exec/3`, `status/1`, `stop/1`, `list/0`, `snapshot/2`, `deliver_message/3`, `handle_done/1`. Boot sequence: clone rootfs → inject guest agent → create TAP → start hypervisor binary → configure via API → boot → wait for guest agent ping → configure guest network → configure identity/SSH/Iroh.
 
-- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `cp --reflink=auto` for instant CoW cloning of ext4 images on BTRFS. Storage layout: `@base/` (template images), `@vms/<uuid>/` (per-VM rootfs), `@snapshots/<name>/` (named snapshots).
+- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `btrfs subvolume snapshot` for instant CoW cloning of base subvolumes (shared into the guest via virtio-fs; no ext4 image). Storage layout: `@base/` (template subvolumes), `@vms/<uuid>/` (per-VM rootfs subvolume), `@snapshots/<name>/` (named snapshot subvolumes).
 
 - **`Mjolnir.CloudHypervisor.Client`** — HTTP client for CH's REST API over Unix socket via `Req`. Endpoints: `vm.create`, `vm.boot`, `vm.pause`, `vm.resume`, `vm.shutdown`, `vm.delete`, `vm.info`.
 

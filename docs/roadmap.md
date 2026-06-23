@@ -1,16 +1,25 @@
 # Mjolnir Project Roadmap
 ## From Theory to Distributed Computation Fabric
 
-> **Note:** This roadmap was written during the Firecracker era. Mjolnir now uses Cloud Hypervisor v50 with virtio-fs and BTRFS subvolumes (no ext4 images). Many Phase 1/2 items are complete. See `docs/plans/current-status.md` for up-to-date status and `docs/encryption-and-security.md` for the current architecture.
+> **How to read this.** This roadmap was originally written as a forward-looking,
+> Firecracker-era plan. It has been rewritten to reflect reality: Mjolnir now runs on **Cloud
+> Hypervisor v50 with virtio-fs + BTRFS subvolumes** (no ext4 images, no Firecracker), and much
+> of the original Phase 1–3 plan has shipped. Sections are now organized as **Shipped**,
+> **In progress**, and **Planned** rather than as a fictional weekly timeline. For the current
+> architecture see [`../CLAUDE.md`](../CLAUDE.md) and [`architecture.md`](architecture.md); for a
+> dated implementation snapshot see [`plans/current-status.md`](plans/current-status.md).
 
 ### Vision
 
 Mjolnir is a distributed computational fabric where:
 - **Any Linux shell** can be spawned on-demand as an isolated microVM
-- **State is orthogonally persistent**—checkpoint, migrate, resume anywhere
+- **State is orthogonally persistent** — checkpoint, migrate, resume anywhere
 - **AI agents** run with full system access, safely sandboxed
 - **Channels** (π-calculus style) connect processes across the network
 - **Economic incentives** enable a decentralized compute marketplace
+
+The first three of those are real today (single-node); the last two are the longer-term
+direction.
 
 ---
 
@@ -20,297 +29,136 @@ Mjolnir is a distributed computational fabric where:
 ┌─────────────────────────────────────────────────────────────────────┐
 │  LAYER 5: Applications                                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
-│  │ AI Agents   │  │ Dev Envs    │  │ Batch Jobs  │                 │
-│  │ (Claude)    │  │ (ephemeral) │  │ (workflows) │                 │
+│  │ AI Agents   │  │ Dev Envs    │  │ CI Jobs     │                 │
+│  │ (Claude)    │  │ (ephemeral) │  │ (Forgejo)   │                 │
 │  └─────────────┘  └─────────────┘  └─────────────┘                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 4: Agent & Workflow Orchestration    [computational-fabric]  │
-│  - Multi-agent choreography                                         │
+│  - Multi-agent choreography                  (planned)              │
 │  - Cross-org trust & authentication                                 │
-│  - Capability marketplace                                           │
+│  - Capability marketplace                    (planned)              │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 3: Type Sync & Messaging             [spec.md]               │
 │  - Universal Type Descriptors                                       │
-│  - Transport abstraction (HTTP, WS, WebRTC)                        │
-│  - Channel routing (fan-out, pub-sub, round-robin)                 │
+│  - Transport abstraction (HTTP, WS, Iroh QUIC)                     │
+│  - Channel routing (fan-out, pub-sub, round-robin)  (partial)      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 2: MicroVM Execution Fabric          [microvm-fabric.md]     │
-│  - Cloud Hypervisor VM management                                   │
-│  - BTRFS checkpointing                                              │
-│  - Elixir/OTP orchestration                                         │
+│  - Cloud Hypervisor VM management            ✅ shipped             │
+│  - BTRFS subvolume checkpointing             ✅ shipped             │
+│  - Elixir/OTP orchestration                  ✅ shipped             │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 1: Theoretical Foundations           [everything-is-a-channel]│
 │  - π-calculus (remote closures)             [orthogonal-persistence]│
 │  - ρ-calculus (service discovery)           [event-queue]           │
-│  - Cryptographic identity                                           │
+│  - Cryptographic identity                    ✅ per-VM Ed25519/Iroh  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Phase 1: Foundational Infrastructure (Weeks 1-4)
+## Shipped (single-node)
 
-### Milestone 1.1: Single-Node VM Spawning
-**Goal**: Spawn Firecracker VMs programmatically from Elixir
+These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
 
-- [ ] Setup Elixir project with OTP supervision tree
-- [ ] Implement `Mjolnir.Firecracker.spawn/1` to launch VMs via API
-- [ ] Create base Ubuntu 22.04 rootfs image
-- [ ] Implement vsock communication for host↔guest control
-- [ ] Basic VM lifecycle: start, stop, status
+### VM lifecycle
+- Spawn microVMs on **Cloud Hypervisor v50** with a PVH kernel, booting in well under a second.
+- `spawn` → `exec` → `connect` → `snapshot` → `stop`/`kill`, all via `Mjolnir.VM` (a GenServer
+  per VM under a DynamicSupervisor) and the HTTP API.
+- Rust **guest agent** over vsock: `exec`, `ping`, network/identity/Iroh configuration, PTY
+  sessions, and LUKS2 secret injection.
 
-**Deliverables**:
-```elixir
-{:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-22.04", memory_mb: 512})
-{:ok, "hello"} = Mjolnir.VM.exec(vm.id, "echo hello")
-:ok = Mjolnir.VM.stop(vm.id)
-```
+### Storage (BTRFS + virtio-fs)
+- Base images are **BTRFS subvolumes** under `@base/`, shared into the guest directly via
+  **virtio-fs** — no ext4 block images.
+- Instant copy-on-write cloning via `btrfs subvolume snapshot` (`Mjolnir.BTRFS.clone/2`): a
+  ~1ms metadata operation regardless of filesystem size.
+- Named snapshots (`@snapshots/<name>/`) of running VMs, quiesced for consistency
+  (guest `sync` → pause → host fsync → snapshot → resume). Spawn fresh VMs from any snapshot.
 
-### Milestone 1.2: BTRFS Integration
-**Goal**: Instant CoW clones and snapshots for VM filesystems
+### Connectivity (Iroh)
+- Per-VM cryptographic identity (Ed25519) and NAT-traversing **Iroh QUIC** access:
+  `mj iroh connect <ticket>` for an interactive PTY, `mj iroh ssh <ticket>` for SSH — no
+  port-forwarding, no public IP.
+- WebSocket PTY (`mj connect <vm_id>`) for shells over the API, including reattachable
+  `--session` (tmux) sessions.
 
-Firecracker requires ext4 file images, so we store ext4 images on BTRFS and use reflink (`cp --reflink=auto`) for instant copy-on-write cloning.
+### Secrets
+- **LUKS2-encrypted secrets volumes** inside the guest, with passphrases delivered over a
+  dedicated Iroh ALPN that bypasses the host. Authorized inject peers validated by node ID.
+  Every `exec` auto-sources `/etc/mjolnir/secrets.env`.
 
-- [x] Mount BTRFS partition with optimal settings
-- [x] Create directory structure (@base, @vms, @snapshots)
-- [x] Implement `Mjolnir.BTRFS.clone/2` using reflink copy
-- [ ] Implement `Mjolnir.BTRFS.snapshot/2` for checkpointing
-- [ ] Quota management per-VM
+### Dormancy & messaging
+- Dormant VMs: `handle_done/1` snapshots a VM and registers it for wake-on-message
+  (`Mjolnir.DormantRegistry`). Inter-VM messaging buffered during boot.
 
-**Architecture Note**: We use ext4 images on BTRFS (not BTRFS subvolumes) because Firecracker needs block device images. BTRFS reflinks give us instant CoW cloning of these ext4 files.
+### CI: VM-sandboxed Forgejo runner
+- A patched `forgejo-runner` executes Actions workflows **inside Mjolnir microVMs** instead of
+  Docker containers (`lib/mjolnir/runner/`, `native/forgejo-runner/`). Multi-virtio-fs mounts
+  let CI mount a repo read-only into the VM.
 
-**Deliverables**:
-```elixir
-# Clone base ext4 image for new VM (instant via reflink)
-{:ok, path} = Mjolnir.BTRFS.clone("debian-12", "vm-123")
-# => {:ok, "/var/lib/mjolnir/btrfs/@vms/vm-123/rootfs.ext4"}
+### Host config: Forge
+- `Mjolnir.Forge` — a declarative host-configuration reconciler with three-way diff
+  (declared/owned/observed), ownership-tracked pruning, an audit log + SSE event stream, and a
+  ratatui TUI (`mj forge tui`).
 
-# Snapshot VM rootfs (for checkpointing)
-{:ok, snap} = Mjolnir.BTRFS.snapshot("vm-123", "checkpoint-1")
-# => {:ok, "/var/lib/mjolnir/btrfs/@snapshots/vm-123/checkpoint-1.ext4"}
-```
+### Persistence index: Postgres sidecar
+- An OTP-managed Postgres (Erlang Port, Unix-socket peer auth) holding **derived indexes**
+  rebuildable from the filesystem source of truth (signed envelopes + content-addressed blobs).
 
-### Milestone 1.3: Filesystem Checkpointing
-**Goal**: Snapshot VM filesystems for backup and cloning
-
-We focus on **filesystem-only checkpoints** (not memory/CPU state). This gives us:
-- Instant VM cloning via BTRFS reflink
-- Workspace backup and restore
-- Cross-host transfer via `btrfs send/receive`
-
-Memory snapshots (pausing a VM and restoring exact execution state) are deferred—Firecracker supports this natively, but we don't need it yet. See [orthogonal-persistence.md](orthogonal-persistence.md) for notes on future full-state checkpointing.
-
-- [ ] Implement `Mjolnir.BTRFS.snapshot/2` for VM rootfs snapshots
-- [ ] Implement `Mjolnir.BTRFS.restore/2` to restore from snapshot
-- [ ] Checkpoint metadata storage (timestamp, VM config, parent snapshot)
-- [ ] Quota management per-VM
-
-**Deliverables**:
-```elixir
-# Snapshot a VM's filesystem (VM should be stopped or quiesced)
-{:ok, snap_path} = Mjolnir.BTRFS.snapshot("vm-123", "backup-1")
-# => {:ok, "/var/lib/mjolnir/btrfs/@snapshots/vm-123/backup-1.ext4"}
-
-# Restore from snapshot
-:ok = Mjolnir.BTRFS.restore("vm-123", "backup-1")
-
-# Clone a VM (instant CoW copy)
-{:ok, new_path} = Mjolnir.BTRFS.clone_vm("vm-123", "vm-456")
-```
+### Tooling
+- The `mj`/`mjolnir` CLI (spawn, exec, connect, iroh, snapshot, forge, mcp-serve), the `just`
+  control plane, and a ~613-test suite (`mix test`) with integration/postgres/e2e tags.
 
 ---
 
-## Phase 2: Distribution (Weeks 5-8)
+## In progress / near-term
 
-### Milestone 2.1: Multi-Node Cluster
-**Goal**: Elixir cluster spanning multiple hosts
-
-- [ ] Configure libcluster for node discovery
-- [ ] Implement distributed VM registry
-- [ ] Node health monitoring and capacity tracking
-- [ ] Scheduler for VM placement decisions
-
-**Deliverables**:
-```elixir
-Mjolnir.Cluster.nodes()
-# => [:"mjolnir@host1", :"mjolnir@host2", :"mjolnir@host3"]
-
-Mjolnir.Scheduler.place(%{vcpus: 4, memory_mb: 4096})
-# => {:ok, :"mjolnir@host2"}
-```
-
-### Milestone 2.2: Cross-Node Migration
-**Goal**: Migrate VM filesystems between hosts
-
-Initial scope is **cold migration** (VM stopped during transfer). This uses BTRFS send/receive for efficient incremental transfer.
-
-Live migration (using Firecracker memory snapshots) is a future enhancement—see [orthogonal-persistence.md](orthogonal-persistence.md).
-
-- [ ] Implement BTRFS send/receive for filesystem transfer
-- [ ] Transfer protocol over Tailscale/Iroh
-- [ ] Coordinate stop → transfer → start workflow
-- [ ] Handle network reconfiguration post-migration
-
-**Deliverables**:
-```elixir
-# Stop VM, transfer filesystem, start on target
-:ok = Mjolnir.VM.migrate(vm_id, target_node: :"mjolnir@host2")
-```
-
-### Milestone 2.3: Channel System
-**Goal**: π-calculus-inspired message channels across fabric
-
-- [ ] Implement `Mjolnir.Channel` GenServer
-- [ ] Local and distributed channel routing
-- [ ] Channel subscription and message delivery
-- [ ] Channel passing (sending channels over channels)
-
-**Deliverables**:
-```elixir
-{:ok, ch} = Mjolnir.Channel.create("my-channel")
-:ok = Mjolnir.Channel.subscribe(ch, self())
-:ok = Mjolnir.Channel.send(ch, {:message, "hello"})
-# Receive: {:channel_message, ch, {:message, "hello"}}
-```
+- **Memory + CPU snapshots** (true orthogonal persistence): pause/resume of full VM state via
+  Cloud Hypervisor's native snapshot API. Today's checkpoints are filesystem-only. See
+  [orthogonal-persistence.md](orthogonal-persistence.md).
+- **Content-addressed checkpoint distribution**: store snapshots as Iroh collections
+  (BLAKE3-verified, deduplicated) so they can move between hosts. Groundwork exists in the
+  storage design; see [`plans/initramfs-verified-boot.md`](plans/initramfs-verified-boot.md).
+- **Index backfill / hot-serve**: rebuild Postgres indexes from disk and short-circuit hot
+  reads through them with a SecretStore fallback.
 
 ---
 
-## Phase 3: AI Agent Integration (Weeks 9-12)
+## Planned / longer-term
 
-### Milestone 3.1: Agent Execution Environment
-**Goal**: Spawn AI agents (Claude Code) in microVMs
+The multi-node and ecosystem layers are not built yet — Mjolnir is currently single-node.
 
-- [ ] Create AI-optimized base image (ubuntu-22.04-ai)
-- [ ] Implement agent spawn with workspace provisioning
-- [ ] Secret injection via vsock (API keys, tokens)
-- [ ] Agent stdin/stdout channel bridging
+### Distribution
+- Multi-node Elixir cluster (libcluster), distributed VM registry, and a placement scheduler.
+- Cross-node **migration**: cold migration first (stop → `btrfs send/receive` → start over
+  Iroh), live migration later (using memory snapshots).
+- Masterless discovery via Iroh DHT instead of any central coordinator.
 
-**Deliverables**:
-```elixir
-{:ok, agent} = Mjolnir.Agent.spawn(:claude_code, %{
-  workspace: "/projects/myrepo",
-  secrets: %{anthropic_api_key: "..."}
-})
+### Channels & workflows
+- `Mjolnir.Channel` — π-calculus-inspired message channels (local + distributed routing,
+  channel passing) connecting processes across the fabric.
+- Multi-agent workflow choreography with atomic checkpointing across participating VMs.
 
-Mjolnir.Agent.prompt(agent, "Analyze this codebase")
-```
-
-### Milestone 3.2: Agent State Management
-**Goal**: Snapshot and clone agent workspaces
-
-Focuses on **workspace state** (files, installed packages) rather than memory state. Agents are expected to be resumable via their own context mechanisms (conversation history, etc.).
-
-- [ ] Workspace snapshots for agent projects (via BTRFS)
-- [ ] Agent cloning (fork with same workspace)
-- [ ] Periodic workspace snapshots for long-running agents
-- [ ] Snapshot retention and cleanup policies
-
-**Deliverables**:
-```elixir
-# Snapshot agent's workspace (filesystem only)
-{:ok, snap} = Mjolnir.Agent.snapshot_workspace(agent)
-
-# Clone agent with same workspace state
-{:ok, cloned_agent} = Mjolnir.Agent.clone(agent)
-```
-
-### Milestone 3.3: Multi-Agent Workflows
-**Goal**: Choreographed multi-agent task execution
-
-- [ ] Workflow definition DSL
-- [ ] Agent-to-agent channel communication
-- [ ] Workflow checkpointing (all agents atomically)
-- [ ] Result aggregation and validation
-
-**Deliverables**:
-```elixir
-workflow = Mjolnir.Workflow.define do
-  step :analyze, agent: :claude, prompt: "Analyze the architecture"
-  step :implement, agent: :claude, depends_on: :analyze
-  step :review, agent: :claude, depends_on: :implement
-end
-
-{:ok, result} = Mjolnir.Workflow.execute(workflow)
-```
+### Production & ecosystem
+- Observability (Prometheus/OpenTelemetry), reliability automation (auto-restart, node-failure
+  recovery, BTRFS scrub/balance), a web dashboard, GPU passthrough (VFIO), and — furthest out —
+  an economic layer (resource accounting, capability marketplace, operator incentives).
 
 ---
 
-## Phase 3.5: Iroh Integration (Weeks 10-12, parallel with Phase 3)
+## Tech Stack Summary
 
-### Milestone 3.5.1: Iroh Node Sidecar
-**Goal**: Run Iroh node alongside Elixir, integrate via Rustler NIF
-
-- [ ] Setup Rustler project for Iroh bindings
-- [ ] Implement basic NIFs: `start_node`, `publish`, `resolve`
-- [ ] GenServer wrapper for Iroh node lifecycle
-- [ ] Test DHT publish/resolve
-
-### Milestone 3.5.2: Masterless Discovery
-**Goal**: Replace Tailscale dependency with Iroh DHT
-
-- [ ] Implement `Mjolnir.Cluster.Strategy.Iroh` for libcluster
-- [ ] Node announcement/discovery via DHT
-- [ ] Graceful fallback to Tailscale if Iroh unreachable
-- [ ] Test cluster formation without central coordinator
-
-### Milestone 3.5.3: Checkpoint Distribution
-**Goal**: Distribute checkpoints via Iroh instead of SSH
-
-- [ ] Store checkpoints as Iroh collections (content-addressed)
-- [ ] Implement `Mjolnir.Checkpoint.IrohStore`
-- [ ] Automatic deduplication of shared base images
-- [ ] Verify checkpoint integrity via BLAKE3 on retrieval
-
----
-
-## Phase 4: Production Hardening (Weeks 13-16)
-
-### Milestone 4.1: Security
-- [ ] Jailer integration for Firecracker
-- [ ] Network isolation (per-VM netns)
-- [ ] Cryptographic identity per VM (Ed25519)
-- [ ] Encrypted checkpoint storage
-- [ ] Audit logging
-
-### Milestone 4.2: Observability
-- [ ] Prometheus metrics export
-- [ ] Distributed tracing (OpenTelemetry)
-- [ ] Log aggregation
-- [ ] Alerting on node/VM failures
-
-### Milestone 4.3: Reliability
-- [ ] Automatic VM restart on failure
-- [ ] Node failure recovery (migrate VMs)
-- [ ] Checkpoint retention policies
-- [ ] BTRFS scrub/balance automation
-
----
-
-## Phase 5: Ecosystem (Weeks 17+)
-
-### Milestone 5.1: CLI & Developer Experience
-- [ ] `mjolnir` CLI tool
-- [ ] `mjolnir vm spawn`, `mjolnir vm exec`, etc.
-- [ ] `mjolnir agent spawn --type claude`
-- [ ] Interactive shell into VMs
-
-### Milestone 5.2: Web Dashboard
-- [ ] Real-time cluster visualization
-- [ ] VM management UI
-- [ ] Agent interaction interface
-- [ ] Checkpoint browser
-
-### Milestone 5.3: Economic Layer
-- [ ] Resource accounting (CPU-hours, memory)
-- [ ] Capability marketplace integration
-- [ ] Node operator incentives
-- [ ] Usage-based billing
-
-### Milestone 5.4: Advanced Features
-- [ ] GPU passthrough for AI workloads
-- [ ] Distributed snapshots (Chandy-Lamport)
-- [ ] WebAssembly guest support
-- [ ] Edge node deployment
+| Component | Technology | Rationale |
+|-----------|------------|-----------|
+| **Virtualization** | Cloud Hypervisor v50 | virtio-fs, BTRFS subvolumes, PVH boot. (Firecracker was removed — no virtio-fs.) |
+| **Guest OS** | Ubuntu 24.04 (default base) | apt-native; Arch base also buildable. |
+| **Filesystem** | BTRFS subvolumes | Instant CoW clones via `btrfs subvolume snapshot`; `send/receive` for future migration; compression. |
+| **Guest↔host control** | vsock + Rust guest agent | Low-latency, no network dependency for control plane. |
+| **Orchestration** | Elixir/OTP | Supervision trees, crash isolation (hypervisor as a Port), message-passing. |
+| **Connectivity** | Iroh QUIC | NAT-traversing P2P shells/SSH; per-VM Ed25519 identity; content-addressed transfer. |
+| **Persistence index** | Postgres (sidecar) | Derived, rebuildable indexes over an FS source of truth. |
+| **Workload** | Shell + apt | Run any Linux program; AI agents and CI jobs are just use cases. |
 
 ---
 
@@ -320,106 +168,67 @@ end
 |----------|-------|-------------|--------|
 | [computational-fabric.md](computational-fabric.md) | Theory | π/ρ-calculus, crypto identity, MCP integration, economic layer | Draft |
 | [spec.md](spec.md) | Messaging | Type synchronization, transport abstraction, routing patterns | Draft |
-| [microvm-fabric.md](microvm-fabric.md) | Execution | Cloud Hypervisor + BTRFS + Elixir + Iroh implementation | Draft |
-| [orthogonal-persistence.md](orthogonal-persistence.md) | Pattern | Checkpoint/restore semantics, process calculus mapping | Draft |
+| [microvm-fabric.md](microvm-fabric.md) | Execution | Cloud Hypervisor + BTRFS + Elixir + Iroh implementation | Current |
+| [architecture.md](architecture.md) | Execution | Module-level architecture of the current system | Current |
+| [orthogonal-persistence.md](orthogonal-persistence.md) | Pattern | Checkpoint/restore semantics, process-calculus mapping | Draft |
 | [everything-is-a-channel.md](everything-is-a-channel.md) | Philosophy | Channels as universal primitive | Notes |
 | [event-queue.md](event-queue.md) | Notes | Email as robust event queue, TCP/UART streams | Notes |
-| [roadmap.md](roadmap.md) | Meta | This document; phases, decisions, index | Active |
+| [guide/](guide/) | User | Hands-on guides: getting started, snapshots, coming from Docker | Current |
+| [roadmap.md](roadmap.md) | Meta | This document | Active |
 
 ---
 
-## Tech Stack Summary
+## Getting started
 
-| Component | Technology | Rationale |
-|-----------|------------|-----------|
-| **Virtualization** | Cloud Hypervisor | virtio-fs, BTRFS subvolumes, PVH boot (Firecracker deprecated) |
-| **Guest OS** | **Debian 12 (Bookworm)** | Minimal, apt-native, no Ubuntu bloat |
-| **Filesystem** | BTRFS | CoW cloning (reflink), send/receive for migration, compression |
-| **Orchestration** | Elixir/OTP | Supervision trees, distributed by default, message-passing |
-| **Host OS** | Debian 12 or Ubuntu 22.04 | Stable, good KVM/Cloud Hypervisor support |
-| **Kernel** | Linux 6.1 LTS | Modern BTRFS, good virtualization support |
-| **Networking (Phase 1)** | Tailscale | Encrypted overlay, easy NAT traversal |
-| **Networking (Phase 2)** | Iroh DHT | Masterless discovery, content-addressed checkpoints |
-| **Content Distribution** | Iroh | DHT + BLAKE3 verification (already in computational-fabric.md) |
-| **Workload** | Shell + apt | Run any Linux program; AI agents are just one use case |
-
-### Key Design Decisions
-
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Base distro | Debian 12 | Same apt as Ubuntu, ~200MB leaner, no Snap/cruft |
-| Master node | **None** | Peer-to-peer mesh; any node can fail without breaking cluster |
-| Discovery Phase 1 | Tailscale | Easy WAN mesh, handles NAT; temporary centralization |
-| Discovery Phase 2 | Iroh DHT | Decentralized, integrates with our Merkle verification |
-| Primary workload | Generic Linux shell | Not AI-specific; agents are just programs with apt |
-| Economic layer | Document now, implement later | Focus on core fabric first |
-
----
-
-## Getting Started (MVP)
+The fastest path is the user [Guide](guide/getting-started.md). In brief:
 
 ```bash
-# 1. Clone mjolnir
-git clone https://github.com/identikey/mjolnir
-cd mjolnir
+# Install the CLI (needs Rust), then point it at a server
+./scripts/build-client.sh --install
+mj login --api https://mjolnir.example.com
 
-# 2. Setup host (requires root)
-sudo USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh
+# Spawn a VM and drop into a shell
+mj spawn --connect
 
-# 3. Start mjolnir
-mix deps.get
-iex -S mix
-
-# 4. Spawn your first VM
-iex> {:ok, vm} = Mjolnir.VM.spawn(%{base_image: "ubuntu-22.04"})
-iex> Mjolnir.VM.exec(vm.id, "uname -a")
-{:ok, "Linux mjolnir-vm 5.10.0 ..."}
-
-# 5. Checkpoint it
-iex> {:ok, cp} = Mjolnir.Checkpoint.create(vm.id)
-
-# 6. Spawn an AI agent
-iex> {:ok, agent} = Mjolnir.Agent.spawn(:claude_code)
-iex> Mjolnir.Agent.prompt(agent, "Write a hello world in Rust")
+# Run a command, snapshot, and spin a fresh VM from the saved state
+mj exec <vm_id> "uname -a"
+mj snapshot <vm_id> my-env
+mj spawn --snapshot my-env
 ```
+
+To stand up your own server (Linux + KVM required), see
+[Run your own server](../README.md#run-your-own-server).
 
 ---
 
-## Open Questions (Resolved)
+## Resolved design questions
 
-| Question | Decision | Notes |
-|----------|----------|-------|
-| **Base distro** | Debian 12 | Minimal, apt-native, no Ubuntu overhead |
-| **Kernel version** | 6.1 LTS | Best BTRFS, stable enough |
-| **Overlay network** | Tailscale → Iroh DHT | Start easy, go masterless |
-| **Master node** | None | Peer-to-peer, any node can fail |
-| **Primary workload** | Shell + apt | Generic Linux; AI agents are programs |
-| **Economic layer** | Document now | Implement after core fabric works |
+| Question | Decision |
+|----------|----------|
+| Hypervisor | **Cloud Hypervisor v50** (virtio-fs + BTRFS subvolumes). Firecracker removed — no virtio-fs. |
+| Storage model | BTRFS subvolumes shared via virtio-fs; CoW clones via `btrfs subvolume snapshot`. No ext4 images. |
+| Guest agent | Custom Rust daemon over vsock (JSON control on channel 0, binary PTY/syslog on others). |
+| Connectivity | Iroh QUIC for masterless, NAT-traversing P2P access; per-VM Ed25519 identity. |
+| Base distro | Ubuntu 24.04 default (Arch base also buildable). |
+| Master node | None — peer-to-peer is the long-term target; single-node today. |
 
-## Remaining Open Questions
+### Still open
 
-1. ~~**Guest agent**: Custom vsock daemon vs SSH vs serial console?~~
-   - **Resolved**: Custom Rust guest agent (`mjolnir-agent`) via vsock. Simple JSON-RPC over vsock, starts early at `basic.target` for fast boot availability.
-
-2. **Checkpoint storage**: Local BTRFS + Iroh (content-addressed) vs S3?
-   - Leaning: Iroh for distribution, local BTRFS for active VMs
-
-3. **GPU support**: When and how?
-   - Future: VFIO passthrough or NVIDIA MIG
-
-4. **Iroh integration**: Sidecar process vs embedded via Rustler?
-   - TBD: Rustler is cleaner but more complex; sidecar is simpler to start
+1. **Checkpoint storage**: local BTRFS for active VMs + Iroh (content-addressed) for
+   distribution vs. an object store — leaning Iroh.
+2. **GPU support**: VFIO passthrough or MIG; timing TBD.
+3. **Live migration**: depends on memory-snapshot work landing first.
 
 ---
 
 ## Contributing
 
-The project is in early design phase. Key areas needing work:
+Active areas needing work:
 
-1. **Elixir core**: VM lifecycle, checkpoint coordinator
-2. **BTRFS tooling**: Snapshot management, quota enforcement
-3. **Cloud Hypervisor integration**: Config generation, API client
-4. **Agent framework**: Workspace management, channel bridging
-5. **Documentation**: Architecture diagrams, API reference
+1. **Distribution** — multi-node cluster, scheduler, cross-node migration.
+2. **Orthogonal persistence** — memory+CPU snapshots via Cloud Hypervisor.
+3. **Checkpoint distribution** — Iroh content-addressed snapshot store with BLAKE3 verification.
+4. **Channels & workflows** — `Mjolnir.Channel` and multi-agent choreography.
+5. **Docs** — keep architecture references in sync with the code.
 
-See GitHub issues for specific tasks.
+See the beads issue tracker (`bd ready`) for specific tasks.

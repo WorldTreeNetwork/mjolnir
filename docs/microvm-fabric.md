@@ -126,7 +126,7 @@ Cloud Hypervisor requires a PVH-capable kernel with VIRTIO_FS built in. The prod
 BTRFS provides the checkpointing foundation via copy-on-write semantics. Cloud Hypervisor exposes the VM rootfs via **virtio-fs**, which means the guest mounts a host directory directly—no block device image required. This eliminates the ext4-on-BTRFS workaround that was needed with Firecracker (legacy).
 
 - **Direct subvolume sharing**: BTRFS subvolumes are mounted into the guest via virtiofsd
-- **Instant cloning**: BTRFS reflink copies (`cp --reflink=auto`) for near-instant CoW directory duplication
+- **Instant cloning**: BTRFS subvolume snapshots (`btrfs subvolume snapshot`) for ~1ms CoW subvolume creation regardless of filesystem size
 - **Snapshot flexibility**: Multiple checkpoint strategies available
 
 ```
@@ -136,7 +136,7 @@ BTRFS provides the checkpointing foundation via copy-on-write semantics. Cloud H
 ├── @vms/                     # Per-VM subvolume directories
 │   └── {vm_id}/              # CoW clone of base subvolume
 └── @snapshots/               # Named snapshots
-    └── {snapshot_name}/      # Reflink copy of a VM subvolume
+    └── {snapshot_name}/      # BTRFS subvolume snapshot of a VM subvolume
 ```
 
 #### BTRFS Subvolumes + virtio-fs (Current Architecture)
@@ -146,8 +146,8 @@ Cloud Hypervisor exposes a host directory to the guest via a virtiofsd socket. T
 This solves the old block-device constraint entirely: BTRFS subvolumes are directory trees, and virtio-fs is designed to share exactly that.
 
 ```bash
-# Clone base subvolume for new VM (instant CoW via reflink)
-cp --reflink=auto -a /var/lib/mjolnir/btrfs/@base/ubuntu-24.04 \
+# Clone base subvolume for new VM (instant CoW via BTRFS subvolume snapshot)
+btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@base/ubuntu-24.04 \
   /var/lib/mjolnir/btrfs/@vms/{vm_id}
 
 # Start virtiofsd to expose the subvolume to the guest
@@ -155,25 +155,25 @@ virtiofsd --socket-path=/tmp/mjolnir/virtiofsd/{vm_id}.sock \
   --shared-dir=/var/lib/mjolnir/btrfs/@vms/{vm_id} \
   --cache=auto
 
-# Snapshot a running VM's rootfs (directory-level reflink)
-cp --reflink=auto -a /var/lib/mjolnir/btrfs/@vms/{vm_id} \
+# Snapshot a running VM's rootfs (BTRFS subvolume snapshot, ~1ms metadata operation)
+btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@vms/{vm_id} \
   /var/lib/mjolnir/btrfs/@snapshots/{snapshot_name}
 
 # Restore from snapshot
-cp --reflink=auto -a /var/lib/mjolnir/btrfs/@snapshots/{snapshot_name} \
+btrfs subvolume snapshot /var/lib/mjolnir/btrfs/@snapshots/{snapshot_name} \
   /var/lib/mjolnir/btrfs/@vms/{vm_id}
 ```
 
 #### Checkpoint/Restore Strategy
 
-We use **filesystem-only checkpoints** via BTRFS reflink copies of subvolume directories:
+We use **filesystem-only checkpoints** via BTRFS subvolume snapshots:
 
 ```bash
-# Snapshot a VM's rootfs (instant CoW directory copy)
-cp --reflink=auto -a @vms/{vm_id} @snapshots/{snapshot_name}
+# Snapshot a VM's rootfs (instant CoW subvolume snapshot, ~1ms metadata operation)
+btrfs subvolume snapshot @vms/{vm_id} @snapshots/{snapshot_name}
 
 # Restore from snapshot
-cp --reflink=auto -a @snapshots/{snapshot_name} @vms/{vm_id}
+btrfs subvolume snapshot @snapshots/{snapshot_name} @vms/{vm_id}
 ```
 
 This captures workspace state (files, installed packages, project data) but **not** running process state (memory, CPU registers). For our current use cases—workspace backup, VM cloning, cross-host transfer—this is sufficient.
@@ -366,10 +366,10 @@ defmodule Mjolnir.VM do
     source = Path.join([btrfs_root, "@base", base_image])
     dest = Path.join([btrfs_root, "@vms", config.id])
 
-    with {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+    with {_, 0} <- System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       {:ok, dest}
     else
-      {err, _} -> {:error, {:reflink_copy_failed, err}}
+      {err, _} -> {:error, {:snapshot_failed, err}}
     end
   end
 
@@ -438,7 +438,7 @@ end
 
 ## 3. Checkpointing System
 
-Mjolnir uses **filesystem-only checkpoints**—we snapshot the VM's rootfs (BTRFS subvolume directory) via reflink copies. This captures workspace state but not running process memory.
+Mjolnir uses **filesystem-only checkpoints**—we snapshot the VM's rootfs (BTRFS subvolume directory) via `btrfs subvolume snapshot`. This captures workspace state but not running process memory.
 
 For full VM state snapshots (memory + CPU + devices), see [orthogonal-persistence.md](orthogonal-persistence.md). We defer this complexity until live migration or VM forking becomes a requirement.
 
@@ -447,7 +447,7 @@ For full VM state snapshots (memory + CPU + devices), see [orthogonal-persistenc
 ```elixir
 defmodule Mjolnir.BTRFS do
   @moduledoc """
-  Filesystem snapshot operations using BTRFS reflink copies.
+  Filesystem snapshot operations using BTRFS subvolume snapshots.
   """
 
   @doc """
@@ -458,7 +458,7 @@ defmodule Mjolnir.BTRFS do
     source = Path.join([btrfs_root, "@vms", vm_id])
     dest = Path.join([btrfs_root, "@snapshots", snapshot_name])
 
-    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       {_, 0} -> {:ok, dest}
       {err, _} -> {:error, {:snapshot_failed, err}}
     end
@@ -473,7 +473,7 @@ defmodule Mjolnir.BTRFS do
     dest = Path.join([btrfs_root, "@vms", vm_id])
 
     with :ok <- File.rm_rf(dest),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+         {_, 0} <- System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       :ok
     else
       {err, _} -> {:error, {:restore_failed, err}}
@@ -489,7 +489,7 @@ defmodule Mjolnir.BTRFS do
     source = Path.join([btrfs_root, "@vms", source_vm_id])
     dest = Path.join([btrfs_root, "@vms", target_vm_id])
 
-    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       {_, 0} -> {:ok, dest}
       {err, _} -> {:error, {:clone_failed, err}}
     end
@@ -627,7 +627,7 @@ defmodule Mjolnir.Agent.Workspace do
   @moduledoc """
   Manages agent workspaces via VM rootfs snapshots.
   Workspaces live inside the VM's BTRFS subvolume directory and can be
-  cloned/snapshotted using reflink copies.
+  cloned/snapshotted using BTRFS subvolume snapshots.
   """
 
   def snapshot_vm_rootfs(vm_id, name) do
@@ -635,7 +635,7 @@ defmodule Mjolnir.Agent.Workspace do
     source = Path.join([btrfs_root, "@vms", vm_id])
     dest = Path.join([btrfs_root, "@snapshots", name])
 
-    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       {_, 0} -> {:ok, dest}
       {err, _} -> {:error, {:snapshot_failed, err}}
     end
@@ -646,8 +646,8 @@ defmodule Mjolnir.Agent.Workspace do
     source = Path.join([btrfs_root, "@vms", source_vm_id])
     dest = Path.join([btrfs_root, "@vms", target_vm_id])
 
-    # Instant CoW clone via reflink
-    case System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+    # Instant CoW clone via BTRFS subvolume snapshot
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       {_, 0} -> {:ok, dest}
       {err, _} -> {:error, {:clone_failed, err}}
     end
@@ -660,7 +660,7 @@ defmodule Mjolnir.Agent.Workspace do
 
     # Replace current rootfs subvolume with snapshot (VM must be stopped)
     with :ok <- File.rm_rf(dest),
-         {_, 0} <- System.cmd("cp", ["--reflink=auto", "-a", source, dest]) do
+         {_, 0} <- System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest]) do
       :ok
     end
   end
@@ -829,7 +829,7 @@ The orthogonal persistence pattern from `orthogonal-persistence.md` maps to our 
 
 | Concept | Implementation |
 |---------|----------------|
-| State persistence | BTRFS reflink snapshots (filesystem) |
+| State persistence | BTRFS subvolume snapshots (filesystem) |
 | Identity preservation | VM ID + cryptographic keypair |
 | State validation | BTRFS integrity (scrub, checksums) |
 | Transparent restoration | `Mjolnir.BTRFS.restore/2` |
@@ -1394,7 +1394,7 @@ end
 
 ## Appendix A: BTRFS Best Practices
 
-Since we use BTRFS subvolume directories (not ext4 file images), reflink cloning applies at the directory level:
+Since we use BTRFS subvolume directories (not ext4 file images), cloning and snapshotting use `btrfs subvolume snapshot` for instant CoW subvolume creation:
 
 ```bash
 # Enable quotas for overall storage limits (optional)
@@ -1413,12 +1413,12 @@ compsize /var/lib/mjolnir/btrfs/@vms/
 # btrfs filesystem defragment -r /var/lib/mjolnir/btrfs/@vms/{vm_id}
 ```
 
-### Reflink Behavior Notes
+### Subvolume Snapshot Behavior Notes
 
-When using `cp --reflink=auto`:
-- **Initial clone**: 0 bytes used (shares all blocks with source)
-- **After writes**: Only changed blocks use new space (CoW)
-- **Defragmentation**: Can break reflinks, causing space increase
+When using `btrfs subvolume snapshot`:
+- **Initial snapshot**: ~1ms metadata operation, 0 bytes used (shares all blocks with source via CoW)
+- **After writes**: Only changed blocks use new space (copy-on-write)
+- **Defragmentation**: Can break CoW block sharing, causing space increase
 
 To check actual disk usage accounting for shared blocks:
 ```bash

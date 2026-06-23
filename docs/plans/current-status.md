@@ -1,4 +1,17 @@
-# Mjolnir Current Status — 2026-03-13
+# Mjolnir Status Snapshot — 2026-03-13 (historical)
+
+> **⚠️ Historical snapshot.** This is a dated handoff from 2026-03-13, kept for context. Several
+> things below are no longer accurate:
+> - The **"CH vm.create Returns 400 / VMs cannot spawn"** issue further down is **RESOLVED**.
+>   VMs are fully functional end-to-end (spawn, exec, connect, snapshot, restore) on Cloud
+>   Hypervisor v50 + virtio-fs + BTRFS subvolumes.
+> - Test counts shown here (101, 186) are stale — the suite is now ~613 unit tests.
+> - Storage is **BTRFS subvolumes shared via virtio-fs**, not ext4 block images; clones use
+>   `btrfs subvolume snapshot` (not `cp --reflink` of `.ext4` files).
+>
+> For the current architecture see [`../../CLAUDE.md`](../../CLAUDE.md) and the
+> [README](../../README.md); for a forward view see [`../roadmap.md`](../roadmap.md). Treat the
+> sections below as a record of how things stood in March 2026.
 
 ## Secrets Architecture (2026-03-12 → 2026-03-13)
 
@@ -87,9 +100,11 @@
 
 ---
 
-## Open Issue: CH vm.create Returns 400
+## ~~Open Issue: CH vm.create Returns 400~~ — RESOLVED
 
-**Priority: HIGH — VMs cannot spawn**
+**~~Priority: HIGH — VMs cannot spawn~~** — This was fixed; the `vm.create` payload now matches
+the CH v50 API and VMs spawn reliably. The debugging notes below are retained only as a record
+of how it was diagnosed.
 
 ### Symptoms
 - POST to `/api/vms` returns `{"error": "spawn_failed", ...}`

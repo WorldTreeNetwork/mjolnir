@@ -50,7 +50,7 @@ mj iroh connect <ticket>         # interactive terminal over Iroh QUIC (P2P, NAT
 mj iroh ssh <ticket>             # SSH into the VM through an Iroh tunnel
 mj snapshot <vm_id> my-snap      # checkpoint a running VM
 mj snapshots                     # list snapshots
-mj spawn --from my-snap          # restore from a snapshot
+mj spawn --snapshot my-snap      # restore from a snapshot
 mj kill <vm_id>                  # stop and destroy
 mj status                        # show current auth + config
 ```
@@ -154,7 +154,7 @@ Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so it won't clobbe
 Mjolnir is Elixir/OTP for orchestration over a Rust guest agent inside each VM.
 
 - **`Mjolnir.VM`** — a GenServer per VM (spawn → boot → running → snapshot/stop). Boot = BTRFS reflink clone → inject guest agent → create TAP → launch Cloud Hypervisor → configure via its Unix-socket API → wait for the guest agent over vsock → configure network/identity/Iroh.
-- **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `cp --reflink`. Layout: `@base/` templates, `@vms/<uuid>/`, `@snapshots/<name>/`.
+- **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `btrfs subvolume snapshot`. Layout: `@base/` templates, `@vms/<uuid>/`, `@snapshots/<name>/`.
 - **Guest agent** (`native/mjolnir_guest_agent/`, Rust) — runs inside the VM on vsock, handles `exec`, networking, identity, and Iroh-backed PTY/SSH.
 - **HTTP API** — Bandit on port `4000`, JWT/OIDC-authenticated. This is what `mj` and the `just` control plane talk to.
 - **Forge** (`lib/mjolnir/forge/`) — a declarative host-config reconciler with three-way diff (declared/owned/observed) and a TUI (`mj forge tui`).
@@ -194,6 +194,12 @@ grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualiza
 
 ## Documentation
 
+**New here?** Start with the [Guide](docs/guide/) — user-facing docs for spawning and working
+with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
+[Working with Snapshots](docs/guide/snapshots.md). If you think in containers, read
+[Coming from Docker](docs/guide/coming-from-docker.md).
+
+- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md)
 - [Current status / handoff notes](docs/plans/current-status.md)
 - [Roadmap](docs/roadmap.md)
 - [MicroVM Fabric Spec](docs/microvm-fabric.md)
