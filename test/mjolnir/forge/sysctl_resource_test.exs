@@ -4,15 +4,19 @@ defmodule Mjolnir.Forge.SysctlResourceTest do
   alias Mjolnir.Forge.Resource.Sysctl
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "mjolnir-forge-sysctl-#{:erlang.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "mjolnir-forge-sysctl-#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
 
     # Point sysctl at our sandbox dir
     prev = Application.get_env(:mjolnir, :forge_sysctl_dir)
     Application.put_env(:mjolnir, :forge_sysctl_dir, dir)
+
     on_exit(fn ->
-      if prev, do: Application.put_env(:mjolnir, :forge_sysctl_dir, prev),
+      if prev,
+        do: Application.put_env(:mjolnir, :forge_sysctl_dir, prev),
         else: Application.delete_env(:mjolnir, :forge_sysctl_dir)
     end)
 

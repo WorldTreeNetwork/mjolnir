@@ -51,7 +51,11 @@ defmodule Mjolnir.VM do
 
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
-  @type extra_mount :: %{required(:tag) => String.t(), required(:shared_dir) => String.t(), optional(:opts) => keyword()}
+  @type extra_mount :: %{
+          required(:tag) => String.t(),
+          required(:shared_dir) => String.t(),
+          optional(:opts) => keyword()
+        }
 
   @type spawn_opts :: %{
           optional(:base_image) => String.t(),
@@ -941,9 +945,7 @@ defmodule Mjolnir.VM do
 
     case Enum.find(extra_ports, fn {_tag, p, _sock} -> p == port end) do
       {tag, _port, sock} ->
-        Logger.warning(
-          "virtiofsd[#{tag}] exited with status #{status} for VM #{state.id}"
-        )
+        Logger.warning("virtiofsd[#{tag}] exited with status #{status} for VM #{state.id}")
 
         updated = Enum.reject(extra_ports, fn {_t, p, _s} -> p == port end)
         # Clean up the socket
@@ -1393,7 +1395,9 @@ defmodule Mjolnir.VM do
   # must NOT be torn down by cleanup_partial_boot on a retryable boot failure.
   # Only track rootfs in boot_partial for fresh spawns.
   defp track_rootfs_for_cleanup(%__MODULE__{resume_mode: true}, _rootfs_path), do: :ok
-  defp track_rootfs_for_cleanup(_state, rootfs_path), do: boot_partial_put(:rootfs_path, rootfs_path)
+
+  defp track_rootfs_for_cleanup(_state, rootfs_path),
+    do: boot_partial_put(:rootfs_path, rootfs_path)
 
   defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path) do
     config = %{

@@ -143,9 +143,7 @@ defmodule Mjolnir.Cleanup do
 
     case safe_state_lookup(entry) do
       {:ok, record} ->
-        Logger.info(
-          "Preserving VM subvolume #{entry} (intent=#{record.intent}) for reconcile"
-        )
+        Logger.info("Preserving VM subvolume #{entry} (intent=#{record.intent}) for reconcile")
 
       :not_found ->
         Logger.info("Removing stale VM directory: #{path}")

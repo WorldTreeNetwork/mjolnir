@@ -197,9 +197,7 @@ defmodule Mjolnir.StateStore do
 
     case File.rename(path, dest) do
       :ok ->
-        Logger.warning(
-          "StateStore quarantined #{path} → #{dest} (#{inspect(reason)})"
-        )
+        Logger.warning("StateStore quarantined #{path} → #{dest} (#{inspect(reason)})")
 
       {:error, err} ->
         Logger.error("StateStore failed to quarantine #{path}: #{inspect(err)}")

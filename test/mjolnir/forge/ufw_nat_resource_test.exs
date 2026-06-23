@@ -13,7 +13,8 @@ defmodule Mjolnir.Forge.UfwNatResourceTest do
     Application.put_env(:mjolnir, :forge_ufw_before_rules_path, path)
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:mjolnir, :forge_ufw_before_rules_path, prev),
+      if prev,
+        do: Application.put_env(:mjolnir, :forge_ufw_before_rules_path, prev),
         else: Application.delete_env(:mjolnir, :forge_ufw_before_rules_path)
     end)
 
@@ -33,7 +34,10 @@ defmodule Mjolnir.Forge.UfwNatResourceTest do
 
     test "different rules produce different canonical" do
       a = UfwNat.canonical(%{rules: "*nat\n-A POSTROUTING -s 10.0.0.0/8 -j MASQUERADE\nCOMMIT"})
-      b = UfwNat.canonical(%{rules: "*nat\n-A POSTROUTING -s 192.168.0.0/16 -j MASQUERADE\nCOMMIT"})
+
+      b =
+        UfwNat.canonical(%{rules: "*nat\n-A POSTROUTING -s 192.168.0.0/16 -j MASQUERADE\nCOMMIT"})
+
       assert a != b
     end
   end
@@ -61,7 +65,8 @@ defmodule Mjolnir.Forge.UfwNatResourceTest do
     end
 
     test "extracts rules from marker block", %{path: path} do
-      rules = "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.192.0.0/10 -o enp1s0 -j MASQUERADE\nCOMMIT"
+      rules =
+        "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.192.0.0/10 -o enp1s0 -j MASQUERADE\nCOMMIT"
 
       File.write!(path, """
       # ufw before rules
@@ -79,7 +84,9 @@ defmodule Mjolnir.Forge.UfwNatResourceTest do
 
   describe "apply/3" do
     test "creates marker block in empty file", %{path: path} do
-      rules = "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/8 -j MASQUERADE\nCOMMIT"
+      rules =
+        "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.0.0.0/8 -j MASQUERADE\nCOMMIT"
+
       assert :ok = UfwNat.apply("localhost", "test-nat", %{rules: rules})
 
       content = File.read!(path)
@@ -130,7 +137,9 @@ defmodule Mjolnir.Forge.UfwNatResourceTest do
     end
 
     test "round-trip: apply then probe returns same rules", %{path: _path} do
-      rules = "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.192.0.0/10 -o enp1s0 -j MASQUERADE\nCOMMIT"
+      rules =
+        "*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s 10.192.0.0/10 -o enp1s0 -j MASQUERADE\nCOMMIT"
+
       UfwNat.apply("localhost", "rt-test", %{rules: rules})
       assert {:ok, %{rules: ^rules}} = UfwNat.probe("localhost", "rt-test")
     end

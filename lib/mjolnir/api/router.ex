@@ -92,11 +92,24 @@ defmodule Mjolnir.API.Router do
 
       opts =
         case conn.body_params["secrets_mode"] do
-          "persistent" -> Map.put(opts, :secrets_mode, :persistent)
-          "ephemeral" -> Map.put(opts, :secrets_mode, :ephemeral)
-          "none" -> Map.put(opts, :secrets_mode, :none)
-          nil -> opts
-          _ -> Map.put(opts, :_validation_error, "secrets_mode must be 'persistent', 'ephemeral', or 'none'")
+          "persistent" ->
+            Map.put(opts, :secrets_mode, :persistent)
+
+          "ephemeral" ->
+            Map.put(opts, :secrets_mode, :ephemeral)
+
+          "none" ->
+            Map.put(opts, :secrets_mode, :none)
+
+          nil ->
+            opts
+
+          _ ->
+            Map.put(
+              opts,
+              :_validation_error,
+              "secrets_mode must be 'persistent', 'ephemeral', or 'none'"
+            )
         end
 
       opts =
@@ -119,7 +132,9 @@ defmodule Mjolnir.API.Router do
 
                   {:cont, {:ok, [entry | acc]}}
                 else
-                  _ -> {:halt, {:error, "extra_mounts entries must have string 'tag' and 'path' fields"}}
+                  _ ->
+                    {:halt,
+                     {:error, "extra_mounts entries must have string 'tag' and 'path' fields"}}
                 end
               end)
 
@@ -381,7 +396,8 @@ defmodule Mjolnir.API.Router do
       authorize_vm(conn, id, :exec, fn _vm ->
         case Validation.validate_session_name(session_name, "session_name") do
           {:ok, validated_name} ->
-            scrollback_lines = Validation.validate_scrollback_lines(conn.query_params["scrollback_lines"])
+            scrollback_lines =
+              Validation.validate_scrollback_lines(conn.query_params["scrollback_lines"])
 
             case Mjolnir.VM.terminal_read(id, validated_name, scrollback_lines) do
               {:ok, response} ->
@@ -425,17 +441,17 @@ defmodule Mjolnir.API.Router do
 
             case cmd_valid do
               {:ok, _} ->
-              case Mjolnir.VM.terminal_send(id, validated_name, command, keys) do
-                {:ok, _response} ->
-                  json(conn, 200, %{sent: true})
+                case Mjolnir.VM.terminal_send(id, validated_name, command, keys) do
+                  {:ok, _response} ->
+                    json(conn, 200, %{sent: true})
 
-                {:error, :not_found} ->
-                  json(conn, 404, %{error: "not_found"})
+                  {:error, :not_found} ->
+                    json(conn, 404, %{error: "not_found"})
 
-                {:error, reason} ->
-                  Logger.error("Terminal send failed for #{id}: #{inspect(reason)}")
-                  json(conn, 500, %{error: "terminal_send_failed"})
-              end
+                  {:error, reason} ->
+                    Logger.error("Terminal send failed for #{id}: #{inspect(reason)}")
+                    json(conn, 500, %{error: "terminal_send_failed"})
+                end
 
               {:error, msg} ->
                 json(conn, 400, %{error: msg})
@@ -456,9 +472,11 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
-        with {:ok, validated_name} <- Validation.validate_session_name(session_name, "session_name"),
+        with {:ok, validated_name} <-
+               Validation.validate_session_name(session_name, "session_name"),
              {:ok, command} <- Validation.validate_command(conn.body_params["command"]) do
-          timeout_ms = Validation.validate_timeout(conn.body_params["timeout_ms"], 30_000, 300_000)
+          timeout_ms =
+            Validation.validate_timeout(conn.body_params["timeout_ms"], 30_000, 300_000)
 
           try do
             case Mjolnir.VM.terminal_send_and_read(id, validated_name, command, timeout_ms) do
@@ -802,7 +820,10 @@ defmodule Mjolnir.API.Router do
                       json(conn, 404, %{error: "not_found"})
 
                     {:error, reason} ->
-                      Logger.error("Snapshot delete failed for '#{validated_name}': #{inspect(reason)}")
+                      Logger.error(
+                        "Snapshot delete failed for '#{validated_name}': #{inspect(reason)}"
+                      )
+
                       json(conn, 500, %{error: "snapshot_delete_failed"})
                   end
 

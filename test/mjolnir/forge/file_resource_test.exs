@@ -5,7 +5,9 @@ defmodule Mjolnir.Forge.FileResourceTest do
 
   # Each test gets its own unique tmp dir, cleaned up on exit.
   setup do
-    dir = Path.join(System.tmp_dir!(), "mjolnir-forge-file-#{:erlang.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "mjolnir-forge-file-#{:erlang.unique_integer([:positive])}")
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     {:ok, dir: dir}

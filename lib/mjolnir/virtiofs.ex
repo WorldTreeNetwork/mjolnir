@@ -206,7 +206,8 @@ defmodule Mjolnir.VirtioFS do
   def start_many(_socket_dir, _vm_id, []), do: {:ok, []}
 
   def start_many(socket_dir, vm_id, mounts) do
-    Enum.reduce_while(mounts, {:ok, []}, fn %{tag: tag, shared_dir: shared_dir} = mount, {:ok, acc} ->
+    Enum.reduce_while(mounts, {:ok, []}, fn %{tag: tag, shared_dir: shared_dir} = mount,
+                                            {:ok, acc} ->
       opts = Map.get(mount, :opts, [])
       sock = socket_path(socket_dir, vm_id, tag)
 

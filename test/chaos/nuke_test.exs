@@ -48,7 +48,11 @@ defmodule Mjolnir.Chaos.NukeTest do
     # Command always returns exit 0 so the API gives us a plain `output` —
     # we parse the token (EXISTS vs MISSING) ourselves.
     {:ok, post_ls} =
-      wait_for_exec(vm_id, "test -f /tmp/mjolnir-nuke-canary && echo EXISTS || echo MISSING", 60_000)
+      wait_for_exec(
+        vm_id,
+        "test -f /tmp/mjolnir-nuke-canary && echo EXISTS || echo MISSING",
+        60_000
+      )
 
     output = String.trim(Map.get(post_ls, "output", ""))
 

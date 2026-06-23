@@ -120,7 +120,9 @@ defmodule Mjolnir.Syslog.ParserTest do
     end
 
     test "parses message with colon in content" do
-      line = "<134>Jun  6 12:34:56 host sshd[999]: Accepted publickey for root from 1.2.3.4 port 22 ssh2: RSA SHA256:abc"
+      line =
+        "<134>Jun  6 12:34:56 host sshd[999]: Accepted publickey for root from 1.2.3.4 port 22 ssh2: RSA SHA256:abc"
+
       assert {:ok, msg} = Parser.parse(line)
       assert msg.tag == "sshd"
       assert msg.pid == 999

@@ -275,7 +275,9 @@ defmodule Mjolnir.BTRFS do
   end
 
   defp snapshot_subvolume(source, dest) do
-    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest], stderr_to_stdout: true) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest],
+           stderr_to_stdout: true
+         ) do
       {_, 0} ->
         Logger.debug("Created BTRFS snapshot: #{source} -> #{dest}")
         :ok

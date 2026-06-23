@@ -14,14 +14,14 @@ defmodule Mjolnir.StateStore.Record do
   @type intent :: :running | :dormant | :stopped
 
   typedstruct enforce: true do
-    field :uuid, String.t()
-    field :intent, intent()
-    field :created_at, DateTime.t()
-    field :last_boot_at, DateTime.t() | nil, default: nil
-    field :spawn_config, map(), default: %{}
-    field :identity, map(), default: %{}
-    field :dormant, map() | nil, default: nil
-    field :runtime, map(), default: %{}
+    field(:uuid, String.t())
+    field(:intent, intent())
+    field(:created_at, DateTime.t())
+    field(:last_boot_at, DateTime.t() | nil, default: nil)
+    field(:spawn_config, map(), default: %{})
+    field(:identity, map(), default: %{})
+    field(:dormant, map() | nil, default: nil)
+    field(:runtime, map(), default: %{})
   end
 
   @spec schema_version() :: pos_integer()

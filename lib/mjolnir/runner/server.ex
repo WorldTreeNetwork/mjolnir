@@ -67,7 +67,15 @@ defmodule Mjolnir.Runner.Server do
       start_runner(config)
     else
       Logger.info("Runner.Server: runner_enabled=false; runner will not start")
-      {:ok, %{status: :disabled, config: config, port: nil, os_pid: nil, backoff_ms: @initial_backoff_ms}}
+
+      {:ok,
+       %{
+         status: :disabled,
+         config: config,
+         port: nil,
+         os_pid: nil,
+         backoff_ms: @initial_backoff_ms
+       }}
     end
   end
 
@@ -83,14 +91,20 @@ defmodule Mjolnir.Runner.Server do
   end
 
   def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
-    Logger.warning("Runner.Server: runner process exited code=#{code}; restarting in #{state.backoff_ms}ms")
+    Logger.warning(
+      "Runner.Server: runner process exited code=#{code}; restarting in #{state.backoff_ms}ms"
+    )
+
     Process.send_after(self(), :restart, state.backoff_ms)
     new_backoff = min(state.backoff_ms * 2, @max_backoff_ms)
     {:noreply, %{state | port: nil, os_pid: nil, status: :restarting, backoff_ms: new_backoff}}
   end
 
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
-    Logger.error("Runner.Server: port EXIT reason=#{inspect(reason)}; restarting in #{state.backoff_ms}ms")
+    Logger.error(
+      "Runner.Server: port EXIT reason=#{inspect(reason)}; restarting in #{state.backoff_ms}ms"
+    )
+
     Process.send_after(self(), :restart, state.backoff_ms)
     new_backoff = min(state.backoff_ms * 2, @max_backoff_ms)
     {:noreply, %{state | port: nil, os_pid: nil, status: :restarting, backoff_ms: new_backoff}}
@@ -102,10 +116,15 @@ defmodule Mjolnir.Runner.Server do
     case spawn_port(state.config) do
       {:ok, port, pid} ->
         Logger.info("Runner.Server: runner restarted os_pid=#{pid}")
-        {:noreply, %{state | port: port, os_pid: pid, status: :running, backoff_ms: @initial_backoff_ms}}
+
+        {:noreply,
+         %{state | port: port, os_pid: pid, status: :running, backoff_ms: @initial_backoff_ms}}
 
       {:error, reason} ->
-        Logger.warning("Runner.Server: restart failed (#{inspect(reason)}); retrying in #{state.backoff_ms}ms")
+        Logger.warning(
+          "Runner.Server: restart failed (#{inspect(reason)}); retrying in #{state.backoff_ms}ms"
+        )
+
         Process.send_after(self(), :restart, state.backoff_ms)
         new_backoff = min(state.backoff_ms * 2, @max_backoff_ms)
         {:noreply, %{state | backoff_ms: new_backoff}}
@@ -144,8 +163,18 @@ defmodule Mjolnir.Runner.Server do
       :ok ->
         case setup_and_spawn(config) do
           {:ok, port, pid} ->
-            Logger.info("Runner.Server: runner started os_pid=#{pid} binary=#{config.binary_path}")
-            {:ok, %{status: :running, config: config, port: port, os_pid: pid, backoff_ms: @initial_backoff_ms}}
+            Logger.info(
+              "Runner.Server: runner started os_pid=#{pid} binary=#{config.binary_path}"
+            )
+
+            {:ok,
+             %{
+               status: :running,
+               config: config,
+               port: port,
+               os_pid: pid,
+               backoff_ms: @initial_backoff_ms
+             }}
 
           {:error, reason} ->
             Logger.error("Runner.Server: failed to start runner (#{inspect(reason)})")
@@ -154,7 +183,15 @@ defmodule Mjolnir.Runner.Server do
 
       {:error, reason} ->
         Logger.warning("Runner.Server: #{reason}; running in disabled state")
-        {:ok, %{status: :disabled, config: config, port: nil, os_pid: nil, backoff_ms: @initial_backoff_ms}}
+
+        {:ok,
+         %{
+           status: :disabled,
+           config: config,
+           port: nil,
+           os_pid: nil,
+           backoff_ms: @initial_backoff_ms
+         }}
     end
   end
 

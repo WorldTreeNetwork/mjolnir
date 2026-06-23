@@ -504,28 +504,33 @@ defmodule Mjolnir.Vsock.Connection do
 
         unless name_valid do
           Logger.warning("Guest sent invalid snapshot name: #{inspect(name)}")
-          send_message(state.socket, %{"type" => "snapshot_self_response", "id" => id, "ok" => false}, 0)
+
+          send_message(
+            state.socket,
+            %{"type" => "snapshot_self_response", "id" => id, "ok" => false},
+            0
+          )
         end
 
         if name_valid do
-        Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
-          response =
-            try do
-              case Mjolnir.VM.snapshot(vm_id, name) do
-                {:ok, _} ->
-                  %{"type" => "snapshot_self_response", "id" => id, "ok" => true}
+          Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
+            response =
+              try do
+                case Mjolnir.VM.snapshot(vm_id, name) do
+                  {:ok, _} ->
+                    %{"type" => "snapshot_self_response", "id" => id, "ok" => true}
 
-                {:error, _} ->
+                  {:error, _} ->
+                    %{"type" => "snapshot_self_response", "id" => id, "ok" => false}
+                end
+              catch
+                kind, reason ->
+                  Logger.error("Snapshot crashed: #{inspect(kind)}: #{inspect(reason)}")
                   %{"type" => "snapshot_self_response", "id" => id, "ok" => false}
               end
-            catch
-              kind, reason ->
-                Logger.error("Snapshot crashed: #{inspect(kind)}: #{inspect(reason)}")
-                %{"type" => "snapshot_self_response", "id" => id, "ok" => false}
-            end
 
-          Mjolnir.Vsock.Connection.send_control_message(conn_pid, response)
-        end)
+            Mjolnir.Vsock.Connection.send_control_message(conn_pid, response)
+          end)
         end
 
         state

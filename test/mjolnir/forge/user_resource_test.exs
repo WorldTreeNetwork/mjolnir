@@ -9,7 +9,8 @@ defmodule Mjolnir.Forge.UserResourceTest do
     User.ensure_sandbox_table()
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:mjolnir, :forge_user_sandbox, prev),
+      if prev,
+        do: Application.put_env(:mjolnir, :forge_user_sandbox, prev),
         else: Application.delete_env(:mjolnir, :forge_user_sandbox)
 
       if :ets.whereis(:forge_user_sandbox) != :undefined do
@@ -32,7 +33,14 @@ defmodule Mjolnir.Forge.UserResourceTest do
     end
 
     test "encodes all fields" do
-      content = %{state: :present, uid: 999, shell: "/bin/bash", home: "/home/duke", groups: ["sudo", "docker"]}
+      content = %{
+        state: :present,
+        uid: 999,
+        shell: "/bin/bash",
+        home: "/home/duke",
+        groups: ["sudo", "docker"]
+      }
+
       canonical = User.canonical(content)
       assert canonical =~ "state=present"
       assert canonical =~ "uid=999"
@@ -84,7 +92,15 @@ defmodule Mjolnir.Forge.UserResourceTest do
     end
 
     test "returns content for existing user" do
-      content = %{state: :present, uid: 999, shell: "/bin/bash", home: "/home/test", groups: nil, system: true}
+      content = %{
+        state: :present,
+        uid: 999,
+        shell: "/bin/bash",
+        home: "/home/test",
+        groups: nil,
+        system: true
+      }
+
       :ets.insert(:forge_user_sandbox, {"testuser", content})
       assert {:ok, ^content} = User.probe("localhost", "testuser")
     end
@@ -92,20 +108,44 @@ defmodule Mjolnir.Forge.UserResourceTest do
 
   describe "apply/3 (sandbox)" do
     test "create a user" do
-      content = %{state: :present, uid: 1001, shell: "/bin/zsh", home: "/home/newuser", groups: ["sudo"], system: false}
+      content = %{
+        state: :present,
+        uid: 1001,
+        shell: "/bin/zsh",
+        home: "/home/newuser",
+        groups: ["sudo"],
+        system: false
+      }
+
       assert :ok = User.apply("localhost", "newuser", content)
       assert {:ok, ^content} = User.probe("localhost", "newuser")
     end
 
     test "remove a user" do
-      content = %{state: :present, uid: 1001, shell: "/bin/bash", home: "/home/rm", groups: nil, system: false}
+      content = %{
+        state: :present,
+        uid: 1001,
+        shell: "/bin/bash",
+        home: "/home/rm",
+        groups: nil,
+        system: false
+      }
+
       User.apply("localhost", "rmuser", content)
       assert :ok = User.apply("localhost", "rmuser", %{state: :absent})
       assert User.probe("localhost", "rmuser") == :missing
     end
 
     test "apply is idempotent" do
-      content = %{state: :present, uid: 500, shell: "/usr/sbin/nologin", home: "/nonexistent", groups: nil, system: true}
+      content = %{
+        state: :present,
+        uid: 500,
+        shell: "/usr/sbin/nologin",
+        home: "/nonexistent",
+        groups: nil,
+        system: true
+      }
+
       assert :ok = User.apply("localhost", "svc", content)
       assert :ok = User.apply("localhost", "svc", content)
       assert {:ok, ^content} = User.probe("localhost", "svc")
@@ -114,7 +154,15 @@ defmodule Mjolnir.Forge.UserResourceTest do
 
   describe "delete/2 (sandbox)" do
     test "removes user from sandbox" do
-      User.apply("localhost", "delme", %{state: :present, uid: 1002, shell: "/bin/sh", home: "/tmp", groups: nil, system: false})
+      User.apply("localhost", "delme", %{
+        state: :present,
+        uid: 1002,
+        shell: "/bin/sh",
+        home: "/tmp",
+        groups: nil,
+        system: false
+      })
+
       assert :ok = User.delete("localhost", "delme")
       assert User.probe("localhost", "delme") == :missing
     end

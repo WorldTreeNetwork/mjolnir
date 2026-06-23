@@ -30,6 +30,7 @@ defmodule Mjolnir.Chaos.NatWipeTest do
 
     # Baseline: NAT rule should be present.
     assert {:ok, baseline} = host_health()
+
     assert nat_status(baseline) == "ok",
            "expected baseline nat_masquerade = ok, got #{inspect(nat_status(baseline))}"
 

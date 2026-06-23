@@ -207,6 +207,7 @@ defmodule Mjolnir.API.RouterTest do
 
       # Sign and store HEAD
       alias Mjolnir.Sites.HeadRecord
+
       head = %HeadRecord{
         version: 1,
         identikey_fp: fp,

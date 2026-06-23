@@ -44,7 +44,10 @@ defmodule Mjolnir.DormantIntegrationTest do
     poll_until(
       fn ->
         Registry.lookup(VMRegistry, vm_id) != []
-      end, timeout: 60_000, interval: 500)
+      end,
+      timeout: 60_000,
+      interval: 500
+    )
 
     # 8. Verify state was preserved through snapshot
     {:ok, output} = VM.exec(vm_id, "cat /tmp/marker", timeout: 10_000)

@@ -7,14 +7,14 @@ defmodule Mjolnir.Forge.DeclarationTest do
     use Mjolnir.Forge.Declaration, host: "test-host-a"
 
     systemd_unit "alpha.service" do
-      source "[Unit]\nDescription=Alpha\n"
-      enabled true
-      state :running
+      source("[Unit]\nDescription=Alpha\n")
+      enabled(true)
+      state(:running)
     end
 
     systemd_unit "beta.service" do
-      source "[Unit]\nDescription=Beta\n"
-      state :stopped
+      source("[Unit]\nDescription=Beta\n")
+      state(:stopped)
     end
   end
 
@@ -22,7 +22,7 @@ defmodule Mjolnir.Forge.DeclarationTest do
     use Mjolnir.Forge.Declaration, host: "test-host-b"
 
     systemd_unit "gamma.service" do
-      source "x"
+      source("x")
     end
   end
 
@@ -55,7 +55,7 @@ defmodule Mjolnir.Forge.DeclarationTest do
         use Mjolnir.Forge.Declaration, host: "bad"
 
         systemd_unit "x.service" do
-          nonexistent_field "value"
+          nonexistent_field("value")
         end
       end
     end
@@ -67,15 +67,15 @@ defmodule Mjolnir.Forge.DeclarationTest do
     use Mjolnir.Forge.Declaration, host: "test-host-file"
 
     file "/etc/motd" do
-      source "Welcome\n"
-      mode 0o644
+      source("Welcome\n")
+      mode(0o644)
     end
 
     file "/etc/issue" do
-      source "My host\n"
-      mode 0o600
-      owner "root"
-      group "root"
+      source("My host\n")
+      mode(0o600)
+      owner("root")
+      group("root")
     end
   end
 
@@ -103,7 +103,7 @@ defmodule Mjolnir.Forge.DeclarationTest do
       use Mjolnir.Forge.Declaration, host: "test-host-file-defaults"
 
       file "/tmp/test" do
-        source "hello"
+        source("hello")
       end
     end
 
@@ -119,7 +119,7 @@ defmodule Mjolnir.Forge.DeclarationTest do
         use Mjolnir.Forge.Declaration, host: "bad-file"
 
         file "/tmp/x" do
-          bad_field "value"
+          bad_field("value")
         end
       end
     end

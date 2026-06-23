@@ -32,7 +32,16 @@ defmodule Mjolnir.Forge.Declaration do
 
     quote do
       import Mjolnir.Forge.Declaration,
-        only: [systemd_unit: 2, file: 2, sysctl: 2, apt_package: 2, user: 2, ufw_nat: 2, iptables: 2]
+        only: [
+          systemd_unit: 2,
+          file: 2,
+          sysctl: 2,
+          apt_package: 2,
+          user: 2,
+          ufw_nat: 2,
+          iptables: 2
+        ]
+
       Module.register_attribute(__MODULE__, :forge_resources, accumulate: true)
       @forge_host unquote(host)
       @before_compile Mjolnir.Forge.Declaration

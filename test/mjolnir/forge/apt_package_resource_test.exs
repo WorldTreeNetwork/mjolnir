@@ -10,7 +10,8 @@ defmodule Mjolnir.Forge.AptPackageResourceTest do
     AptPackage.ensure_sandbox_table()
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:mjolnir, :forge_apt_sandbox, prev),
+      if prev,
+        do: Application.put_env(:mjolnir, :forge_apt_sandbox, prev),
         else: Application.delete_env(:mjolnir, :forge_apt_sandbox)
 
       # Clean up sandbox table entries (but leave the table — other tests may use it)
@@ -82,7 +83,9 @@ defmodule Mjolnir.Forge.AptPackageResourceTest do
 
     test "returns content for installed package" do
       :ets.insert(:forge_apt_sandbox, {"nginx", %{state: :installed, version: "1.24.0"}})
-      assert {:ok, %{state: :installed, version: "1.24.0"}} = AptPackage.probe("localhost", "nginx")
+
+      assert {:ok, %{state: :installed, version: "1.24.0"}} =
+               AptPackage.probe("localhost", "nginx")
     end
   end
 

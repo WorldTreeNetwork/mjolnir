@@ -180,6 +180,57 @@ Notes:
   written in "pending" state (calendar attestation only); upgraded to
   Bitcoin-anchored state by a background job as blocks confirm (see §6.1).
 
+### Storage integration decision (spike mjolnir-9bq.1, 2026-06-22)
+
+**Decision: delegate chunk storage to the `recrypt-storage` crate via the
+`recrypt-server` HTTP sidecar (NOT a NIF). Ship the seam now; the live wiring is
+deferred until recrypt-server grows content-addressed chunk routes.**
+
+The seam is in place behind `Mjolnir.Sites.Store`:
+
+- `Mjolnir.Sites.Storage` — behaviour (`put_chunk/3`, `get_chunk/1`, `has_chunk?/1`).
+- `Mjolnir.Sites.Storage.Local` — **default** backend. BTRFS files, byte-for-byte
+  the same layout as recrypt's `LocalFileStorage` (`blob/b3/<hash58>` + `.obao`).
+  Keeps the unit suite green and recrypt-less hosts working.
+- `Mjolnir.Sites.Storage.Recrypt` — HTTP adapter to the sidecar (scaffolded).
+- Selected via `config :mjolnir, :sites_storage_backend` (default `…Storage.Local`);
+  env override `MJOLNIR_RECRYPT_STORAGE_URL` flips to the Recrypt backend.
+
+**Why sidecar over NIF:**
+
+- `recrypt-storage::BlobStorage` already implements `put_with_outboard` /
+  `get_with_outboard` / `delete_with_outboard` with real Bao outboards, and an
+  S3/B2 backend (the `minio()` path-style ctor is the same code with a B2
+  endpoint). recrypt-server already wires this up (`state.rs`,
+  `routes/files.rs`).
+- `recrypt-ffi` exposes **crypto only** (OpenFHE/liboqs/ed25519) — **no storage**.
+  A NIF would mean either pulling OpenFHE into the BEAM release build, or a fresh
+  rustler crate against recrypt-storage that still drags `aws-sdk-s3` + the
+  recrypt git dependency into the BEAM build. The whole recrypt workspace **fails
+  to compile on macOS** (OpenFHE/liboqs native deps), so a NIF would break local
+  Mac development of Mjolnir.
+- A sidecar keeps the BEAM build clean, lets recrypt-server own the S3/B2 backend,
+  and crash-isolates storage — consistent with how Mjolnir already runs the
+  hypervisor and Forgejo runner as separate processes.
+
+**Gap that blocks going live (follow-up for recrypt repo):** recrypt-server's
+current routes are insufficient. `POST /files` is multisig-auth-gated, hashes
+server-side, and stores an **empty** outboard (never accepts a precomputed
+`.obao`); `GET /files/{hash}` returns ciphertext only. The Recrypt adapter
+expects unauthenticated content-addressed chunk routes that round-trip a
+**precomputed** outboard, mapping 1:1 onto `put_with_outboard`/`get_with_outboard`:
+
+    PUT /storage/blob/b3/{hash}        body = ciphertext
+    PUT /storage/blob/b3/{hash}.obao   body = outboard
+    GET /storage/blob/b3/{hash}        -> ciphertext
+    GET /storage/blob/b3/{hash}.obao   -> outboard (404 = none)
+
+The round-trip test (`test/mjolnir/sites/storage/recrypt_test.exs`, tagged
+`:recrypt_storage`) documents this contract and is excluded from `mix test`. To
+validate it, build + run recrypt-server **on the Mjolnir server** (not macOS),
+add the routes above, then run
+`MJOLNIR_RECRYPT_STORAGE_URL=… mix test … --include recrypt_storage`.
+
 ---
 
 ## 5. The manifest

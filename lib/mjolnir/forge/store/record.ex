@@ -23,17 +23,17 @@ defmodule Mjolnir.Forge.Store.Record do
           | :ignored
 
   typedstruct enforce: true do
-    field :host, String.t()
-    field :kind, String.t()
-    field :resource_id, String.t()
-    field :status, status()
-    field :declared_hash, binary() | nil, default: nil
-    field :owned_hash, binary() | nil, default: nil
-    field :observed_hash, binary() | nil, default: nil
-    field :applied_at, DateTime.t() | nil, default: nil
-    field :observed_at, DateTime.t() | nil, default: nil
-    field :inserted_at, DateTime.t()
-    field :updated_at, DateTime.t()
+    field(:host, String.t())
+    field(:kind, String.t())
+    field(:resource_id, String.t())
+    field(:status, status())
+    field(:declared_hash, binary() | nil, default: nil)
+    field(:owned_hash, binary() | nil, default: nil)
+    field(:observed_hash, binary() | nil, default: nil)
+    field(:applied_at, DateTime.t() | nil, default: nil)
+    field(:observed_at, DateTime.t() | nil, default: nil)
+    field(:inserted_at, DateTime.t())
+    field(:updated_at, DateTime.t())
   end
 
   @spec schema_version() :: pos_integer()
@@ -127,8 +127,9 @@ defmodule Mjolnir.Forge.Store.Record do
     end
   end
 
-  defp parse_status(s) when s in ~w(converged drifted missing new conflict prune tombstone unmanaged ignored),
-    do: {:ok, String.to_existing_atom(s)}
+  defp parse_status(s)
+       when s in ~w(converged drifted missing new conflict prune tombstone unmanaged ignored),
+       do: {:ok, String.to_existing_atom(s)}
 
   defp parse_status(_), do: {:error, :invalid_status}
 

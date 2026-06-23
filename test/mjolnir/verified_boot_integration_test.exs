@@ -26,6 +26,7 @@ defmodule Mjolnir.VerifiedBootIntegrationTest do
       t0 = System.monotonic_time(:millisecond)
       assert {:ok, vm_id} = Mjolnir.VM.spawn(%{})
       elapsed = System.monotonic_time(:millisecond) - t0
+
       assert elapsed < @boot_timeout_ms,
              "Boot took #{elapsed}ms, expected < #{@boot_timeout_ms}ms"
 
@@ -35,6 +36,7 @@ defmodule Mjolnir.VerifiedBootIntegrationTest do
     test "uname confirms running linux kernel in guest" do
       assert {:ok, vm_id} = Mjolnir.VM.spawn(%{})
       assert {:ok, result} = Mjolnir.VM.exec(vm_id, "uname -r", 5_000)
+
       assert String.contains?(result, "6.") or String.contains?(result, "5."),
              "Expected kernel version, got: #{result}"
 
@@ -44,6 +46,7 @@ defmodule Mjolnir.VerifiedBootIntegrationTest do
     test "rootfs is virtiofs-mounted (flat layout preserved)" do
       assert {:ok, vm_id} = Mjolnir.VM.spawn(%{})
       assert {:ok, result} = Mjolnir.VM.exec(vm_id, "mount | grep 'on / '", 5_000)
+
       assert String.contains?(result, "virtiofs"),
              "Expected virtiofs root mount, got: #{result}"
 
@@ -60,6 +63,7 @@ defmodule Mjolnir.VerifiedBootIntegrationTest do
       t0 = System.monotonic_time(:millisecond)
       assert {:ok, vm_id} = Mjolnir.VM.spawn(%{})
       elapsed = System.monotonic_time(:millisecond) - t0
+
       assert elapsed < max_total_boot_ms,
              "Total boot time #{elapsed}ms exceeds #{max_total_boot_ms}ms budget (NFR1)"
 
@@ -74,10 +78,13 @@ defmodule Mjolnir.VerifiedBootIntegrationTest do
     setup do
       original = Application.get_env(:mjolnir, :initramfs_path)
       Application.delete_env(:mjolnir, :initramfs_path)
+
       on_exit(fn ->
-        if original, do: Application.put_env(:mjolnir, :initramfs_path, original),
-                    else: Application.delete_env(:mjolnir, :initramfs_path)
+        if original,
+          do: Application.put_env(:mjolnir, :initramfs_path, original),
+          else: Application.delete_env(:mjolnir, :initramfs_path)
       end)
+
       :ok
     end
 

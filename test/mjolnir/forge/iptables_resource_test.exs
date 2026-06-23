@@ -9,7 +9,8 @@ defmodule Mjolnir.Forge.IptablesResourceTest do
     Iptables.ensure_sandbox_table()
 
     on_exit(fn ->
-      if prev, do: Application.put_env(:mjolnir, :forge_iptables_sandbox, prev),
+      if prev,
+        do: Application.put_env(:mjolnir, :forge_iptables_sandbox, prev),
         else: Application.delete_env(:mjolnir, :forge_iptables_sandbox)
 
       if :ets.whereis(:forge_iptables_sandbox) != :undefined do
@@ -82,13 +83,23 @@ defmodule Mjolnir.Forge.IptablesResourceTest do
 
   describe "apply/3 (sandbox)" do
     test "stores rules" do
-      content = %{table: "filter", chain: "FORWARD", rules: ["-i mj-+ -j ACCEPT", "-o mj-+ -j ACCEPT"]}
+      content = %{
+        table: "filter",
+        chain: "FORWARD",
+        rules: ["-i mj-+ -j ACCEPT", "-o mj-+ -j ACCEPT"]
+      }
+
       assert :ok = Iptables.apply("localhost", "vm-forward", content)
       assert {:ok, ^content} = Iptables.probe("localhost", "vm-forward")
     end
 
     test "apply is idempotent" do
-      content = %{table: "nat", chain: "POSTROUTING", rules: ["-s 10.192.0.0/10 -o enp1s0 -j MASQUERADE"]}
+      content = %{
+        table: "nat",
+        chain: "POSTROUTING",
+        rules: ["-s 10.192.0.0/10 -o enp1s0 -j MASQUERADE"]
+      }
+
       assert :ok = Iptables.apply("localhost", "nat-1", content)
       assert :ok = Iptables.apply("localhost", "nat-1", content)
       assert {:ok, ^content} = Iptables.probe("localhost", "nat-1")
@@ -96,7 +107,13 @@ defmodule Mjolnir.Forge.IptablesResourceTest do
 
     test "update replaces content" do
       v1 = %{table: "filter", chain: "INPUT", rules: ["-p tcp --dport 22 -j ACCEPT"]}
-      v2 = %{table: "filter", chain: "INPUT", rules: ["-p tcp --dport 22 -j ACCEPT", "-p tcp --dport 4000 -j ACCEPT"]}
+
+      v2 = %{
+        table: "filter",
+        chain: "INPUT",
+        rules: ["-p tcp --dport 22 -j ACCEPT", "-p tcp --dport 4000 -j ACCEPT"]
+      }
+
       Iptables.apply("localhost", "ssh-access", v1)
       Iptables.apply("localhost", "ssh-access", v2)
       assert {:ok, ^v2} = Iptables.probe("localhost", "ssh-access")
