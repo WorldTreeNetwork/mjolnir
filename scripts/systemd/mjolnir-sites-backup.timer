@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily IdentiKey Sites -> Backblaze B2 backup
+Documentation=file:///opt/mjolnir/docs/plans/initiatives/identikey-sites.md
+
+[Timer]
+# Daily, staggered away from forgejo-backup (~03:31) and dpkg-db-backup (00:00).
+OnCalendar=*-*-* 04:15:00
+# Catch up if the machine was off at the scheduled time.
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -313,7 +313,9 @@ defmodule Mjolnir.SecretStore do
 
   defp parse_alias_index(contents) do
     case Jason.decode(contents) do
-      {:ok, %{"fp" => fp, "site" => site}} -> {fp, site}
+      {:ok, %{"fp" => fp, "site" => site}} ->
+        {fp, site}
+
       _ ->
         # Legacy colon-delimited fallback for any pre-existing index entries.
         case String.split(contents, ":", parts: 2) do
@@ -334,10 +336,16 @@ defmodule Mjolnir.SecretStore do
              {existing_fp, _site} <- parse_alias_index(existing),
              true <- existing_fp == identikey_fp do
           case File.rm(index_path) do
-            :ok -> :ok
-            {:error, :enoent} -> :ok
+            :ok ->
+              :ok
+
+            {:error, :enoent} ->
+              :ok
+
             {:error, reason} ->
-              Logger.warning("SecretStore: failed to remove alias index for #{fqdn}: #{inspect(reason)}")
+              Logger.warning(
+                "SecretStore: failed to remove alias index for #{fqdn}: #{inspect(reason)}"
+              )
           end
         else
           {:error, :enoent} -> :ok
@@ -464,12 +472,17 @@ defmodule Mjolnir.SecretStore do
             path = Path.join(root, entry)
 
             cond do
-              File.regular?(path) -> [path]
-              File.dir?(path) -> (case walk(path) do
-                                    {:ok, sub} -> sub
-                                    :not_found -> []
-                                  end)
-              true -> []
+              File.regular?(path) ->
+                [path]
+
+              File.dir?(path) ->
+                case walk(path) do
+                  {:ok, sub} -> sub
+                  :not_found -> []
+                end
+
+              true ->
+                []
             end
           end)
 
@@ -561,28 +574,24 @@ defmodule Mjolnir.SecretStore do
     end
   end
 
-  # Extract the signature bytes from a JSON-decoded envelope.
-  # HEAD records use "signature"; manifests use "signatures".
+  # Extract the ED25519 signature leg from a JSON-decoded envelope.
+  # HEAD/alias records use "signature"; manifests use "signatures".
+  #
+  # The field is a forward-compatible MultiSig object (`%{"ed25519" => b64}`)
+  # but `Mjolnir.Sites.MultiSig.from_field/1` also accepts the legacy bare
+  # base64-string shape so envelopes written before the struct landed still
+  # verify.
   defp extract_signature(raw) do
-    sig_b64 =
+    field =
       cond do
-        Map.has_key?(raw, "signature") and is_binary(raw["signature"]) ->
-          raw["signature"]
-
-        Map.has_key?(raw, "signatures") and is_binary(raw["signatures"]) ->
-          raw["signatures"]
-
-        true ->
-          nil
+        Map.has_key?(raw, "signature") -> raw["signature"]
+        Map.has_key?(raw, "signatures") -> raw["signatures"]
+        true -> nil
       end
 
-    case sig_b64 do
-      nil -> {:error, :missing_signature}
-      b64 ->
-        case Base.decode64(b64) do
-          {:ok, sig} -> {:ok, sig}
-          :error -> {:error, :bad_signature_encoding}
-        end
+    case Mjolnir.Sites.MultiSig.from_field(field) do
+      %Mjolnir.Sites.MultiSig{ed25519: sig} when is_binary(sig) -> {:ok, sig}
+      _ -> {:error, :missing_signature}
     end
   end
 

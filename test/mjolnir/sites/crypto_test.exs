@@ -15,8 +15,11 @@ defmodule Mjolnir.Sites.CryptoTest do
     # SKIPPED until the SHA-256 placeholder in Sites.Crypto is replaced with a
     # real Blake3 binding (waiting on a working rustler/Rust toolchain combo or
     # the recrypt Rust integration).
-    expected = Base.decode16!("AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262",
-                              case: :upper)
+    expected =
+      Base.decode16!("AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262",
+        case: :upper
+      )
+
     assert Crypto.blake3_hash("") == expected
   end
 
@@ -60,6 +63,7 @@ defmodule Mjolnir.Sites.CryptoTest do
     key2 = :crypto.strong_rand_bytes(32)
     nonce = :crypto.strong_rand_bytes(24)
     plaintext = "same plaintext"
+
     refute Crypto.xchacha20_encrypt(key1, nonce, plaintext) ==
              Crypto.xchacha20_encrypt(key2, nonce, plaintext)
   end
@@ -69,6 +73,7 @@ defmodule Mjolnir.Sites.CryptoTest do
     nonce1 = :crypto.strong_rand_bytes(24)
     nonce2 = :crypto.strong_rand_bytes(24)
     plaintext = "same plaintext"
+
     refute Crypto.xchacha20_encrypt(key, nonce1, plaintext) ==
              Crypto.xchacha20_encrypt(key, nonce2, plaintext)
   end
@@ -83,6 +88,7 @@ defmodule Mjolnir.Sites.CryptoTest do
     key = :crypto.strong_rand_bytes(32)
     nonce = :crypto.strong_rand_bytes(24)
     data = "symmetric"
+
     assert Crypto.xchacha20_encrypt(key, nonce, data) ==
              Crypto.xchacha20_decrypt(key, nonce, data)
   end

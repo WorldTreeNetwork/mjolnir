@@ -46,7 +46,9 @@ defmodule Mjolnir.Sites.TimestampUpgrader do
   @impl true
   def handle_call(:sweep_now, _from, state) do
     {n_upgraded, n_pending} = sweep()
-    {:reply, :ok, state |> Map.put(:last_upgraded, n_upgraded) |> Map.put(:last_pending, n_pending)}
+
+    {:reply, :ok,
+     state |> Map.put(:last_upgraded, n_upgraded) |> Map.put(:last_pending, n_pending)}
   end
 
   @impl true
@@ -91,7 +93,10 @@ defmodule Mjolnir.Sites.TimestampUpgrader do
         {0, 0}
 
       {:error, reason} ->
-        Logger.warning("Sites.TimestampUpgrader: cannot list #{manifests_dir}: #{inspect(reason)}")
+        Logger.warning(
+          "Sites.TimestampUpgrader: cannot list #{manifests_dir}: #{inspect(reason)}"
+        )
+
         {0, 0}
     end
   end
@@ -126,9 +131,7 @@ defmodule Mjolnir.Sites.TimestampUpgrader do
           :still_pending
 
         {:error, reason} ->
-          Logger.warning(
-            "Sites.TimestampUpgrader: upgrade error for #{path}: #{inspect(reason)}"
-          )
+          Logger.warning("Sites.TimestampUpgrader: upgrade error for #{path}: #{inspect(reason)}")
 
           :error
       end

@@ -170,6 +170,7 @@ defmodule Mix.Tasks.Mjolnir.Sites.PublishTest do
       # POST snapshot
       conn = call(:post, "/#{fp}/#{site}/snapshot", manifest_bytes)
       assert conn.status == 201
+
       %{"snapshot_hash" => snapshot_hash, "missing_chunks" => missing} =
         Jason.decode!(conn.resp_body)
 
@@ -179,8 +180,11 @@ defmodule Mix.Tasks.Mjolnir.Sites.PublishTest do
       # Upload all missing chunks
       for bao_hash <- missing do
         %{ciphertext: ct, outboard: ob} = Map.fetch!(chunks, bao_hash)
-        framed = <<byte_size(ct)::big-unsigned-64, ct::binary,
-                   byte_size(ob)::big-unsigned-64, ob::binary>>
+
+        framed =
+          <<byte_size(ct)::big-unsigned-64, ct::binary, byte_size(ob)::big-unsigned-64,
+            ob::binary>>
+
         conn = call(:put, "/blob/#{bao_hash}", framed)
         assert conn.status == 201, "chunk upload failed for #{bao_hash}: #{conn.resp_body}"
       end
@@ -219,13 +223,17 @@ defmodule Mix.Tasks.Mjolnir.Sites.PublishTest do
 
         conn = call(:post, "/#{fp}/#{site}/snapshot", manifest_bytes)
         assert conn.status == 201
+
         %{"snapshot_hash" => snapshot_hash, "missing_chunks" => missing} =
           Jason.decode!(conn.resp_body)
 
         for bao_hash <- missing do
           %{ciphertext: ct, outboard: ob} = Map.fetch!(chunks, bao_hash)
-          framed = <<byte_size(ct)::big-unsigned-64, ct::binary,
-                     byte_size(ob)::big-unsigned-64, ob::binary>>
+
+          framed =
+            <<byte_size(ct)::big-unsigned-64, ct::binary, byte_size(ob)::big-unsigned-64,
+              ob::binary>>
+
           assert 201 == call(:put, "/blob/#{bao_hash}", framed).status
         end
 

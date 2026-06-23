@@ -43,6 +43,12 @@ if flush_delay = System.get_env("MJOLNIR_DORMANT_FLUSH_DELAY_MS") do
   config :mjolnir, dormant_flush_delay_ms: String.to_integer(flush_delay)
 end
 
+if recrypt_storage_url = System.get_env("MJOLNIR_RECRYPT_STORAGE_URL") do
+  config :mjolnir,
+    sites_storage_backend: Mjolnir.Sites.Storage.Recrypt,
+    recrypt_storage_url: recrypt_storage_url
+end
+
 case System.get_env("MJOLNIR_PG_ENABLED") do
   "true" -> config :mjolnir, pg_enabled: true
   "false" -> config :mjolnir, pg_enabled: false

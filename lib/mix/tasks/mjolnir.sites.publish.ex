@@ -73,7 +73,8 @@ defmodule Mix.Tasks.Mjolnir.Sites.Publish do
   def run(args) do
     Application.ensure_all_started(:req)
 
-    {opts, positional, _invalid} = OptionParser.parse(args, switches: @switches, aliases: @aliases)
+    {opts, positional, _invalid} =
+      OptionParser.parse(args, switches: @switches, aliases: @aliases)
 
     dir =
       case positional do
@@ -81,9 +82,15 @@ defmodule Mix.Tasks.Mjolnir.Sites.Publish do
         [] -> Mix.raise("mjolnir.sites.publish: <directory> argument is required")
       end
 
-    fp = Keyword.get(opts, :identikey_fp) || Mix.raise("mjolnir.sites.publish: --identikey-fp is required")
+    fp =
+      Keyword.get(opts, :identikey_fp) ||
+        Mix.raise("mjolnir.sites.publish: --identikey-fp is required")
+
     site = Keyword.get(opts, :site) || Mix.raise("mjolnir.sites.publish: --site is required")
-    base_url = Keyword.get(opts, :base_url) || Mix.raise("mjolnir.sites.publish: --base-url is required")
+
+    base_url =
+      Keyword.get(opts, :base_url) || Mix.raise("mjolnir.sites.publish: --base-url is required")
+
     sequence = Keyword.get(opts, :sequence, 1)
     keypair = load_keypair(Keyword.get(opts, :keypair_file))
 
@@ -91,7 +98,9 @@ defmodule Mix.Tasks.Mjolnir.Sites.Publish do
       Mix.raise("mjolnir.sites.publish: #{inspect(dir)} is not a directory")
     end
 
-    Mix.shell().info("Publishing #{dir} → #{base_url}/api/sites/#{fp}/#{site} (sequence=#{sequence})")
+    Mix.shell().info(
+      "Publishing #{dir} → #{base_url}/api/sites/#{fp}/#{site} (sequence=#{sequence})"
+    )
 
     publish_opts =
       [sequence: sequence]

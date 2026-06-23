@@ -51,7 +51,10 @@ defmodule Mjolnir.Sites.OpenTimestamps do
             end
 
           {output, exit_code} ->
-            Logger.warning("Sites.OpenTimestamps: ots stamp failed (exit #{exit_code}): #{output}")
+            Logger.warning(
+              "Sites.OpenTimestamps: ots stamp failed (exit #{exit_code}): #{output}"
+            )
+
             {:error, {:ots_stamp_failed, exit_code}}
         end
       rescue

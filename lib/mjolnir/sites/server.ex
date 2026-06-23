@@ -9,9 +9,10 @@ defmodule Mjolnir.Sites.Server do
   actual transport — HTTP-over-Iroh from the gateway — calls `serve/3` with
   the bound endpoint's `(identikey_fp, site_name)` and the requested path.
 
-  Decryption is currently STUBBED. The seam is `decrypt_public/3`, to be wired
-  to a recrypt helper once the chunk format and HKDF derivation are exercised
-  end-to-end.
+  Public-mode decryption is real: `decrypt_public/4` derives the per-file key as
+  `HKDF-SHA256(snapshot.sym_seed, info=entry.path, length=32)` and runs
+  `XChaCha20` decrypt over the chunk ciphertext, matching the Publisher's
+  derivation convention. Gated/group modes are not yet wired.
   """
 
   require Logger

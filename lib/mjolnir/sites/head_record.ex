@@ -49,7 +49,7 @@ defmodule Mjolnir.Sites.HeadRecord do
       "snapshot_hash" => r.snapshot_hash,
       "sequence" => r.sequence,
       "created_at" => DateTime.to_iso8601(r.created_at),
-      "signature" => if(r.signature, do: Base.encode64(r.signature), else: nil)
+      "signature" => encode_sig(r.signature)
     }
     |> Jason.encode!()
   end
@@ -109,12 +109,22 @@ defmodule Mjolnir.Sites.HeadRecord do
     dt
   end
 
-  defp decode_sig(nil), do: nil
+  # The `signature` field is carried internally as a raw ED25519 binary (or
+  # `nil`), but serialized as a forward-compatible MultiSig object on the wire.
+  # `nil`/`<<>>` encodes to `nil` so canonical signing bytes match.
+  defp encode_sig(nil), do: nil
+  defp encode_sig(<<>>), do: nil
 
-  defp decode_sig(str) when is_binary(str) do
-    case Base.decode64(str) do
-      {:ok, bin} -> bin
-      :error -> nil
+  defp encode_sig(bin) when is_binary(bin) do
+    Mjolnir.Sites.MultiSig.to_field(%Mjolnir.Sites.MultiSig{ed25519: bin})
+  end
+
+  defp encode_sig(%Mjolnir.Sites.MultiSig{} = ms), do: Mjolnir.Sites.MultiSig.to_field(ms)
+
+  defp decode_sig(field) do
+    case Mjolnir.Sites.MultiSig.from_field(field) do
+      nil -> nil
+      %Mjolnir.Sites.MultiSig{ed25519: ed} -> ed
     end
   end
 end

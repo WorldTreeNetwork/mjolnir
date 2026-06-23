@@ -28,7 +28,17 @@ defmodule Mjolnir.API.SitesRouter do
   require Logger
 
   alias Mjolnir.SecretStore
-  alias Mjolnir.Sites.{AliasRecord, HeadIndex, HeadRecord, Manifest, ManifestIndex, OpenTimestamps, Server, Store}
+
+  alias Mjolnir.Sites.{
+    AliasRecord,
+    HeadIndex,
+    HeadRecord,
+    Manifest,
+    ManifestIndex,
+    OpenTimestamps,
+    Server,
+    Store
+  }
 
   plug(:match)
   plug(:dispatch)
@@ -319,7 +329,12 @@ defmodule Mjolnir.API.SitesRouter do
 
   defp alias_key(site_name, fqdn), do: "sites/#{site_name}/aliases/#{fqdn}"
 
-  defp check_alias_matches(%AliasRecord{identikey_fp: rfp, site_name: rname, fqdn: rfqdn}, fp, name, fqdn) do
+  defp check_alias_matches(
+         %AliasRecord{identikey_fp: rfp, site_name: rname, fqdn: rfqdn},
+         fp,
+         name,
+         fqdn
+       ) do
     cond do
       rfp != fp -> {:error, :identikey_mismatch}
       rname != name -> {:error, :site_mismatch}

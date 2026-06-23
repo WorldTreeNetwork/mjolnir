@@ -153,8 +153,8 @@ defmodule Mjolnir.Sites.Crypto do
   # Runs 20 ChaCha rounds on the initial state and returns the first and last
   # row of the result as a 32-byte subkey.
   defp hchacha20(key, nonce16) when byte_size(key) == 32 and byte_size(nonce16) == 16 do
-    <<k0::32-little, k1::32-little, k2::32-little, k3::32-little,
-      k4::32-little, k5::32-little, k6::32-little, k7::32-little>> = key
+    <<k0::32-little, k1::32-little, k2::32-little, k3::32-little, k4::32-little, k5::32-little,
+      k6::32-little, k7::32-little>> = key
 
     <<n0::32-little, n1::32-little, n2::32-little, n3::32-little>> = nonce16
 
@@ -171,47 +171,78 @@ defmodule Mjolnir.Sites.Crypto do
     # row3: [n0, n1, n2, n3]
     {a0, a1, a2, a3, _b0, _b1, _b2, _b3, _c0, _c1, _c2, _c3, d0, d1, d2, d3} =
       chacha20_rounds(
-        s0, s1, s2, s3,
-        k0, k1, k2, k3,
-        k4, k5, k6, k7,
-        n0, n1, n2, n3
+        s0,
+        s1,
+        s2,
+        s3,
+        k0,
+        k1,
+        k2,
+        k3,
+        k4,
+        k5,
+        k6,
+        k7,
+        n0,
+        n1,
+        n2,
+        n3
       )
 
     # HChaCha20 output: first word-row (a0..a3) + last word-row (d0..d3),
     # WITHOUT adding the initial state (unlike ChaCha20 proper).
-    <<a0::32-little, a1::32-little, a2::32-little, a3::32-little,
-      d0::32-little, d1::32-little, d2::32-little, d3::32-little>>
+    <<a0::32-little, a1::32-little, a2::32-little, a3::32-little, d0::32-little, d1::32-little,
+      d2::32-little, d3::32-little>>
   end
 
   defp chacha20_rounds(a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3) do
     # 20 rounds = 10 double-rounds (column then diagonal)
-    Enum.reduce(1..10, {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3},
-      fn _, {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3} ->
-        # Column round
-        {a0, b0, c0, d0} = qr(a0, b0, c0, d0)
-        {a1, b1, c1, d1} = qr(a1, b1, c1, d1)
-        {a2, b2, c2, d2} = qr(a2, b2, c2, d2)
-        {a3, b3, c3, d3} = qr(a3, b3, c3, d3)
-        # Diagonal round
-        {a0, b1, c2, d3} = qr(a0, b1, c2, d3)
-        {a1, b2, c3, d0} = qr(a1, b2, c3, d0)
-        {a2, b3, c0, d1} = qr(a2, b3, c0, d1)
-        {a3, b0, c1, d2} = qr(a3, b0, c1, d2)
-        {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3}
-      end)
+    Enum.reduce(1..10, {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3}, fn _,
+                                                                                            {a0,
+                                                                                             a1,
+                                                                                             a2,
+                                                                                             a3,
+                                                                                             b0,
+                                                                                             b1,
+                                                                                             b2,
+                                                                                             b3,
+                                                                                             c0,
+                                                                                             c1,
+                                                                                             c2,
+                                                                                             c3,
+                                                                                             d0,
+                                                                                             d1,
+                                                                                             d2,
+                                                                                             d3} ->
+      # Column round
+      {a0, b0, c0, d0} = qr(a0, b0, c0, d0)
+      {a1, b1, c1, d1} = qr(a1, b1, c1, d1)
+      {a2, b2, c2, d2} = qr(a2, b2, c2, d2)
+      {a3, b3, c3, d3} = qr(a3, b3, c3, d3)
+      # Diagonal round
+      {a0, b1, c2, d3} = qr(a0, b1, c2, d3)
+      {a1, b2, c3, d0} = qr(a1, b2, c3, d0)
+      {a2, b3, c0, d1} = qr(a2, b3, c0, d1)
+      {a3, b0, c1, d2} = qr(a3, b0, c1, d2)
+      {a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3}
+    end)
   end
 
   @mask32 0xFFFFFFFF
 
   # ChaCha20 quarter-round
   defp qr(a, b, c, d) do
-    a = band32(a + b); d = rotl32(bxor(d, a), 16)
-    c = band32(c + d); b = rotl32(bxor(b, c), 12)
-    a = band32(a + b); d = rotl32(bxor(d, a),  8)
-    c = band32(c + d); b = rotl32(bxor(b, c),  7)
+    a = band32(a + b)
+    d = rotl32(bxor(d, a), 16)
+    c = band32(c + d)
+    b = rotl32(bxor(b, c), 12)
+    a = band32(a + b)
+    d = rotl32(bxor(d, a), 8)
+    c = band32(c + d)
+    b = rotl32(bxor(b, c), 7)
     {a, b, c, d}
   end
 
   defp band32(x), do: x &&& @mask32
-  defp rotl32(x, n), do: band32((x <<< n) ||| (x >>> (32 - n)))
+  defp rotl32(x, n), do: band32(x <<< n ||| x >>> (32 - n))
 end

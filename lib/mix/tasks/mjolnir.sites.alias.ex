@@ -64,25 +64,36 @@ defmodule Mix.Tasks.Mjolnir.Sites.Alias do
   def run(args) do
     Application.ensure_all_started(:req)
 
-    {opts, positional, _invalid} = OptionParser.parse(args, switches: @switches, aliases: @aliases)
+    {opts, positional, _invalid} =
+      OptionParser.parse(args, switches: @switches, aliases: @aliases)
 
     {subcmd, fqdn} =
       case positional do
-        [cmd, fqdn | _] when cmd in ["add", "remove"] -> {cmd, fqdn}
+        [cmd, fqdn | _] when cmd in ["add", "remove"] ->
+          {cmd, fqdn}
+
         [cmd | _] when cmd in ["add", "remove"] ->
           Mix.raise("mjolnir.sites.alias: <fqdn> argument is required")
+
         _ ->
           Mix.raise("mjolnir.sites.alias: subcommand must be 'add' or 'remove'")
       end
 
-    fp = Keyword.get(opts, :identikey_fp) ||
-      Mix.raise("mjolnir.sites.alias: --identikey-fp is required")
-    site = Keyword.get(opts, :site) ||
-      Mix.raise("mjolnir.sites.alias: --site is required")
-    keypair_file = Keyword.get(opts, :keypair_file) ||
-      Mix.raise("mjolnir.sites.alias: --keypair-file is required")
-    base_url = Keyword.get(opts, :base_url) ||
-      Mix.raise("mjolnir.sites.alias: --base-url is required")
+    fp =
+      Keyword.get(opts, :identikey_fp) ||
+        Mix.raise("mjolnir.sites.alias: --identikey-fp is required")
+
+    site =
+      Keyword.get(opts, :site) ||
+        Mix.raise("mjolnir.sites.alias: --site is required")
+
+    keypair_file =
+      Keyword.get(opts, :keypair_file) ||
+        Mix.raise("mjolnir.sites.alias: --keypair-file is required")
+
+    base_url =
+      Keyword.get(opts, :base_url) ||
+        Mix.raise("mjolnir.sites.alias: --base-url is required")
 
     unless File.exists?(keypair_file) do
       Mix.raise("mjolnir.sites.alias: keypair file #{inspect(keypair_file)} not found")
@@ -90,14 +101,20 @@ defmodule Mix.Tasks.Mjolnir.Sites.Alias do
 
     keypair =
       case IdentiKey.keypair_from_json(File.read!(keypair_file)) do
-        {:ok, kp} -> kp
-        {:error, reason} -> Mix.raise("mjolnir.sites.alias: failed to load keypair: #{inspect(reason)}")
+        {:ok, kp} ->
+          kp
+
+        {:error, reason} ->
+          Mix.raise("mjolnir.sites.alias: failed to load keypair: #{inspect(reason)}")
       end
 
     case subcmd do
       "add" ->
         sequence = Keyword.get(opts, :sequence, 1)
-        Mix.shell().info("Adding alias #{fqdn} → #{base_url}/api/sites/#{fp}/#{site} (sequence=#{sequence})")
+
+        Mix.shell().info(
+          "Adding alias #{fqdn} → #{base_url}/api/sites/#{fp}/#{site} (sequence=#{sequence})"
+        )
 
         case Publisher.publish_alias(keypair, fp, site, fqdn, base_url, sequence: sequence) do
           {:ok, _body} ->

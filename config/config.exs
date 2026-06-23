@@ -51,6 +51,15 @@ config :mjolnir,
   sites_root: "/var/lib/mjolnir/btrfs/@sites",
   secret_store_root: "/var/lib/mjolnir/btrfs/@sites/keyspace",
   sites_ots_upgrade_interval_ms: 30 * 60 * 1_000,
+  # Chunk-store backend behind Mjolnir.Sites.Store. Default keeps blobs on local
+  # BTRFS (recrypt LocalFileStorage layout). Switch to
+  # Mjolnir.Sites.Storage.Recrypt to delegate to the recrypt-storage crate via
+  # the recrypt-server sidecar (real Bao outboards + S3/B2). See
+  # docs/plans/initiatives/identikey-sites.md ("Storage integration decision").
+  sites_storage_backend: Mjolnir.Sites.Storage.Local,
+  # Base URL of the recrypt-server sidecar (only read by the Recrypt backend).
+  # Overridable via MJOLNIR_RECRYPT_STORAGE_URL.
+  recrypt_storage_url: nil,
 
   # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
   # tests and dev machines without the binary stay green. Operator enables in

@@ -27,6 +27,7 @@ defmodule Mjolnir.API.SitesRouterTest do
     # Generate a keypair and register its identity for the default fp
     keypair = IdentiKey.gen_keypair()
     fp = IdentiKey.fingerprint(keypair)
+
     :ok =
       SecretStore.put(
         fp,
@@ -183,6 +184,7 @@ defmodule Mjolnir.API.SitesRouterTest do
   test "GET /manifests/:hash returns stored manifest", %{fp: fp} do
     m = sample_manifest(fp)
     mbytes = Manifest.serialize(m)
+
     {:ok, %{"snapshot_hash" => hash}} =
       call(:post, "/#{fp}/blog/snapshot", mbytes).resp_body |> Jason.decode()
 
@@ -236,6 +238,7 @@ defmodule Mjolnir.API.SitesRouterTest do
     }
 
     mbytes = Manifest.serialize(m)
+
     {:ok, %{"snapshot_hash" => _}} =
       call(:post, "/#{fp}/blog/snapshot", mbytes).resp_body |> Jason.decode()
 
@@ -296,7 +299,10 @@ defmodule Mjolnir.API.SitesRouterTest do
 
   ## T3: Alias resolver
 
-  test "GET /aliases/lookup returns 200 with fp and site when alias exists", %{keypair: kp, fp: fp} do
+  test "GET /aliases/lookup returns 200 with fp and site when alias exists", %{
+    keypair: kp,
+    fp: fp
+  } do
     fqdn = "blog.duke.io"
     alias_bytes = signed_alias_bytes(kp, fp, "blog", fqdn)
     assert 201 == call(:put, "/#{fp}/blog/aliases/#{fqdn}", alias_bytes).status
@@ -340,8 +346,13 @@ defmodule Mjolnir.API.SitesRouterTest do
   test "PUT alias rejects identikey mismatch", %{keypair: _kp, fp: fp} do
     other_kp = IdentiKey.gen_keypair()
     other_fp = IdentiKey.fingerprint(other_kp)
-    :ok = SecretStore.put(other_fp, "identity/pubkey",
-      Jason.encode!(%{"pubkey" => Base.encode64(other_kp.ed25519_public)}))
+
+    :ok =
+      SecretStore.put(
+        other_fp,
+        "identity/pubkey",
+        Jason.encode!(%{"pubkey" => Base.encode64(other_kp.ed25519_public)})
+      )
 
     fqdn = "mismatch.example.com"
     # Record claims other_fp but URL uses fp

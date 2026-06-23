@@ -107,7 +107,7 @@ defmodule Mjolnir.Sites.Manifest do
       "created_at" => DateTime.to_iso8601(m.created_at),
       "sym_seed" => encode_bin(m.sym_seed),
       "entries" => Enum.map(m.entries, &entry_to_map/1),
-      "signatures" => encode_bin(m.signatures)
+      "signatures" => encode_sig(m.signatures)
     }
     |> Jason.encode!()
   end
@@ -130,7 +130,7 @@ defmodule Mjolnir.Sites.Manifest do
                raw
                |> Map.fetch!("entries")
                |> Enum.map(&entry_from_map/1),
-             signatures: decode_bin(Map.get(raw, "signatures"))
+             signatures: decode_sig(Map.get(raw, "signatures"))
            }}
         rescue
           e -> {:error, {:bad_manifest, e}}
@@ -203,9 +203,28 @@ defmodule Mjolnir.Sites.Manifest do
     end
   end
 
+  # The `signatures` field is carried internally as a raw ED25519 binary (or
+  # `nil`), but serialized as a forward-compatible MultiSig object on the wire.
+  # `nil`/`<<>>` must encode to `nil` so canonical signing bytes match on both
+  # the signing and verifying side.
+  defp encode_sig(nil), do: nil
+  defp encode_sig(<<>>), do: nil
+
+  defp encode_sig(bin) when is_binary(bin) do
+    Mjolnir.Sites.MultiSig.to_field(%Mjolnir.Sites.MultiSig{ed25519: bin})
+  end
+
+  defp encode_sig(%Mjolnir.Sites.MultiSig{} = ms), do: Mjolnir.Sites.MultiSig.to_field(ms)
+
+  defp decode_sig(field) do
+    case Mjolnir.Sites.MultiSig.from_field(field) do
+      nil -> nil
+      %Mjolnir.Sites.MultiSig{ed25519: ed} -> ed
+    end
+  end
+
   defp parse_dt!(str) do
     {:ok, dt, _} = DateTime.from_iso8601(str)
     dt
   end
-
 end

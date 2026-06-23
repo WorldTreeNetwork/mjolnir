@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up IdentiKey Sites store (@sites) to Backblaze B2
+Documentation=file:///opt/mjolnir/docs/plans/initiatives/identikey-sites.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# rclone remote `b2:` is configured in /root/.config/rclone/rclone.conf.
+# Runs as root because @sites lives under /var/lib/mjolnir/btrfs and the
+# rclone config is root-owned; the script only READS @sites and WRITES to B2.
+ExecStart=/usr/local/bin/backup-sites-b2.sh
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

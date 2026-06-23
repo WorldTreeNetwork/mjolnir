@@ -21,12 +21,15 @@ defmodule Mjolnir.Sites.Publisher do
   until after encryption, but encryption needs the key. Both this module and
   `Mjolnir.Sites.Server.decrypt_public/4` use the same derivation.
 
-  ## Signatures (Phase 1 stub)
+  ## Signatures
 
-  Manifest signatures (`signatures: <<>>`) and HEAD record signatures
-  (`signature: <<>>`) are empty placeholders. Real MultiSig signing via the
-  IdentiKey's ED25519 + ML-DSA-87 keypair will replace these once the recrypt
-  signing path lands.
+  When a `:keypair` is supplied, the canonical manifest body and HEAD/alias
+  record bodies are signed with the IdentiKey's ED25519 secret key (via
+  `Mjolnir.Sites.IdentiKey`). The signature is carried internally as a raw
+  ED25519 binary and serialized on the wire as a forward-compatible
+  `Mjolnir.Sites.MultiSig` object (`{"ed25519": "<base64>"}`), so the eventual
+  ML-DSA-87 leg is purely additive. When `:keypair` is `nil` the record is left
+  unsigned (the signature field serializes to `null`).
   """
 
   require Logger
@@ -136,9 +139,11 @@ defmodule Mjolnir.Sites.Publisher do
     {manifest, chunks} = build_snapshot(dir, identikey_fp, site_name, opts)
     manifest_bytes = Manifest.serialize(manifest)
 
-    with {:ok, snapshot_hash, missing} <- post_snapshot(base_url, identikey_fp, site_name, manifest_bytes),
+    with {:ok, snapshot_hash, missing} <-
+           post_snapshot(base_url, identikey_fp, site_name, manifest_bytes),
          :ok <- upload_missing_chunks(base_url, missing, chunks),
-         {:ok, _seq} <- post_head(base_url, identikey_fp, site_name, snapshot_hash, sequence, keypair) do
+         {:ok, _seq} <-
+           post_head(base_url, identikey_fp, site_name, snapshot_hash, sequence, keypair) do
       {:ok, %{snapshot_hash: snapshot_hash, sequence: sequence}}
     end
   end
@@ -271,7 +276,14 @@ defmodule Mjolnir.Sites.Publisher do
 
   Returns `{:ok, map()}` on 201, `{:error, term()}` otherwise.
   """
-  @spec publish_alias(IdentiKey.keypair(), String.t(), String.t(), String.t(), String.t(), keyword()) ::
+  @spec publish_alias(
+          IdentiKey.keypair(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
           {:ok, map()} | {:error, term()}
   def publish_alias(keypair, fp, site_name, fqdn, base_url, opts \\ []) do
     sequence = Keyword.get(opts, :sequence, 1)
@@ -305,7 +317,14 @@ defmodule Mjolnir.Sites.Publisher do
 
   Returns `:ok` on 204, `{:error, term()}` otherwise.
   """
-  @spec remove_alias(IdentiKey.keypair(), String.t(), String.t(), String.t(), String.t(), keyword()) ::
+  @spec remove_alias(
+          IdentiKey.keypair(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
           :ok | {:error, term()}
   def remove_alias(keypair, fp, site_name, fqdn, base_url, opts \\ []) do
     sequence = Keyword.get(opts, :sequence, :erlang.system_time(:millisecond))

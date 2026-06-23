@@ -14,14 +14,25 @@ defmodule Mjolnir.Sites.Store do
   Writes verify the supplied bao_hash matches the bytes on receive — bytes that
   fail verification never land on disk.
 
-  This module is the Elixir-side facade. The actual Bao tree construction /
-  verification is delegated to a Rust helper (planned: NIF or sidecar binary
-  wrapping `bao-tree`). For Phase 1 scaffolding the verification path is
-  STUBBED — see `verify_bao!/3`.
+  This module is the Elixir-side facade. Chunk (ciphertext + outboard)
+  operations are delegated to a pluggable backend that implements the
+  `Mjolnir.Sites.Storage` behaviour, selected at runtime via the
+  `:sites_storage_backend` config (default `Mjolnir.Sites.Storage.Local`):
+
+    * `Mjolnir.Sites.Storage.Local` — BTRFS files, layout-compatible with
+      recrypt's `LocalFileStorage`. The default; keeps the unit suite green.
+    * `Mjolnir.Sites.Storage.Recrypt` — HTTP sidecar delegating to the
+      `recrypt-storage` crate (real Bao outboards, S3/B2 backend). See the
+      "Storage integration decision" note in the design doc.
+
+  Manifest and OTS storage are small signed records / receipts kept on the host
+  filesystem; they are not part of the recrypt blob store and stay local here.
   """
 
   use GenServer
   require Logger
+
+  alias Mjolnir.Sites.Storage
 
   ## Public API
 
@@ -59,40 +70,31 @@ defmodule Mjolnir.Sites.Store do
     manifest_path(snapshot_hash58) <> ".ots"
   end
 
-  @doc "True if a chunk's ciphertext + outboard are both on disk."
+  @doc "True if a chunk's ciphertext is present in the configured backend."
   @spec has_chunk?(String.t()) :: boolean()
   def has_chunk?(bao_hash58) do
-    File.regular?(chunk_path(bao_hash58)) and File.regular?(outboard_path(bao_hash58))
+    Storage.backend().has_chunk?(validate_hash!(bao_hash58))
   end
 
   @doc """
   Write a chunk + outboard, verifying the bytes match `bao_hash`. Returns
-  `{:error, :bao_mismatch}` if verification fails — nothing is left on disk
-  in that case.
+  `{:error, {:bao_mismatch, _}}` if verification fails — nothing is left
+  behind in that case. Delegates to the configured `Sites.Storage` backend.
   """
   @spec put_chunk(String.t(), binary(), binary()) :: :ok | {:error, term()}
   def put_chunk(bao_hash58, ciphertext, outboard)
       when is_binary(ciphertext) and is_binary(outboard) do
-    GenServer.call(__MODULE__, {:put_chunk, bao_hash58, ciphertext, outboard})
+    Storage.backend().put_chunk(validate_hash!(bao_hash58), ciphertext, outboard)
   end
 
   @doc """
-  Read a chunk's ciphertext + outboard. Verification on read is the caller's
-  responsibility for streaming use — call `verify_bao!/3` if needed.
+  Read a chunk's ciphertext + outboard from the configured backend. Outboard is
+  `<<>>` when no `.obao` sibling exists (small-file case).
   """
   @spec get_chunk(String.t()) ::
-          {:ok, %{ciphertext: binary(), outboard: binary()}} | :not_found
+          {:ok, %{ciphertext: binary(), outboard: binary()}} | :not_found | {:error, term()}
   def get_chunk(bao_hash58) do
-    cp = chunk_path(bao_hash58)
-    op = outboard_path(bao_hash58)
-
-    with {:ok, ct} <- File.read(cp),
-         {:ok, ob} <- File.read(op) do
-      {:ok, %{ciphertext: ct, outboard: ob}}
-    else
-      {:error, :enoent} -> :not_found
-      {:error, _} = err -> err
-    end
+    Storage.backend().get_chunk(validate_hash!(bao_hash58))
   end
 
   @doc "Store a manifest envelope under its snapshot hash."
@@ -149,16 +151,6 @@ defmodule Mjolnir.Sites.Store do
   end
 
   @impl true
-  def handle_call({:put_chunk, bao_hash58, ciphertext, outboard}, _from, state) do
-    with :ok <- verify_bao!(bao_hash58, ciphertext, outboard),
-         :ok <- write_atomic(chunk_path(bao_hash58), ciphertext),
-         :ok <- write_atomic(outboard_path(bao_hash58), outboard) do
-      {:reply, :ok, state}
-    else
-      {:error, _} = err -> {:reply, err, state}
-    end
-  end
-
   def handle_call({:put_manifest, snapshot_hash58, bytes}, _from, state) do
     {:reply, write_atomic(manifest_path(snapshot_hash58), bytes), state}
   end
@@ -191,22 +183,6 @@ defmodule Mjolnir.Sites.Store do
       error ->
         _ = File.rm(tmp)
         {:error, error}
-    end
-  end
-
-  # Whole-content Blake3 verification. Phase 1 does not stream-verify with
-  # the .obao; that arrives with the real Bao-tree wiring. For Phase 1 we
-  # check the ciphertext hash matches the supplied bao_hash. The outboard
-  # bytes are stored as-supplied (empty allowed in Phase 1) for future use.
-  defp verify_bao!(_bao_hash58, <<>>, _outboard), do: {:error, :empty_ciphertext}
-
-  defp verify_bao!(bao_hash58, ciphertext, _outboard) do
-    actual = Mjolnir.Sites.Crypto.blake3_hash_base58(ciphertext)
-
-    if actual == bao_hash58 do
-      :ok
-    else
-      {:error, {:bao_mismatch, expected: bao_hash58, actual: actual}}
     end
   end
 end

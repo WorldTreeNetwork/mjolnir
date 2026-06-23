@@ -103,7 +103,10 @@ defmodule Mjolnir.SecretStoreSignatureTest do
     assert {:error, :identity_not_registered} = SecretStore.put(fp, "sites/blog/HEAD", bytes)
   end
 
-  test "identity/pubkey bootstrap accepts a record whose pubkey matches the fp", %{keypair: kp, fp: fp} do
+  test "identity/pubkey bootstrap accepts a record whose pubkey matches the fp", %{
+    keypair: kp,
+    fp: fp
+  } do
     assert :ok = SecretStore.put(fp, "identity/pubkey", identity_record(kp))
   end
 
