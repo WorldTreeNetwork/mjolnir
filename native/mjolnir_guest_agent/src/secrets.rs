@@ -2,7 +2,13 @@
 //!
 //! Provides create, open, close, and mount operations for an encrypted
 //! LUKS loopback container at `/var/lib/mjolnir/secrets.luks`. Secrets
-//! are exposed as environment variables via `/etc/mjolnir/secrets.env`.
+//! are exposed as environment variables via `/run/mjolnir/secrets.env`.
+//!
+//! The rendered env file lives on tmpfs (`/run`), NOT the rootfs, so plaintext
+//! secrets are never persisted and never captured by a BTRFS rootfs snapshot
+//! (e.g. a deploy build/release layer). The encrypted LUKS volume remains the
+//! at-rest source of truth; `/run` holds only the RAM-resident rendered copy,
+//! re-created by `load_env_vars()` on each open (re-inject / re-mount after boot).
 
 use std::collections::HashMap;
 use std::os::unix::fs::OpenOptionsExt;
@@ -15,7 +21,9 @@ use zeroize::Zeroize;
 pub const SECRETS_LUKS_PATH: &str = "/var/lib/mjolnir/secrets.luks";
 pub const SECRETS_MOUNT: &str = "/secrets";
 pub const SECRETS_MAPPER_NAME: &str = "mjolnir-secrets";
-pub const SECRETS_ENV_PATH: &str = "/etc/mjolnir/secrets.env";
+// Rendered env lives on tmpfs (/run) so plaintext never lands on the rootfs or
+// in a snapshot. The encrypted LUKS volume is the at-rest source of truth.
+pub const SECRETS_ENV_PATH: &str = "/run/mjolnir/secrets.env";
 pub const SECRETS_PROFILE_PATH: &str = "/etc/profile.d/mjolnir-secrets.sh";
 pub const DEFAULT_SECRETS_SIZE_MB: u32 = 32;
 
@@ -173,7 +181,7 @@ pub fn close_secrets_volume() -> Result<(), String> {
     Ok(())
 }
 
-/// Parse .env files from the secrets mount and write to /etc/mjolnir/secrets.env.
+/// Parse .env files from the secrets mount and write to /run/mjolnir/secrets.env (tmpfs).
 ///
 /// Format: `export KEY=VALUE` (one per line), shell-safe quoting.
 pub fn load_env_vars() -> Result<HashMap<String, String>, String> {
@@ -204,7 +212,7 @@ pub fn load_env_vars() -> Result<HashMap<String, String>, String> {
         }
     }
 
-    // Write /etc/mjolnir/secrets.env
+    // Write /run/mjolnir/secrets.env (tmpfs — never persisted to rootfs/snapshots)
     write_secrets_env(&vars)?;
 
     // Write /etc/profile.d/mjolnir-secrets.sh for interactive shells
@@ -454,9 +462,11 @@ pub fn parse_env_into(content: &str, vars: &mut HashMap<String, String>) {
 }
 
 fn write_secrets_env(vars: &HashMap<String, String>) -> Result<(), String> {
-    // Ensure /etc/mjolnir exists
-    std::fs::create_dir_all("/etc/mjolnir")
-        .map_err(|e| format!("Failed to create /etc/mjolnir: {}", e))?;
+    // Ensure the parent dir of SECRETS_ENV_PATH exists (tmpfs /run on systemd guests)
+    if let Some(parent) = Path::new(SECRETS_ENV_PATH).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+    }
 
     let mut lines: Vec<String> = vars
         .iter()
