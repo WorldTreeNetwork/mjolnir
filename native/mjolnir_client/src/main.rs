@@ -108,6 +108,39 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    /// Retire a stranded VM to state=failed so it stops auto-resuming
+    Retire {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Revive a failed VM back to running so Reconcile resumes it
+    Revive {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Permanently dispose of a failed VM (soft-delete rootfs to @trash)
+    Forget {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Send a JSON payload into a VM (wakes a dormant VM)
     Message {
         /// VM ID or ticket
@@ -546,6 +579,9 @@ async fn main() {
                 }
             }
         }
+        Command::Retire { id, api, token } => api::cmd_retire(&profile, &api, &token, &id).await,
+        Command::Revive { id, api, token } => api::cmd_revive(&profile, &api, &token, &id).await,
+        Command::Forget { id, api, token } => api::cmd_forget(&profile, &api, &token, &id).await,
         Command::Message {
             id,
             payload,

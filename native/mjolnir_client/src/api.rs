@@ -287,6 +287,89 @@ pub async fn cmd_kill(
     Ok(())
 }
 
+/// Retire a stranded VM record to `:failed` so Reconcile stops trying to resume
+/// it (`POST /api/vms/{id}/retire`). The rootfs subvolume is preserved — revive
+/// it later with [`cmd_revive`]. See mjolnir-5fu.
+pub async fn cmd_retire(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    send_text(
+        client.post(format!("{}/api/vms/{}/retire", base, &id)),
+        "retire",
+    )
+    .await?;
+
+    eprintln!(
+        "Retired {} (state=failed; rootfs preserved, revive to retry)",
+        id
+    );
+    Ok(())
+}
+
+/// Revive a `:failed` record back to `:running` so the next Reconcile pass boots
+/// it (`POST /api/vms/{id}/revive`). Clears the resume-failure counter.
+pub async fn cmd_revive(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    send_text(
+        client.post(format!("{}/api/vms/{}/revive", base, &id)),
+        "revive",
+    )
+    .await?;
+
+    eprintln!(
+        "Revived {} (state=running; Reconcile will resume it shortly)",
+        id
+    );
+    Ok(())
+}
+
+/// Permanently dispose of a stranded/`:failed` record: soft-delete its rootfs to
+/// `@trash` and remove the record (`POST /api/vms/{id}/forget`). Recoverable
+/// from `@trash` until reaped.
+pub async fn cmd_forget(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    send_text(
+        client.post(format!("{}/api/vms/{}/forget", base, &id)),
+        "forget",
+    )
+    .await?;
+
+    eprintln!(
+        "Forgot {} (rootfs soft-deleted to @trash, record removed)",
+        id
+    );
+    Ok(())
+}
+
 pub async fn cmd_snapshot_create(
     profile: &Profile,
     api_flag: &Option<String>,
