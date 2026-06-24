@@ -213,3 +213,98 @@ pub async fn resolve_vm_id(
         .map(|vm| vm.id.clone())
         .ok_or_else(|| anyhow::anyhow!("No VM found with ticket {}", id_or_ticket))
 }
+
+/// Fetch detailed info for one VM (`GET /api/vms/{id}`), as typed data.
+pub async fn fetch_info(client: &reqwest::Client, base: &str, id: &str) -> Result<VmInfo> {
+    client
+        .get(format!("{}/api/vms/{}", base.trim_end_matches('/'), id))
+        .send()
+        .await
+        .context("failed to fetch VM info")?
+        .error_for_status()
+        .context("VM info request failed")?
+        .json()
+        .await
+        .context("failed to parse VM info response")
+}
+
+/// Fetch a VM's current connection ticket (`GET /api/vms/{id}/ticket`). Returns
+/// the ticket string. Errors if the VM has no ticket yet — use [`await_pty`] to
+/// block until the shell endpoint is online.
+pub async fn fetch_ticket(client: &reqwest::Client, base: &str, id: &str) -> Result<String> {
+    let tr: TicketResponse = client
+        .get(format!("{}/api/vms/{}/ticket", base.trim_end_matches('/'), id))
+        .send()
+        .await
+        .context("failed to fetch ticket")?
+        .error_for_status()
+        .context("ticket request failed")?
+        .json()
+        .await
+        .context("failed to parse ticket response")?;
+    Ok(tr.ticket)
+}
+
+/// Block until a VM's PTY/shell endpoint is online, then return its ticket
+/// (`POST /api/vms/{id}/await-pty`). This is how a not-yet-ready box's live
+/// location (and thus its node-id identity) is forced to materialize.
+pub async fn await_pty(
+    client: &reqwest::Client,
+    base: &str,
+    id: &str,
+    timeout_ms: u64,
+) -> Result<String> {
+    let resp: AwaitShellResponse = client
+        .post(format!("{}/api/vms/{}/await-pty", base.trim_end_matches('/'), id))
+        .json(&serde_json::json!({ "timeout": timeout_ms }))
+        .send()
+        .await
+        .context("failed to send await-pty request")?
+        .error_for_status()
+        .context("await-pty request failed")?
+        .json()
+        .await
+        .context("failed to parse await-pty response")?;
+    Ok(resp.ticket)
+}
+
+/// Options for spawning a VM. All fields optional; unset fields are omitted from
+/// the request body so the host applies its defaults.
+#[derive(Default)]
+pub struct SpawnOptions {
+    pub memory_mb: Option<u32>,
+    pub snapshot: Option<String>,
+    pub ssh_public_key: Option<String>,
+}
+
+/// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
+/// VM may not have a ticket yet (`shell_ready == Some(false)`); call
+/// [`await_pty`] with the returned `id` to obtain one.
+pub async fn spawn_vm(
+    client: &reqwest::Client,
+    base: &str,
+    opts: &SpawnOptions,
+) -> Result<SpawnResponse> {
+    let mut body = serde_json::json!({});
+    if let Some(key) = &opts.ssh_public_key {
+        body["ssh_public_key"] = serde_json::Value::String(key.clone());
+    }
+    if let Some(memory) = opts.memory_mb {
+        body["memory_mb"] = serde_json::Value::Number(memory.into());
+    }
+    if let Some(snap) = &opts.snapshot {
+        body["snapshot"] = serde_json::Value::String(snap.clone());
+    }
+
+    client
+        .post(format!("{}/api/vms", base.trim_end_matches('/')))
+        .json(&body)
+        .send()
+        .await
+        .context("failed to send spawn request")?
+        .error_for_status()
+        .context("spawn request failed")?
+        .json()
+        .await
+        .context("failed to parse spawn response")
+}

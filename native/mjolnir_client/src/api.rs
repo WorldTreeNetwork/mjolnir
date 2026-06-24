@@ -35,56 +35,33 @@ pub async fn cmd_spawn(
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
 
-    // Include SSH public key if available
-    let mut body = serde_json::json!({});
-    if let Some(key_path) = crate::config::resolve_ssh_key_path() {
-        if let Some(ssh_key) = crate::config::read_ssh_public_key(profile) {
+    // Resolve the SSH public key from CLI config (a presentation/config
+    // concern that stays in the bin; the lib's spawn_vm just takes the key).
+    let ssh_public_key = crate::config::resolve_ssh_key_path().and_then(|key_path| {
+        crate::config::read_ssh_public_key(profile).map(|ssh_key| {
             eprintln!("Using SSH key: {}", key_path);
-            body["ssh_public_key"] = serde_json::Value::String(ssh_key);
-        }
-    }
-
-    // Include memory override if specified
-    if let Some(memory) = memory_mb {
-        body["memory_mb"] = serde_json::Value::Number((*memory).into());
-    }
-
-    // Include snapshot if specified
+            ssh_key
+        })
+    });
     if let Some(snap) = snapshot {
         eprintln!("Spawning from snapshot: {}", snap);
-        body["snapshot"] = serde_json::Value::String(snap.clone());
     }
 
-    eprintln!("Spawning VM...");
-    let resp: SpawnResponse = client
-        .post(format!("{}/api/vms", base))
-        .json(&body)
-        .send()
-        .await
-        .context("failed to send spawn request")?
-        .error_for_status()
-        .context("spawn request failed")?
-        .json()
-        .await
-        .context("failed to parse spawn response")?;
+    let opts = SpawnOptions {
+        memory_mb: *memory_mb,
+        snapshot: snapshot.clone(),
+        ssh_public_key,
+    };
 
-    // If shell not ready yet, await it
+    eprintln!("Spawning VM...");
+    let resp = spawn_vm(&client, base, &opts).await?;
+
+    // If shell not ready yet, await it.
     let ticket = if resp.shell_ready == Some(true) {
         resp.ticket.clone()
     } else {
         eprintln!("Waiting for shell...");
-        let await_resp: AwaitShellResponse = client
-            .post(format!("{}/api/vms/{}/await-pty", base, resp.id))
-            .json(&serde_json::json!({"timeout": 30000}))
-            .send()
-            .await
-            .context("failed to send await-pty request")?
-            .error_for_status()
-            .context("await-pty request failed")?
-            .json()
-            .await
-            .context("failed to parse await-pty response")?;
-        Some(await_resp.ticket)
+        Some(await_pty(&client, base, &resp.id, 30000).await?)
     };
 
     if let Some(ref t) = ticket {
