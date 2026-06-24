@@ -23,8 +23,12 @@ use mjolnir_gateway::cloudflare::CloudflareClient;
 use mjolnir_gateway::config::{self, Apex, Fallthrough, SitesResolver};
 use mjolnir_gateway::route::RouteTable;
 use mjolnir_gateway::sites::{self as sites_mod, LookupResult};
-use mjolnir_gateway::tls::{load_server_config, load_server_config_from_bytes, TlsError};
+use mjolnir_gateway::tls::{
+    build_certified_key, load_server_config_with_sni, CertEntryRuntime, SniCertResolver, TlsError,
+};
 use mjolnir_protocol::TCP_FWD_ALPN;
+use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,38 +39,48 @@ use tracing::{debug, error, info, warn};
 
 // ── TlsState (unchanged) ─────────────────────────────────────────────────────
 
-/// Hot-reloadable TLS server configuration. The inner `ServerConfig` is stored
-/// in an `ArcSwap` so the SIGHUP handler can atomically swap in a fresh cert
-/// without pausing in-flight connections.
+/// Hot-reloadable TLS server configuration. The `ServerConfig` (built once with
+/// an [`SniCertResolver`] as its cert resolver) is stored in an `ArcSwap` so the
+/// acceptor always sees a live handle; cert selection — primary (ACME/static)
+/// plus per-host bring-your-own certs — is owned by the persistent `sni`
+/// resolver, which supports atomic hot-swap without pausing in-flight
+/// connections.
 struct TlsState {
     config: ArcSwap<rustls::ServerConfig>,
+    sni: Arc<SniCertResolver>,
     cert_path: PathBuf,
     key_path: PathBuf,
-    session_cache: usize,
-    fail_within: Duration,
     not_after: std::sync::RwLock<SystemTime>,
 }
 
 impl TlsState {
+    /// Static-cert path: read PEM files, build the SNI-backed ServerConfig.
     fn load(
         cert_path: PathBuf,
         key_path: PathBuf,
         session_cache: usize,
         fail_within: Duration,
     ) -> Result<Arc<Self>, TlsError> {
-        let (server_config, resolver) =
-            load_server_config(&cert_path, &key_path, session_cache, fail_within)?;
-        let not_after = resolver.current_not_after();
-        Ok(Arc::new(Self {
-            config: ArcSwap::from(server_config),
-            cert_path,
-            key_path,
+        let chain_pem = std::fs::read(&cert_path)?;
+        let key_pem = std::fs::read(&key_path)?;
+        let (_key, not_after) = build_certified_key(&chain_pem, &key_pem)?;
+        let (server_config, sni) = load_server_config_with_sni(
+            &chain_pem,
+            &key_pem,
+            HashMap::new(),
             session_cache,
             fail_within,
+        )?;
+        Ok(Arc::new(Self {
+            config: ArcSwap::from(server_config),
+            sni,
+            cert_path,
+            key_path,
             not_after: std::sync::RwLock::new(not_after),
         }))
     }
 
+    /// ACME / in-memory path: build the SNI-backed ServerConfig from PEM bytes.
     fn from_pem_bytes(
         chain_pem: &[u8],
         key_pem: &[u8],
@@ -74,23 +88,44 @@ impl TlsState {
         fail_within: Duration,
         not_after: SystemTime,
     ) -> Result<Arc<Self>, TlsError> {
-        let (server_config, _resolver) =
-            load_server_config_from_bytes(chain_pem, key_pem, session_cache, fail_within)?;
-        Ok(Arc::new(Self {
-            config: ArcSwap::from(server_config),
-            cert_path: PathBuf::new(),
-            key_path: PathBuf::new(),
+        let (server_config, sni) = load_server_config_with_sni(
+            chain_pem,
+            key_pem,
+            HashMap::new(),
             session_cache,
             fail_within,
+        )?;
+        Ok(Arc::new(Self {
+            config: ArcSwap::from(server_config),
+            sni,
+            cert_path: PathBuf::new(),
+            key_path: PathBuf::new(),
             not_after: std::sync::RwLock::new(not_after),
         }))
     }
 
+    /// Re-read the static cert from disk and swap the PRIMARY cert in the
+    /// persistent SNI resolver. Extra (BYO) certs are untouched.
     fn reload(&self) -> Result<(), TlsError> {
-        match load_server_config(&self.cert_path, &self.key_path, self.session_cache, self.fail_within) {
-            Ok((new_config, resolver)) => {
-                let new_not_after = resolver.current_not_after();
-                self.config.store(new_config);
+        let chain_pem = match std::fs::read(&self.cert_path) {
+            Ok(b) => b,
+            Err(e) => {
+                let e = TlsError::Io(e);
+                warn!(event = "cert.reload_failed", error = %e, "TLS reload failed — keeping previous certificate");
+                return Err(e);
+            }
+        };
+        let key_pem = match std::fs::read(&self.key_path) {
+            Ok(b) => b,
+            Err(e) => {
+                let e = TlsError::Io(e);
+                warn!(event = "cert.reload_failed", error = %e, "TLS reload failed — keeping previous certificate");
+                return Err(e);
+            }
+        };
+        match build_certified_key(&chain_pem, &key_pem) {
+            Ok((key, new_not_after)) => {
+                self.sni.swap_primary(key, new_not_after);
                 if let Ok(mut guard) = self.not_after.write() {
                     *guard = new_not_after;
                 }
@@ -104,19 +139,25 @@ impl TlsState {
         }
     }
 
+    /// Swap the PRIMARY cert from in-memory PEM (ACME renewal). The persistent
+    /// SNI resolver instance is kept, so extra certs survive the renewal.
     fn swap_from_pem(
         &self,
         chain_pem: &[u8],
         key_pem: &[u8],
         new_not_after: SystemTime,
     ) -> Result<(), TlsError> {
-        let (new_config, _resolver) =
-            load_server_config_from_bytes(chain_pem, key_pem, self.session_cache, self.fail_within)?;
-        self.config.store(new_config);
+        let (key, _not_after) = build_certified_key(chain_pem, key_pem)?;
+        self.sni.swap_primary(key, new_not_after);
         if let Ok(mut guard) = self.not_after.write() {
             *guard = new_not_after;
         }
         Ok(())
+    }
+
+    /// Replace the per-host bring-your-own cert map (SIGHUP hot-load).
+    fn swap_extra_certs(&self, map: HashMap<String, CertEntryRuntime>) {
+        self.sni.swap_extra(map);
     }
 
     fn current_not_after(&self) -> SystemTime {
@@ -126,6 +167,57 @@ impl TlsState {
     fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
         tokio_rustls::TlsAcceptor::from(self.config.load_full())
     }
+}
+
+/// Build the runtime BYO-cert map from `extra_certs`. Reads each cert+key file
+/// and parses it; WARN-and-skips any entry whose files are missing or fail to
+/// parse so a bad drop-in never crashes startup or a reload.
+fn build_extra_cert_map(
+    extra_certs: &[mjolnir_gateway::config::CertEntry],
+) -> HashMap<String, CertEntryRuntime> {
+    let mut map = HashMap::new();
+    for entry in extra_certs {
+        let chain_pem = match std::fs::read(&entry.cert_path) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    event = "cert.sni_skip",
+                    host = %entry.host,
+                    path = %entry.cert_path.display(),
+                    error = %e,
+                    "BYO cert file unreadable — skipping"
+                );
+                continue;
+            }
+        };
+        let key_pem = match std::fs::read(&entry.key_path) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    event = "cert.sni_skip",
+                    host = %entry.host,
+                    path = %entry.key_path.display(),
+                    error = %e,
+                    "BYO key file unreadable — skipping"
+                );
+                continue;
+            }
+        };
+        match build_certified_key(&chain_pem, &key_pem) {
+            Ok((key, not_after)) => {
+                map.insert(entry.host.clone(), CertEntryRuntime { key, not_after });
+            }
+            Err(e) => {
+                warn!(
+                    event = "cert.sni_skip",
+                    host = %entry.host,
+                    error = %e,
+                    "BYO cert/key failed to parse — skipping"
+                );
+            }
+        }
+    }
+    map
 }
 
 // ── ACME renewal ──────────────────────────────────────────────────────────────
@@ -951,6 +1043,102 @@ async fn shutdown_signal() {
     }
 }
 
+// ── CLI ──────────────────────────────────────────────────────────────────────
+
+/// Mjolnir web gateway. With no subcommand, runs the reverse-proxy server.
+#[derive(Debug, Parser)]
+#[command(name = "mjolnir-gateway", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Certificate management (manual ACME issuance).
+    Cert {
+        #[command(subcommand)]
+        command: CertCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum CertCommands {
+    /// Issue a certificate. With `--manual`, runs ACME DNS-01 but prints the
+    /// required TXT records and waits for the operator to add them (no
+    /// Cloudflare token needed).
+    Issue {
+        /// Manual DNS-01: print TXT records and wait for operator confirmation.
+        #[arg(long)]
+        manual: bool,
+        /// Domain (SAN). Repeat for multiple: `--domain a --domain b`.
+        #[arg(long = "domain")]
+        domains: Vec<String>,
+        /// ACME account contact email.
+        #[arg(long)]
+        email: String,
+        /// Output directory for fullchain.pem + privkey.pem (and ACME state).
+        #[arg(long)]
+        out: PathBuf,
+        /// Use Let's Encrypt staging directory.
+        #[arg(long)]
+        staging: bool,
+    },
+}
+
+/// Run the manual cert-issuance subcommand. Returns without starting the server.
+async fn run_cert_issue(
+    manual: bool,
+    domains: Vec<String>,
+    email: String,
+    out: PathBuf,
+    staging: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !manual {
+        return Err("only --manual is supported".into());
+    }
+    if domains.is_empty() {
+        return Err("at least one --domain is required".into());
+    }
+
+    let directory_url = if staging {
+        "https://acme-staging-v02.api.letsencrypt.org/directory".to_owned()
+    } else {
+        "https://acme-v02.api.letsencrypt.org/directory".to_owned()
+    };
+
+    let cfg = AcmeConfig {
+        directory_url,
+        email,
+        domains,
+        state_dir: out.clone(),
+        renew_before: Duration::from_secs(30 * 24 * 3600),
+    };
+
+    let issued = mjolnir_gateway::acme::issue_manual(&cfg, |records| {
+        use std::io::Write as _;
+        let instructions = mjolnir_gateway::acme::manual_dns_instructions(records);
+        eprint!("{}", instructions);
+        let _ = std::io::stderr().flush();
+        // Block on the operator: read (and discard) a line from stdin.
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        Ok(())
+    })
+    .await?;
+
+    let fullchain = out.join("fullchain.pem");
+    let privkey = out.join("privkey.pem");
+    println!("Certificate issued:");
+    println!("  fullchain: {}", fullchain.display());
+    println!("  privkey:   {}", privkey.display());
+    println!(
+        "  not_after: {}",
+        humantime::format_rfc3339_seconds(issued.not_after)
+    );
+    Ok(())
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -960,6 +1148,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
+
+    // ── CLI dispatch ──────────────────────────────────────────────────────────
+    // With no subcommand, fall through to the server path (unchanged).
+    let cli = Cli::parse();
+    if let Some(Commands::Cert {
+        command: CertCommands::Issue { manual, domains, email, out, staging },
+    }) = cli.command
+    {
+        return run_cert_issue(manual, domains, email, out, staging).await;
+    }
 
     // ── Load config ───────────────────────────────────────────────────────────
     let config_path = config::resolve_config_path();
@@ -1088,6 +1286,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = TlsState::load(cert, key, loaded.tls_session_cache, fail_within)?;
         Some(state)
     };
+
+    // ── Bring-your-own (SNI) certs ────────────────────────────────────────────
+    // Load per-host certs and install them into the primary's SNI resolver.
+    // Files missing/unparseable are warn-and-skipped so startup never crashes.
+    if let Some(ref tls) = tls_state {
+        let map = build_extra_cert_map(&loaded.extra_certs);
+        let hosts: Vec<&String> = map.keys().collect();
+        info!(
+            event = "cert.sni_loaded",
+            count = map.len(),
+            hosts = ?hosts,
+            "bring-your-own SNI certs loaded"
+        );
+        tls.swap_extra_certs(map);
+    }
 
     let tls_listener: Option<TcpListener> = if let Some(addr) = loaded.listen_tls {
         let l = TcpListener::bind(addr).await?;
@@ -1251,6 +1464,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "route table swapped"
                 );
 
+                // Step 3b: rebuild + hot-swap the bring-your-own (SNI) cert map.
+                // Dropping in a new cert file + SIGHUP hot-loads it.
+                if let Some(tls) = tls_state.as_ref() {
+                    let map = build_extra_cert_map(&new_loaded.extra_certs);
+                    let hosts: Vec<&String> = map.keys().collect();
+                    info!(
+                        event = "cert.sni_reloaded",
+                        count = map.len(),
+                        hosts = ?hosts,
+                        "bring-your-own SNI certs reloaded"
+                    );
+                    tls.swap_extra_certs(map);
+                }
+
                 // Step 4: update ACME SAN list + kick a renewal (if ACME).
                 if let (Some(acme), Some(tls)) = (acme_state.as_ref(), tls_state.as_ref()) {
                     let new_sans = new_loaded.effective_acme_domains();
@@ -1352,6 +1579,7 @@ mod tests {
             apexes,
             routes,
             aliases: Vec::new(),
+            extra_certs: Vec::new(),
             sites_resolver: None,
         }
     }

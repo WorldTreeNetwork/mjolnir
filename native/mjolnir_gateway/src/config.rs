@@ -74,6 +74,9 @@ pub struct FileConfig {
 
     #[serde(default, rename = "alias")]
     pub aliases: Vec<AliasDecl>,
+
+    #[serde(default, rename = "cert")]
+    pub certs: Vec<CertDecl>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -138,6 +141,18 @@ pub struct AliasDecl {
     pub port: Option<u16>,
 }
 
+/// A bring-your-own TLS certificate as declared in TOML. The gateway serves
+/// this cert when the TLS ClientHello's SNI exactly matches `host`, falling back
+/// to the primary (ACME/static) cert otherwise. Lets an operator front a
+/// hostname pointed at the gateway WITHOUT the gateway holding a Cloudflare API
+/// token for that host's zone.
+#[derive(Debug, Deserialize, Clone)]
+pub struct CertDecl {
+    pub host: String,
+    pub cert: String,
+    pub key: String,
+}
+
 // ── Normalized / validated view ──────────────────────────────────────────────
 
 /// Fallthrough behavior for an apex when no explicit route matches a subdomain.
@@ -188,6 +203,15 @@ impl Alias {
     }
 }
 
+/// A validated bring-your-own cert entry. `host` is lowercased; paths are not
+/// required to exist at parse time (files may be dropped in before a SIGHUP).
+#[derive(Debug, Clone)]
+pub struct CertEntry {
+    pub host: String,
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
+}
+
 /// ACME configuration in a normalized, ready-to-use shape.
 #[derive(Debug, Clone)]
 pub struct AcmeSettings {
@@ -231,6 +255,7 @@ pub struct LoadedConfig {
     pub apexes: Vec<Apex>,
     pub routes: Vec<Route>,
     pub aliases: Vec<Alias>,
+    pub extra_certs: Vec<CertEntry>,
     pub sites_resolver: Option<SitesResolver>,
 }
 
@@ -499,6 +524,7 @@ pub fn load_from_env() -> Result<LoadedConfig, ConfigError> {
         apexes,
         routes: Vec::new(),
         aliases: Vec::new(),
+        extra_certs: Vec::new(),
         sites_resolver: None,
     })
 }
@@ -678,6 +704,45 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         });
     }
 
+    // ── Bring-your-own certs ([[cert]]) ───────────────────────────────────────
+    // Validate host (lowercased FQDN) + non-empty cert/key paths; dedup by host.
+    // Files are NOT required to exist at parse time — they may be dropped in
+    // before a SIGHUP. main.rs warn-and-skips any whose files are
+    // missing/unparseable at load.
+    let mut extra_certs: Vec<CertEntry> = Vec::new();
+    for c in &file.certs {
+        let host_lower = c.host.to_ascii_lowercase();
+        if !is_ascii_fqdn(&host_lower) {
+            warn!(
+                event = "config.bad_cert_host",
+                host = %c.host,
+                "[[cert]] host is not a valid ASCII FQDN — skipping"
+            );
+            continue;
+        }
+        if c.cert.trim().is_empty() || c.key.trim().is_empty() {
+            warn!(
+                event = "config.bad_cert_paths",
+                host = %host_lower,
+                "[[cert]] requires non-empty cert and key paths — skipping"
+            );
+            continue;
+        }
+        if extra_certs.iter().any(|e| e.host == host_lower) {
+            warn!(
+                event = "config.duplicate_cert",
+                host = %host_lower,
+                "duplicate [[cert]] host — keeping first declaration"
+            );
+            continue;
+        }
+        extra_certs.push(CertEntry {
+            host: host_lower,
+            cert_path: PathBuf::from(&c.cert),
+            key_path: PathBuf::from(&c.key),
+        });
+    }
+
     // ── Scalars ───────────────────────────────────────────────────────────────
     // When a TOML key is absent we disable that listener (explicit opt-in).
     // An explicit empty string also disables. The spec's sample TOML shows
@@ -787,6 +852,7 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         apexes,
         routes,
         aliases,
+        extra_certs,
         sites_resolver,
     })
 }
@@ -1278,6 +1344,84 @@ mod tests {
                 std::env::set_var("GATEWAY_DOMAIN", v);
             }
         }
+    }
+
+    // ── [[cert]] bring-your-own-cert tests ────────────────────────────────
+
+    #[test]
+    fn toml_cert_parsed_and_host_lowercased() {
+        let text = r#"
+            [[domain]]
+            suffix = "vm.worldtree.network"
+
+            [[cert]]
+            host = "Zine.IdentiKey.IO"
+            cert = "/etc/mjolnir/certs/zine/fullchain.pem"
+            key  = "/etc/mjolnir/certs/zine/privkey.pem"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        assert_eq!(cfg.extra_certs.len(), 1);
+        let c = &cfg.extra_certs[0];
+        assert_eq!(c.host, "zine.identikey.io", "host lowercased");
+        assert_eq!(
+            c.cert_path,
+            PathBuf::from("/etc/mjolnir/certs/zine/fullchain.pem")
+        );
+        assert_eq!(
+            c.key_path,
+            PathBuf::from("/etc/mjolnir/certs/zine/privkey.pem")
+        );
+    }
+
+    #[test]
+    fn toml_cert_duplicate_host_skipped() {
+        let text = r#"
+            [[domain]]
+            suffix = "vm.worldtree.network"
+
+            [[cert]]
+            host = "zine.identikey.io"
+            cert = "/a/fullchain.pem"
+            key  = "/a/privkey.pem"
+
+            [[cert]]
+            host = "ZINE.identikey.io"
+            cert = "/b/fullchain.pem"
+            key  = "/b/privkey.pem"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        assert_eq!(cfg.extra_certs.len(), 1, "dupe host (case-insensitive) skipped");
+        assert_eq!(cfg.extra_certs[0].cert_path, PathBuf::from("/a/fullchain.pem"));
+    }
+
+    #[test]
+    fn toml_cert_bad_host_skipped() {
+        let text = r#"
+            [[domain]]
+            suffix = "vm.worldtree.network"
+
+            [[cert]]
+            host = "not a valid host"
+            cert = "/a/fullchain.pem"
+            key  = "/a/privkey.pem"
+        "#;
+        let cfg = load_from_toml_str(text).expect("loads, bad cert host warn-skipped");
+        assert!(cfg.extra_certs.is_empty(), "invalid host cert is dropped");
+    }
+
+    #[test]
+    fn toml_cert_empty_paths_skipped() {
+        let text = r#"
+            [[domain]]
+            suffix = "vm.worldtree.network"
+
+            [[cert]]
+            host = "zine.identikey.io"
+            cert = ""
+            key  = "/a/privkey.pem"
+        "#;
+        let cfg = load_from_toml_str(text).expect("loads");
+        assert!(cfg.extra_certs.is_empty(), "empty cert path is dropped");
     }
 
     #[test]

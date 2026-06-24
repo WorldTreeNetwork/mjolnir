@@ -317,12 +317,21 @@ pub async fn issue(cfg: &AcmeConfig, cf: &CloudflareClient) -> Result<IssuedCert
     // ── Step 10: Cleanup DNS TXT records (fire-and-forget) ────────────────────
     cleanup_records(cf, &created_records).await;
 
-    // ── Step 11: Parse metadata from first cert in chain ─────────────────────
+    // ── Steps 11-13: parse meta, persist, emit event ─────────────────────────
+    finalize_issued_cert(cfg, chain_pem, key_pem)
+}
+
+/// Parse the issued chain, persist `fullchain.pem` / `privkey.pem` /
+/// `metadata.json` to `cfg.state_dir`, emit the `acme.cert_issued` event, and
+/// return the resulting [`IssuedCert`]. Shared by both [`issue`] and
+/// [`issue_manual`].
+fn finalize_issued_cert(cfg: &AcmeConfig, chain_pem: String, key_pem: String) -> Result<IssuedCert, AcmeError> {
+    // Parse metadata from first cert in chain.
     let certs = crate::tls::parse_cert_chain(chain_pem.as_bytes())
         .map_err(|e| AcmeError::Parse(e.to_string()))?;
     let meta = extract_cert_metadata(certs[0].as_ref())?;
 
-    // ── Step 12: Persist ──────────────────────────────────────────────────────
+    // Persist.
     let chain_path = cfg.state_dir.join("fullchain.pem");
     let key_path = cfg.state_dir.join("privkey.pem");
     let meta_path = cfg.state_dir.join("metadata.json");
@@ -346,7 +355,6 @@ pub async fn issue(cfg: &AcmeConfig, cf: &CloudflareClient) -> Result<IssuedCert
         .map_err(|e| AcmeError::Acme(format!("serialize metadata: {e}")))?;
     atomic_write(&meta_path, &meta_json)?;
 
-    // ── Step 13: Emit tracing event ───────────────────────────────────────────
     let not_after_str = humantime::format_rfc3339_seconds(meta.not_after).to_string();
     info!(
         event = "acme.cert_issued",
@@ -363,6 +371,159 @@ pub async fn issue(cfg: &AcmeConfig, cf: &CloudflareClient) -> Result<IssuedCert
         not_before: meta.not_before,
         fingerprint_sha256: meta.fingerprint_sha256,
     })
+}
+
+/// Format an operator-facing block listing the DNS TXT records that must be
+/// created before a manual DNS-01 issuance can proceed. Pure (no I/O) so it can
+/// be unit-tested directly.
+pub fn manual_dns_instructions(records: &[(String, String)]) -> String {
+    let mut s = String::from("Create these DNS TXT records, then press Enter:\n");
+    for (fqdn, value) in records {
+        s.push_str(&format!("  {}  TXT  \"{}\"\n", fqdn, value));
+    }
+    s
+}
+
+/// Run the ACME DNS-01 flow in *manual* mode: no Cloudflare token is used.
+/// Instead, the required `(challenge_fqdn, dns_value)` records are collected and
+/// passed to `confirm`, which is expected to display them and block until the
+/// operator has created them (e.g. by reading a line from stdin). After
+/// `confirm` returns `Ok`, the challenges are marked ready and the flow
+/// completes exactly like [`issue`], persisting to `cfg.state_dir`.
+pub async fn issue_manual(
+    cfg: &AcmeConfig,
+    confirm: impl FnOnce(&[(String, String)]) -> std::io::Result<()>,
+) -> Result<IssuedCert, AcmeError> {
+    use instant_acme::{
+        Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
+        NewOrder, OrderStatus,
+    };
+
+    if cfg.domains.is_empty() {
+        return Err(AcmeError::NoDomains);
+    }
+
+    // ── Step 1: Load or create ACME account ───────────────────────────────────
+    fs::create_dir_all(&cfg.state_dir)?;
+    let account_path = cfg.state_dir.join("account.json");
+
+    let account = if account_path.exists() {
+        let data = fs::read(&account_path)?;
+        let creds: AccountCredentials = serde_json::from_slice(&data)
+            .map_err(|e| AcmeError::Acme(format!("account.json parse: {e}")))?;
+        Account::from_credentials(creds).await?
+    } else {
+        let contact = format!("mailto:{}", cfg.email);
+        let (account, credentials) = Account::create(
+            &NewAccount {
+                contact: &[contact.as_str()],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            &cfg.directory_url,
+            None,
+        )
+        .await?;
+        let creds_json = serde_json::to_vec(&credentials)
+            .map_err(|e| AcmeError::Acme(format!("serialize credentials: {e}")))?;
+        atomic_write(&account_path, &creds_json)?;
+        info!(event = "acme.account_created", email = %cfg.email, "ACME account created");
+        account
+    };
+
+    // ── Step 2: Create order ──────────────────────────────────────────────────
+    let identifiers: Vec<Identifier> = cfg
+        .domains
+        .iter()
+        .map(|d| Identifier::Dns(d.clone()))
+        .collect();
+    let mut order = account
+        .new_order(&NewOrder {
+            identifiers: &identifiers,
+        })
+        .await?;
+
+    // ── Step 3 (manual): collect TXT records, ask operator to create them ─────
+    let authorizations = order.authorizations().await?;
+
+    let mut records: Vec<(String, String)> = Vec::new();
+    for authz in &authorizations {
+        if authz.status == AuthorizationStatus::Valid {
+            continue;
+        }
+        let challenge = authz
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Dns01)
+            .ok_or_else(|| AcmeError::Acme("no dns-01 challenge found".into()))?;
+        let Identifier::Dns(domain) = &authz.identifier;
+        let fqdn = challenge_fqdn(domain);
+        let dns_value = order.key_authorization(challenge).dns_value();
+        records.push((fqdn, dns_value));
+    }
+
+    // Block on the operator: they print the records and confirm DNS is set.
+    confirm(&records)?;
+
+    // ── Step 5: Mark challenges ready ────────────────────────────────────────
+    for authz in &authorizations {
+        if authz.status == AuthorizationStatus::Valid {
+            continue;
+        }
+        let challenge = authz
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Dns01)
+            .ok_or_else(|| AcmeError::Acme("no dns-01 challenge found".into()))?;
+        order.set_challenge_ready(&challenge.url).await?;
+    }
+
+    // ── Step 6: Poll for order Ready/Invalid ─────────────────────────────────
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AcmeError::Timeout("order did not become ready"));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let state = order.refresh().await?;
+        match state.status {
+            OrderStatus::Ready => break,
+            OrderStatus::Invalid => {
+                let desc = state
+                    .error
+                    .as_ref()
+                    .and_then(|e| e.detail.clone())
+                    .unwrap_or_else(|| "order invalid".into());
+                return Err(AcmeError::Acme(desc));
+            }
+            _ => {}
+        }
+    }
+
+    // ── Step 7: Generate CSR ──────────────────────────────────────────────────
+    let mut params = rcgen::CertificateParams::new(cfg.domains.clone())?;
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    let key_pair = rcgen::KeyPair::generate()?;
+    let csr = params.serialize_request(&key_pair)?;
+    let key_pem = key_pair.serialize_pem();
+
+    // ── Step 8: Finalize ──────────────────────────────────────────────────────
+    order.finalize(csr.der()).await?;
+
+    // ── Step 9: Poll for certificate ─────────────────────────────────────────
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let chain_pem = loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AcmeError::Timeout("certificate not available"));
+        }
+        match order.certificate().await? {
+            Some(chain) => break chain,
+            None => tokio::time::sleep(Duration::from_secs(2)).await,
+        }
+    };
+
+    // ── Steps 11-13: parse meta, persist, emit event ─────────────────────────
+    finalize_issued_cert(cfg, chain_pem, key_pem)
 }
 
 /// Fire-and-forget cleanup of DNS TXT records; logs on failure.
@@ -535,6 +696,27 @@ mod tests {
         assert_eq!(strip_wildcard("vm.worldtree.network"), "vm.worldtree.network");
         assert_eq!(strip_wildcard("*.example.com"), "example.com");
         assert_eq!(strip_wildcard("example.com"), "example.com");
+    }
+
+    // 7. manual_dns_instructions formats fqdn + value correctly
+    #[test]
+    fn manual_dns_instructions_formats_records() {
+        let records = vec![
+            (
+                "_acme-challenge.zine.identikey.io".to_string(),
+                "abc123value".to_string(),
+            ),
+            (
+                "_acme-challenge.identikey.io".to_string(),
+                "def456value".to_string(),
+            ),
+        ];
+        let out = manual_dns_instructions(&records);
+        assert!(out.contains("Create these DNS TXT records, then press Enter:"));
+        assert!(out.contains("_acme-challenge.zine.identikey.io  TXT  \"abc123value\""));
+        assert!(out.contains("_acme-challenge.identikey.io  TXT  \"def456value\""));
+        // Each record on its own line.
+        assert_eq!(out.lines().count(), 3);
     }
 
     // 6. challenge_fqdn_is_prefixed_with_underscore_acme_challenge

@@ -102,3 +102,37 @@ backend   = "127.0.0.1:3000"
 # subdomain = "zine"
 # node      = "xebksroiithey6dp4q3fwx4ddb6m3c71tjt79bfqy7nktsp76njo"
 # port      = 3000
+
+# ── Bring-your-own TLS certs ([[cert]], SNI multi-cert serving) ────────────────
+# Serve a per-host certificate selected by the TLS ClientHello's SNI, falling
+# back to the primary cert (the ACME-managed wildcard above, or the [tls] static
+# cert) when no [[cert]] host matches. This lets you front any hostname pointed
+# at the gateway WITHOUT the gateway holding a Cloudflare API token for that
+# host's DNS zone — useful for one-off domains in zones you don't control.
+#
+#   host = the exact SNI hostname this cert serves (lowercased; matched against
+#          the ClientHello SNI). Must be a bare FQDN (no wildcard).
+#   cert = path to the PEM fullchain (leaf + intermediates).
+#   key  = path to the PEM private key.
+#
+# Cert/key files do NOT need to exist when the gateway starts — drop them in
+# later and send SIGHUP (`systemctl reload mjolnir-gateway`) to hot-load them.
+# A missing or unparseable file is warn-and-skipped; it never crashes startup.
+#
+# How to obtain a cert for a host whose DNS you control but the gateway doesn't:
+# run the built-in manual DNS-01 issuer on any machine, then copy the output
+# files to the paths below:
+#
+#   mjolnir-gateway cert issue --manual \
+#     --domain zine.identikey.io \
+#     --email you@example.com \
+#     --out /etc/mjolnir/certs/zine
+#   # (add --staging while testing to use Let's Encrypt staging)
+#
+# It prints the _acme-challenge TXT records to create, waits for you to press
+# Enter once DNS is live, then writes fullchain.pem + privkey.pem to --out.
+#
+# [[cert]]
+# host = "zine.identikey.io"
+# cert = "/etc/mjolnir/certs/zine/fullchain.pem"
+# key  = "/etc/mjolnir/certs/zine/privkey.pem"

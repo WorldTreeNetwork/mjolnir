@@ -12,6 +12,7 @@ use rustls::server::ResolvesServerCert;
 use rustls::sign::CertifiedKey;
 use rustls::ServerConfig;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -205,6 +206,109 @@ impl fmt::Debug for ExpiryAwareResolver {
     }
 }
 
+// ── SNI multi-cert resolver ──────────────────────────────────────────────────
+
+/// A bring-your-own certificate keyed by SNI hostname. `not_after` is the
+/// end-entity cert's expiry, used to refuse handshakes near expiry (mirrors the
+/// primary's policy).
+#[derive(Clone)]
+pub struct CertEntryRuntime {
+    pub key: Arc<CertifiedKey>,
+    pub not_after: SystemTime,
+}
+
+/// Build a `CertifiedKey` from PEM chain + key bytes, returning the key together
+/// with the end-entity cert's `not_after`. Shared by the static, ACME, and BYO
+/// (SNI) load paths.
+pub fn build_certified_key(
+    chain_pem: &[u8],
+    key_pem: &[u8],
+) -> Result<(Arc<CertifiedKey>, SystemTime), TlsError> {
+    let cert_chain = parse_cert_chain(chain_pem)?;
+    let key_der = parse_private_key(key_pem)?;
+    let meta = extract_cert_metadata(cert_chain[0].as_ref())?;
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
+        .map_err(|e| TlsError::KeyMismatch(e.to_string()))?;
+    let certified_key = Arc::new(CertifiedKey::new(cert_chain, signing_key));
+    Ok((certified_key, meta.not_after))
+}
+
+/// Pure SNI → extra-cert selection. Returns the matching extra cert's key when
+/// `sni` exactly matches a map entry (case-insensitive) and that cert is not
+/// within `fail_within` of expiry; otherwise `None` (caller falls back to the
+/// primary). Factored out so it can be unit-tested without a real `ClientHello`.
+pub(crate) fn select_extra(
+    extra: &HashMap<String, CertEntryRuntime>,
+    sni: Option<&str>,
+    fail_within: Duration,
+    now: SystemTime,
+) -> Option<Arc<CertifiedKey>> {
+    let sni = sni?;
+    let entry = extra.get(&sni.to_ascii_lowercase())?;
+    if should_refuse_handshake(entry.not_after, fail_within, now) {
+        return None;
+    }
+    Some(Arc::clone(&entry.key))
+}
+
+/// A `ResolvesServerCert` that serves a per-host certificate selected by SNI,
+/// falling back to a primary `ExpiryAwareResolver` (ACME wildcard or static)
+/// when no extra cert matches. The extra-cert map is hot-swappable for SIGHUP;
+/// the primary is hot-swappable for ACME renewal.
+pub struct SniCertResolver {
+    primary: Arc<ExpiryAwareResolver>,
+    extra: ArcSwap<HashMap<String, CertEntryRuntime>>,
+    fail_within: Duration,
+}
+
+impl SniCertResolver {
+    pub fn new(
+        primary: Arc<ExpiryAwareResolver>,
+        fail_within: Duration,
+        extra: HashMap<String, CertEntryRuntime>,
+    ) -> Self {
+        Self {
+            primary,
+            extra: ArcSwap::from_pointee(extra),
+            fail_within,
+        }
+    }
+
+    /// Swap the primary cert (ACME renewal). The extra-cert map is unaffected.
+    pub fn swap_primary(&self, key: Arc<CertifiedKey>, not_after: SystemTime) {
+        self.primary.swap(key, not_after);
+    }
+
+    /// Atomically replace the extra-cert map (SIGHUP hot-load).
+    pub fn swap_extra(&self, map: HashMap<String, CertEntryRuntime>) {
+        self.extra.store(Arc::new(map));
+    }
+}
+
+impl ResolvesServerCert for SniCertResolver {
+    fn resolve(&self, client_hello: rustls::server::ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let extra = self.extra.load();
+        if let Some(key) = select_extra(
+            &extra,
+            client_hello.server_name(),
+            self.fail_within,
+            SystemTime::now(),
+        ) {
+            return Some(key);
+        }
+        self.primary.resolve(client_hello)
+    }
+}
+
+impl fmt::Debug for SniCertResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SniCertResolver")
+            .field("fail_within", &self.fail_within)
+            .field("extra_count", &self.extra.load().len())
+            .finish_non_exhaustive()
+    }
+}
+
 // ── Main entry points ─────────────────────────────────────────────────────────
 
 /// Build a TLS `ServerConfig` from in-memory PEM bytes (ACME / hot-swap path).
@@ -249,6 +353,53 @@ pub fn load_server_config_from_bytes(
     );
 
     Ok((Arc::new(config), resolver))
+}
+
+/// Build a TLS `ServerConfig` whose cert resolver is an [`SniCertResolver`]:
+/// per-host bring-your-own certs selected by SNI, falling back to a primary
+/// `ExpiryAwareResolver` (built from `primary_chain_pem`/`primary_key_pem`).
+///
+/// Returns the `ServerConfig` and the `SniCertResolver` so the caller can
+/// `swap_primary` on ACME renewal and `swap_extra` on SIGHUP.
+pub fn load_server_config_with_sni(
+    primary_chain_pem: &[u8],
+    primary_key_pem: &[u8],
+    extra: HashMap<String, CertEntryRuntime>,
+    session_cache: usize,
+    fail_within: Duration,
+) -> Result<(Arc<ServerConfig>, Arc<SniCertResolver>), TlsError> {
+    let cert_chain = parse_cert_chain(primary_chain_pem)?;
+    let key_der = parse_private_key(primary_key_pem)?;
+    let meta = extract_cert_metadata(cert_chain[0].as_ref())?;
+
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
+        .map_err(|e| TlsError::KeyMismatch(e.to_string()))?;
+    let certified_key = Arc::new(CertifiedKey::new(cert_chain, signing_key));
+
+    let primary = Arc::new(ExpiryAwareResolver::new(
+        certified_key,
+        fail_within,
+        meta.not_after,
+    ));
+    let sni_resolver = Arc::new(SniCertResolver::new(primary, fail_within, extra));
+
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::clone(&sni_resolver) as Arc<dyn ResolvesServerCert>);
+
+    config.session_storage = rustls::server::ServerSessionMemoryCache::new(session_cache);
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.max_early_data_size = 0;
+
+    info!(
+        event = "cert.loaded",
+        fingerprint_sha256 = %meta.fingerprint_sha256,
+        not_after = %humantime::format_rfc3339_seconds(meta.not_after),
+        source = "sni_primary",
+        "TLS primary certificate loaded (SNI resolver)"
+    );
+
+    Ok((Arc::new(config), sni_resolver))
 }
 
 /// Load a TLS `ServerConfig` from PEM files and return it together with the
@@ -482,5 +633,128 @@ mod tests {
         assert!(logs_contain("cert.loaded"));
         assert!(logs_contain("source"));
         assert!(logs_contain("fingerprint_sha256"));
+    }
+
+    // ── SNI resolver selection (pure helper) ──────────────────────────────
+
+    /// Build an `extra` map entry from a self-signed cert for `cn`, with the
+    /// given `not_after`. The `not_after` is supplied explicitly so tests can
+    /// simulate expired certs independent of the cert's real validity.
+    fn extra_entry(cn: &str, not_after: SystemTime) -> CertEntryRuntime {
+        install_provider();
+        let (cert_pem, key_pem) = generate_self_signed(cn);
+        let (key, _real_not_after) = build_certified_key(&cert_pem, &key_pem).expect("build key");
+        CertEntryRuntime { key, not_after }
+    }
+
+    #[test]
+    fn select_extra_returns_match_for_known_sni() {
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        let mut extra = HashMap::new();
+        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", fresh));
+
+        let got = select_extra(
+            &extra,
+            Some("zine.identikey.io"),
+            Duration::from_secs(24 * 3600),
+            now,
+        );
+        assert!(got.is_some(), "exact SNI match should return the extra cert");
+    }
+
+    #[test]
+    fn select_extra_is_case_insensitive() {
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        let mut extra = HashMap::new();
+        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", fresh));
+
+        let got = select_extra(
+            &extra,
+            Some("ZINE.IdentiKey.IO"),
+            Duration::from_secs(24 * 3600),
+            now,
+        );
+        assert!(got.is_some(), "SNI match must be case-insensitive");
+    }
+
+    #[test]
+    fn select_extra_returns_none_when_sni_absent() {
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        let mut extra = HashMap::new();
+        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", fresh));
+
+        let got = select_extra(&extra, None, Duration::from_secs(24 * 3600), now);
+        assert!(got.is_none(), "no SNI → fall back to primary");
+    }
+
+    #[test]
+    fn select_extra_returns_none_for_unmatched_sni() {
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        let mut extra = HashMap::new();
+        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", fresh));
+
+        let got = select_extra(
+            &extra,
+            Some("other.identikey.io"),
+            Duration::from_secs(24 * 3600),
+            now,
+        );
+        assert!(got.is_none(), "unmatched SNI → fall back to primary");
+    }
+
+    #[test]
+    fn select_extra_refuses_expired_cert() {
+        let now = SystemTime::now();
+        // Expires in 1h, but fail_within is 24h → refuse, fall back to primary.
+        let expiring = now + Duration::from_secs(3600);
+        let mut extra = HashMap::new();
+        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", expiring));
+
+        let got = select_extra(
+            &extra,
+            Some("zine.identikey.io"),
+            Duration::from_secs(24 * 3600),
+            now,
+        );
+        assert!(
+            got.is_none(),
+            "an extra cert within fail_within of expiry must fall back to primary"
+        );
+    }
+
+    #[test]
+    fn sni_resolver_swap_extra_replaces_map() {
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+
+        let (primary_cert, primary_key) = generate_self_signed("primary");
+        let (sni_config, resolver) = load_server_config_with_sni(
+            &primary_cert,
+            &primary_key,
+            HashMap::new(),
+            128,
+            Duration::from_secs(24 * 3600),
+        )
+        .expect("build sni config");
+        // ServerConfig built and is usable.
+        let _ = sni_config;
+
+        let mut map = HashMap::new();
+        map.insert("zine.identikey.io".to_string(), extra_entry("zine", fresh));
+        resolver.swap_extra(map);
+
+        // After swap, the pure selection over the live map should match.
+        let live = resolver.extra.load();
+        let got = select_extra(
+            &live,
+            Some("zine.identikey.io"),
+            Duration::from_secs(24 * 3600),
+            now,
+        );
+        assert!(got.is_some(), "swapped-in extra cert should be selectable");
     }
 }
