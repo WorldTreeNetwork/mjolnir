@@ -33,6 +33,12 @@ pub struct VmSummary {
     #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
     pub web_url: Option<String>,
+    /// The iroh endpoint node-id (hex). This is the box's stable IDENTITY,
+    /// served directly by the host (render_vm_summary) — no ticket parsing
+    /// needed. `None` until the guest's iroh endpoint is up (identity does not
+    /// exist before the endpoint does).
+    #[serde(default)]
+    pub iroh_node_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +64,12 @@ pub struct VmInfo {
     #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
     pub web_url: Option<String>,
+    /// Iroh endpoint node-id (hex) — the box identity. See [`VmSummary::iroh_node_id`].
+    /// (The detail view also serves `iroh_addr`, the full EndpointAddr JSON, but
+    /// its shape is a nested object — add a typed field for it when a consumer
+    /// needs location-from-info.)
+    #[serde(default)]
+    pub iroh_node_id: Option<String>,
     pub config: Option<VmConfig>,
     pub boot_time: Option<i64>,
 }

@@ -1240,7 +1240,13 @@ defmodule Mjolnir.VM do
     "address already in use",
     "no space left",
     "create_tap",
-    "tap_"
+    "tap_",
+    # TAP allocation races (a leftover mj-<id> interface from a prior instance
+    # not yet reaped): `ip tuntap add ... ioctl(TUNSETIFF): Device or resource
+    # busy`. Transient — the next sweep frees it.
+    "tuntap",
+    "tunsetiff",
+    "device or resource busy"
   ]
   @permanent_boot_markers [
     "shared_dir_not_found",
