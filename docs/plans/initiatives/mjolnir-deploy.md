@@ -171,9 +171,11 @@ The entry point is **tar the current directory**, not git. This is the Heroku mo
 
 - **P0 — tar cwd.** `mj deploy` packages the directory and uploads. Respect `.gitignore`/`.dockerignore`; when it's a clean git repo, prefer `git archive HEAD` (clean, gitignore-honoring), with `--dirty` to include uncommitted work. Covers private code with **zero credentials**.
 - **P1 — public repo URL.** `mj deploy github.com/user/repo`, no auth. Covers "deploy this OSS thing."
-- **Deferred / maybe never — private repo pull.** This is the deploy-key PITA. Do **not** build deploy-key or GitHub-App management. If ever needed, inject a PAT via the existing secrets injector and let the VM clone — but tar-the-cwd already covers private code, so the value is low.
+- **P1 — private repo pull via deploy key (first-class).** Revised from an earlier "deferred/PITA" stance: in practice `ssh-keygen` + pasting a read-only **deploy key** into the repo host is *easy* (validated 2026-06-23 against Forgejo). So support `mj deploy <git-ssh-url>` where the VM clones over SSH with a generated deploy key. The flow: `mj` generates an ed25519 keypair per app, shows the user the public key to paste (or auto-registers it — see Forgejo note), stores the private key via the **secrets injector** (never on the rootfs/layers), and the guest clones with it. Revocation = delete the deploy key on the host.
+  - **Forgejo synergy:** Mjolnir already runs its own Forgejo (the CI runner). For repos hosted there, deploy-key registration can be **fully automated** via the Forgejo API — no copy-paste at all. That's the closest thing to the "git push and it's live" moment for self-hosted repos, and it's uniquely cheap *because we own the forge*.
+- **Later — PAT/token fallback.** For hosts without easy deploy keys, inject a PAT via the secrets injector and clone. Lowest priority; deploy keys cover the common case.
 
-Rationale: "everyone uses repos" is true for *CI*; for *deploy from a laptop*, "ship what's in front of me" beats "configure a git credential." Git-pull is an optimization, not the front door.
+Rationale: tar-the-cwd stays the **front door** (zero auth, ship what's in front of you). But "configure a git credential" turned out to be a one-time `ssh-keygen` + paste, not a real barrier — so git-pull is a strong, first-class *second* option, not a someday-maybe. Owning the Forgejo instance makes the private-repo path especially turnkey.
 
 ---
 
