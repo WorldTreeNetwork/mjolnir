@@ -102,12 +102,14 @@ The Heroku magic was never the config language — it was **not needing one**. `
 
 | Detect | Plan |
 |---|---|
-| `package.json` + `svelte.config.js` (adapter-node) | mise: node (from `.nvmrc`/`engines`/default 20) · `npm ci` · `npm run build` · start `node build/index.js` · port 3000 |
-| `package.json` (generic Node) | mise: node · `npm ci` · `npm run build` if present · start from `scripts.start` |
+| `package.json` + `svelte.config.js` (adapter-node) | PM **from lockfile** (`bun.lock`→bun, `pnpm-lock.yaml`→pnpm, `package-lock.json`→npm; default npm); runtime via mise; install prod deps · `<pm> run build` · start `<node\|bun> build/index.js` · port 3000 |
+| `package.json` (generic Node) | PM/runtime from lockfile · install · `<pm> run build` if present · start from `scripts.start` |
 | `requirements.txt` / `pyproject.toml` | mise: python · install deps · start from Procfile/`__main__` |
 | `Procfile` present | honor it (Heroku-compatible process types) |
 
-`mise` is the universal runtime lever — it's already in the base rootfs, and "install any language at a pinned version" is exactly one `mise install` away. By design Node is **not** pre-baked; the deploy layer installs it as L1 and snapshots it, so the install cost is paid once and cached forever.
+**Detect the package manager from the lockfile, not an assumption.** `npm`/`bun`/`pnpm`/`yarn` differ in install command, prod-dep flag, and — critically — lifecycle-script behavior (see hazards below). Defaulting to `npm ci` breaks bun/pnpm projects (field-validated against a bun + `bun.lock` SvelteKit app, 2026-06-23).
+
+`mise` is the universal runtime lever — it's already in the base rootfs, and "install any language at a pinned version" is one `mise install` away (node *and* bun are mise-managed). By design no runtime is pre-baked; the deploy layer installs it as L1 and snapshots it, so the cost is paid once and cached forever.
 
 Target experience:
 
@@ -118,6 +120,17 @@ $ mj deploy
 → booted service VM · systemd unit `app` · :3000
 → live: https://app-7x2.vm.worldtree.network   (2.1s, 2/3 layers cached)
 ```
+
+### Real-world build hazards (field-validated against Zine, a bun + adapter-node + better-sqlite3 app)
+
+Detection getting the *commands* right isn't enough — real apps fail in the build/first-run, in ways the buildpack must anticipate:
+
+1. **Native modules + bun's blocked postinstall.** bun suppresses dependency lifecycle scripts by default (supply-chain safety), so native addons like `better-sqlite3` never build/download their `.node` binary → a "Could not locate the bindings file" crash *at first DB access*, not at install. The buildpack must **detect native deps and trust their install scripts** (`trustedDependencies` / `bun pm trust`), or fall back to node (npm runs postinstall by default). General rule: **native deps must be installed/built on the target (linux-x64), with lifecycle scripts allowed** — never shipped from the dev Mac.
+2. **Runtime ≠ package manager.** A bun project may still need to *run* under node if a native module has ABI friction under bun. "build-with-bun, run-with-node" is a valid split the detector should be able to choose.
+3. **Prerender treats broken links as fatal.** SvelteKit's prerender aborts the build on a missing linked asset (e.g. a generated `/psd/.../x.png` that an app build-step produces). This is app config (`handleHttpError`), not a deploy bug — but the buildpack should **surface it clearly as an app build failure**, not a platform error, and the docs/output should point at the app's own prerender config.
+4. **Apps have pre-build generators.** Real projects generate assets before `build` (Zine exports PSD layers via its own scripts). The buildpack can't know these; this is exactly what the optional manifest's custom `steps` are for.
+
+The throughline: the zero-config path nails the *common* case, but the manifest escape hatch (custom build steps, runtime override, native-dep trust list) is **load-bearing for real apps** — design it in from P1, not as an afterthought.
 
 ### The optional manifest (escape hatch only)
 
