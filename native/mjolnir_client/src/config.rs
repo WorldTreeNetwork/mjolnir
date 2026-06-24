@@ -74,8 +74,7 @@ fn save_profiles(profiles: &Profiles) -> Result<()> {
             .with_context(|| format!("create config dir {}", parent.display()))?;
     }
     let toml_str = toml::to_string_pretty(profiles).context("serialize profiles to TOML")?;
-    std::fs::write(&path, &toml_str)
-        .with_context(|| format!("write {}", path.display()))?;
+    std::fs::write(&path, &toml_str).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
@@ -190,9 +189,7 @@ pub fn set_in(profile_name: &str, key: &str, value: &str) -> Result<()> {
         "api" => profile.api = Some(value.to_string()),
         "host" => profile.host = Some(value.to_string()),
         "ssh_key" | "ssh-key" => profile.ssh_key = Some(value.to_string()),
-        "setup_source" | "setup-source" => {
-            profile.setup_source = Some(value.to_string())
-        }
+        "setup_source" | "setup-source" => profile.setup_source = Some(value.to_string()),
         _ => bail!(
             "Unknown config key: {}. Valid keys: api, host, ssh_key, setup_source",
             key
@@ -207,7 +204,6 @@ pub fn set_in(profile_name: &str, key: &str, value: &str) -> Result<()> {
 pub fn set(key: &str, value: &str) -> Result<()> {
     set_in("default", key, value)
 }
-
 
 // ---------------------------------------------------------------------------
 // Display

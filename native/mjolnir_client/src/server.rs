@@ -215,19 +215,14 @@ fn walk_up_for_project(start: &std::path::Path, max_levels: usize) -> Option<Pat
 }
 
 /// Bootstrap a fresh server by rsyncing the project and running bootstrap-host.sh.
-fn cmd_setup(
-    host: &str,
-    profile: &Profile,
-    use_loopback: bool,
-    skip_rootfs: bool,
-) -> Result<()> {
-    let source = profile
-        .setup_source
-        .as_deref()
-        .unwrap_or("local");
+fn cmd_setup(host: &str, profile: &Profile, use_loopback: bool, skip_rootfs: bool) -> Result<()> {
+    let source = profile.setup_source.as_deref().unwrap_or("local");
 
     if source != "local" {
-        bail!("Unsupported setup_source '{}'. Only 'local' is supported.", source);
+        bail!(
+            "Unsupported setup_source '{}'. Only 'local' is supported.",
+            source
+        );
     }
 
     let project_root = find_project_root()?;

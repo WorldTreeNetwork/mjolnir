@@ -88,11 +88,11 @@ pub struct StateResponse {
 
 fn color_for_status(status: &str) -> &'static str {
     match status {
-        "converged" => "\x1b[32m",              // green
+        "converged" => "\x1b[32m",                             // green
         "drifted" | "missing" | "new" | "prune" => "\x1b[33m", // yellow
-        "conflict" => "\x1b[31m",              // red
-        "unmanaged" => "\x1b[34m",             // blue
-        "tombstone" | "ignored" => "\x1b[2m",  // dim
+        "conflict" => "\x1b[31m",                              // red
+        "unmanaged" => "\x1b[34m",                             // blue
+        "tombstone" | "ignored" => "\x1b[2m",                  // dim
         _ => "\x1b[0m",
     }
 }
@@ -214,10 +214,7 @@ pub async fn plan(
         .await
         .context("failed to parse forge plan response")?;
 
-    println!(
-        "{:<12} {:<20} {:<36} {}",
-        "STATUS", "KIND", "ID", "HASH"
-    );
+    println!("{:<12} {:<20} {:<36} {}", "STATUS", "KIND", "ID", "HASH");
     println!("{}", "-".repeat(74));
 
     let mut all_converged = true;
@@ -303,10 +300,7 @@ pub async fn apply(
 
         if has_drift(&plan_resp.entries) {
             // Show the plan
-            println!(
-                "{:<12} {:<20} {:<36} {}",
-                "STATUS", "KIND", "ID", "HASH"
-            );
+            println!("{:<12} {:<20} {:<36} {}", "STATUS", "KIND", "ID", "HASH");
             println!("{}", "-".repeat(74));
             for entry in &plan_resp.entries {
                 let color = color_for_status(&entry.status);

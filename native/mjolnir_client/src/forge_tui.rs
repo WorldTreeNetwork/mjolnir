@@ -184,7 +184,11 @@ impl ForgeClient {
         let resp: DiffResponse = self
             .client
             .get(format!("{}/api/forge/diff", self.base))
-            .query(&[("host", &self.host), ("kind", &kind.to_string()), ("id", &id.to_string())])
+            .query(&[
+                ("host", &self.host),
+                ("kind", &kind.to_string()),
+                ("id", &id.to_string()),
+            ])
             .send()
             .await
             .context("failed to fetch forge diff")?
@@ -288,7 +292,11 @@ impl ForgeClient {
         let resp: DeclPathResponse = self
             .client
             .get(format!("{}/api/forge/decl-path", self.base))
-            .query(&[("host", &self.host), ("kind", &kind.to_string()), ("id", &id.to_string())])
+            .query(&[
+                ("host", &self.host),
+                ("kind", &kind.to_string()),
+                ("id", &id.to_string()),
+            ])
             .send()
             .await
             .context("failed to fetch decl-path")?
@@ -728,7 +736,10 @@ async fn handle_list_key(app: &mut App, code: KeyCode, _mods: KeyModifiers) -> R
         }
         KeyCode::Char('d') => open_diff(app).await,
         KeyCode::Char('a') => {
-            if let Some((kind, id)) = app.selected_record().map(|r| (r.kind.clone(), r.resource_id.clone())) {
+            if let Some((kind, id)) = app
+                .selected_record()
+                .map(|r| (r.kind.clone(), r.resource_id.clone()))
+            {
                 app.toast = match app.forge.apply_one(&kind, &id).await {
                     Ok(msg) => msg,
                     Err(e) => format!("apply failed: {}", e),
@@ -744,7 +755,10 @@ async fn handle_list_key(app: &mut App, code: KeyCode, _mods: KeyModifiers) -> R
             app.refresh_state().await;
         }
         KeyCode::Char('o') => {
-            if let Some((kind, id)) = app.selected_record().map(|r| (r.kind.clone(), r.resource_id.clone())) {
+            if let Some((kind, id)) = app
+                .selected_record()
+                .map(|r| (r.kind.clone(), r.resource_id.clone()))
+            {
                 app.toast = match app.forge.adopt(&kind, &id).await {
                     Ok(msg) => msg,
                     Err(e) => format!("adopt failed: {}", e),
@@ -753,7 +767,10 @@ async fn handle_list_key(app: &mut App, code: KeyCode, _mods: KeyModifiers) -> R
             }
         }
         KeyCode::Char('i') => {
-            if let Some((kind, id)) = app.selected_record().map(|r| (r.kind.clone(), r.resource_id.clone())) {
+            if let Some((kind, id)) = app
+                .selected_record()
+                .map(|r| (r.kind.clone(), r.resource_id.clone()))
+            {
                 app.toast = match app.forge.ignore(&kind, &id).await {
                     Ok(msg) => msg,
                     Err(e) => format!("ignore failed: {}", e),
@@ -928,8 +945,14 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!("| total {} ", total)),
-        Span::styled(format!("| drifted {} ", drifted), Style::default().fg(Color::Yellow)),
-        Span::styled(format!("| unmanaged {} ", unmanaged), Style::default().fg(Color::Blue)),
+        Span::styled(
+            format!("| drifted {} ", drifted),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(
+            format!("| unmanaged {} ", unmanaged),
+            Style::default().fg(Color::Blue),
+        ),
     ];
     if conflict > 0 {
         spans.push(Span::styled(
@@ -964,8 +987,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
         .filter_map(|&i| app.records.get(i))
         .map(|r| {
             Row::new(vec![
-                Cell::from(r.status.clone())
-                    .style(Style::default().fg(status_color(&r.status))),
+                Cell::from(r.status.clone()).style(Style::default().fg(status_color(&r.status))),
                 Cell::from(r.kind.clone()),
                 Cell::from(r.resource_id.clone()),
             ])
@@ -981,10 +1003,7 @@ fn draw_table(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL))
-        .row_highlight_style(
-            Style::default()
-                .add_modifier(Modifier::REVERSED | Modifier::BOLD),
-        )
+        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD))
         .highlight_symbol("> ");
 
     f.render_stateful_widget(table, area, &mut app.table_state);
@@ -999,7 +1018,8 @@ fn draw_toast(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_legend(f: &mut Frame, area: Rect) {
-    let legend = " j/k move  /:filter  d:diff  a:apply  A:apply-all  o:adopt  i:ignore  r:refresh  q:quit";
+    let legend =
+        " j/k move  /:filter  d:diff  a:apply  A:apply-all  o:adopt  i:ignore  r:refresh  q:quit";
     let para = Paragraph::new(Line::from(Span::styled(
         legend,
         Style::default().fg(Color::DarkGray),

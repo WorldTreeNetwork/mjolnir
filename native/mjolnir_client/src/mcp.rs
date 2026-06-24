@@ -10,9 +10,7 @@
 use std::sync::{Arc, RwLock};
 
 use rmcp::{
-    handler::server::router::tool::ToolRouter,
-    handler::server::wrapper::Parameters,
-    model::*,
+    handler::server::router::tool::ToolRouter, handler::server::wrapper::Parameters, model::*,
     schemars, tool, tool_handler, tool_router, ServerHandler,
 };
 use serde::Deserialize;
@@ -127,9 +125,13 @@ pub struct TerminalSendParams {
     pub vm_id: String,
     #[schemars(description = "tmux session name (default: \"dev\").")]
     pub session_name: Option<String>,
-    #[schemars(description = "Complete command to execute (Enter is appended automatically). Exactly one of 'command' or 'keys' must be provided.")]
+    #[schemars(
+        description = "Complete command to execute (Enter is appended automatically). Exactly one of 'command' or 'keys' must be provided."
+    )]
     pub command: Option<String>,
-    #[schemars(description = "Raw tmux key sequence (e.g., \"C-c\", \"Escape\"). Exactly one of 'command' or 'keys' must be provided.")]
+    #[schemars(
+        description = "Raw tmux key sequence (e.g., \"C-c\", \"Escape\"). Exactly one of 'command' or 'keys' must be provided."
+    )]
     pub keys: Option<String>,
 }
 
@@ -162,7 +164,11 @@ pub struct TerminalCloseParams {
 // ── Helpers ──
 
 fn mcp_err(msg: impl Into<String>) -> ErrorData {
-    ErrorData::new(ErrorCode::INTERNAL_ERROR, msg.into(), None::<serde_json::Value>)
+    ErrorData::new(
+        ErrorCode::INTERNAL_ERROR,
+        msg.into(),
+        None::<serde_json::Value>,
+    )
 }
 
 // ── Tool implementations ──
@@ -183,9 +189,9 @@ impl MjolnirMcpService {
 
     /// Build an authenticated reqwest client.
     async fn authed_client(&self) -> Result<reqwest::Client, ErrorData> {
-        let token = auth::load_token().await.ok_or_else(|| {
-            mcp_err("Not logged in. Run `mjolnir login` to authenticate.")
-        })?;
+        let token = auth::load_token()
+            .await
+            .ok_or_else(|| mcp_err("Not logged in. Run `mjolnir login` to authenticate."))?;
 
         let mut headers = reqwest::header::HeaderMap::new();
         let val = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))
@@ -202,35 +208,52 @@ impl MjolnirMcpService {
     async fn api_get(&self, path: &str) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
         let url = format!("{}{}", self.current_api_base(), path);
-        let resp = client.get(&url).send().await.map_err(|e| {
-            mcp_err(format!("Request to {} failed: {}", url, e))
-        })?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| mcp_err(format!("Request to {} failed: {}", url, e)))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| {
-            mcp_err(format!("Failed to read response: {}", e))
-        })?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| mcp_err(format!("Failed to read response: {}", e)))?;
         if status.is_success() {
             Ok(CallToolResult::success(vec![Content::text(body)]))
         } else {
-            Ok(CallToolResult::error(vec![Content::text(format!("HTTP {} — {}", status, body))]))
+            Ok(CallToolResult::error(vec![Content::text(format!(
+                "HTTP {} — {}",
+                status, body
+            ))]))
         }
     }
 
     /// POST request with JSON body, return body text.
-    async fn api_post(&self, path: &str, body: &serde_json::Value) -> Result<CallToolResult, ErrorData> {
+    async fn api_post(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
         let url = format!("{}{}", self.current_api_base(), path);
-        let resp = client.post(&url).json(body).send().await.map_err(|e| {
-            mcp_err(format!("Request to {} failed: {}", url, e))
-        })?;
+        let resp = client
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| mcp_err(format!("Request to {} failed: {}", url, e)))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| {
-            mcp_err(format!("Failed to read response: {}", e))
-        })?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| mcp_err(format!("Failed to read response: {}", e)))?;
         if status.is_success() {
             Ok(CallToolResult::success(vec![Content::text(text)]))
         } else {
-            Ok(CallToolResult::error(vec![Content::text(format!("HTTP {} — {}", status, text))]))
+            Ok(CallToolResult::error(vec![Content::text(format!(
+                "HTTP {} — {}",
+                status, text
+            ))]))
         }
     }
 
@@ -238,23 +261,32 @@ impl MjolnirMcpService {
     async fn api_delete(&self, path: &str) -> Result<CallToolResult, ErrorData> {
         let client = self.authed_client().await?;
         let url = format!("{}{}", self.current_api_base(), path);
-        let resp = client.delete(&url).send().await.map_err(|e| {
-            mcp_err(format!("Request to {} failed: {}", url, e))
-        })?;
+        let resp = client
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| mcp_err(format!("Request to {} failed: {}", url, e)))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| {
-            mcp_err(format!("Failed to read response: {}", e))
-        })?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| mcp_err(format!("Failed to read response: {}", e)))?;
         if status.is_success() {
             Ok(CallToolResult::success(vec![Content::text(text)]))
         } else {
-            Ok(CallToolResult::error(vec![Content::text(format!("HTTP {} — {}", status, text))]))
+            Ok(CallToolResult::error(vec![Content::text(format!(
+                "HTTP {} — {}",
+                status, text
+            ))]))
         }
     }
 
     // ── Tools ──
 
-    #[tool(name = "spawn_vm", description = "Create and boot a new microVM. Returns the VM's UUID and status.")]
+    #[tool(
+        name = "spawn_vm",
+        description = "Create and boot a new microVM. Returns the VM's UUID and status."
+    )]
     async fn spawn_vm(
         &self,
         Parameters(p): Parameters<SpawnVmParams>,
@@ -278,10 +310,14 @@ impl MjolnirMcpService {
         if let Some(v) = p.enable_iroh {
             body.insert("enable_iroh".into(), serde_json::Value::Bool(v));
         }
-        self.api_post("/api/vms", &serde_json::Value::Object(body)).await
+        self.api_post("/api/vms", &serde_json::Value::Object(body))
+            .await
     }
 
-    #[tool(name = "list_vms", description = "List all running microVMs with state and connectivity info.")]
+    #[tool(
+        name = "list_vms",
+        description = "List all running microVMs with state and connectivity info."
+    )]
     async fn list_vms(
         &self,
         Parameters(_): Parameters<EmptyParams>,
@@ -289,7 +325,10 @@ impl MjolnirMcpService {
         self.api_get("/api/vms").await
     }
 
-    #[tool(name = "get_vm", description = "Get detailed info about a specific VM.")]
+    #[tool(
+        name = "get_vm",
+        description = "Get detailed info about a specific VM."
+    )]
     async fn get_vm(
         &self,
         Parameters(p): Parameters<VmIdParams>,
@@ -297,7 +336,10 @@ impl MjolnirMcpService {
         self.api_get(&format!("/api/vms/{}", p.vm_id)).await
     }
 
-    #[tool(name = "exec", description = "Execute a shell command inside a running VM. Returns stdout, stderr, and exit code.")]
+    #[tool(
+        name = "exec",
+        description = "Execute a shell command inside a running VM. Returns stdout, stderr, and exit code."
+    )]
     async fn exec_cmd(
         &self,
         Parameters(p): Parameters<ExecParams>,
@@ -306,10 +348,14 @@ impl MjolnirMcpService {
         if let Some(t) = p.timeout {
             body["timeout"] = serde_json::Value::Number(t.into());
         }
-        self.api_post(&format!("/api/vms/{}/exec", p.vm_id), &body).await
+        self.api_post(&format!("/api/vms/{}/exec", p.vm_id), &body)
+            .await
     }
 
-    #[tool(name = "stop_vm", description = "Stop and destroy a running VM. Irreversible.")]
+    #[tool(
+        name = "stop_vm",
+        description = "Stop and destroy a running VM. Irreversible."
+    )]
     async fn stop_vm(
         &self,
         Parameters(p): Parameters<VmIdParams>,
@@ -317,13 +363,17 @@ impl MjolnirMcpService {
         self.api_delete(&format!("/api/vms/{}", p.vm_id)).await
     }
 
-    #[tool(name = "create_snapshot", description = "Snapshot a running VM's filesystem via BTRFS CoW.")]
+    #[tool(
+        name = "create_snapshot",
+        description = "Snapshot a running VM's filesystem via BTRFS CoW."
+    )]
     async fn create_snapshot(
         &self,
         Parameters(p): Parameters<CreateSnapshotParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let body = serde_json::json!({ "name": p.name });
-        self.api_post(&format!("/api/vms/{}/snapshots", p.vm_id), &body).await
+        self.api_post(&format!("/api/vms/{}/snapshots", p.vm_id), &body)
+            .await
     }
 
     #[tool(name = "list_snapshots", description = "List all available snapshots.")]
@@ -334,7 +384,10 @@ impl MjolnirMcpService {
         self.api_get("/api/snapshots").await
     }
 
-    #[tool(name = "get_snapshot", description = "Get metadata for a specific snapshot.")]
+    #[tool(
+        name = "get_snapshot",
+        description = "Get metadata for a specific snapshot."
+    )]
     async fn get_snapshot(
         &self,
         Parameters(p): Parameters<SnapshotNameParams>,
@@ -342,7 +395,10 @@ impl MjolnirMcpService {
         self.api_get(&format!("/api/snapshots/{}", p.name)).await
     }
 
-    #[tool(name = "delete_snapshot", description = "Permanently delete a snapshot.")]
+    #[tool(
+        name = "delete_snapshot",
+        description = "Permanently delete a snapshot."
+    )]
     async fn delete_snapshot(
         &self,
         Parameters(p): Parameters<SnapshotNameParams>,
@@ -350,7 +406,10 @@ impl MjolnirMcpService {
         self.api_delete(&format!("/api/snapshots/{}", p.name)).await
     }
 
-    #[tool(name = "deliver_message", description = "Send a message to a VM for inter-VM communication or coroutine wake-up.")]
+    #[tool(
+        name = "deliver_message",
+        description = "Send a message to a VM for inter-VM communication or coroutine wake-up."
+    )]
     async fn deliver_message(
         &self,
         Parameters(p): Parameters<DeliverMessageParams>,
@@ -359,10 +418,14 @@ impl MjolnirMcpService {
             "from_vm_id": p.from_vm_id.unwrap_or_else(|| "external".into()),
             "payload": p.payload.unwrap_or(serde_json::Value::Object(Default::default())),
         });
-        self.api_post(&format!("/api/vms/{}/messages", p.vm_id), &body).await
+        self.api_post(&format!("/api/vms/{}/messages", p.vm_id), &body)
+            .await
     }
 
-    #[tool(name = "get_connection_ticket", description = "Get an Iroh connection ticket for P2P shell access.")]
+    #[tool(
+        name = "get_connection_ticket",
+        description = "Get an Iroh connection ticket for P2P shell access."
+    )]
     async fn get_connection_ticket(
         &self,
         Parameters(p): Parameters<VmIdParams>,
@@ -370,7 +433,10 @@ impl MjolnirMcpService {
         self.api_get(&format!("/api/vms/{}/ticket", p.vm_id)).await
     }
 
-    #[tool(name = "list_dormant", description = "List VMs snapshotted and stopped, awaiting messages to restore.")]
+    #[tool(
+        name = "list_dormant",
+        description = "List VMs snapshotted and stopped, awaiting messages to restore."
+    )]
     async fn list_dormant(
         &self,
         Parameters(_): Parameters<EmptyParams>,
@@ -378,7 +444,10 @@ impl MjolnirMcpService {
         self.api_get("/api/dormant").await
     }
 
-    #[tool(name = "await_pty", description = "Wait for VM PTY/shell readiness. Returns connection ticket.")]
+    #[tool(
+        name = "await_pty",
+        description = "Wait for VM PTY/shell readiness. Returns connection ticket."
+    )]
     async fn await_pty(
         &self,
         Parameters(p): Parameters<AwaitPtyParams>,
@@ -387,20 +456,28 @@ impl MjolnirMcpService {
         if let Some(t) = p.timeout {
             body["timeout"] = serde_json::Value::Number(t.into());
         }
-        self.api_post(&format!("/api/vms/{}/await-pty", p.vm_id), &body).await
+        self.api_post(&format!("/api/vms/{}/await-pty", p.vm_id), &body)
+            .await
     }
 
-    #[tool(name = "open_terminal", description = "Open or attach to a persistent terminal session (tmux) inside a VM. Use this for interactive work that requires state across commands.")]
+    #[tool(
+        name = "open_terminal",
+        description = "Open or attach to a persistent terminal session (tmux) inside a VM. Use this for interactive work that requires state across commands."
+    )]
     async fn open_terminal(
         &self,
         Parameters(p): Parameters<OpenTerminalParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = p.session_name.as_deref().unwrap_or("dev");
         let body = serde_json::json!({ "session_name": session });
-        self.api_post(&format!("/api/vms/{}/terminal/open", p.vm_id), &body).await
+        self.api_post(&format!("/api/vms/{}/terminal/open", p.vm_id), &body)
+            .await
     }
 
-    #[tool(name = "terminal_read", description = "Read the current visible content of a terminal session. Returns clean text with ANSI escapes stripped.")]
+    #[tool(
+        name = "terminal_read",
+        description = "Read the current visible content of a terminal session. Returns clean text with ANSI escapes stripped."
+    )]
     async fn terminal_read(
         &self,
         Parameters(p): Parameters<TerminalReadParams>,
@@ -413,7 +490,10 @@ impl MjolnirMcpService {
         self.api_get(&path).await
     }
 
-    #[tool(name = "terminal_send", description = "Send a command or keystrokes to a terminal session. Use 'command' for complete commands or 'keys' for raw key sequences like 'C-c' or 'Escape'. Exactly one of 'command' or 'keys' must be provided.")]
+    #[tool(
+        name = "terminal_send",
+        description = "Send a command or keystrokes to a terminal session. Use 'command' for complete commands or 'keys' for raw key sequences like 'C-c' or 'Escape'. Exactly one of 'command' or 'keys' must be provided."
+    )]
     async fn terminal_send(
         &self,
         Parameters(p): Parameters<TerminalSendParams>,
@@ -429,10 +509,14 @@ impl MjolnirMcpService {
         self.api_post(
             &format!("/api/vms/{}/terminal/{}/send", p.vm_id, session),
             &serde_json::Value::Object(body),
-        ).await
+        )
+        .await
     }
 
-    #[tool(name = "terminal_send_and_read", description = "Send a single-line command and wait for it to complete, returning the output. Preferred over separate send+read for simple command execution. Designed for single-line commands only; for multi-line scripts, write to a file first then execute it. Do NOT use for commands that spawn interactive processes (bash, python, ssh, docker exec -it, etc.) — these will timeout because no shell prompt returns.")]
+    #[tool(
+        name = "terminal_send_and_read",
+        description = "Send a single-line command and wait for it to complete, returning the output. Preferred over separate send+read for simple command execution. Designed for single-line commands only; for multi-line scripts, write to a file first then execute it. Do NOT use for commands that spawn interactive processes (bash, python, ssh, docker exec -it, etc.) — these will timeout because no shell prompt returns."
+    )]
     async fn terminal_send_and_read(
         &self,
         Parameters(p): Parameters<TerminalSendAndReadParams>,
@@ -445,26 +529,38 @@ impl MjolnirMcpService {
         self.api_post(
             &format!("/api/vms/{}/terminal/{}/send-and-read", p.vm_id, session),
             &body,
-        ).await
+        )
+        .await
     }
 
-    #[tool(name = "terminal_list", description = "List active terminal sessions (tmux) in a VM.")]
+    #[tool(
+        name = "terminal_list",
+        description = "List active terminal sessions (tmux) in a VM."
+    )]
     async fn terminal_list(
         &self,
         Parameters(p): Parameters<TerminalListParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.api_get(&format!("/api/vms/{}/terminal", p.vm_id)).await
+        self.api_get(&format!("/api/vms/{}/terminal", p.vm_id))
+            .await
     }
 
-    #[tool(name = "terminal_close", description = "Close a terminal session in a VM. The session and its processes are destroyed.")]
+    #[tool(
+        name = "terminal_close",
+        description = "Close a terminal session in a VM. The session and its processes are destroyed."
+    )]
     async fn terminal_close(
         &self,
         Parameters(p): Parameters<TerminalCloseParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.api_delete(&format!("/api/vms/{}/terminal/{}", p.vm_id, p.session_name)).await
+        self.api_delete(&format!("/api/vms/{}/terminal/{}", p.vm_id, p.session_name))
+            .await
     }
 
-    #[tool(name = "get_profile", description = "Show which Mjolnir profile and API endpoint this MCP instance is currently using.")]
+    #[tool(
+        name = "get_profile",
+        description = "Show which Mjolnir profile and API endpoint this MCP instance is currently using."
+    )]
     async fn get_profile(
         &self,
         Parameters(_): Parameters<EmptyParams>,
@@ -476,7 +572,10 @@ impl MjolnirMcpService {
         )]))
     }
 
-    #[tool(name = "list_profiles", description = "List all configured Mjolnir profiles and their API endpoints.")]
+    #[tool(
+        name = "list_profiles",
+        description = "List all configured Mjolnir profiles and their API endpoints."
+    )]
     async fn list_profiles(
         &self,
         Parameters(_): Parameters<EmptyParams>,
@@ -495,7 +594,10 @@ impl MjolnirMcpService {
         )]))
     }
 
-    #[tool(name = "switch_profile", description = "Switch this MCP instance to a different profile/server. Affects only this Claude Code session — other sessions are unaffected.")]
+    #[tool(
+        name = "switch_profile",
+        description = "Switch this MCP instance to a different profile/server. Affects only this Claude Code session — other sessions are unaffected."
+    )]
     async fn switch_profile(
         &self,
         Parameters(p): Parameters<SwitchProfileParams>,
@@ -509,7 +611,9 @@ impl MjolnirMcpService {
                 names.join(", ")
             ))
         })?;
-        let new_api = profile.api.unwrap_or_else(|| "http://localhost:4000".into());
+        let new_api = profile
+            .api
+            .unwrap_or_else(|| "http://localhost:4000".into());
         *self.api_base.write().unwrap() = new_api.clone();
         *self.profile_name.write().unwrap() = p.profile.clone();
         Ok(CallToolResult::success(vec![Content::text(
@@ -547,7 +651,10 @@ pub async fn run_mcp_server(
         .trim_end_matches('/')
         .to_string();
 
-    eprintln!("mjolnir mcp-serve: profile={} api={}", profile_name, api_base);
+    eprintln!(
+        "mjolnir mcp-serve: profile={} api={}",
+        profile_name, api_base
+    );
 
     let service = MjolnirMcpService::new(profile_name.to_string(), api_base);
     let server = service.serve(rmcp::transport::stdio()).await?;
