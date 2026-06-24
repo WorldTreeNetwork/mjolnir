@@ -1,0 +1,28 @@
+defmodule Mjolnir.Deploy.BuildPlan do
+  @moduledoc """
+  Describes the full plan for building and running a detected app.
+
+  Produced by `Mjolnir.Deploy.Detector` and consumed by `Mjolnir.Deploy.Builder`.
+  Fields are intentionally flat and serialisable — no functions, no closures.
+  """
+
+  use TypedStruct
+
+  typedstruct enforce: true do
+    @typedoc """
+    A fully-resolved build plan.
+
+    - `runtime` — mise-managed runtime spec, e.g. `"node@20"`.
+    - `package_manager` — detected from lockfile; drives install/build commands.
+    - `steps` — ordered shell commands that build the app. Run sequentially;
+      each step is a candidate snapshot boundary.
+    - `start_command` — command the service VM executes to start the app.
+    - `port` — port the app binds on inside the VM.
+    """
+    field(:runtime, String.t())
+    field(:package_manager, :npm | :bun | :pnpm | :yarn)
+    field(:steps, [String.t()])
+    field(:start_command, String.t())
+    field(:port, pos_integer())
+  end
+end
