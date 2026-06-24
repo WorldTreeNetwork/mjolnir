@@ -135,7 +135,7 @@ These aren't matters of taste. They're capabilities a container model structural
    that you boot *as* a machine — same artifact, no flattening step, and it carries live state,
    not just files.
 
-4. **Peer-to-peer access is built in.** `mj connect` and `mj iroh ssh` reach into a VM over
+4. **Peer-to-peer access is built in.** `mj connect` and `mj ssh` reach into a VM over
    [Iroh](https://iroh.computer) QUIC — NAT-traversing, no port-forwarding, no public IP, no
    reverse proxy. Getting an interactive shell into a container behind two NATs is a
    you-problem in Docker; in Mjolnir it's a ticket string.

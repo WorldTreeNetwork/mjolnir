@@ -4,8 +4,8 @@
 //!   mjolnir login --api https://mjolnir.example.com   # authenticate + save API
 //!   mjolnir spawn                                      # spawn a VM, print ticket
 //!   mjolnir list                                       # list your VMs
-//!   mjolnir connect <id>                               # connect to a VM PTY
-//!   mjolnir iroh connect <ticket>                      # connect via Iroh QUIC
+//!   mjolnir connect <id|ticket>                        # shell (id→gateway, ticket→P2P)
+//!   mjolnir ssh <id|ticket>                            # SSH over the Iroh tunnel
 //!   mjolnir exec <id> <cmd>                            # run a command in a VM
 //!   mjolnir server status                              # show server status
 //!   mjolnir config                                     # show config
@@ -138,6 +138,74 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    // --- Connections ---
+    /// Open an interactive shell (VM id → gateway WebSocket, ticket → P2P)
+    #[command(next_help_heading = "Connections")]
+    Connect {
+        /// VM ID or ticket
+        target: String,
+        /// Force a direct peer-to-peer (Iroh) connection even for a VM id
+        #[arg(long)]
+        p2p: bool,
+        /// Attach to a named tmux session inside the VM
+        #[arg(long)]
+        session: Option<String>,
+        /// Relay URL hint (P2P only)
+        #[arg(long)]
+        relay: Option<String>,
+        /// Direct IP hint(s) for hole-punching (P2P only; ip:port, repeatable)
+        #[arg(long)]
+        ip: Vec<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// SSH into a VM over the Iroh tunnel
+    Ssh {
+        /// VM ID or ticket
+        target: String,
+        /// SSH user (default: root)
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Relay URL hint
+        #[arg(long)]
+        relay: Option<String>,
+        /// Direct IP hint(s)
+        #[arg(long)]
+        ip: Vec<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+        /// Extra args passed to ssh
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        ssh_args: Vec<String>,
+    },
+    /// TCP proxy to a VM over the Iroh tunnel (for ssh ProxyCommand)
+    Proxy {
+        /// VM ID or ticket
+        target: String,
+        /// Target port on the guest (default: 22)
+        #[arg(long, default_value = "22")]
+        port: u16,
+        /// Relay URL hint
+        #[arg(long)]
+        relay: Option<String>,
+        /// Direct IP hint(s)
+        #[arg(long)]
+        ip: Vec<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Get the web gateway URL for a VM
     Url {
         /// VM ID or ticket
@@ -152,27 +220,10 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
-
-    // --- Connections ---
-    /// Connect to a VM terminal (WebSocket PTY)
-    #[command(next_help_heading = "Connections")]
-    Connect {
-        /// VM ID (UUID)
-        id: String,
-        /// Mjolnir API base URL
-        #[arg(long)]
-        api: Option<String>,
-        /// Bearer token for API auth
-        #[arg(long, env = "MJOLNIR_TOKEN")]
-        token: Option<String>,
-        /// Attach to a named tmux session inside the VM
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// P2P connections via Iroh QUIC
-    Iroh {
+    /// Fetch or convert connection tickets
+    Ticket {
         #[command(subcommand)]
-        action: IrohCommand,
+        action: TicketAction,
     },
 
     // --- Snapshots ---
@@ -206,11 +257,6 @@ enum Command {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Convert between ticket formats
-    Ticket {
-        #[command(subcommand)]
-        action: TicketAction,
-    },
 
     // --- Integrations ---
     /// Run MCP server over stdio (for Claude Code integration)
@@ -235,52 +281,6 @@ enum Command {
     Server {
         #[command(subcommand)]
         action: server::ServerCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum IrohCommand {
-    /// Connect to VM shell via Iroh QUIC (P2P)
-    Connect {
-        /// Ticket (z32 node ID), hex node ID, or full iroh JSON
-        ticket: String,
-        /// Relay URL hint (only needed for self-hosted relays)
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s) for faster hole-punching (ip:port, repeatable)
-        #[arg(long)]
-        ip: Vec<String>,
-    },
-    /// SSH into VM via Iroh tunnel
-    Ssh {
-        /// Ticket
-        ticket: String,
-        /// SSH user (default: root)
-        #[arg(long, default_value = "root")]
-        user: String,
-        /// Relay URL hint
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s)
-        #[arg(long)]
-        ip: Vec<String>,
-        /// Extra args passed to ssh
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        ssh_args: Vec<String>,
-    },
-    /// TCP proxy via Iroh (for ProxyCommand)
-    Proxy {
-        /// Ticket
-        ticket: String,
-        /// Target port on the guest (default: 22 for SSH)
-        #[arg(long, default_value = "22")]
-        port: u16,
-        /// Relay URL hint
-        #[arg(long)]
-        relay: Option<String>,
-        /// Direct IP hint(s)
-        #[arg(long)]
-        ip: Vec<String>,
     },
 }
 
@@ -571,32 +571,36 @@ async fn main() {
 
         // --- Connections ---
         Command::Connect {
-            id,
+            target,
+            p2p,
+            session,
+            relay,
+            ip,
             api,
             token,
-            session,
-        } => connect::cmd_connect(&profile, &api, &token, &id, session).await,
-        Command::Iroh { action } => match action {
-            IrohCommand::Connect { ticket, relay, ip } => {
-                match connect::resolve_addr(&ticket, relay, &ip) {
-                    Ok(addr) => connect::connect_to_vm(addr, None).await,
-                    Err(e) => Err(e),
-                }
-            }
-            IrohCommand::Ssh {
-                ticket,
-                user,
-                relay,
-                ip,
-                ssh_args,
-            } => connect::cmd_ssh(&ticket, &user, relay, &ip, &ssh_args),
-            IrohCommand::Proxy {
-                ticket,
-                port,
-                relay,
-                ip,
-            } => connect::cmd_proxy(&ticket, port, relay, &ip).await,
-        },
+        } => connect::cmd_shell(&profile, &api, &token, &target, p2p, session, relay, &ip).await,
+        Command::Ssh {
+            target,
+            user,
+            relay,
+            ip,
+            api,
+            token,
+            ssh_args,
+        } => {
+            connect::cmd_ssh_target(
+                &profile, &api, &token, &target, &user, relay, &ip, &ssh_args,
+            )
+            .await
+        }
+        Command::Proxy {
+            target,
+            port,
+            relay,
+            ip,
+            api,
+            token,
+        } => connect::cmd_proxy_target(&profile, &api, &token, &target, port, relay, &ip).await,
 
         // --- Snapshots ---
         Command::Snapshot { action } => match action {

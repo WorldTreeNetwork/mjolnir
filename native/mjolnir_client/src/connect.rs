@@ -1,16 +1,18 @@
 //! Connection-related commands: Iroh QUIC shell, WebSocket PTY, TCP proxy, SSH tunnel.
 
 use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use iroh::endpoint::Endpoint;
 use iroh::{EndpointAddr, PublicKey, RelayUrl};
-use mjolnir_protocol::{read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN};
+use mjolnir_protocol::{
+    read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN,
+};
 #[cfg(unix)]
 use nix::sys::termios;
 use std::io::Write;
 use std::net::SocketAddr;
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
-use futures_util::{SinkExt, StreamExt};
 
 // --- Terminal size ---
 
@@ -82,11 +84,7 @@ fn restore_terminal(_original: &u32) {
 /// - z32-encoded node ID (the default compact format, 52 chars)
 ///
 /// Optional relay URL and direct IP hints are appended to the resulting address.
-pub fn resolve_addr(
-    ticket: &str,
-    relay: Option<String>,
-    ips: &[String],
-) -> Result<EndpointAddr> {
+pub fn resolve_addr(ticket: &str, relay: Option<String>, ips: &[String]) -> Result<EndpointAddr> {
     let ticket = ticket.trim();
 
     // Full iroh JSON
@@ -99,8 +97,9 @@ pub fn resolve_addr(
     let bytes: Vec<u8> = if ticket.len() == 64 && ticket.chars().all(|c| c.is_ascii_hexdigit()) {
         hex::decode(ticket).context("Failed to hex-decode ticket")?
     } else {
-        z32::decode(ticket.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Invalid ticket: not valid z32, hex, or iroh JSON ({})", e))?
+        z32::decode(ticket.as_bytes()).map_err(|e| {
+            anyhow::anyhow!("Invalid ticket: not valid z32, hex, or iroh JSON ({})", e)
+        })?
     };
 
     let key_bytes: [u8; 32] = bytes
@@ -147,10 +146,16 @@ pub fn format_addr_info(addr: &EndpointAddr) -> String {
 pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
-    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await.context("Failed to bind Iroh endpoint")?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await
+        .context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
-    let conn = endpoint.connect(addr, SHELL_ALPN).await.context("Failed to connect to VM")?;
+    let conn = endpoint
+        .connect(addr, SHELL_ALPN)
+        .await
+        .context("Failed to connect to VM")?;
     eprintln!("Connected. Opening shell...");
 
     let (mut send, mut recv) = conn.open_bi().await.context("Failed to open QUIC stream")?;
@@ -330,12 +335,17 @@ pub async fn cmd_connect(
 
     // Build request with auth header
     let effective_token = crate::auth::resolve_token(token).await;
-    let mut request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url.as_str())
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+            url.as_str(),
+        )
         .context("Failed to build WebSocket request")?;
     if let Some(t) = effective_token {
         request.headers_mut().insert(
             "Authorization",
-            format!("Bearer {}", t).parse().context("Invalid auth header value")?,
+            format!("Bearer {}", t)
+                .parse()
+                .context("Invalid auth header value")?,
         );
     }
 
@@ -370,8 +380,9 @@ pub async fn cmd_connect(
 #[cfg(unix)]
 async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
 where
-    S: futures_util::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+    S: futures_util::Stream<
+            Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + Unpin,
 {
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -381,21 +392,24 @@ where
     // Send initial resize
     let (rows, cols) = get_terminal_size();
     let resize_msg = serde_json::json!({"type": "resize", "rows": rows, "cols": cols});
-    ws_write.send(Message::Text(resize_msg.to_string())).await
+    ws_write
+        .send(Message::Text(resize_msg.to_string()))
+        .await
         .context("Failed to send initial resize")?;
 
     // Inject tmux session command if requested
     if let Some(ref name) = session {
         let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
-        ws_write.send(Message::Binary(cmd.into_bytes())).await
+        ws_write
+            .send(Message::Binary(cmd.into_bytes()))
+            .await
             .context("Failed to send tmux session command")?;
     }
 
     // Set up SIGWINCH handler
-    let mut sigwinch = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::window_change(),
-    )
-    .context("Failed to register SIGWINCH handler")?;
+    let mut sigwinch =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+            .context("Failed to register SIGWINCH handler")?;
 
     loop {
         tokio::select! {
@@ -432,8 +446,9 @@ where
 #[cfg(windows)]
 async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
 where
-    S: futures_util::Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+    S: futures_util::Stream<
+            Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + Unpin,
 {
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -447,13 +462,17 @@ where
         "rows": rows,
         "cols": cols
     });
-    ws_write.send(Message::Text(resize_msg.to_string())).await
+    ws_write
+        .send(Message::Text(resize_msg.to_string()))
+        .await
         .context("Failed to send initial resize")?;
 
     // Inject tmux session command if requested
     if let Some(ref name) = session {
         let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
-        ws_write.send(Message::Binary(cmd.into_bytes())).await
+        ws_write
+            .send(Message::Binary(cmd.into_bytes()))
+            .await
             .context("Failed to send tmux session command")?;
     }
 
@@ -513,14 +532,22 @@ pub async fn cmd_proxy(
 ) -> Result<()> {
     let addr = resolve_addr(ticket, relay, ips)?;
 
-    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await.context("Failed to bind Iroh endpoint")?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await
+        .context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
-    let conn = endpoint.connect(addr, TCP_FWD_ALPN).await.context("Failed to connect to VM")?;
+    let conn = endpoint
+        .connect(addr, TCP_FWD_ALPN)
+        .await
+        .context("Failed to connect to VM")?;
     let (mut send, mut recv) = conn.open_bi().await.context("Failed to open QUIC stream")?;
 
     // Send target port as 2 bytes (u16 big-endian)
-    send.write_all(&port.to_be_bytes()).await.context("Failed to send port")?;
+    send.write_all(&port.to_be_bytes())
+        .await
+        .context("Failed to send port")?;
 
     // Bidirectional copy with graceful half-close: stdin <-> QUIC
     let mut stdin = tokio::io::stdin();
@@ -531,9 +558,7 @@ pub async fn cmd_proxy(
         let _ = send.finish();
         r
     };
-    let s2c = async {
-        tokio::io::copy(&mut recv, &mut stdout).await
-    };
+    let s2c = async { tokio::io::copy(&mut recv, &mut stdout).await };
 
     let (c2s_result, s2c_result) = tokio::join!(c2s, s2c);
     if let Err(e) = c2s_result {
@@ -557,9 +582,11 @@ pub fn cmd_ssh(
 ) -> Result<()> {
     let self_exe = std::env::current_exe().context("Failed to get current executable path")?;
 
-    // Build the ProxyCommand with shell-safe quoting
+    // Build the ProxyCommand with shell-safe quoting.
+    // Self-invokes `mj proxy <ticket>` — passing a ticket (already resolved by
+    // the caller) so the proxy goes straight to the P2P path without a re-lookup.
     let mut proxy_cmd = format!(
-        "{} iroh proxy {} --port 22",
+        "{} proxy {} --port 22",
         shell_quote(&self_exe.to_string_lossy()),
         shell_quote(ticket),
     );
@@ -608,4 +635,86 @@ pub fn cmd_ssh(
             .map_err(|e| anyhow::anyhow!("Failed to run ssh: {}", e))?;
         std::process::exit(status.code().unwrap_or(1));
     }
+}
+
+// --- Intent-level connection verbs (transport auto-selected) ---
+
+/// True if `target` looks like a VM UUID (vs an Iroh ticket). Mirrors the
+/// heuristic in `mjolnir_api::api::resolve_vm_id` (36 chars, contains '-').
+pub fn is_vm_id(target: &str) -> bool {
+    target.len() == 36 && target.contains('-')
+}
+
+/// Resolve a connection target (VM id OR ticket) to an Iroh ticket. If it's a
+/// VM id, fetch the ticket from the API (requires auth on the owning account).
+async fn target_to_ticket(
+    profile: &crate::config::Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    target: &str,
+) -> Result<String> {
+    if is_vm_id(target) {
+        let client = crate::api::api_client(token).await;
+        let base = crate::config::resolve_api(api_flag, profile);
+        crate::api::fetch_ticket(&client, &base, target).await
+    } else {
+        Ok(target.to_string())
+    }
+}
+
+/// `mj connect <id|ticket>` — interactive shell. A VM id goes through the
+/// gateway (WebSocket) unless `--p2p` is set; a ticket always goes peer-to-peer
+/// (Iroh QUIC). The chosen transport is announced on stderr.
+pub async fn cmd_shell(
+    profile: &crate::config::Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    target: &str,
+    p2p: bool,
+    session: Option<String>,
+    relay: Option<String>,
+    ips: &[String],
+) -> Result<()> {
+    if is_vm_id(target) && !p2p {
+        eprintln!("→ transport: gateway (WebSocket)");
+        cmd_connect(profile, api_flag, token, target, session).await
+    } else {
+        eprintln!("→ transport: peer-to-peer (Iroh QUIC)");
+        let ticket = target_to_ticket(profile, api_flag, token, target).await?;
+        let addr = resolve_addr(&ticket, relay, ips)?;
+        connect_to_vm(addr, session).await
+    }
+}
+
+/// `mj ssh <id|ticket>` — SSH over the Iroh tunnel. Always peer-to-peer; a VM id
+/// is resolved to a ticket first.
+pub async fn cmd_ssh_target(
+    profile: &crate::config::Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    target: &str,
+    user: &str,
+    relay: Option<String>,
+    ips: &[String],
+    ssh_args: &[String],
+) -> Result<()> {
+    let ticket = target_to_ticket(profile, api_flag, token, target).await?;
+    eprintln!("→ transport: peer-to-peer (Iroh QUIC)");
+    cmd_ssh(&ticket, user, relay, ips, ssh_args)
+}
+
+/// `mj proxy <id|ticket>` — raw TCP proxy over the Iroh tunnel (used as an ssh
+/// ProxyCommand). Always peer-to-peer; a VM id is resolved to a ticket first.
+/// No status line — this is machine-facing plumbing.
+pub async fn cmd_proxy_target(
+    profile: &crate::config::Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    target: &str,
+    port: u16,
+    relay: Option<String>,
+    ips: &[String],
+) -> Result<()> {
+    let ticket = target_to_ticket(profile, api_flag, token, target).await?;
+    cmd_proxy(&ticket, port, relay, ips).await
 }

@@ -78,7 +78,7 @@ These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
 
 ### Connectivity (Iroh)
 - Per-VM cryptographic identity (Ed25519) and NAT-traversing **Iroh QUIC** access:
-  `mj iroh connect <ticket>` for an interactive PTY, `mj iroh ssh <ticket>` for SSH — no
+  `mj connect <ticket>` for an interactive PTY, `mj ssh <ticket>` for SSH — no
   port-forwarding, no public IP.
 - WebSocket PTY (`mj connect <vm_id>`) for shells over the API, including reattachable
   `--session` (tmux) sessions.

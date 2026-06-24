@@ -88,7 +88,7 @@ mj snapshot show <name>                # Snapshot metadata
 mj snapshot rm <name>                  # Delete a snapshot
 ```
 
-Add `--json` to any reporting command for the raw server response. Run `mj --help` for the full surface (connections via `mj iroh`, `mj config`, `mj forge`, `mj server`).
+Add `--json` to any reporting command for the raw server response. Run `mj --help` for the full surface (`mj connect`/`mj ssh`/`mj proxy`, `mj config`, `mj forge`, `mj server`).
 
 **Server Management** — SSH into the server:
 

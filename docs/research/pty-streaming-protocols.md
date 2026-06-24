@@ -4,7 +4,7 @@
 
 Mjolnir is a microVM platform with two connection paths to VM shells:
 
-1. **Iroh QUIC direct connect** (`mjolnir iroh connect <ticket>`) -- P2P NAT-traversing QUIC connection using the `mjolnir-shell/1` ALPN, carrying a custom binary frame protocol (Data/Resize/Exit/Hello).
+1. **Iroh QUIC direct connect** (`mjolnir connect <ticket>`) -- P2P NAT-traversing QUIC connection using the `mjolnir-shell/1` ALPN, carrying a custom binary frame protocol (Data/Resize/Exit/Hello).
 2. **WebSocket PTY** (`mjolnir connect <vm_id>`) -- authenticated WebSocket through the Mjolnir API server, carrying raw binary PTY bytes (WS Binary frames) with JSON resize messages (WS Text frames).
 
 Both paths terminate at the guest agent's `PtySession`, which uses `openpty(2)` + `fork(2)` to spawn `/bin/bash` with a real PTY pair. The client sets the local terminal to raw mode and does bidirectional byte copying.
@@ -207,11 +207,11 @@ This is significantly more complex. The tmux control protocol is not formally do
 
 #### Option D: Use SSH as the Transport Layer (Recommended Hybrid)
 
-Mjolnir already has `mjolnir iroh ssh` which tunnels SSH over Iroh QUIC. SSH is the protocol that tmux and every terminal tool already understands perfectly.
+Mjolnir already has `mjolnir ssh` which tunnels SSH over Iroh QUIC. SSH is the protocol that tmux and every terminal tool already understands perfectly.
 
 ```bash
 # This already works:
-tmux new-window -n "vm-abc" "mjolnir iroh ssh <ticket>"
+tmux new-window -n "vm-abc" "mjolnir ssh <ticket>"
 
 # Or with the API-based approach, if SSH is configured:
 tmux new-window -n "vm-abc" "ssh -o ProxyCommand='mjolnir proxy <ticket> --port 22' root@mjolnir"
@@ -520,17 +520,17 @@ These are xterm.js-style (browser-based terminal emulation), which is the opposi
 
 ### Priority 1: Document the SSH Path (Low effort, High impact)
 
-The `mjolnir iroh ssh` command is already the best integration point for tmux and iTerm2. Document this as the recommended way to use Mjolnir with tmux:
+The `mjolnir ssh` command is already the best integration point for tmux and iTerm2. Document this as the recommended way to use Mjolnir with tmux:
 
 ```bash
 # One-liner to open a VM in a new tmux window
 tmux new-window -n "vm-$(echo $VM_ID | cut -c1-8)" \
-  "mjolnir iroh ssh $TICKET"
+  "mjolnir ssh $TICKET"
 
 # For tmux -CC (iTerm2 integration):
 # Just use tmux normally -- iTerm2 handles the rendering
 tmux -CC new-session -s mjolnir
-tmux new-window -n "my-vm" "mjolnir iroh ssh $TICKET"
+tmux new-window -n "my-vm" "mjolnir ssh $TICKET"
 ```
 
 **Trade-off:** Requires sshd in the VM. But this is already the standard Mjolnir setup path.
@@ -598,7 +598,7 @@ mjolnir tmux list
 mjolnir tmux attach abc123
 ```
 
-Under the hood, this just wraps `tmux new-window "mjolnir iroh ssh ..."` with proper naming, session management, and cleanup.
+Under the hood, this just wraps `tmux new-window "mjolnir ssh ..."` with proper naming, session management, and cleanup.
 
 **Trade-off:** Thin wrapper; value is mainly UX polish and discoverability.
 
@@ -608,7 +608,7 @@ Under the hood, this just wraps `tmux new-window "mjolnir iroh ssh ..."` with pr
 
 ### Option A: SSH Everywhere
 
-Use SSH as the universal transport. Agents, tmux, and interactive users all go through `mjolnir iroh ssh`.
+Use SSH as the universal transport. Agents, tmux, and interactive users all go through `mjolnir ssh`.
 
 | Pros | Cons |
 |------|------|
@@ -643,7 +643,7 @@ Keep interactive sessions as-is (SSH or native protocol), add MCP tools for agen
 
 ### Recommendation: Option C (MCP-Native) + Option A (SSH) as Complementary Layers
 
-- **Interactive human use:** `mjolnir iroh ssh` + tmux for multiplexing. This works today.
+- **Interactive human use:** `mjolnir ssh` + tmux for multiplexing. This works today.
 - **Agent structured commands:** MCP `exec` tool. This works today.
 - **Agent interactive sessions:** New MCP `pty_*` tools for cases where `exec` is insufficient. Build this.
 - **Agent terminal monitoring:** tmux `send-keys` + `capture-pane` when the agent needs a live terminal view. Already possible.
@@ -656,9 +656,9 @@ This avoids building a new protocol and leverages existing infrastructure for ea
 
 1. **Mjolnir's raw PTY byte streaming is well-architected** for terminal integration. The data is already just bytes -- no xterm.js-style emulation layer gets in the way.
 
-2. **tmux -CC integration works today** by running `mjolnir iroh ssh` or `mjolnir connect` inside tmux panes. No protocol changes needed. iTerm2 handles rendering natively.
+2. **tmux -CC integration works today** by running `mjolnir ssh` or `mjolnir connect` inside tmux panes. No protocol changes needed. iTerm2 handles rendering natively.
 
-3. **The SSH path (`mjolnir iroh ssh`) is the most integration-friendly** transport. It works with tmux, iTerm2, Warp, Ghostty, ansible, fabric, rsync, scp, and every other SSH-aware tool. The `ProxyCommand` pattern (`mjolnir iroh proxy`) makes this transparent.
+3. **The SSH path (`mjolnir ssh`) is the most integration-friendly** transport. It works with tmux, iTerm2, Warp, Ghostty, ansible, fabric, rsync, scp, and every other SSH-aware tool. The `ProxyCommand` pattern (`mjolnir proxy`) makes this transparent.
 
 4. **For AI agents, the MCP `exec` tool is sufficient for most cases.** For interactive sessions, add MCP `pty_*` tools that manage server-side PTY channels and output buffers. For terminal-centric agents (Claude Code in tmux), use `tmux send-keys` + `capture-pane`.
 

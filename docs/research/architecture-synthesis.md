@@ -12,7 +12,7 @@ The research unanimously agrees on these architectural points:
 
 **tmux is the session primitive.** All three documents converge on tmux as the multiplexing layer inside the VM. It provides concurrent access, `capture-pane` for AI context, `send-keys` for AI input, session persistence, and window/pane management -- all battle-tested. The cost of including tmux in base images is negligible compared to reimplementing its capabilities.
 
-**SSH over Iroh is the human transport.** `mjolnir iroh ssh` (or `mjolnir connect`) running inside a tmux pane is the cleanest integration path. tmux manages the PTY pair; the bridge process is just a stdin/stdout-to-WebSocket/QUIC pipe. iTerm2, Ghostty, Warp, and every SSH-aware tool work without modification.
+**SSH over Iroh is the human transport.** `mjolnir ssh` (or `mjolnir connect`) running inside a tmux pane is the cleanest integration path. tmux manages the PTY pair; the bridge process is just a stdin/stdout-to-WebSocket/QUIC pipe. iTerm2, Ghostty, Warp, and every SSH-aware tool work without modification.
 
 **Snapshot-based context capture for the AI.** The AI should pull terminal state on demand via `tmux capture-pane`, not receive a continuous stream. MCP is request-response; streaming adds complexity without proportional benefit. Push notifications (SSE) are reserved for discrete events like human signals.
 
@@ -30,7 +30,7 @@ The PTY streaming doc presents three transports. The tmux-CC doc assumes tmux ha
 
 **Resolution: SSH over Iroh for humans, vsock for AI.**
 
-- Human connects via `mjolnir iroh ssh <ticket>` or `mjolnir connect <vm_id>`. Both terminate at tmux inside the VM.
+- Human connects via `mjolnir ssh <ticket>` or `mjolnir connect <vm_id>`. Both terminate at tmux inside the VM.
 - AI accesses the terminal via MCP tools, which translate to vsock calls to the guest agent, which executes tmux commands locally inside the VM.
 - No WebSocket PTY bridge is needed for the shared terminal use case. The existing WebSocket path remains for the web UI.
 
@@ -130,7 +130,7 @@ This requires the user to have a local tmux -CC session running. The tool detect
 
 **Human path:** `iTerm2 -> local tmux -> mjolnir connect -> Iroh QUIC / SSH -> VM sshd -> VM tmux attach`
 
-The `mjolnir connect` command is a stdio bridge. When run inside a local tmux pane, tmux manages the PTY pair. The bridge forwards stdin/stdout to the VM over Iroh QUIC (or SSH via `mjolnir iroh ssh`). SIGWINCH propagates resize through the full chain: iTerm2 -> local tmux -> bridge -> Iroh -> VM sshd -> VM tmux.
+The `mjolnir connect` command is a stdio bridge. When run inside a local tmux pane, tmux manages the PTY pair. The bridge forwards stdin/stdout to the VM over Iroh QUIC (or SSH via `mjolnir ssh`). SIGWINCH propagates resize through the full chain: iTerm2 -> local tmux -> bridge -> Iroh -> VM sshd -> VM tmux.
 
 **AI path:** `Claude Code -> MCP tool call -> Mjolnir MCP server -> vsock -> guest agent -> tmux command -> tmux session`
 
