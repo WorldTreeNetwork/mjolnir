@@ -236,7 +236,23 @@ func (v *VMEnvironment) Remove() common.Executor {
 		if v.vmID == "" {
 			return nil
 		}
-		return v.client.StopVM(ctx, v.vmID)
+		// VM teardown MUST run even when the job's context is already
+		// cancelled — which is the common case, not the exception: act runs
+		// this cleanup via Finally(), and a job that was cancelled, timed
+		// out, or interrupted by a runner restart (shutdown force-cancels
+		// in-progress jobs) arrives here with a dead ctx. Passing that ctx
+		// to the StopVM DELETE makes net/http fail it immediately with
+		// "context canceled", so the VM is never destroyed and leaks — and
+		// Mjolnir's durability layer then resurrects the orphaned :running
+		// record on every restart, accumulating zombie CI VMs.
+		//
+		// Detach to a fresh background context with its own timeout so the
+		// teardown DELETE always reaches the API. The Mjolnir client carries
+		// its own auth/base-URL (localhost bypass), so dropping the inherited
+		// context values is safe.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		return v.client.StopVM(cleanupCtx, v.vmID)
 	}
 }
 
