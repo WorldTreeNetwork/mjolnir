@@ -9,8 +9,9 @@ defmodule Mjolnir.Health do
     each `:degraded` or `:dead` finding, invokes the matching `heal/1`
     callback up to `max_level`.
   - Host-wide checks live in `Mjolnir.Health.Host` and are independent.
-  - `nuke/1` is the escape hatch — it triggers L5 (subvolume rebuild).
-    Currently unimplemented; left as a stub so the API shape is stable.
+  - `nuke/1` is the escape hatch — it triggers L5 (subvolume rebuild). It is
+    recover-safe: the old rootfs is moved to `@trash` and restored if the
+    respawn fails, so a nuke can never cause permanent data loss.
   """
 
   require Logger
@@ -116,27 +117,50 @@ defmodule Mjolnir.Health do
   respawn a fresh one with the same UUID (and therefore same TAP/MAC/IP/CID,
   since those are all deterministic UUID derivations).
 
-  Sequence:
-  1. Snapshot `spawn_config` from StateStore before any teardown — a clean
-     `VM.stop/1` will wipe the state file on successful terminate, so we
-     need the config up-front to respawn faithfully.
-  2. `VM.stop/1` if registered — its normal-termination path does the full
-     cleanup (hypervisor kill, TAP delete, subvolume delete, state delete).
-  3. Belt-and-suspenders: if the subvolume still exists after stop (e.g.
-     because the VM wasn't registered to begin with, or cleanup failed
-     partway), destroy it directly. Idempotent.
-  4. Delete the state record explicitly.
-  5. `VM.spawn_with_id/1` with the captured config → fresh BTRFS clone from
-     base image, fresh TAP, fresh guest agent inject.
+  Sequence (recover-safe — never deletes before a replacement is confirmed):
+  1. Capture `spawn_config` and the intent record from StateStore up-front.
+  2. Move the existing rootfs into `@trash` (O(1) rename) — this both frees
+     `@vms/<uuid>` for the respawn AND keeps a recoverable copy.
+  3. `VM.stop/1` for runtime teardown (hypervisor kill, TAP delete, sockets);
+     its own subvolume soft-delete is now a no-op since we already moved it.
+  4. `VM.spawn_with_id/1` with the captured config → fresh clone from base.
+  5. On respawn **success**: leave the recovery copy in `@trash` for the GC
+     window (so even a bad nuke is reversible). On **failure**: restore the
+     rootfs from `@trash` and re-persist the intent record, so the VM is left
+     exactly as it was and `Mjolnir.Reconcile` resumes it — never lost.
 
-  **Destroys all in-VM state.** Callers should only reach this level when
-  lower levels have failed or a nuke is explicitly requested.
+  **Destroys all in-VM state on success.** Callers should only reach this
+  level when lower levels have failed or a nuke is explicitly requested.
   """
   @spec nuke(String.t()) :: :ok | {:error, term()}
   def nuke(vm_id) when is_binary(vm_id) do
     Logger.warning("Health.nuke/1: L5 respawn initiated for #{vm_id}")
 
     spawn_opts = capture_spawn_opts(vm_id)
+    record = capture_state_record(vm_id)
+
+    # SAFETY: move the existing rootfs into @trash BEFORE any teardown, keeping
+    # a handle to it. This frees @vms/<uuid> for the fresh respawn while making
+    # the old state fully recoverable. A live VM keeps serving from the moved
+    # inode until VM.stop kills its hypervisor a moment later.
+    rootfs = Mjolnir.Reconcile.rootfs_path(vm_id)
+
+    recovery_path =
+      case Mjolnir.BTRFS.trash_subvolume(rootfs) do
+        {:ok, path} ->
+          path
+
+        # Nothing to recover (already gone) — proceed, but we have no rollback.
+        :ok ->
+          nil
+
+        {:error, reason} ->
+          Logger.error(
+            "Health.nuke/1 #{vm_id}: could not snapshot rootfs before nuke: #{inspect(reason)}"
+          )
+
+          nil
+      end
 
     _ =
       case Mjolnir.VM.stop(vm_id) do
@@ -145,17 +169,53 @@ defmodule Mjolnir.Health do
         other -> Logger.warning("Health.nuke/1 #{vm_id}: stop returned #{inspect(other)}")
       end
 
+    # rootfs is already in @trash; this is now a belt-and-suspenders no-op for
+    # any stale leftover the respawn hasn't created yet.
     _ = force_destroy_subvolume(vm_id)
     _ = Mjolnir.StateStore.delete(vm_id)
 
     case Mjolnir.VM.spawn_with_id(spawn_opts) do
       {:ok, _vm} ->
-        Logger.warning("Health.nuke/1 #{vm_id}: respawned successfully")
+        Logger.warning(
+          "Health.nuke/1 #{vm_id}: respawned successfully " <>
+            "(prior state preserved in #{inspect(recovery_path)} until GC)"
+        )
+
         :ok
 
       {:error, reason} = err ->
-        Logger.error("Health.nuke/1 #{vm_id}: respawn failed: #{inspect(reason)}")
+        Logger.error("Health.nuke/1 #{vm_id}: respawn failed: #{inspect(reason)} — rolling back")
+
+        rollback_nuke(vm_id, rootfs, recovery_path, record)
         err
+    end
+  end
+
+  # Restore the pre-nuke rootfs and intent record so a failed respawn leaves the
+  # VM exactly as it was (recoverable by the normal Reconcile loop) rather than
+  # deleted forever.
+  defp rollback_nuke(vm_id, rootfs, recovery_path, record) do
+    case Mjolnir.BTRFS.restore_trashed(recovery_path, rootfs) do
+      :ok ->
+        if record, do: _ = Mjolnir.StateStore.put(record)
+
+        Logger.warning(
+          "Health.nuke/1 #{vm_id}: rolled back — rootfs restored and intent record re-persisted; " <>
+            "Reconcile will retry the resume."
+        )
+
+      {:error, reason} ->
+        Logger.error(
+          "Health.nuke/1 #{vm_id}: ROLLBACK FAILED (#{inspect(reason)}). " <>
+            "Recovery copy is at #{inspect(recovery_path)} — restore manually."
+        )
+    end
+  end
+
+  defp capture_state_record(vm_id) do
+    case Mjolnir.StateStore.get(vm_id) do
+      {:ok, record} -> record
+      _ -> nil
     end
   end
 

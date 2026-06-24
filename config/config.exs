@@ -22,6 +22,10 @@ config :mjolnir,
   # Durability: per-VM intent state (one JSON file per VM)
   state_dir: "/var/lib/mjolnir/state",
 
+  # Durability: soft-deleted VM subvolumes are moved to @trash and reaped after
+  # this window (default 7 days), so a deletion is recoverable in the interim.
+  trash_retention_seconds: 7 * 24 * 60 * 60,
+
   # Forge (host config reconciler) — see docs/plans/host-reconcile.md
   forge_state_dir: "/var/lib/mjolnir/forge/state",
   forge_declarations_path: "forge/declarations",

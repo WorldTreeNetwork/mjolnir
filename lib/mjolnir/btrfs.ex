@@ -220,6 +220,10 @@ defmodule Mjolnir.BTRFS do
 
   @doc """
   Delete a subvolume (VM overlay or snapshot).
+
+  This is the irreversible primitive. Prefer `trash_subvolume/2` for any VM
+  rootfs so a deletion can be undone — the only caller of `delete_subvolume`
+  on a live VM rootfs should be the trash reaper (`reap_trash/1`).
   """
   def delete_subvolume(path) do
     case System.cmd("sudo", ["-n", "btrfs", "subvolume", "delete", path], stderr_to_stdout: true) do
@@ -230,6 +234,160 @@ defmodule Mjolnir.BTRFS do
       {output, code} ->
         Logger.error("Failed to delete subvolume #{path}: #{output}")
         {:error, {:btrfs_delete_failed, code, output}}
+    end
+  end
+
+  @doc """
+  The `@trash` directory holding soft-deleted subvolumes awaiting GC.
+  """
+  def trash_root do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    Path.join(btrfs_root, "@trash")
+  end
+
+  @doc """
+  Soft-delete a VM rootfs subvolume by moving it into `@trash/<name>__<ts>__<rand>/`.
+
+  This is the durability-critical alternative to `delete_subvolume/1`: a
+  rename within the same BTRFS filesystem is O(1) and fully reversible via
+  `restore_trashed/2`, so no inline teardown path can ever cause permanent
+  data loss. The trash is reclaimed later by `reap_trash/1`.
+
+  Returns `{:ok, trash_path}` on success, `:ok` if the source is already gone
+  (idempotent), or `{:error, reason}` if the move failed — in which case the
+  subvolume is intentionally LEFT IN PLACE rather than hard-deleted, so it
+  remains recoverable.
+  """
+  def trash_subvolume(path, opts \\ []) do
+    cond do
+      is_nil(path) ->
+        :ok
+
+      not File.exists?(path) ->
+        :ok
+
+      true ->
+        trash_dir = Keyword.get(opts, :trash_root, trash_root())
+        basename = Path.basename(path)
+        # Second-resolution timestamp + short random suffix guarantees a unique
+        # destination even if the same VM id is trashed twice in one second.
+        stamp = System.os_time(:second)
+        rand = :rand.uniform(0xFFFF) |> Integer.to_string(16)
+        dest = Path.join(trash_dir, "#{basename}__#{stamp}__#{rand}")
+
+        with :ok <- ensure_dir(trash_dir),
+             {_, 0} <- System.cmd("mv", [path, dest], stderr_to_stdout: true) do
+          Logger.info("Soft-deleted subvolume #{path} -> #{dest}")
+          {:ok, dest}
+        else
+          {output, code} when is_binary(output) and is_integer(code) ->
+            Logger.error(
+              "Failed to trash subvolume #{path} (code #{code}): #{output}. " <>
+                "Leaving in place — recover manually or let Cleanup retry."
+            )
+
+            {:error, {:btrfs_trash_failed, code, output}}
+
+          {:error, reason} ->
+            Logger.error("Failed to trash subvolume #{path}: #{inspect(reason)}")
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Restore a previously trashed subvolume to `dest` (e.g. on a failed `nuke`).
+
+  If `dest` already exists (a partial respawn left a stale subvolume), it is
+  itself trashed first so the restore lands cleanly. Returns `:ok` or
+  `{:error, reason}`.
+  """
+  def restore_trashed(trash_path, dest) do
+    cond do
+      is_nil(trash_path) or not File.exists?(trash_path) ->
+        {:error, {:trash_missing, trash_path}}
+
+      true ->
+        # Get the stale dest out of the way (recoverably) before restoring.
+        _ = if File.exists?(dest), do: trash_subvolume(dest), else: :ok
+
+        with :ok <- ensure_dir(Path.dirname(dest)),
+             {_, 0} <- System.cmd("mv", [trash_path, dest], stderr_to_stdout: true) do
+          Logger.warning("Restored trashed subvolume #{trash_path} -> #{dest}")
+          :ok
+        else
+          {output, code} when is_binary(output) ->
+            {:error, {:btrfs_restore_failed, code, output}}
+
+          other ->
+            {:error, other}
+        end
+    end
+  end
+
+  @doc """
+  Hard-delete trashed subvolumes older than the retention window.
+
+  Retention comes from `:trash_retention_seconds` (default 7 days). Returns
+  `{:ok, reaped_count}`. Entries that fail to parse a timestamp are kept
+  (fail-safe) so a malformed name never triggers premature deletion.
+  """
+  def reap_trash(opts \\ []) do
+    trash_dir = Keyword.get(opts, :trash_root, trash_root())
+
+    retention =
+      Keyword.get(
+        opts,
+        :retention_seconds,
+        Application.get_env(:mjolnir, :trash_retention_seconds, 7 * 24 * 60 * 60)
+      )
+
+    now = System.os_time(:second)
+
+    case File.ls(trash_dir) do
+      {:ok, entries} ->
+        reaped =
+          entries
+          |> Enum.filter(fn entry -> reapable?(entry, now, retention) end)
+          |> Enum.reduce(0, fn entry, acc ->
+            path = Path.join(trash_dir, entry)
+
+            case delete_subvolume(path) do
+              :ok ->
+                acc + 1
+
+              {:error, _} ->
+                # Fall back to a plain recursive remove (handles non-subvolume
+                # leftovers); never block the reaper on one bad entry.
+                _ = File.rm_rf(path)
+                acc + 1
+            end
+          end)
+
+        if reaped > 0, do: Logger.info("Reaped #{reaped} trashed subvolume(s)")
+        {:ok, reaped}
+
+      {:error, :enoent} ->
+        {:ok, 0}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Trash entries are named "<name>__<unix_ts>__<rand>". Reap only when the
+  # parsed timestamp is older than the retention window. Unparseable names are
+  # KEPT (returns false) — fail-safe against deleting something we can't date.
+  defp reapable?(entry, now, retention) do
+    case String.split(entry, "__") do
+      [_name, ts_str, _rand] ->
+        case Integer.parse(ts_str) do
+          {ts, ""} -> now - ts > retention
+          _ -> false
+        end
+
+      _ ->
+        false
     end
   end
 

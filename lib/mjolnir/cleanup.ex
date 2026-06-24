@@ -29,8 +29,18 @@ defmodule Mjolnir.Cleanup do
     clean_stale_sockets(socket_dir)
     clean_stale_vms(btrfs_root)
     clean_orphan_taps()
+    reap_trash()
 
     :ok
+  end
+
+  defp reap_trash do
+    case Mjolnir.BTRFS.reap_trash() do
+      {:ok, _n} -> :ok
+      {:error, reason} -> Logger.warning("Trash reap failed: #{inspect(reason)}")
+    end
+  rescue
+    _ -> :ok
   end
 
   @doc false
@@ -138,29 +148,52 @@ defmodule Mjolnir.Cleanup do
     end
   end
 
+  # Reserved sibling/dot-dirs that live alongside VM subvolumes and must never
+  # be treated as orphan VMs (e.g. @trash is a top-level sibling, but guard
+  # against any dot-prefixed entry slipping in).
+  defp reserved_entry?(entry), do: String.starts_with?(entry, ".")
+
+  defp maybe_remove_vm(_vms_dir, entry) when entry in ["", "."], do: :ok
+
   defp maybe_remove_vm(vms_dir, entry) do
     path = Path.join(vms_dir, entry)
 
-    case safe_state_lookup(entry) do
-      {:ok, record} ->
-        Logger.info("Preserving VM subvolume #{entry} (intent=#{record.intent}) for reconcile")
+    cond do
+      reserved_entry?(entry) ->
+        Logger.debug("Skipping reserved entry in @vms: #{entry}")
 
-      :not_found ->
-        Logger.info("Removing stale VM directory: #{path}")
+      true ->
+        case safe_state_lookup(entry) do
+          {:ok, record} ->
+            Logger.info(
+              "Preserving VM subvolume #{entry} (intent=#{record.intent}) for reconcile"
+            )
 
-        case Mjolnir.BTRFS.delete_subvolume(path) do
-          :ok -> :ok
-          {:error, _} -> File.rm_rf(path)
+          :not_found ->
+            # A genuine orphan: no intent record. Soft-delete (trash) rather than
+            # hard-delete so even a sweep mistake is recoverable from @trash.
+            Logger.info("Trashing stale VM directory: #{path}")
+            _ = Mjolnir.BTRFS.trash_subvolume(path)
+
+          :unknown ->
+            # We could NOT consult the intent store (table missing, store down).
+            # Fail SAFE: preserve. Deleting here is exactly the "disappeared
+            # forever" hazard — never destroy data we can't prove is orphaned.
+            Logger.warning(
+              "Cannot consult StateStore for #{entry}; PRESERVING subvolume (fail-safe). " <>
+                "Will retry on next sweep."
+            )
         end
     end
   end
 
-  # StateStore may not be running in early boot or in test contexts that
-  # don't start the full application. Fall back to "delete" behavior if we
-  # can't consult the intent store — mirrors pre-durability semantics.
+  # StateStore may not be running in early boot or in test contexts that don't
+  # start the full application. Return :unknown (NOT :not_found) so the caller
+  # fails safe and preserves rather than deletes — losing user data is far
+  # worse than leaving an orphan subvolume for the next sweep.
   defp safe_state_lookup(uuid) do
     Mjolnir.StateStore.get(uuid)
   rescue
-    ArgumentError -> :not_found
+    ArgumentError -> :unknown
   end
 end

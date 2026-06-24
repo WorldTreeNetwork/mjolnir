@@ -41,6 +41,9 @@ defmodule Mjolnir.Health.Monitor do
 
       # Per-VM L0–L2 probes + auto-heal on :degraded.
       probe_all_vms()
+
+      # Reclaim soft-deleted subvolumes past their retention window.
+      _ = Mjolnir.BTRFS.reap_trash()
     rescue
       e -> Logger.error("Health.Monitor tick raised: #{inspect(e)}")
     end

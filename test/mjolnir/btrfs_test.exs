@@ -44,4 +44,70 @@ defmodule Mjolnir.BTRFSTest do
       refute function_exported?(Mjolnir.BTRFS, :compact_rootfs, 1)
     end
   end
+
+  # The soft-delete trash layer is portable to macOS: trash/restore use `mv`
+  # on plain directories, and reap falls back to File.rm_rf when btrfs is
+  # absent. These tests pass an explicit :trash_root so they never touch the
+  # configured btrfs_root.
+  describe "soft-delete trash layer" do
+    setup do
+      base = Path.join(System.tmp_dir!(), "trash-test-#{System.unique_integer([:positive])}")
+      src_parent = Path.join(base, "@vms")
+      trash = Path.join(base, "@trash")
+      File.mkdir_p!(src_parent)
+      on_exit(fn -> File.rm_rf!(base) end)
+      %{base: base, src_parent: src_parent, trash: trash}
+    end
+
+    test "trash_subvolume moves the directory into trash and is reversible", %{
+      src_parent: src_parent,
+      trash: trash
+    } do
+      src = Path.join(src_parent, "abc-123")
+      File.mkdir_p!(src)
+      File.write!(Path.join(src, "marker"), "user-data")
+
+      assert {:ok, dest} = Mjolnir.BTRFS.trash_subvolume(src, trash_root: trash)
+      refute File.exists?(src)
+      assert File.exists?(dest)
+      assert File.read!(Path.join(dest, "marker")) == "user-data"
+      assert String.starts_with?(Path.basename(dest), "abc-123__")
+
+      # Round-trip: restore it back to the original path.
+      assert :ok = Mjolnir.BTRFS.restore_trashed(dest, src)
+      assert File.read!(Path.join(src, "marker")) == "user-data"
+      refute File.exists?(dest)
+    end
+
+    test "trash_subvolume is idempotent on a missing source", %{trash: trash} do
+      assert :ok = Mjolnir.BTRFS.trash_subvolume("/no/such/path", trash_root: trash)
+      assert :ok = Mjolnir.BTRFS.trash_subvolume(nil, trash_root: trash)
+    end
+
+    test "reap_trash removes only entries older than retention", %{trash: trash} do
+      File.mkdir_p!(trash)
+      now = System.os_time(:second)
+      old = Path.join(trash, "old__#{now - 10_000}__ab")
+      fresh = Path.join(trash, "fresh__#{now}__cd")
+      File.mkdir_p!(old)
+      File.mkdir_p!(fresh)
+
+      assert {:ok, 1} = Mjolnir.BTRFS.reap_trash(trash_root: trash, retention_seconds: 3600)
+      refute File.exists?(old)
+      assert File.exists?(fresh)
+    end
+
+    test "reap_trash KEEPS entries with an unparseable name (fail-safe)", %{trash: trash} do
+      File.mkdir_p!(trash)
+      weird = Path.join(trash, "not-a-trash-name")
+      File.mkdir_p!(weird)
+
+      assert {:ok, 0} = Mjolnir.BTRFS.reap_trash(trash_root: trash, retention_seconds: 0)
+      assert File.exists?(weird)
+    end
+
+    test "reap_trash on a missing trash dir is a no-op", %{trash: trash} do
+      assert {:ok, 0} = Mjolnir.BTRFS.reap_trash(trash_root: trash)
+    end
+  end
 end

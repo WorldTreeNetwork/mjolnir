@@ -44,6 +44,28 @@ defmodule Mjolnir.API.Views do
     }
   end
 
+  @doc """
+  Render a summary for a stranded/recovering VM (a StateStore record whose
+  GenServer is not currently alive). Same shape as `render_vm_summary/1` so
+  clients can render one list, plus a `rootfs_present` recoverability flag.
+  """
+  def render_stranded_summary(record) do
+    config = record.spawn_config || %{}
+
+    %{
+      id: record.uuid,
+      state: :recovering,
+      owner_id: Map.get(config, "owner_id"),
+      hypervisor: nil,
+      guest_ip: nil,
+      pty_ready: false,
+      ticket: nil,
+      iroh_node_id: nil,
+      web_url: nil,
+      rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid))
+    }
+  end
+
   defp get_in_net(vm, key) do
     case vm.net_config do
       %{^key => val} -> val

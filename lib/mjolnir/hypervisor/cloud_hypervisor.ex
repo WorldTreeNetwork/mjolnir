@@ -205,18 +205,20 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       File.rm(Path.join(socket_dir, "cloud-hypervisor-#{state.id}.log"))
     end
 
-    # Delete rootfs subvolume (skipped when state.rootfs_path is nil — the
-    # preserve-for-reconcile signal set by Mjolnir.VM.cleanup/2).
+    # Soft-delete rootfs subvolume (skipped when state.rootfs_path is nil — the
+    # preserve-for-reconcile signal set by Mjolnir.VM.cleanup/2). We trash
+    # rather than hard-delete so even an intended teardown is recoverable from
+    # @trash for the retention window; the reaper reclaims it later.
     if state.rootfs_path do
-      mark.("subvolume delete begin")
+      mark.("subvolume trash begin")
 
       try do
-        Mjolnir.BTRFS.delete_subvolume(state.rootfs_path)
-        mark.("subvolume deleted")
+        Mjolnir.BTRFS.trash_subvolume(state.rootfs_path)
+        mark.("subvolume trashed")
       rescue
         e ->
           Logger.warning("Rootfs subvolume cleanup failed: #{inspect(e)}")
-          mark.("subvolume delete raised")
+          mark.("subvolume trash raised")
       end
     end
 

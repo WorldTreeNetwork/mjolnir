@@ -190,7 +190,16 @@ defmodule Mjolnir.API.Router do
         end)
         |> Enum.map(&Views.render_vm_summary/1)
 
-      json(conn, 200, %{vms: vms})
+      # Stranded VMs: crashed GenServers with a surviving :running record,
+      # awaiting Reconcile. Shown as state=recovering so they never look "gone".
+      stranded =
+        Mjolnir.VM.list_stranded()
+        |> Enum.filter(fn record ->
+          user_id == "localhost" or Map.get(record.spawn_config || %{}, "owner_id") == user_id
+        end)
+        |> Enum.map(&Views.render_stranded_summary/1)
+
+      json(conn, 200, %{vms: vms ++ stranded})
     else
       conn
     end

@@ -199,6 +199,27 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  List VMs that have a `:running` intent record in StateStore but no live
+  GenServer in `Mjolnir.VMRegistry` — i.e. they crashed (hypervisor exit,
+  failed boot) and are awaiting the next `Mjolnir.Reconcile` pass.
+
+  Surfacing these turns "the VM inexplicably vanished" into "the VM is
+  recovering": the data (rootfs subvolume) and intent are both preserved, and
+  the Health.Monitor tick will resume it. `rootfs_present` flags the one case
+  needing human attention — a `:running` record whose subvolume is gone.
+  """
+  @spec list_stranded() :: [Mjolnir.StateStore.Record.t()]
+  def list_stranded do
+    registered =
+      Mjolnir.VMRegistry
+      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> MapSet.new()
+
+    Mjolnir.StateStore.list_by_intent(:running)
+    |> Enum.reject(fn record -> MapSet.member?(registered, record.uuid) end)
+  end
+
+  @doc """
   Get the serial console socket path for a VM.
 
   Connect to this with: screen <path>
@@ -562,7 +583,12 @@ defmodule Mjolnir.VM do
     %{
       id: {__MODULE__, opts.id},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :transient
+      # :temporary, not :transient. A transient restart re-runs init with the
+      # ORIGINAL (resume:false) opts, which always fails at clone because the
+      # subvolume still exists — a wasted restart that never recovers anything.
+      # Recovery is owned by Mjolnir.Reconcile (Health.Monitor tick), which
+      # resumes from the preserved subvolume + :running record. See mjolnir-mpi.
+      restart: :temporary
     }
   end
 
@@ -1159,7 +1185,7 @@ defmodule Mjolnir.VM do
          }}
       else
         error ->
-          cleanup_partial_boot(state.hypervisor, socket_path, vsock_path, serial_path)
+          handle_boot_failure(state, error, socket_path, vsock_path, serial_path)
           error
       end
 
@@ -1168,6 +1194,68 @@ defmodule Mjolnir.VM do
     e ->
       cleanup_partial_boot(state.hypervisor, nil, nil, nil)
       {:error, {:boot_exception, e}}
+  end
+
+  # On a boot failure, decide whether the freshly-cloned rootfs should be kept.
+  #
+  # For a FRESH spawn that failed for a *transient* reason (virtiofsd/CH
+  # resource exhaustion, boot timeout, TAP allocation), we preserve the rootfs
+  # and persist a :running intent record so Mjolnir.Reconcile resumes it on the
+  # next Health.Monitor tick — instead of trashing it and giving up. Resume-mode
+  # rootfs is never tracked, so it is already preserved.
+  #
+  # All other failures (permanent: bad base image, missing kernel) fall through
+  # to the normal partial-boot cleanup, which soft-deletes the fresh clone.
+  defp handle_boot_failure(state, error, socket_path, vsock_path, serial_path) do
+    partial = Process.get(:boot_partial, %{})
+
+    if (not state.resume_mode and partial[:rootfs_path]) && transient_boot_error?(error) do
+      Logger.warning(
+        "VM #{state.id}: transient boot failure (#{inspect(error)}); " <>
+          "preserving rootfs and persisting :running record for Reconcile retry"
+      )
+
+      # Drop rootfs from the cleanup set so cleanup_partial_boot preserves it,
+      # then persist intent so Reconcile owns recovery.
+      Process.put(:boot_partial, Map.delete(partial, :rootfs_path))
+      _ = persist_running_state(state)
+    end
+
+    cleanup_partial_boot(state.hypervisor, socket_path, vsock_path, serial_path)
+  end
+
+  # Recognize boot failures that are worth retrying (resource pressure, timing)
+  # versus permanent misconfiguration. Conservative: an unrecognized error is
+  # treated as permanent so we don't retry a genuinely broken config forever.
+  @transient_boot_markers [
+    "timeout",
+    "virtiofsd",
+    "eagain",
+    "enomem",
+    "emfile",
+    "eaddrinuse",
+    "resource temporarily unavailable",
+    "cannot allocate memory",
+    "too many open files",
+    "address already in use",
+    "no space left",
+    "create_tap",
+    "tap_"
+  ]
+  @permanent_boot_markers [
+    "shared_dir_not_found",
+    "resume_rootfs_missing",
+    "snapshot_not_found",
+    "btrfs_snapshot_failed"
+  ]
+  defp transient_boot_error?(error) do
+    s = error |> inspect() |> String.downcase()
+
+    cond do
+      Enum.any?(@permanent_boot_markers, &String.contains?(s, &1)) -> false
+      Enum.any?(@transient_boot_markers, &String.contains?(s, &1)) -> true
+      true -> false
+    end
   end
 
   defp boot_partial_put(key, value) do
@@ -1226,10 +1314,12 @@ defmodule Mjolnir.VM do
       end
     end
 
-    # Remove rootfs if cloned
+    # Remove rootfs if cloned (fresh spawns only — resume mode never tracks it).
+    # Soft-delete to @trash so a freshly-cloned rootfs lost to a transient boot
+    # failure is recoverable rather than gone forever.
     if partial[:rootfs_path] do
       try do
-        Mjolnir.BTRFS.delete_subvolume(partial.rootfs_path)
+        Mjolnir.BTRFS.trash_subvolume(partial.rootfs_path)
       rescue
         # May fail on macOS (no btrfs) -- that's OK for tests
         _ -> File.rm_rf(partial.rootfs_path)
