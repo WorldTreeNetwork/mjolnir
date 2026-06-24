@@ -2360,6 +2360,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mjolnir-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "open",
+ "rand 0.8.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "mjolnir-client"
 version = "0.1.0"
 dependencies = [
@@ -2371,6 +2386,7 @@ dependencies = [
  "hex",
  "iroh",
  "libc",
+ "mjolnir-api",
  "mjolnir-protocol",
  "nix 0.29.0",
  "open",

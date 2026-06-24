@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 mjolnir-protocol = { path = "../mjolnir_protocol" }
+mjolnir-api = { path = "../mjolnir_api" }
 iroh = "1.0"
 tokio = { version = "1", features = ["full", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }

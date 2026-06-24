@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "mjolnir_protocol",
+    "mjolnir_api",
     "mjolnir_guest_agent",
     "mjolnir_client",
     "mjolnir_gateway",
