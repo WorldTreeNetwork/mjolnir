@@ -521,7 +521,9 @@ defmodule Mjolnir.BTRFS do
   data unique to this path — the real marginal cost. Both are pre-compression.
   """
   def du_usage(path) do
-    case System.cmd("btrfs", ["filesystem", "du", "-s", "--bytes", path], stderr_to_stdout: true) do
+    # `--raw` (not `--bytes`) is the portable byte-count flag across btrfs-progs
+    # versions (v6.x rejects `--bytes`).
+    case System.cmd("btrfs", ["filesystem", "du", "-s", "--raw", path], stderr_to_stdout: true) do
       {output, 0} ->
         # Header line + data line: "<total> <exclusive> <shared> <path>".
         case output |> String.split("\n", trim: true) |> List.last() |> String.split() do
