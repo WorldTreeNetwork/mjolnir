@@ -66,6 +66,34 @@ defmodule Mjolnir.API.Views do
     }
   end
 
+  @doc """
+  Render a summary for a VM that `Mjolnir.Reconcile` retired to `intent: :failed`
+  after repeated resume failures (mjolnir-5fu). Same shape as a recovering VM,
+  but `state: :failed` and with the failure counters so an operator can see why
+  it gave up. The VM is no longer auto-resumed — revive it with
+  `POST /api/vms/:id/revive` once the cause is fixed.
+  """
+  def render_failed_summary(record) do
+    config = record.spawn_config || %{}
+    runtime = record.runtime || %{}
+
+    %{
+      id: record.uuid,
+      state: :failed,
+      owner_id: Map.get(config, "owner_id"),
+      hypervisor: nil,
+      guest_ip: nil,
+      pty_ready: false,
+      ticket: nil,
+      iroh_node_id: nil,
+      web_url: nil,
+      rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid)),
+      resume_failures: Map.get(runtime, "resume_failures"),
+      first_failure_at: Map.get(runtime, "first_failure_at"),
+      last_failure_at: Map.get(runtime, "last_failure_at")
+    }
+  end
+
   defp get_in_net(vm, key) do
     case vm.net_config do
       %{^key => val} -> val

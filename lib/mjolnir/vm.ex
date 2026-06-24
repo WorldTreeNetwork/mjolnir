@@ -220,6 +220,94 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  List VMs that `Mjolnir.Reconcile` has retired to `intent: :failed` — records
+  whose VM repeatedly failed to resume (or whose rootfs is gone). These are no
+  longer auto-resumed; an operator must `revive/1` them (after fixing the
+  cause) or dispose of them with `forget/1` (which soft-deletes the rootfs to
+  `@trash`). Until then their rootfs subvolume is preserved per the durability
+  invariant, so they remain visible and recoverable.
+  """
+  @spec list_failed() :: [Mjolnir.StateStore.Record.t()]
+  def list_failed do
+    Mjolnir.StateStore.list_by_intent(:failed)
+  end
+
+  @doc """
+  Operator action: retire a stranded `:running` record to `:failed` so
+  `Mjolnir.Reconcile` stops trying to resume it. Does NOT touch the rootfs
+  subvolume — the VM stays fully recoverable via `revive/1`. Refuses if the VM
+  has a live GenServer (kill it first) or no record exists.
+  """
+  @spec retire(vm_id()) :: :ok | {:error, :not_found | :running}
+  def retire(vm_id) when is_binary(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{_pid, _}] ->
+        {:error, :running}
+
+      [] ->
+        case Mjolnir.StateStore.get(vm_id) do
+          {:ok, record} ->
+            Mjolnir.StateStore.put(%{record | intent: :failed})
+
+          :not_found ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
+  Operator action: revive a `:failed` record back to `:running` (clearing the
+  resume-failure counter) so the next `Mjolnir.Reconcile` pass attempts to boot
+  it again. Use after fixing whatever made it fail (host capacity, kernel, etc.).
+  """
+  @spec revive(vm_id()) :: :ok | {:error, :not_found}
+  def revive(vm_id) when is_binary(vm_id) do
+    case Mjolnir.StateStore.get(vm_id) do
+      {:ok, record} ->
+        runtime =
+          (record.runtime || %{})
+          |> Map.drop(["resume_failures", "first_failure_at", "last_failure_at"])
+
+        Mjolnir.StateStore.put(%{record | intent: :running, runtime: runtime})
+
+      :not_found ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Operator action: permanently dispose of a record that has no live VM
+  (typically a `:failed` ghost). Soft-deletes the rootfs subvolume to `@trash`
+  (recoverable for `:trash_retention_seconds` per the durability invariant,
+  never hard-deleted inline) and then removes the StateStore record. Refuses if
+  a live GenServer exists — stop it with `stop/1` first. The record is only
+  deleted *after* the subvolume is safely trashed, so a trash failure leaves
+  everything in place for a retry.
+  """
+  @spec forget(vm_id()) :: :ok | {:error, :not_found | :running | term()}
+  def forget(vm_id) when is_binary(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{_pid, _}] ->
+        {:error, :running}
+
+      [] ->
+        case Mjolnir.StateStore.get(vm_id) do
+          {:ok, _record} ->
+            rootfs = Mjolnir.Reconcile.rootfs_path(vm_id)
+
+            case Mjolnir.BTRFS.trash_subvolume(rootfs) do
+              {:ok, _trash_path} -> Mjolnir.StateStore.delete(vm_id)
+              :ok -> Mjolnir.StateStore.delete(vm_id)
+              {:error, reason} -> {:error, reason}
+            end
+
+          :not_found ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
   Get the serial console socket path for a VM.
 
   Connect to this with: screen <path>

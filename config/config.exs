@@ -26,6 +26,13 @@ config :mjolnir,
   # this window (default 7 days), so a deletion is recoverable in the interim.
   trash_retention_seconds: 7 * 24 * 60 * 60,
 
+  # Durability: Reconcile retirement policy (mjolnir-5fu). A :running record
+  # that fails to resume this many consecutive times, OR whose failure streak
+  # is older than the TTL, is retired to intent=:failed so it stops being
+  # resumed on every tick/restart. Rootfs is preserved; revive via mj/API.
+  reconcile_max_failures: 10,
+  reconcile_failure_ttl_seconds: 24 * 60 * 60,
+
   # Forge (host config reconciler) — see docs/plans/host-reconcile.md
   forge_state_dir: "/var/lib/mjolnir/forge/state",
   forge_declarations_path: "forge/declarations",

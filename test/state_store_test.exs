@@ -65,6 +65,18 @@ defmodule Mjolnir.StateStoreTest do
       assert back.runtime["ch_api_socket"] == "/var/run/mjolnir/xyz.sock"
     end
 
+    test "round-trips the :failed intent (mjolnir-5fu retirement)" do
+      r =
+        Record.new("ghost", :failed,
+          created_at: ~U[2026-06-08 10:00:00Z],
+          runtime: %{"resume_failures" => 11, "first_failure_at" => "2026-06-08T10:00:00Z"}
+        )
+
+      assert {:ok, back} = Record.from_json(Record.to_json(r))
+      assert back.intent == :failed
+      assert back.runtime["resume_failures"] == 11
+    end
+
     test "rejects missing schema_version" do
       json = Jason.encode!(%{"uuid" => "x", "intent" => "running"})
       assert {:error, :schema_version_mismatch} = Record.from_json(json)

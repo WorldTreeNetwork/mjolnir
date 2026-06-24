@@ -11,7 +11,7 @@ defmodule Mjolnir.StateStore.Record do
 
   @schema_version 1
 
-  @type intent :: :running | :dormant | :stopped
+  @type intent :: :running | :dormant | :stopped | :failed
 
   typedstruct enforce: true do
     field(:uuid, String.t())
@@ -28,7 +28,7 @@ defmodule Mjolnir.StateStore.Record do
   def schema_version, do: @schema_version
 
   @spec new(String.t(), intent(), keyword()) :: t()
-  def new(uuid, intent, opts \\ []) when intent in [:running, :dormant, :stopped] do
+  def new(uuid, intent, opts \\ []) when intent in [:running, :dormant, :stopped, :failed] do
     %__MODULE__{
       uuid: uuid,
       intent: intent,
@@ -103,6 +103,7 @@ defmodule Mjolnir.StateStore.Record do
   defp parse_intent("running"), do: {:ok, :running}
   defp parse_intent("dormant"), do: {:ok, :dormant}
   defp parse_intent("stopped"), do: {:ok, :stopped}
+  defp parse_intent("failed"), do: {:ok, :failed}
   defp parse_intent(_), do: {:error, :invalid_intent}
 
   defp parse_datetime(nil), do: {:error, :missing_field}

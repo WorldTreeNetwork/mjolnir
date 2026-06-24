@@ -80,4 +80,68 @@ defmodule Mjolnir.ReconcileTest do
       assert path == Path.join([ctx.btrfs_root, "@vms", "some-uuid"])
     end
   end
+
+  describe "note_failure/2 (retirement policy)" do
+    setup do
+      prev_max = Application.get_env(:mjolnir, :reconcile_max_failures)
+      prev_ttl = Application.get_env(:mjolnir, :reconcile_failure_ttl_seconds)
+      Application.put_env(:mjolnir, :reconcile_max_failures, 3)
+      Application.put_env(:mjolnir, :reconcile_failure_ttl_seconds, 3600)
+
+      on_exit(fn ->
+        restore(:reconcile_max_failures, prev_max)
+        restore(:reconcile_failure_ttl_seconds, prev_ttl)
+      end)
+
+      :ok
+    end
+
+    test "first failure increments counter and stamps timestamps, stays :running" do
+      now = ~U[2026-06-24 12:00:00Z]
+      record = Record.new("u1", :running)
+
+      assert {:retry, updated} = Reconcile.note_failure(record, now)
+      assert updated.intent == :running
+      assert updated.runtime["resume_failures"] == 1
+      assert updated.runtime["first_failure_at"] == DateTime.to_iso8601(now)
+      assert updated.runtime["last_failure_at"] == DateTime.to_iso8601(now)
+    end
+
+    test "subsequent failures keep the original first_failure_at and bump count" do
+      now1 = ~U[2026-06-24 12:00:00Z]
+      now2 = ~U[2026-06-24 12:00:30Z]
+
+      {:retry, r1} = Reconcile.note_failure(Record.new("u2", :running), now1)
+      {:retry, r2} = Reconcile.note_failure(r1, now2)
+
+      assert r2.runtime["resume_failures"] == 2
+      assert r2.runtime["first_failure_at"] == DateTime.to_iso8601(now1)
+      assert r2.runtime["last_failure_at"] == DateTime.to_iso8601(now2)
+    end
+
+    test "retires to :failed once the count threshold is reached" do
+      now = ~U[2026-06-24 12:00:00Z]
+
+      {:retry, r1} = Reconcile.note_failure(Record.new("u3", :running), now)
+      {:retry, r2} = Reconcile.note_failure(r1, now)
+      # 3rd consecutive failure == reconcile_max_failures (3)
+      assert {:retire, r3} = Reconcile.note_failure(r2, now)
+      assert r3.intent == :failed
+      assert r3.runtime["resume_failures"] == 3
+    end
+
+    test "retires on TTL even when the count is below threshold" do
+      first = ~U[2026-06-24 12:00:00Z]
+      # one hour and one second later — exceeds the 3600s TTL on the 2nd failure
+      later = ~U[2026-06-24 13:00:01Z]
+
+      {:retry, r1} = Reconcile.note_failure(Record.new("u4", :running), first)
+      assert {:retire, r2} = Reconcile.note_failure(r1, later)
+      assert r2.intent == :failed
+      assert r2.runtime["resume_failures"] == 2
+    end
+  end
+
+  defp restore(key, nil), do: Application.delete_env(:mjolnir, key)
+  defp restore(key, val), do: Application.put_env(:mjolnir, key, val)
 end

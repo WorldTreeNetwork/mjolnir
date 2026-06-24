@@ -16,6 +16,9 @@ defmodule Mjolnir.Policy.CoverageTest do
   # would match non-authz uses.
   @policy_patterns [
     "authorize_vm",
+    # record-level ownership check for endpoints acting on stranded/:failed
+    # records that have no live VM (retire/revive — mjolnir-5fu)
+    "authorize_record",
     "Policy.VM.authorize",
     "Policy.Snapshot.authorize",
     # inline ownership filter (vm list, snapshot list, dormant list)

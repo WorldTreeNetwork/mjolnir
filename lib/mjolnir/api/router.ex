@@ -199,7 +199,16 @@ defmodule Mjolnir.API.Router do
         end)
         |> Enum.map(&Views.render_stranded_summary/1)
 
-      json(conn, 200, %{vms: vms ++ stranded})
+      # Failed VMs: records Reconcile retired after repeated resume failures
+      # (mjolnir-5fu). Shown as state=failed — preserved + revivable, not gone.
+      failed =
+        Mjolnir.VM.list_failed()
+        |> Enum.filter(fn record ->
+          user_id == "localhost" or Map.get(record.spawn_config || %{}, "owner_id") == user_id
+        end)
+        |> Enum.map(&Views.render_failed_summary/1)
+
+      json(conn, 200, %{vms: vms ++ stranded ++ failed})
     else
       conn
     end
@@ -275,6 +284,71 @@ defmodule Mjolnir.API.Router do
         case Mjolnir.Health.nuke(id) do
           :ok -> json(conn, 200, %{ok: true})
           {:error, reason} -> json(conn, 500, %{error: "nuke_failed", reason: inspect(reason)})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Retire a stranded :running record to :failed so Reconcile stops resuming it
+  # (mjolnir-5fu). Operates on a record with no live GenServer; rootfs preserved.
+  post "/api/vms/:id/retire" do
+    conn = require_scope(conn, "vms:stop")
+
+    unless conn.halted do
+      authorize_record(conn, id, fn ->
+        case Mjolnir.VM.retire(id) do
+          :ok ->
+            json(conn, 200, %{ok: true, id: id, state: "failed"})
+
+          {:error, :running} ->
+            json(conn, 409, %{error: "vm_running", reason: "kill the live VM before retiring"})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "not_found"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Revive a :failed record back to :running so the next Reconcile pass boots it.
+  post "/api/vms/:id/revive" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      authorize_record(conn, id, fn ->
+        case Mjolnir.VM.revive(id) do
+          :ok -> json(conn, 200, %{ok: true, id: id, state: "running"})
+          {:error, :not_found} -> json(conn, 404, %{error: "not_found"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Permanently dispose of a stranded/:failed record: soft-delete its rootfs to
+  # @trash (recoverable) and remove the StateStore record (mjolnir-5fu).
+  post "/api/vms/:id/forget" do
+    conn = require_scope(conn, "vms:stop")
+
+    unless conn.halted do
+      authorize_record(conn, id, fn ->
+        case Mjolnir.VM.forget(id) do
+          :ok ->
+            json(conn, 200, %{ok: true, id: id})
+
+          {:error, :running} ->
+            json(conn, 409, %{error: "vm_running", reason: "stop the live VM before forgetting"})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "not_found"})
+
+          {:error, reason} ->
+            json(conn, 500, %{error: "forget_failed", reason: inspect(reason)})
         end
       end)
     else

@@ -68,7 +68,7 @@ defmodule Mjolnir.StateStore do
 
   @doc "All records matching the given intent."
   @spec list_by_intent(Record.intent()) :: [Record.t()]
-  def list_by_intent(intent) when intent in [:running, :dormant, :stopped] do
+  def list_by_intent(intent) when intent in [:running, :dormant, :stopped, :failed] do
     list() |> Enum.filter(&(&1.intent == intent))
   end
 

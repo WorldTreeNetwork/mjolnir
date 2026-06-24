@@ -13,16 +13,40 @@ defmodule Mjolnir.Reconcile do
 
   ## Failure modes
 
-  - **Record points to a missing subvolume** — logged; record is left in place
-    so a human can investigate. Does not block other VMs from rehydrating.
-  - **Resume fails (boot timeout, CH crash, etc.)** — logged; record stays
-    `:running` so the next reconcile pass retries.
+  - **Resume fails (boot timeout, CH crash, etc.)** — logged; the record's
+    failure counter is bumped and it stays `:running` so the next reconcile
+    pass retries.
+  - **Record points to a missing subvolume** — logged; counts as a failure for
+    retirement purposes (the data is gone, so it will never resume).
+
+  ## Retirement (mjolnir-5fu)
+
+  A record that can never boot again would otherwise be retried on every
+  `Health.Monitor` tick and re-resumed on every server restart, accumulating as
+  a "ghost VM". To stop that, each consecutive resume failure is recorded in the
+  record's `runtime` map (`resume_failures`, `first_failure_at`,
+  `last_failure_at`). Once a record has failed `:reconcile_max_failures` times
+  in a row (default 10) **or** its failure streak is older than
+  `:reconcile_failure_ttl_seconds` (default 24h), Reconcile flips its intent
+  from `:running` to `:failed`. A `:failed` record is no longer resumed — but
+  its rootfs subvolume is preserved (per the durability invariant), so it stays
+  visible as `state=failed` in the API and can be revived (`Mjolnir.VM.revive/1`)
+  or forgotten by an operator. A *successful* resume rewrites a fresh `:running`
+  record via `Mjolnir.VM` boot, which clears the counter automatically.
+
+  Because a resume-mode boot failure never re-persists the record (see
+  `Mjolnir.VM`'s `handle_boot_failure/5`, guarded on `not resume_mode`),
+  Reconcile is the sole writer on the failure path — the read-modify-write of
+  the counter is race-free.
   """
 
   require Logger
 
   alias Mjolnir.StateStore
   alias Mjolnir.StateStore.Record
+
+  @default_max_failures 10
+  @default_failure_ttl_seconds 86_400
 
   @type plan_entry ::
           {:resume, Record.t(), rootfs_path :: String.t()}
@@ -129,25 +153,101 @@ defmodule Mjolnir.Reconcile do
           Logger.info("Reconcile: VM #{uuid} resumed")
 
         {:error, reason} ->
-          Logger.error(
-            "Reconcile: VM #{uuid} resume failed: #{inspect(reason)}. " <>
-              "Record left as :running; next reconcile will retry."
-          )
+          record_failure(record, "resume failed: #{inspect(reason)}")
       end
     catch
       kind, reason ->
+        record_failure(record, "resume #{kind}: #{inspect(reason)}")
+    end
+  end
+
+  defp execute({:missing_rootfs, %Record{uuid: uuid} = record, path}) do
+    record_failure(
+      record,
+      "rootfs missing at #{path} (data lost — cannot resume)",
+      fn -> "Reconcile: VM #{uuid} rootfs is gone; " end
+    )
+  end
+
+  # Bump the record's consecutive-failure counter and, if it crosses the
+  # retirement threshold, flip its intent to `:failed` so it stops being
+  # resumed every tick. Persistence failures here are non-fatal: the worst case
+  # is the counter doesn't advance this pass and we retry again next tick.
+  defp record_failure(record, why, prefix \\ nil) do
+    {disposition, updated} = note_failure(record)
+    prefix = if prefix, do: prefix.(), else: "Reconcile: VM #{record.uuid} "
+
+    case disposition do
+      :retire ->
         Logger.error(
-          "Reconcile: VM #{uuid} resume #{kind}: #{inspect(reason)}. " <>
-            "Record left as :running; next reconcile will retry."
+          prefix <>
+            "#{why}. Retired after #{updated.runtime["resume_failures"]} failed attempt(s) — " <>
+            "intent set to :failed, rootfs preserved. Revive with " <>
+            "`POST /api/vms/#{record.uuid}/revive` once the cause is fixed."
+        )
+
+      :retry ->
+        Logger.warning(
+          prefix <>
+            "#{why}. Attempt #{updated.runtime["resume_failures"]}/#{max_failures()}; " <>
+            "record kept :running for the next reconcile pass."
+        )
+    end
+
+    case StateStore.put(updated) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "Reconcile: failed to persist failure for #{record.uuid}: #{inspect(reason)}"
         )
     end
   end
 
-  defp execute({:missing_rootfs, %Record{uuid: uuid}, path}) do
-    Logger.warning(
-      "Reconcile: VM #{uuid} has :running record but rootfs is missing at #{path}. " <>
-        "Record kept for manual investigation — inspect with `mj info <id>` " <>
-        "or delete via StateStore.delete/1 if known-lost."
-    )
+  @doc """
+  Pure retirement policy: given a `:running` record (and optionally the current
+  time), return `{disposition, updated_record}` where `disposition` is
+  `:retire` (intent flipped to `:failed`) or `:retry` (intent unchanged).
+
+  The updated record always carries an incremented `runtime["resume_failures"]`
+  counter plus `first_failure_at`/`last_failure_at` timestamps. Extracted as a
+  pure function so the count/TTL thresholds can be unit-tested without booting
+  VMs or touching disk.
+  """
+  @spec note_failure(Record.t(), DateTime.t()) :: {:retire | :retry, Record.t()}
+  def note_failure(%Record{} = record, now \\ DateTime.utc_now()) do
+    runtime = record.runtime || %{}
+    failures = (runtime["resume_failures"] || 0) + 1
+    first_at = runtime["first_failure_at"] || DateTime.to_iso8601(now)
+    now_iso = DateTime.to_iso8601(now)
+
+    runtime =
+      runtime
+      |> Map.put("resume_failures", failures)
+      |> Map.put("first_failure_at", first_at)
+      |> Map.put("last_failure_at", now_iso)
+
+    streak_seconds = failure_streak_seconds(first_at, now)
+
+    if failures >= max_failures() or streak_seconds >= failure_ttl_seconds() do
+      {:retire, %{record | intent: :failed, runtime: runtime}}
+    else
+      {:retry, %{record | runtime: runtime}}
+    end
   end
+
+  defp failure_streak_seconds(first_at_iso, now) do
+    case DateTime.from_iso8601(first_at_iso) do
+      {:ok, first, _} -> DateTime.diff(now, first, :second)
+      _ -> 0
+    end
+  end
+
+  defp max_failures,
+    do: Application.get_env(:mjolnir, :reconcile_max_failures, @default_max_failures)
+
+  defp failure_ttl_seconds,
+    do:
+      Application.get_env(:mjolnir, :reconcile_failure_ttl_seconds, @default_failure_ttl_seconds)
 end

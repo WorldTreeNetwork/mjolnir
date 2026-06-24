@@ -61,4 +61,41 @@ defmodule Mjolnir.API.Authz do
         |> halt()
     end
   end
+
+  @doc """
+  Authorize an action on a durable StateStore *record* rather than a live VM.
+
+  Used by operator endpoints (retire/revive) that act on stranded or `:failed`
+  records, which have no live GenServer for `authorize_vm/4` to find. The
+  `localhost` user bypasses ownership (same rule as the `/api/vms` list filter);
+  any other user must own the record. On a missing record the callback still
+  runs so the handler can return its own 404 (keeps behaviour uniform with
+  `Mjolnir.VM.retire/revive` returning `{:error, :not_found}`).
+  """
+  def authorize_record(conn, vm_id, callback) do
+    user_id = conn.assigns[:user_id]
+
+    owner =
+      case Mjolnir.StateStore.get(vm_id) do
+        {:ok, record} -> Map.get(record.spawn_config || %{}, "owner_id")
+        :not_found -> :no_record
+      end
+
+    cond do
+      owner == :no_record ->
+        callback.()
+
+      user_id == "localhost" ->
+        callback.()
+
+      owner == user_id ->
+        callback.()
+
+      true ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(404, Jason.encode!(%{error: "not_found"}))
+        |> halt()
+    end
+  end
 end
