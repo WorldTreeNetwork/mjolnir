@@ -7,16 +7,19 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::config::{Apex, LoadedConfig, Route};
+use crate::config::{Alias, Apex, LoadedConfig, Route};
 
 /// Immutable snapshot of the routing state: apex list (sorted for longest-suffix
-/// match) + `(apex, subdomain) → backend` map.
+/// match) + `(apex, subdomain) → backend` map + vanity `(apex, subdomain) → Iroh
+/// node` alias map.
 #[derive(Debug, Clone)]
 pub struct RouteTable {
     /// Apex list, sorted by `suffix.len()` descending so the longest match wins.
     apexes: Arc<Vec<Apex>>,
     /// Flat route list — small N, linear scan is fine.
     routes: Arc<Vec<Route>>,
+    /// Flat alias list — vanity subdomains pinned to Iroh node IDs.
+    aliases: Arc<Vec<Alias>>,
 }
 
 impl RouteTable {
@@ -29,6 +32,7 @@ impl RouteTable {
         Self {
             apexes: Arc::new(apexes),
             routes: Arc::new(cfg.routes.clone()),
+            aliases: Arc::new(cfg.aliases.clone()),
         }
     }
 
@@ -80,6 +84,21 @@ impl RouteTable {
             .find(|r| r.apex == apex.suffix && r.subdomain == sub_lower)
             .map(|r| r.backend)
     }
+
+    /// Look up a vanity alias for `(apex, subdomain)`. On hit, returns the
+    /// synthetic `<node>[-<port>]` subdomain string to feed into the Iroh proxy
+    /// path — letting a friendly name like `zine` resolve to a pinned node ID.
+    pub fn lookup_alias(&self, apex: &Apex, subdomain: &str) -> Option<String> {
+        let sub_lower = subdomain.to_ascii_lowercase();
+        self.aliases
+            .iter()
+            .find(|a| a.apex == apex.suffix && a.subdomain == sub_lower)
+            .map(|a| a.target_subdomain())
+    }
+
+    pub fn alias_count(&self) -> usize {
+        self.aliases.len()
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -87,7 +106,7 @@ impl RouteTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Apex, Fallthrough, Route};
+    use crate::config::{Alias, Apex, Fallthrough, Route};
 
     fn apex(suffix: &str, ft: Fallthrough) -> Apex {
         Apex {
@@ -104,6 +123,18 @@ mod tests {
         RouteTable {
             apexes: Arc::new(apexes),
             routes: Arc::new(routes),
+            aliases: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Like `table` but also seeds the alias list.
+    fn table_with_aliases(apexes: Vec<Apex>, routes: Vec<Route>, aliases: Vec<Alias>) -> RouteTable {
+        let mut apexes = apexes;
+        apexes.sort_by(|a, b| b.suffix.len().cmp(&a.suffix.len()));
+        RouteTable {
+            apexes: Arc::new(apexes),
+            routes: Arc::new(routes),
+            aliases: Arc::new(aliases),
         }
     }
 
@@ -208,5 +239,59 @@ mod tests {
         let (a, sub) = t.match_host("Git.Worldtree.NETWORK").expect("match");
         assert_eq!(sub, "git");
         assert!(t.lookup_local(a, &sub).is_some());
+    }
+
+    // A valid 52-char z32 string that decodes to 32 bytes.
+    const NODE_Z32: &str = "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u";
+
+    fn alias(apex: &str, sub: &str, port: Option<u16>) -> Alias {
+        Alias {
+            apex: apex.into(),
+            subdomain: sub.into(),
+            node_z32: NODE_Z32.into(),
+            port,
+        }
+    }
+
+    #[test]
+    fn alias_lookup_hit_renders_synthetic_subdomain() {
+        // `zine.identikey.io` under a `none` apex still resolves via the alias,
+        // yielding the synthetic `<node>` subdomain (no port → bare node).
+        let t = table_with_aliases(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![],
+            vec![alias("identikey.io", "zine", None)],
+        );
+        let (a, sub) = t.match_host("zine.identikey.io").expect("match");
+        assert!(t.lookup_local(a, &sub).is_none(), "no local route");
+        assert_eq!(t.lookup_alias(a, &sub).as_deref(), Some(NODE_Z32));
+    }
+
+    #[test]
+    fn alias_lookup_appends_port() {
+        let t = table_with_aliases(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![],
+            vec![alias("identikey.io", "zine", Some(3000))],
+        );
+        let (a, sub) = t.match_host("zine.identikey.io").expect("match");
+        assert_eq!(
+            t.lookup_alias(a, &sub).as_deref(),
+            Some(format!("{NODE_Z32}-3000").as_str())
+        );
+    }
+
+    #[test]
+    fn alias_lookup_is_case_insensitive_and_apex_scoped() {
+        let t = table_with_aliases(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![],
+            vec![alias("identikey.io", "zine", None)],
+        );
+        let (a, sub) = t.match_host("ZINE.identikey.io").expect("match");
+        assert!(t.lookup_alias(a, &sub).is_some(), "matching is case-insensitive");
+        // A different subdomain under the same apex misses.
+        let (a2, sub2) = t.match_host("other.identikey.io").expect("match");
+        assert!(t.lookup_alias(a2, &sub2).is_none());
     }
 }

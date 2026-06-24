@@ -481,6 +481,13 @@ fn classify<'a>(table: &'a RouteTable, host: &str) -> Disposition<'a> {
     if let Some(backend) = table.lookup_local(apex, &subdomain) {
         return Disposition::Local(apex, subdomain, backend);
     }
+    // Vanity alias: a friendly subdomain pinned to an Iroh node ID. Resolves
+    // regardless of the apex's fallthrough mode (so a `none` apex can still
+    // serve declared aliases) and reuses the Iroh path via a synthetic
+    // `<node>[-<port>]` subdomain.
+    if let Some(target) = table.lookup_alias(apex, &subdomain) {
+        return Disposition::Iroh(apex, target);
+    }
     match apex.fallthrough {
         Fallthrough::Iroh => Disposition::Iroh(apex, subdomain),
         Fallthrough::None => Disposition::Reject(ProxyError::NotFound),
@@ -1295,7 +1302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mjolnir_gateway::config::{Apex, Fallthrough, LoadedConfig, Route};
+    use mjolnir_gateway::config::{Alias, Apex, Fallthrough, LoadedConfig, Route};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1344,6 +1351,7 @@ mod tests {
             },
             apexes,
             routes,
+            aliases: Vec::new(),
             sites_resolver: None,
         }
     }
@@ -1629,6 +1637,36 @@ mod tests {
         // Unpinned → 404 (NotFound)
         let d = classify(&table, "unknown.worldtree.network");
         assert!(matches!(d, Disposition::Reject(ProxyError::NotFound)));
+    }
+
+    #[test]
+    fn alias_resolves_under_fallthrough_none() {
+        // The motivating case: `zine.identikey.io` on a `none` apex with no
+        // local route. The alias must short-circuit the 404 and produce an
+        // Iroh disposition carrying the synthetic `<node>-<port>` subdomain.
+        const NODE: &str = "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u";
+        let mut cfg = loaded_with(vec![apex("identikey.io", Fallthrough::None)], vec![]);
+        cfg.aliases = vec![Alias {
+            apex: "identikey.io".into(),
+            subdomain: "zine".into(),
+            node_z32: NODE.into(),
+            port: Some(3000),
+        }];
+        let table = RouteTable::from_config(&cfg);
+
+        match classify(&table, "zine.identikey.io") {
+            Disposition::Iroh(a, sub) => {
+                assert_eq!(a.suffix, "identikey.io");
+                assert_eq!(sub, format!("{NODE}-3000"));
+            }
+            _ => panic!("expected Iroh disposition from alias hit"),
+        }
+
+        // A non-aliased subdomain on the same `none` apex still 404s.
+        assert!(matches!(
+            classify(&table, "other.identikey.io"),
+            Disposition::Reject(ProxyError::NotFound)
+        ));
     }
 
     #[test]

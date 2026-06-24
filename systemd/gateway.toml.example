@@ -82,3 +82,23 @@ backend   = "127.0.0.1:3000"
 # apex      = "worldtree.network"
 # subdomain = "api"
 # backend   = "[::1]:8080"
+
+# ── Vanity aliases (friendly subdomain → Iroh node) ───────────────────────────
+# Pin a (apex, subdomain) pair to a specific Iroh node ID. Unlike a [[route]]
+# (which dials a local TCP backend), an [[alias]] tunnels over Iroh exactly as
+# if the request had arrived for "<node>.<iroh-apex>". This is the durable way
+# to give a live VM a friendly name: the node ID travels with the VM's identity,
+# so the alias survives respawns (a TAP-IP pin would not).
+#
+# Resolves under ANY apex regardless of `fallthrough`: a `none` apex still
+# serves its declared aliases (the alias short-circuits the 404), and the alias
+# FQDN is auto-added to the cert SAN list so ACME issues a cert for it.
+#
+#   node = z32 node ID (the VM's `mj info <id>` ticket, 52 chars)
+#   port = optional target port inside the VM (omitted → vm_default_port)
+#
+# [[alias]]
+# apex      = "identikey.io"   # must also be declared as a [[domain]]
+# subdomain = "zine"
+# node      = "xebksroiithey6dp4q3fwx4ddb6m3c71tjt79bfqy7nktsp76njo"
+# port      = 3000

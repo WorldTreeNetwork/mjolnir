@@ -71,6 +71,9 @@ pub struct FileConfig {
 
     #[serde(default, rename = "route")]
     pub routes: Vec<RouteDecl>,
+
+    #[serde(default, rename = "alias")]
+    pub aliases: Vec<AliasDecl>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -120,6 +123,21 @@ pub struct RouteDecl {
     pub backend: String,
 }
 
+/// A vanity-subdomain → Iroh node alias as declared in TOML. Unlike a
+/// `[[route]]` (which targets a local TCP backend), an `[[alias]]` pins a
+/// friendly subdomain to a specific Iroh `node` ID so the request is tunneled
+/// over Iroh — exactly as if the subdomain had been the raw z32 node ID.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AliasDecl {
+    pub apex: String,
+    pub subdomain: String,
+    /// z32-encoded Iroh node ID (the VM's stable identity, e.g. `mj info`'s ticket).
+    pub node: String,
+    /// Optional target port inside the VM. Omitted → gateway's `vm_default_port`.
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
 // ── Normalized / validated view ──────────────────────────────────────────────
 
 /// Fallthrough behavior for an apex when no explicit route matches a subdomain.
@@ -145,6 +163,29 @@ pub struct Route {
     pub apex: String,
     pub subdomain: String,
     pub backend: SocketAddr,
+}
+
+/// A validated vanity-subdomain → Iroh node alias. `node_z32` has been verified
+/// to decode to a 32-byte key. `subdomain`/`apex` are lowercased.
+#[derive(Debug, Clone)]
+pub struct Alias {
+    pub apex: String,
+    pub subdomain: String,
+    pub node_z32: String,
+    pub port: Option<u16>,
+}
+
+impl Alias {
+    /// Render the synthetic subdomain string the Iroh proxy path consumes:
+    /// `<node>` or `<node>-<port>`. This is fed verbatim into the same
+    /// `parse_z32_subdomain` used for raw node-ID subdomains, so the entire
+    /// dial/pool/forward machinery is reused unchanged.
+    pub fn target_subdomain(&self) -> String {
+        match self.port {
+            Some(p) => format!("{}-{}", self.node_z32, p),
+            None => self.node_z32.clone(),
+        }
+    }
 }
 
 /// ACME configuration in a normalized, ready-to-use shape.
@@ -189,6 +230,7 @@ pub struct LoadedConfig {
     pub acme: AcmeSettings,
     pub apexes: Vec<Apex>,
     pub routes: Vec<Route>,
+    pub aliases: Vec<Alias>,
     pub sites_resolver: Option<SitesResolver>,
 }
 
@@ -262,6 +304,13 @@ fn is_ascii_label(s: &str) -> bool {
     true
 }
 
+/// True if `s` is a z32 string that decodes to exactly 32 bytes — the shape of
+/// an Iroh node ID / ed25519 public key. Mirrors `main.rs::resolve_ticket`'s
+/// decode so a bad `[[alias]]` node is rejected at load time, not per-request.
+fn is_valid_node_z32(s: &str) -> bool {
+    matches!(z32::decode(s.as_bytes()), Ok(bytes) if bytes.len() == 32)
+}
+
 fn parse_fallthrough(s: Option<&str>) -> Result<Fallthrough, ConfigError> {
     match s {
         None => Ok(Fallthrough::Iroh),
@@ -292,33 +341,34 @@ fn parse_optional_socketaddr(s: &Option<String>) -> Result<Option<SocketAddr>, C
 
 // ── SAN list auto-derivation ──────────────────────────────────────────────────
 
-/// Derive the cert SAN list from the declared apex list + route list, honoring
-/// each apex's fallthrough mode (Decision 7).
-pub fn derive_san_list(apexes: &[Apex], routes: &[Route]) -> Vec<String> {
+/// Derive the cert SAN list from the declared apex list + route list + alias
+/// list, honoring each apex's fallthrough mode (Decision 7).
+pub fn derive_san_list(apexes: &[Apex], routes: &[Route], aliases: &[Alias]) -> Vec<String> {
+    fn push_unique(out: &mut Vec<String>, v: String) {
+        if !out.iter().any(|e| e == &v) {
+            out.push(v);
+        }
+    }
     let mut out: Vec<String> = Vec::new();
 
     for apex in apexes {
         match apex.fallthrough {
             Fallthrough::Iroh => {
-                let wild = format!("*.{}", apex.suffix);
-                if !out.iter().any(|v| v == &wild) {
-                    out.push(wild);
-                }
-                if !out.iter().any(|v| v == &apex.suffix) {
-                    out.push(apex.suffix.clone());
-                }
+                push_unique(&mut out, format!("*.{}", apex.suffix));
+                push_unique(&mut out, apex.suffix.clone());
             }
             Fallthrough::None => {
-                if !out.iter().any(|v| v == &apex.suffix) {
-                    out.push(apex.suffix.clone());
-                }
+                push_unique(&mut out, apex.suffix.clone());
                 for r in routes.iter().filter(|r| r.apex == apex.suffix) {
-                    let fqdn = format!("{}.{}", r.subdomain, apex.suffix);
-                    if !out.iter().any(|v| v == &fqdn) {
-                        out.push(fqdn);
-                    }
+                    push_unique(&mut out, format!("{}.{}", r.subdomain, apex.suffix));
                 }
             }
+        }
+        // Aliases need an explicit SAN under any apex: a `none` apex has no
+        // wildcard, and an `iroh` apex's `*.apex` wildcard only covers
+        // single-label subdomains — an alias may be multi-label.
+        for al in aliases.iter().filter(|al| al.apex == apex.suffix) {
+            push_unique(&mut out, format!("{}.{}", al.subdomain, apex.suffix));
         }
     }
 
@@ -448,6 +498,7 @@ pub fn load_from_env() -> Result<LoadedConfig, ConfigError> {
         },
         apexes,
         routes: Vec::new(),
+        aliases: Vec::new(),
         sites_resolver: None,
     })
 }
@@ -559,6 +610,74 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         });
     }
 
+    // ── Aliases (vanity subdomain → Iroh node) ────────────────────────────────
+    let mut aliases: Vec<Alias> = Vec::new();
+    for a in &file.aliases {
+        let apex_lower = a.apex.to_ascii_lowercase();
+        let sub_lower = a.subdomain.to_ascii_lowercase();
+
+        if !apexes.iter().any(|ap| ap.suffix == apex_lower) {
+            warn!(
+                event = "config.orphan_alias",
+                apex = %a.apex,
+                subdomain = %a.subdomain,
+                "[[alias]] apex does not match any [[domain]] — skipping"
+            );
+            continue;
+        }
+        if !is_ascii_label(&sub_lower) {
+            warn!(
+                event = "config.invalid_alias_subdomain",
+                apex = %apex_lower,
+                subdomain = %a.subdomain,
+                "[[alias]] subdomain is not a valid ASCII hostname label — skipping"
+            );
+            continue;
+        }
+        if !is_valid_node_z32(&a.node) {
+            warn!(
+                event = "config.bad_alias_node",
+                apex = %apex_lower,
+                subdomain = %sub_lower,
+                node = %a.node,
+                "[[alias]] node is not a valid z32 32-byte Iroh node ID — skipping"
+            );
+            continue;
+        }
+        // A [[route]] for the same (apex, subdomain) wins — classify() checks
+        // local routes before aliases. Warn and skip so behavior is obvious.
+        if routes
+            .iter()
+            .any(|r| r.apex == apex_lower && r.subdomain == sub_lower)
+        {
+            warn!(
+                event = "config.alias_shadowed_by_route",
+                apex = %apex_lower,
+                subdomain = %sub_lower,
+                "[[alias]] shadowed by a [[route]] with the same (apex, subdomain) — skipping alias"
+            );
+            continue;
+        }
+        if aliases
+            .iter()
+            .any(|existing| existing.apex == apex_lower && existing.subdomain == sub_lower)
+        {
+            warn!(
+                event = "config.duplicate_alias",
+                apex = %apex_lower,
+                subdomain = %sub_lower,
+                "duplicate [[alias]] (apex, subdomain) — keeping first declaration"
+            );
+            continue;
+        }
+        aliases.push(Alias {
+            apex: apex_lower,
+            subdomain: sub_lower,
+            node_z32: a.node.clone(),
+            port: a.port,
+        });
+    }
+
     // ── Scalars ───────────────────────────────────────────────────────────────
     // When a TOML key is absent we disable that listener (explicit opt-in).
     // An explicit empty string also disables. The spec's sample TOML shows
@@ -644,6 +763,7 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         source = ?source,
         apex_count = apexes.len(),
         route_count = routes.len(),
+        alias_count = aliases.len(),
         acme = acme_settings.enabled,
         sites = sites_resolver.is_some(),
         "gateway config loaded"
@@ -666,6 +786,7 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
         acme: acme_settings,
         apexes,
         routes,
+        aliases,
         sites_resolver,
     })
 }
@@ -677,7 +798,7 @@ impl LoadedConfig {
         if let Some(ref explicit) = self.acme.explicit_domains {
             return explicit.clone();
         }
-        derive_san_list(&self.apexes, &self.routes)
+        derive_san_list(&self.apexes, &self.routes, &self.aliases)
     }
 
     pub fn connect_timeout(&self) -> Duration {
@@ -973,7 +1094,7 @@ mod tests {
             suffix: "vm.worldtree.network".into(),
             fallthrough: Fallthrough::Iroh,
         }];
-        let sans = derive_san_list(&apexes, &[]);
+        let sans = derive_san_list(&apexes, &[], &[]);
         assert_eq!(sans, vec!["*.vm.worldtree.network", "vm.worldtree.network"]);
     }
 
@@ -995,7 +1116,7 @@ mod tests {
                 backend: "127.0.0.1:4000".parse().unwrap(),
             },
         ];
-        let sans = derive_san_list(&apexes, &routes);
+        let sans = derive_san_list(&apexes, &routes, &[]);
         // No wildcard; apex + two route subdomains.
         assert!(!sans.iter().any(|s| s.starts_with("*.")));
         assert!(sans.iter().any(|s| s == "worldtree.network"));
@@ -1020,13 +1141,117 @@ mod tests {
             subdomain: "git".into(),
             backend: "127.0.0.1:3000".parse().unwrap(),
         }];
-        let sans = derive_san_list(&apexes, &routes);
+        let sans = derive_san_list(&apexes, &routes, &[]);
         assert!(sans.contains(&"*.vm.worldtree.network".to_owned()));
         assert!(sans.contains(&"vm.worldtree.network".to_owned()));
         assert!(sans.contains(&"worldtree.network".to_owned()));
         assert!(sans.contains(&"git.worldtree.network".to_owned()));
         // No wildcard for the `none`-mode apex.
         assert!(!sans.contains(&"*.worldtree.network".to_owned()));
+    }
+
+    // A valid 52-char z32 node ID (decodes to 32 bytes).
+    const TEST_NODE_Z32: &str = "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u";
+
+    #[test]
+    fn toml_alias_parsed_and_normalized() {
+        let toml = format!(
+            r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[alias]]
+            apex = "identikey.io"
+            subdomain = "Zine"
+            node = "{TEST_NODE_Z32}"
+            port = 3000
+            "#
+        );
+        let cfg = load_from_toml_str(&toml).expect("valid config");
+        assert_eq!(cfg.aliases.len(), 1);
+        let a = &cfg.aliases[0];
+        assert_eq!(a.apex, "identikey.io");
+        assert_eq!(a.subdomain, "zine", "subdomain lowercased");
+        assert_eq!(a.node_z32, TEST_NODE_Z32);
+        assert_eq!(a.target_subdomain(), format!("{TEST_NODE_Z32}-3000"));
+    }
+
+    #[test]
+    fn toml_alias_bad_node_skipped() {
+        let toml = r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[alias]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            node = "not-a-valid-z32-node-id"
+        "#;
+        let cfg = load_from_toml_str(toml).expect("loads, bad alias warn-skipped");
+        assert!(cfg.aliases.is_empty(), "invalid node ID alias is dropped");
+    }
+
+    #[test]
+    fn toml_alias_orphan_apex_skipped() {
+        let toml = format!(
+            r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[alias]]
+            apex = "nope.example.com"
+            subdomain = "zine"
+            node = "{TEST_NODE_Z32}"
+            "#
+        );
+        let cfg = load_from_toml_str(&toml).expect("loads");
+        assert!(cfg.aliases.is_empty(), "alias under undeclared apex is dropped");
+    }
+
+    #[test]
+    fn toml_alias_shadowed_by_route_skipped() {
+        let toml = format!(
+            r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            backend = "127.0.0.1:3000"
+
+            [[alias]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            node = "{TEST_NODE_Z32}"
+            "#
+        );
+        let cfg = load_from_toml_str(&toml).expect("loads");
+        assert_eq!(cfg.routes.len(), 1);
+        assert!(cfg.aliases.is_empty(), "route wins; shadowed alias dropped");
+    }
+
+    #[test]
+    fn san_derivation_includes_alias_under_none_apex() {
+        let apexes = vec![Apex {
+            suffix: "identikey.io".into(),
+            fallthrough: Fallthrough::None,
+        }];
+        let aliases = vec![Alias {
+            apex: "identikey.io".into(),
+            subdomain: "zine".into(),
+            node_z32: TEST_NODE_Z32.into(),
+            port: Some(3000),
+        }];
+        let sans = derive_san_list(&apexes, &[], &aliases);
+        // The alias FQDN must be a SAN so ACME can issue the cert — there is no
+        // wildcard for a `none` apex.
+        assert!(sans.iter().any(|s| s == "zine.identikey.io"));
+        assert!(!sans.iter().any(|s| s.starts_with("*.")));
     }
 
     /// Spec AC 1: env-fallback mode preserves the pre-upgrade single-apex
