@@ -23,7 +23,28 @@ defmodule Mjolnir.API.Views do
       web_url: web_url(vm),
       config: render_config(vm.config),
       boot_time: vm.boot_time,
+      rootfs_bytes: rootfs_bytes(vm),
       persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250)
+    }
+  end
+
+  # Exclusive (CoW-aware) disk cost of this VM's rootfs. Computed on the detail
+  # view only — one btrfs du shell-out — never in the list path.
+  defp rootfs_bytes(%{rootfs_path: path}) when is_binary(path) and path != "" do
+    Mjolnir.BTRFS.du_exclusive(path)
+  end
+
+  defp rootfs_bytes(_), do: nil
+
+  @doc "JSON for one `@trash` entry (soft-deleted VM)."
+  def render_trash_entry(entry) do
+    %{
+      vm_id: entry.vm_id,
+      trashed_at: entry.trashed_at,
+      age_seconds: entry.age_seconds,
+      reaps_in_seconds: entry.reaps_in_seconds,
+      restorable: Map.get(entry, :restorable, entry.metadata != nil),
+      owner_id: get_in(entry, [:metadata, "spawn_config", "owner_id"])
     }
   end
 

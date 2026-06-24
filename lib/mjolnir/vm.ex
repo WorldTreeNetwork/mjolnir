@@ -1091,6 +1091,20 @@ defmodule Mjolnir.VM do
 
     Logger.warning("[vm-terminate] #{state.id} preserve=#{preserve} → calling cleanup")
 
+    # On a non-preserving teardown (user kill), soft-delete the rootfs with a
+    # metadata sidecar BEFORE the StateStore record is deleted, so
+    # `mj trash restore` can bring the VM back with enough state for Reconcile
+    # to resume it. Nilling rootfs_path makes the subsequent cleanup skip the
+    # subvolume (we've already trashed it) while still tearing down the rest.
+    state =
+      if not preserve and state.rootfs_path do
+        meta = trash_metadata_for(state)
+        _ = Mjolnir.BTRFS.trash_subvolume(state.rootfs_path, metadata: meta)
+        %{state | rootfs_path: nil}
+      else
+        state
+      end
+
     if state.hypervisor_port || state.net_config || state.rootfs_path do
       cleanup(state, preserve_rootfs: preserve)
     end
@@ -1107,6 +1121,29 @@ defmodule Mjolnir.VM do
 
   defp preserve_rootfs?(:normal, %{state: :running}), do: false
   defp preserve_rootfs?(_reason, _state), do: true
+
+  # Serialize the VM's :running record as a plain map for the trash sidecar so
+  # `Mjolnir.Storage.restore_from_trash/1` can re-persist intent on restore.
+  #
+  # Only attach resumable metadata when a StateStore record still exists. The
+  # dormant transition (handle_done) deletes the record BEFORE stopping, so its
+  # trashed rootfs gets no sidecar — its real state lives in the dormant
+  # snapshot and must not be auto-resumed from trash. Best-effort: nil on any
+  # error (rootfs is still recoverable, just not auto-resumable).
+  defp trash_metadata_for(state) do
+    case Mjolnir.StateStore.get(state.id) do
+      {:ok, _record} ->
+        state
+        |> build_running_record()
+        |> Mjolnir.StateStore.Record.to_json()
+        |> Jason.decode!()
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
 
   # ============================================================================
   # Private Functions
@@ -1905,29 +1942,35 @@ defmodule Mjolnir.VM do
     _ -> :ok
   end
 
+  # Build the durable :running record from live VM state. Shared by
+  # persist_running_state/1 and the trash-metadata sidecar so a restored VM
+  # carries the same spawn_config Reconcile needs to resume it.
+  defp build_running_record(state) do
+    Mjolnir.StateStore.Record.new(state.id, :running,
+      spawn_config: %{
+        "vcpus" => state.config.vcpu_count,
+        "memory_mb" => state.config.mem_size_mib,
+        "base_image" => state.config.base_image,
+        "enable_iroh" => state.enable_iroh,
+        "owner_id" => state.owner_id,
+        "ssh_public_key" => state.ssh_public_key,
+        "secrets_mode" => Atom.to_string(state.secrets_mode)
+      },
+      identity: %{
+        "iroh_node_id" => state.iroh_node_id,
+        "hostname" => nil,
+        "ssh_authorized_keys_hash" => nil
+      },
+      runtime: %{
+        "ch_api_socket" => state.socket_path,
+        "vsock_uds" => state.vsock_path
+      },
+      last_boot_at: DateTime.utc_now()
+    )
+  end
+
   defp persist_running_state(state) do
-    record =
-      Mjolnir.StateStore.Record.new(state.id, :running,
-        spawn_config: %{
-          "vcpus" => state.config.vcpu_count,
-          "memory_mb" => state.config.mem_size_mib,
-          "base_image" => state.config.base_image,
-          "enable_iroh" => state.enable_iroh,
-          "owner_id" => state.owner_id,
-          "ssh_public_key" => state.ssh_public_key,
-          "secrets_mode" => Atom.to_string(state.secrets_mode)
-        },
-        identity: %{
-          "iroh_node_id" => state.iroh_node_id,
-          "hostname" => nil,
-          "ssh_authorized_keys_hash" => nil
-        },
-        runtime: %{
-          "ch_api_socket" => state.socket_path,
-          "vsock_uds" => state.vsock_path
-        },
-        last_boot_at: DateTime.utc_now()
-      )
+    record = build_running_record(state)
 
     case Mjolnir.StateStore.put(record) do
       :ok ->

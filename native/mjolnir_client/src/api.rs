@@ -252,6 +252,12 @@ pub async fn cmd_info(
         if let Some(size) = config.rootfs_size_mb {
             println!("Rootfs Size:  {} MiB", size);
         }
+        if let Some(bytes) = resp.rootfs_bytes {
+            println!(
+                "Disk Used:    {} (exclusive of shared base)",
+                human_bytes(bytes)
+            );
+        }
     }
 
     if let Some(boot_time) = resp.boot_time {
@@ -260,6 +266,129 @@ pub async fn cmd_info(
         println!("Boot Time:    {} (unix timestamp)", boot_time);
     }
 
+    Ok(())
+}
+
+/// `mj storage` — whole-disk usage + per-area CoW-aware breakdown.
+pub async fn cmd_storage(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let body = send_text(client.get(format!("{}/api/storage", base)), "storage").await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let resp: StorageOverview =
+        serde_json::from_str(&body).context("failed to parse storage response")?;
+
+    if let Some(d) = &resp.disk {
+        println!(
+            "Disk:  {} used / {} total  ({:.1}% used, {} free)",
+            human_bytes(d.used_bytes),
+            human_bytes(d.total_bytes),
+            d.use_percent,
+            human_bytes(d.free_bytes)
+        );
+        println!();
+    }
+    println!(
+        "{:<14} {:>7} {:>14} {:>14}",
+        "AREA", "COUNT", "EXCLUSIVE", "LOGICAL"
+    );
+    for a in &resp.areas {
+        let excl = a
+            .exclusive_bytes
+            .map(human_bytes)
+            .unwrap_or_else(|| "-".into());
+        let total = a.total_bytes.map(human_bytes).unwrap_or_else(|| "-".into());
+        println!("{:<14} {:>7} {:>14} {:>14}", a.name, a.count, excl, total);
+    }
+    println!();
+    println!("EXCLUSIVE = data unique to that area; LOGICAL counts CoW-shared blocks");
+    println!("(pre-compression — physical disk use is the 'Disk' line above).");
+    Ok(())
+}
+
+/// `mj trash list` — soft-deleted VMs still recoverable within the GC window.
+pub async fn cmd_trash_list(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let body = send_text(client.get(format!("{}/api/trash", base)), "trash").await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let resp: TrashResponse =
+        serde_json::from_str(&body).context("failed to parse trash response")?;
+
+    if resp.trash.is_empty() {
+        eprintln!("Trash is empty.");
+        return Ok(());
+    }
+    println!(
+        "{:<38} {:>10} {:>12} {:>11}",
+        "VM ID", "AGE", "REAPS IN", "RESTORABLE"
+    );
+    for e in &resp.trash {
+        println!(
+            "{:<38} {:>10} {:>12} {:>11}",
+            e.vm_id,
+            human_duration(e.age_seconds),
+            human_duration(e.reaps_in_seconds),
+            if e.restorable { "yes" } else { "no" }
+        );
+    }
+    println!();
+    println!("Undo a kill within the window:  mj trash restore <VM ID>");
+    Ok(())
+}
+
+/// `mj trash restore <id>` — undo a kill: restore the rootfs and resume the VM.
+pub async fn cmd_trash_restore(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id: &str,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let body = send_text(
+        client.post(format!("{}/api/trash/{}/restore", base, id)),
+        "trash restore",
+    )
+    .await?;
+    if json {
+        println!("{}", body);
+        return Ok(());
+    }
+    let resp: RestoreResponse =
+        serde_json::from_str(&body).context("failed to parse restore response")?;
+
+    if resp.resumed {
+        println!("Restored {} — Reconcile is resuming it now.", resp.vm_id);
+    } else {
+        println!(
+            "Restored {} rootfs (no saved config — re-spawn to start it).",
+            resp.vm_id
+        );
+    }
     Ok(())
 }
 

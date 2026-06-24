@@ -9,7 +9,12 @@ defmodule Mjolnir.Policy.CoverageTest do
   use ExUnit.Case, async: true
 
   @router_path "lib/mjolnir/api/router.ex"
-  @whitelisted_paths ["/api/health", "/api/health/host", "/api/health/host/heal"]
+  @whitelisted_paths [
+    "/api/health",
+    "/api/health/host",
+    "/api/health/host/heal",
+    "/api/storage"
+  ]
 
   # These patterns indicate policy enforcement is present.
   # Be specific to avoid false positives — generic patterns like "Enum.filter"
@@ -69,7 +74,16 @@ defmodule Mjolnir.Policy.CoverageTest do
     # - /api/health/host/heal: idempotent host-wide heal (sysctl, NAT, dirs).
     #   Affects all VMs collectively, not any one VM. Gated by
     #   require_scope("vms:exec"); no per-VM ownership check is meaningful.
-    assert @whitelisted_paths == ["/api/health", "/api/health/host", "/api/health/host/heal"],
+    # - /api/storage: host-wide disk-usage aggregate (per-area totals, counts).
+    #   Read-only, no per-VM secrets or owner-scoped data; gated by
+    #   require_scope("vms:read"). Like /api/health/host, an ownership check is
+    #   not meaningful for a fabric-wide total.
+    assert @whitelisted_paths == [
+             "/api/health",
+             "/api/health/host",
+             "/api/health/host/heal",
+             "/api/storage"
+           ],
            "Update this test when adding new whitelisted paths"
   end
 end

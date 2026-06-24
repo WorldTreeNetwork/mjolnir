@@ -109,5 +109,50 @@ defmodule Mjolnir.BTRFSTest do
     test "reap_trash on a missing trash dir is a no-op", %{trash: trash} do
       assert {:ok, 0} = Mjolnir.BTRFS.reap_trash(trash_root: trash)
     end
+
+    test "trash_subvolume writes a metadata sidecar that list_trash returns", %{
+      src_parent: src_parent,
+      trash: trash
+    } do
+      src = Path.join(src_parent, "dead-beef")
+      File.mkdir_p!(src)
+      meta = %{"spawn_config" => %{"owner_id" => "alice", "memory_mb" => 512}}
+
+      assert {:ok, dest} = Mjolnir.BTRFS.trash_subvolume(src, trash_root: trash, metadata: meta)
+      assert File.exists?(dest <> ".meta.json")
+
+      assert {:ok, [entry]} = Mjolnir.BTRFS.list_trash(trash_root: trash)
+      assert entry.vm_id == "dead-beef"
+      assert entry.metadata["spawn_config"]["owner_id"] == "alice"
+      assert entry.reaps_in_seconds > 0
+
+      assert {:ok, found} = Mjolnir.BTRFS.find_trashed("dead-beef", trash_root: trash)
+      assert found.path == dest
+    end
+
+    test "reap_trash removes the metadata sidecar alongside its subvolume", %{trash: trash} do
+      File.mkdir_p!(trash)
+      now = System.os_time(:second)
+      entry = Path.join(trash, "old__#{now - 10_000}__aa")
+      File.mkdir_p!(entry)
+      File.write!(entry <> ".meta.json", ~s({"x":1}))
+
+      assert {:ok, 1} = Mjolnir.BTRFS.reap_trash(trash_root: trash, retention_seconds: 3600)
+      refute File.exists?(entry)
+      refute File.exists?(entry <> ".meta.json")
+    end
+
+    test "list_trash skips sidecar files and unparseable names", %{trash: trash} do
+      File.mkdir_p!(trash)
+      now = System.os_time(:second)
+      good = Path.join(trash, "vm1__#{now}__bb")
+      File.mkdir_p!(good)
+      File.write!(good <> ".meta.json", ~s({"ok":true}))
+      File.mkdir_p!(Path.join(trash, "garbage-no-stamp"))
+
+      assert {:ok, list} = Mjolnir.BTRFS.list_trash(trash_root: trash)
+      assert length(list) == 1
+      assert hd(list).vm_id == "vm1"
+    end
   end
 end

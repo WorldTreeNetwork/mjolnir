@@ -278,6 +278,15 @@ defmodule Mjolnir.BTRFS do
         with :ok <- ensure_dir(trash_dir),
              {_, 0} <- System.cmd("mv", [path, dest], stderr_to_stdout: true) do
           Logger.info("Soft-deleted subvolume #{path} -> #{dest}")
+          # Optional metadata sidecar (e.g. the VM's spawn_config) so a later
+          # `restore_trashed/2` can re-persist enough state for Reconcile to
+          # resume the restored VM. Best-effort: a failed sidecar write never
+          # fails the trash itself.
+          case Keyword.get(opts, :metadata) do
+            nil -> :ok
+            meta -> _ = write_trash_metadata(dest, meta)
+          end
+
           {:ok, dest}
         else
           {output, code} when is_binary(output) and is_integer(code) ->
@@ -348,9 +357,12 @@ defmodule Mjolnir.BTRFS do
       {:ok, entries} ->
         reaped =
           entries
+          # Skip sidecar metadata files; they're reaped alongside their dir.
+          |> Enum.reject(&String.ends_with?(&1, ".meta.json"))
           |> Enum.filter(fn entry -> reapable?(entry, now, retention) end)
           |> Enum.reduce(0, fn entry, acc ->
             path = Path.join(trash_dir, entry)
+            _ = File.rm(meta_sidecar_path(path))
 
             case delete_subvolume(path) do
               :ok ->
@@ -372,6 +384,175 @@ defmodule Mjolnir.BTRFS do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @doc """
+  List soft-deleted subvolumes in `@trash`, newest first.
+
+  Each entry: `%{vm_id, trashed_at (unix), age_seconds, reaps_in_seconds,
+  path, metadata}`. `reaps_in_seconds` is relative to `:trash_retention_seconds`
+  and clamps at 0 (already eligible for the next reap). Unparseable names are
+  skipped. Pure filesystem read — no btrfs shell-out — so it is cheap.
+  """
+  def list_trash(opts \\ []) do
+    trash_dir = Keyword.get(opts, :trash_root, trash_root())
+
+    retention =
+      Keyword.get(
+        opts,
+        :retention_seconds,
+        Application.get_env(:mjolnir, :trash_retention_seconds, 7 * 24 * 60 * 60)
+      )
+
+    now = System.os_time(:second)
+
+    case File.ls(trash_dir) do
+      {:ok, entries} ->
+        list =
+          entries
+          |> Enum.reject(&String.ends_with?(&1, ".meta.json"))
+          |> Enum.flat_map(fn entry ->
+            case String.split(entry, "__") do
+              [vm_id, ts_str, _rand] ->
+                case Integer.parse(ts_str) do
+                  {ts, ""} ->
+                    path = Path.join(trash_dir, entry)
+
+                    [
+                      %{
+                        vm_id: vm_id,
+                        trashed_at: ts,
+                        age_seconds: max(now - ts, 0),
+                        reaps_in_seconds: max(retention - (now - ts), 0),
+                        path: path,
+                        metadata: read_trash_metadata(path)
+                      }
+                    ]
+
+                  _ ->
+                    []
+                end
+
+              _ ->
+                []
+            end
+          end)
+          |> Enum.sort_by(& &1.trashed_at, :desc)
+
+        {:ok, list}
+
+      {:error, :enoent} ->
+        {:ok, []}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Find the newest trashed subvolume for `vm_id` and return its entry (same
+  shape as `list_trash/0` items), or `{:error, :not_found}`.
+  """
+  def find_trashed(vm_id, opts \\ []) do
+    with {:ok, list} <- list_trash(opts) do
+      case Enum.find(list, &(&1.vm_id == vm_id)) do
+        nil -> {:error, :not_found}
+        entry -> {:ok, entry}
+      end
+    end
+  end
+
+  @doc "Read a trash entry's metadata sidecar, or nil if absent/unreadable."
+  def read_trash_metadata(trash_path) do
+    with {:ok, content} <- File.read(meta_sidecar_path(trash_path)),
+         {:ok, meta} <- Jason.decode(content) do
+      meta
+    else
+      _ -> nil
+    end
+  end
+
+  defp meta_sidecar_path(trash_path), do: trash_path <> ".meta.json"
+
+  defp write_trash_metadata(trash_path, meta) do
+    File.write(meta_sidecar_path(trash_path), Jason.encode!(meta, pretty: true))
+  rescue
+    e ->
+      Logger.warning("Failed to write trash metadata for #{trash_path}: #{inspect(e)}")
+      :error
+  end
+
+  @doc """
+  Overall filesystem usage for the btrfs root, via `df`. Returns
+  `%{total_bytes, used_bytes, free_bytes}` or `{:error, reason}`.
+  """
+  def disk_usage(root \\ nil) do
+    path = root || Application.get_env(:mjolnir, :btrfs_root)
+
+    case System.cmd("df", ["--block-size=1", "--output=size,used,avail", path],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        # Two lines: header, then "<size> <used> <avail>".
+        case output |> String.split("\n", trim: true) |> List.last() |> String.split() do
+          [size, used, avail | _] ->
+            {:ok,
+             %{
+               total_bytes: String.to_integer(size),
+               used_bytes: String.to_integer(used),
+               free_bytes: String.to_integer(avail)
+             }}
+
+          _ ->
+            {:error, {:df_parse_failed, output}}
+        end
+
+      {output, code} ->
+        {:error, {:df_failed, code, output}}
+    end
+  end
+
+  @doc """
+  CoW-aware usage for a path (a subvolume or a dir of subvolumes) via
+  `btrfs filesystem du -s`. Returns `%{total_bytes, exclusive_bytes}`.
+
+  `total_bytes` is logical (counts shared blocks); `exclusive_bytes` is the
+  data unique to this path — the real marginal cost. Both are pre-compression.
+  """
+  def du_usage(path) do
+    case System.cmd("btrfs", ["filesystem", "du", "-s", "--bytes", path], stderr_to_stdout: true) do
+      {output, 0} ->
+        # Header line + data line: "<total> <exclusive> <shared> <path>".
+        case output |> String.split("\n", trim: true) |> List.last() |> String.split() do
+          [total, exclusive | _] ->
+            {:ok,
+             %{
+               total_bytes: parse_int(total),
+               exclusive_bytes: parse_int(exclusive)
+             }}
+
+          _ ->
+            {:error, {:du_parse_failed, output}}
+        end
+
+      {output, code} ->
+        {:error, {:du_failed, code, output}}
+    end
+  end
+
+  @doc "Exclusive bytes for a single subvolume, or nil if it can't be measured."
+  def du_exclusive(path) do
+    case du_usage(path) do
+      {:ok, %{exclusive_bytes: b}} -> b
+      _ -> nil
+    end
+  end
+
+  defp parse_int(s) do
+    case Integer.parse(s) do
+      {n, _} -> n
+      _ -> 0
     end
   end
 

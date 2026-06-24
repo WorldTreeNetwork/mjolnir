@@ -72,6 +72,10 @@ pub struct VmInfo {
     pub iroh_node_id: Option<String>,
     pub config: Option<VmConfig>,
     pub boot_time: Option<i64>,
+    /// Measured CoW-exclusive disk usage of this VM's rootfs (bytes). Null when
+    /// not measurable (no live rootfs, or btrfs du unavailable).
+    #[serde(default)]
+    pub rootfs_bytes: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -152,7 +156,85 @@ pub struct DormantResponse {
     pub dormant: Vec<DormantEntry>,
 }
 
+// --- Storage (GET /api/storage) ---
+
+#[derive(Deserialize)]
+pub struct DiskUsage {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub free_bytes: u64,
+    pub use_percent: f64,
+}
+
+#[derive(Deserialize)]
+pub struct StorageArea {
+    pub name: String,
+    pub count: u64,
+    pub total_bytes: Option<u64>,
+    pub exclusive_bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct StorageOverview {
+    pub disk: Option<DiskUsage>,
+    pub areas: Vec<StorageArea>,
+}
+
+// --- Trash (GET /api/trash, POST /api/trash/:id/restore) ---
+
+#[derive(Deserialize)]
+pub struct TrashEntry {
+    pub vm_id: String,
+    pub trashed_at: i64,
+    pub age_seconds: i64,
+    pub reaps_in_seconds: i64,
+    pub restorable: bool,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TrashResponse {
+    pub trash: Vec<TrashEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct RestoreResponse {
+    pub vm_id: String,
+    pub resumed: bool,
+}
+
 // --- Helpers ---
+
+/// Format a byte count as a human-readable size (e.g. "1.4 GiB").
+pub fn human_bytes(n: u64) -> String {
+    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < units.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} {}", n, units[i])
+    } else {
+        format!("{:.1} {}", v, units[i])
+    }
+}
+
+/// Format a duration in seconds as a coarse human string (e.g. "6d 4h", "3h").
+pub fn human_duration(secs: i64) -> String {
+    let secs = secs.max(0);
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    if days > 0 {
+        format!("{}d {}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h", hours)
+    } else {
+        format!("{}m", (secs % 3_600) / 60)
+    }
+}
 
 /// Send a request and return the raw response body as text, surfacing the
 /// server's error body in the message on non-2xx (more useful than

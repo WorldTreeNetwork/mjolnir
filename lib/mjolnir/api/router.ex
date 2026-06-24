@@ -214,6 +214,69 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Storage overview: whole-disk usage + per-area CoW-aware sizes
+  get "/api/storage" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      json(conn, 200, Mjolnir.Storage.overview())
+    else
+      conn
+    end
+  end
+
+  # List soft-deleted VMs awaiting GC, with restore eligibility + reap countdown
+  get "/api/trash" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      user_id = conn.assigns[:user_id]
+
+      case Mjolnir.Storage.list_trash() do
+        {:ok, entries} ->
+          visible =
+            Enum.filter(entries, fn e ->
+              owner = get_in(e, [:metadata, "spawn_config", "owner_id"])
+              user_id == "localhost" or owner == user_id or is_nil(owner)
+            end)
+
+          json(conn, 200, %{trash: Enum.map(visible, &Views.render_trash_entry/1)})
+
+        {:error, reason} ->
+          json(conn, 500, %{error: "trash_list_failed", reason: inspect(reason)})
+      end
+    else
+      conn
+    end
+  end
+
+  # Restore a soft-deleted VM from trash (undo a kill within the retention window)
+  post "/api/trash/:id/restore" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      user_id = conn.assigns[:user_id]
+
+      case Mjolnir.BTRFS.find_trashed(id) do
+        {:ok, entry} ->
+          owner = get_in(entry, [:metadata, "spawn_config", "owner_id"])
+
+          # Ownership: a user may only restore their own VM. Localhost (the
+          # SSH-tunnel admin path) and ownerless legacy entries are allowed.
+          if user_id == "localhost" or owner == user_id or is_nil(owner) do
+            restore_from_trash(conn, id)
+          else
+            json(conn, 403, %{error: "forbidden"})
+          end
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "not_in_trash"})
+      end
+    else
+      conn
+    end
+  end
+
   # WebSocket PTY endpoint (must be before /api/vms/:id to avoid being captured)
   get "/api/vms/:id/pty" do
     conn = require_scope(conn, "pty:connect")
@@ -949,6 +1012,24 @@ defmodule Mjolnir.API.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
+  end
+
+  # Run the trash restore + map its result to a response. Split out so the
+  # endpoint body stays focused on the ownership decision.
+  defp restore_from_trash(conn, id) do
+    case Mjolnir.Storage.restore_from_trash(id) do
+      {:ok, result} ->
+        json(conn, 200, result)
+
+      {:error, :already_present} ->
+        json(conn, 409, %{error: "already_present", detail: "a live VM with this id exists"})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_in_trash"})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: "restore_failed", reason: inspect(reason)})
+    end
   end
 
   # Health response encoders — convert {:degraded, reason} / {:dead, reason}

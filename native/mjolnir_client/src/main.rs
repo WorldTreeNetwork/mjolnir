@@ -267,6 +267,24 @@ enum Command {
         action: SnapshotAction,
     },
 
+    // --- Storage ---
+    /// Show disk usage: whole-disk + per-area (base/vms/snapshots/trash)
+    #[command(next_help_heading = "Storage")]
+    Storage {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Soft-deleted VMs: list and restore within the GC window
+    #[command(next_help_heading = "Storage")]
+    Trash {
+        #[command(subcommand)]
+        action: TrashAction,
+    },
+
     // --- Auth ---
     /// Authenticate with the Mjolnir identity provider
     #[command(next_help_heading = "Auth")]
@@ -359,6 +377,30 @@ enum SnapshotAction {
     Rm {
         /// Snapshot name
         name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrashAction {
+    /// List soft-deleted VMs and their reap countdown
+    List {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Restore a soft-deleted VM (undo a kill within the GC window)
+    Restore {
+        /// VM ID to restore
+        id: String,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -655,6 +697,17 @@ async fn main() {
             }
             SnapshotAction::Rm { name, api, token } => {
                 api::cmd_snapshot_rm(&profile, &api, &token, &name, json).await
+            }
+        },
+
+        // --- Storage ---
+        Command::Storage { api, token } => api::cmd_storage(&profile, &api, &token, json).await,
+        Command::Trash { action } => match action {
+            TrashAction::List { api, token } => {
+                api::cmd_trash_list(&profile, &api, &token, json).await
+            }
+            TrashAction::Restore { id, api, token } => {
+                api::cmd_trash_restore(&profile, &api, &token, &id, json).await
             }
         },
 
