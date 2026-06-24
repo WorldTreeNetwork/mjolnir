@@ -52,14 +52,25 @@ defmodule Mjolnir.Application do
           # Dormant VM registry for coroutine lifecycle
           Mjolnir.DormantRegistry,
 
-          # Synchronous rehydration of running-intent VMs from StateStore. Must
-          # run AFTER VMSupervisor/VMRegistry so VM GenServers can register,
-          # AFTER DormantRegistry so resume flows don't race with dormant-wake,
-          # and AFTER Mjolnir.Cleanup so stale TAPs/sockets are gone before
-          # resume tries to recreate them.
+          # Asynchronous rehydration of running-intent VMs from StateStore.
+          # Spawned as a concurrent Task — NOT a blocking Mjolnir.Startup phase
+          # — so the HTTP API (Bandit, below) becomes available immediately,
+          # independent of how many VMs must resume (mjolnir-s8h: a blocking
+          # sequential resume of N stranded VMs delayed the API by ~N×3s).
+          #
+          # Ordering guarantees still hold because this is a *later sibling*:
+          # the supervisor only reaches it AFTER Mjolnir.Cleanup's blocking
+          # sweep removed stale TAPs/sockets, and AFTER VMSupervisor/VMRegistry
+          # (so VM GenServers can register) and DormantRegistry (so resume does
+          # not race dormant-wake) are up. Only the Task *body* runs concurrently
+          # with Bandit — and that is the goal. Stranded :running records surface
+          # in /api/vms as state=recovering until each VM re-registers, so the
+          # API stays honest while rehydration proceeds. Reconcile.run/0 resumes
+          # with bounded concurrency, and Health.Monitor re-runs it every 30s as
+          # a safety net if this initial pass misses any.
           %{
             id: Mjolnir.StartupReconcile,
-            start: {Mjolnir.Startup, :run, [&Mjolnir.Reconcile.run/0]},
+            start: {Task, :start_link, [&Mjolnir.Reconcile.run/0]},
             restart: :temporary
           },
 

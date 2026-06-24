@@ -37,6 +37,15 @@ defmodule Mjolnir.Reconcile do
   are skipped silently. This lets the Monitor call `run/0` every tick
   without logging noise for the healthy case, while still catching any VM
   whose GenServer died mid-flight (e.g. after a hypervisor_exit).
+
+  Resumes run with bounded concurrency (`:reconcile_max_concurrency`, default
+  4) rather than one-at-a-time. Each `Mjolnir.VM.resume/1` blocks up to 60s on
+  the VM's boot; serially that is `N × boot_time`, which on a fresh start with
+  many stranded VMs is the difference between recovering in seconds vs. minutes
+  (mjolnir-s8h). Per-VM resources (TAP, vsock CID, rootfs subvolume) are all
+  derived from the UUID, so parallel resumes do not contend; the cap just keeps
+  a large fleet from thundering-herding the host. In steady state the plan is
+  empty and no tasks are spawned, so the Monitor's per-tick cost is unchanged.
   """
   @spec run() :: :ok
   def run do
@@ -49,8 +58,22 @@ defmodule Mjolnir.Reconcile do
         :ok
 
       entries ->
-        Logger.info("Reconcile: rehydrating #{length(entries)} stranded VM(s)")
-        Enum.each(entries, &execute/1)
+        max_concurrency = Application.get_env(:mjolnir, :reconcile_max_concurrency, 4)
+
+        Logger.info(
+          "Reconcile: rehydrating #{length(entries)} stranded VM(s) " <>
+            "(max_concurrency=#{max_concurrency})"
+        )
+
+        entries
+        |> Task.async_stream(&execute/1,
+          max_concurrency: max_concurrency,
+          # resume/1 has its own 60s await_boot timeout; don't let the stream's
+          # default 5s timeout kill a still-booting VM out from under it.
+          timeout: :infinity,
+          ordered: false
+        )
+        |> Stream.run()
     end
 
     :ok
@@ -95,13 +118,26 @@ defmodule Mjolnir.Reconcile do
   end
 
   defp execute({:resume, %Record{uuid: uuid} = record, _path}) do
-    case Mjolnir.VM.resume(record) do
-      {:ok, _vm} ->
-        Logger.info("Reconcile: VM #{uuid} resumed")
+    # resume/1 blocks on `GenServer.call(:await_boot, 60_000)`, which *exits*
+    # (not returns an error) on timeout. Because we run under Task.async_stream,
+    # an un-caught exit would propagate and abort every other VM's resume in the
+    # batch — so isolate each VM: a single stuck boot is logged and the record
+    # is left :running for the next pass, exactly like a returned {:error, _}.
+    try do
+      case Mjolnir.VM.resume(record) do
+        {:ok, _vm} ->
+          Logger.info("Reconcile: VM #{uuid} resumed")
 
-      {:error, reason} ->
+        {:error, reason} ->
+          Logger.error(
+            "Reconcile: VM #{uuid} resume failed: #{inspect(reason)}. " <>
+              "Record left as :running; next reconcile will retry."
+          )
+      end
+    catch
+      kind, reason ->
         Logger.error(
-          "Reconcile: VM #{uuid} resume failed: #{inspect(reason)}. " <>
+          "Reconcile: VM #{uuid} resume #{kind}: #{inspect(reason)}. " <>
             "Record left as :running; next reconcile will retry."
         )
     end
