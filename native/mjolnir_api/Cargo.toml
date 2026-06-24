@@ -8,6 +8,8 @@ description = "Shared Mjolnir host-API data layer + OIDC token store, consumed b
 anyhow = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Parse the CLI's profiles.toml to inherit the configured host API base.
+toml = "0.8"
 # rustls (not native-tls) so downstream GUI consumers (Papyrus) stay on the
 # rustls stack and don't drag in openssl. The CLI bin enables native-tls
 # separately; cargo feature-unifies both backends in the workspace build.
