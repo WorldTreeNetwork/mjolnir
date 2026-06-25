@@ -98,16 +98,27 @@ defmodule Mjolnir.Deploy.Runtime do
     case ops.spawn.(boot) do
       {:ok, vm} ->
         vm_id = Map.fetch!(vm, :id)
-        finish(ops, app_name, release_snapshot, vm_id, unit, port, domain, ticket_timeout)
+
+        finish(
+          ops,
+          app_name,
+          release_snapshot,
+          vm_id,
+          unit,
+          workdir,
+          port,
+          domain,
+          ticket_timeout
+        )
 
       {:error, reason} ->
         {:error, {:spawn_failed, reason}}
     end
   end
 
-  defp finish(ops, app_name, release_snapshot, vm_id, unit, port, domain, ticket_timeout) do
+  defp finish(ops, app_name, release_snapshot, vm_id, unit, workdir, port, domain, ticket_timeout) do
     with {:ok, ticket} <- await_ticket(ops, vm_id, ticket_timeout),
-         :ok <- install_unit(ops, vm_id, app_name, unit) do
+         :ok <- install_unit(ops, vm_id, app_name, unit, workdir) do
       url = gateway_url(ticket, port, domain)
 
       attrs = %{release_snapshot: release_snapshot, service_vm_id: vm_id, url: url}
@@ -178,10 +189,14 @@ defmodule Mjolnir.Deploy.Runtime do
 
   # --- systemd unit installation --------------------------------------------
 
-  defp install_unit(ops, vm_id, app_name, unit) do
+  defp install_unit(ops, vm_id, app_name, unit, workdir) do
     unit_path = "/etc/systemd/system/#{unit_name(app_name)}"
-    # A quoted heredoc writes the unit verbatim (no shell expansion of $PORT etc.).
-    write_cmd = "cat > #{unit_path} <<'MJOLNIR_UNIT'\n#{unit}\nMJOLNIR_UNIT"
+    # Materialize the WorkingDirectory first: a missing dir is a hard
+    # pre-ExecStart CHDIR failure (status=200), not a warning. A quoted heredoc
+    # then writes the unit verbatim (no shell expansion of $PORT etc.).
+    write_cmd =
+      "mkdir -p #{workdir} && cat > #{unit_path} <<'MJOLNIR_UNIT'\n#{unit}\nMJOLNIR_UNIT"
+
     activate_cmd = "systemctl daemon-reload && systemctl enable --now #{unit_name(app_name)}"
 
     with {:ok, _} <- ops.exec.(vm_id, write_cmd, []),

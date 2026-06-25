@@ -84,6 +84,7 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       # Unit written then activated, in order.
       execs = for {:exec, _vm, cmd} <- ev, do: cmd
       assert [write, activate] = execs
+      assert write =~ "mkdir -p /app"
       assert write =~ "cat > /etc/systemd/system/my-app.service"
       assert write =~ "ExecStart=/bin/sh -lc 'node build/index.js'"
       assert activate =~ "daemon-reload"
