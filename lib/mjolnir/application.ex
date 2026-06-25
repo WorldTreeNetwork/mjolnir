@@ -85,7 +85,12 @@ defmodule Mjolnir.Application do
           # IdentiKey static sites — content-addressed chunk store, Iroh endpoint
           # binding, OpenTimestamps proof upgrader. See
           # docs/plans/initiatives/identikey-sites.md.
-          Mjolnir.Sites.Supervisor
+          Mjolnir.Sites.Supervisor,
+
+          # mj deploy layer — durable per-app deployment registry (the Builder
+          # and Runtime are call-driven). See
+          # docs/plans/initiatives/mjolnir-deploy.md.
+          Mjolnir.Deploy.Supervisor
         ] ++
         maybe_syslog_children() ++
         maybe_runner_children() ++

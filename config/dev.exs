@@ -13,6 +13,9 @@ config :mjolnir,
   vm_storage_subdir: "@vms-dev",
   socket_dir: "/tmp/mjolnir-dev",
 
+  # Deploy registry kept under the project so the dev BEAM needs no /var/lib perms.
+  deploy_state_dir: Path.join(File.cwd!(), ".mjolnir-dev/deploy/registry"),
+
   # Auto-inject current guest agent — path relative to project root (works for any checkout location)
   guest_agent_bin:
     Path.join(File.cwd!(), "native/target/x86_64-unknown-linux-musl/release/mjolnir-agent"),

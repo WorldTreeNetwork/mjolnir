@@ -13,6 +13,7 @@ config :mjolnir,
   vm_storage_subdir: "@vms",
   api_port: 4001,
   sites_root: "/tmp/mjolnir-test/sites",
-  secret_store_root: "/tmp/mjolnir-test/sites/keyspace"
+  secret_store_root: "/tmp/mjolnir-test/sites/keyspace",
+  deploy_state_dir: "/tmp/mjolnir-test/deploy/registry"
 
 config :mjolnir, :auth, bypass_localhost: true
