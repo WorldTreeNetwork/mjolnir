@@ -148,6 +148,31 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build an inject_secrets request message (`secrets_mode: :managed`).
+
+  Delivers a host-escrowed LUKS passphrase over vsock. The guest creates the
+  volume if none exists (sized `:init_size_mb`, min 32) or opens the existing
+  one, then merges any `:entries` (secret material) and re-renders the tmpfs
+  env file. Options:
+
+    * `:init_size_mb` — size for first-time creation (default left to the guest)
+    * `:entries` — map of `KEY => VALUE` secret material to merge after mount
+    * `:request_id` — explicit request id (default: a fresh UUID)
+  """
+  def inject_secrets_request(passphrase, opts \\ []) when is_binary(passphrase) do
+    %{
+      "type" => "inject_secrets",
+      "id" => opts[:request_id] || UUID.uuid4(),
+      "passphrase" => passphrase
+    }
+    |> maybe_put("init_size_mb", opts[:init_size_mb])
+    |> maybe_put("entries", opts[:entries])
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @doc """
   Build a pty_open request message.
   Opens a new PTY session with the specified dimensions.
   """

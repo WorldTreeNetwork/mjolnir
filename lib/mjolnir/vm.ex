@@ -38,7 +38,10 @@ defmodule Mjolnir.VM do
     :ssh_public_key,
     # Iroh networking toggle
     enable_iroh: false,
-    # Secrets mode: :none (default) | :persistent (LUKS encrypted volume)
+    # Secrets mode: :none (default) | :ephemeral (RAM-only) |
+    # :persistent (LUKS, passphrase held by remote Iroh peer — refuses dormancy) |
+    # :managed (LUKS, passphrase escrowed by host — host re-injects on boot/wake,
+    # so dormancy works). See docs/secrets-architecture.md → "Managed Mode".
     secrets_mode: :none,
     # Inter-VM message queue (buffered during boot)
     message_queue: [],
@@ -743,7 +746,9 @@ defmodule Mjolnir.VM do
       ssh_public_key: Map.get(cfg, "ssh_public_key"),
       secrets_mode:
         case Map.get(cfg, "secrets_mode") do
+          "managed" -> :managed
           "persistent" -> :persistent
+          "ephemeral" -> :ephemeral
           _ -> :none
         end
     }
@@ -1388,6 +1393,17 @@ defmodule Mjolnir.VM do
             nil
           end
 
+        # secrets_mode: :managed — host re-injects the escrowed LUKS passphrase
+        # over vsock. On first boot this creates the volume; on dormancy wake it
+        # re-opens the snapshot-carried ciphertext volume. Log-and-continue like
+        # the other configure steps so a transient cryptsetup hiccup doesn't wedge
+        # the whole boot.
+        case maybe_unlock_secrets(state, vsock_path) do
+          :ok -> :ok
+          :skipped -> :ok
+          {:error, reason} -> Logger.error("Managed secrets unlock failed: #{inspect(reason)}")
+        end
+
         # Start persistent vsock connection for command execution
         {:ok, vsock_conn} =
           Mjolnir.Vsock.Connection.start_link(%{
@@ -1913,6 +1929,47 @@ defmodule Mjolnir.VM do
         {:error, reason}
     end
   end
+
+  # secrets_mode: :managed — fetch (or generate+escrow) this VM's LUKS passphrase
+  # and inject it over vsock. The guest is authoritative on create-vs-open (it
+  # checks whether secrets.luks exists), so the host always sends the same
+  # request; `init_size_mb` is only honored when the guest has to create. The
+  # escrow entry is keyed by vm_id and lives off the data volume, so it survives
+  # dormancy and is re-read on wake.
+  defp maybe_unlock_secrets(%__MODULE__{secrets_mode: :managed} = state, vsock_path) do
+    init_size = Application.get_env(:mjolnir, :secrets_volume_size_mb, 32)
+
+    case Mjolnir.SecretEscrow.get_or_create(state.id) do
+      {:ok, passphrase, origin} ->
+        request = Mjolnir.Vsock.Protocol.inject_secrets_request(passphrase, init_size_mb: init_size)
+
+        # LUKS create (dd + argon2id format + mkfs) can exceed the default 10s.
+        case vsock_request(vsock_path, request, 60_000) do
+          {:ok, %{"ok" => true, "created" => created}} ->
+            Logger.info(
+              "Managed secrets #{if created, do: "created", else: "opened"} " <>
+                "for VM #{state.id} (escrow #{origin})"
+            )
+
+            :ok
+
+          {:ok, %{"ok" => false, "error" => err}} ->
+            {:error, {:secrets_inject_rejected, err}}
+
+          {:ok, other} ->
+            Logger.warning("Unexpected inject_secrets response for VM #{state.id}: #{inspect(other)}")
+            :ok
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, {:escrow_failed, reason}}
+    end
+  end
+
+  defp maybe_unlock_secrets(_state, _vsock_path), do: :skipped
 
   # ============================================================================
   # Vsock Helpers - Synchronous request/response pattern

@@ -92,6 +92,9 @@ defmodule Mjolnir.API.Router do
 
       opts =
         case conn.body_params["secrets_mode"] do
+          "managed" ->
+            Map.put(opts, :secrets_mode, :managed)
+
           "persistent" ->
             Map.put(opts, :secrets_mode, :persistent)
 
@@ -108,7 +111,7 @@ defmodule Mjolnir.API.Router do
             Map.put(
               opts,
               :_validation_error,
-              "secrets_mode must be 'persistent', 'ephemeral', or 'none'"
+              "secrets_mode must be 'managed', 'persistent', 'ephemeral', or 'none'"
             )
         end
 

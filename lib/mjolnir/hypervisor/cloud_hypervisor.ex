@@ -122,11 +122,22 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
     # what made cleanup a silent no-op and prod shutdowns hang for 30s
     # until systemd SIGKILL. See docs/plans/durability.md.
 
-    # Stop persistent vsock connection
-    if state.vsock_conn do
+    # Stop persistent vsock connection. When the hypervisor dies (crash or a
+    # deliberate kill for `mj reboot`), the vsock connection GenServer often
+    # exits first — so `GenServer.stop` on it would exit `:noproc` and, since
+    # that's an exit (not a rescuable exception), crash `terminate/2` BEFORE the
+    # TAP is removed, leaving a stale `mj-*` device that fails the next boot with
+    # "Device or resource busy" (mjolnir-l4i). Guard + catch so cleanup always
+    # proceeds to the TAP/socket teardown below.
+    if state.vsock_conn && Process.alive?(state.vsock_conn) do
       mark.("vsock_conn stop begin")
-      GenServer.stop(state.vsock_conn, :normal, 5000)
-      mark.("vsock_conn stopped")
+
+      try do
+        GenServer.stop(state.vsock_conn, :normal, 5000)
+        mark.("vsock_conn stopped")
+      catch
+        :exit, reason -> mark.("vsock_conn stop skipped: #{inspect(reason)}")
+      end
     end
 
     # Kill Cloud Hypervisor if still running
