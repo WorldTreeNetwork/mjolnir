@@ -204,7 +204,7 @@ defmodule Mjolnir.VM do
           # A registered-but-unresponsive VM must NOT vanish from the list —
           # omitting it made a live VM look destroyed (mjolnir-l4i). Surface a
           # degraded placeholder so operators see :unreachable, not absence.
-          :exit, _ -> %__MODULE__{id: vm_id, state: :unreachable}
+          :exit, _ -> unreachable_placeholder(vm_id)
         end
       end,
       max_concurrency: 16,
@@ -216,6 +216,20 @@ defmodule Mjolnir.VM do
       _ -> nil
     end)
     |> Enum.reject(&is_nil/1)
+  end
+
+  # Build the :unreachable placeholder for a blocked/unresponsive VM. The
+  # owner_id is read from the durable StateStore record (not the blocked
+  # GenServer), so the API's owner filter still shows the VM to its owner
+  # instead of hiding it (mjolnir-l4i).
+  defp unreachable_placeholder(vm_id) do
+    owner =
+      case Mjolnir.StateStore.get(vm_id) do
+        {:ok, record} -> Map.get(record.spawn_config || %{}, "owner_id")
+        _ -> nil
+      end
+
+    %__MODULE__{id: vm_id, state: :unreachable, owner_id: owner}
   end
 
   @doc """
@@ -1995,7 +2009,11 @@ defmodule Mjolnir.VM do
   # the new vsock connection.
   defp verify_or_recover_guest(state) do
     if guest_alive?(state) do
-      {:ok, :healthy, state}
+      # The guest answers a fresh probe socket, but the pause/resume can desync
+      # the long-lived vsock connection that exec/PTY use — leaving the next
+      # exec to hang on a stale socket (mjolnir-l4i). Rebuild it proactively so
+      # the connection is fresh by the time the snapshot call returns.
+      {:ok, :healthy, %{state | vsock_conn: rebuild_vsock_conn(state)}}
     else
       Logger.error("VM #{state.id}: guest unreachable; attempting in-place reboot recovery")
 

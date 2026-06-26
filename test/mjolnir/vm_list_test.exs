@@ -26,6 +26,36 @@ defmodule Mjolnir.VMListTest do
     assert %Mjolnir.VM{state: :unreachable} = entry
   end
 
+  test "an unreachable placeholder carries owner_id from StateStore so the owner can still see it" do
+    alias Mjolnir.StateStore
+    alias Mjolnir.StateStore.Record
+
+    tmp =
+      Path.join([
+        System.tmp_dir!(),
+        "mjolnir-vm-list-test",
+        "#{System.unique_integer([:positive])}"
+      ])
+
+    File.mkdir_p!(Path.join(tmp, "quarantine"))
+    prev_state = Application.get_env(:mjolnir, :state_dir)
+    Application.put_env(:mjolnir, :state_dir, tmp)
+    :ok = StateStore.reload()
+
+    on_exit(fn ->
+      File.rm_rf!(tmp)
+      if prev_state, do: Application.put_env(:mjolnir, :state_dir, prev_state)
+      :ok = StateStore.reload()
+    end)
+
+    id = "owned-#{System.unique_integer([:positive])}"
+    :ok = StateStore.put(Record.new(id, :running, spawn_config: %{"owner_id" => "alice"}))
+    register_blocked(id)
+
+    entry = Enum.find(Mjolnir.VM.list(), &(&1.id == id))
+    assert %Mjolnir.VM{state: :unreachable, owner_id: "alice"} = entry
+  end
+
   test "a responsive VM is returned with its real state alongside an unreachable one" do
     healthy_id = "healthy-#{System.unique_integer([:positive])}"
     blocked_id = "blocked-#{System.unique_integer([:positive])}"
