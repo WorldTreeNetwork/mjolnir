@@ -48,11 +48,6 @@ defmodule Mjolnir.Hypervisor.Mock do
   end
 
   @impl true
-  def reboot_instance(_socket_path) do
-    :ok
-  end
-
-  @impl true
   def stop_instance(_socket_path) do
     :ok
   end

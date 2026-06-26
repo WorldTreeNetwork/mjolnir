@@ -334,24 +334,49 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Reboot a running VM's guest in place (CH `vm.reboot`) and re-attach the
-  control plane to it.
+  Restart a VM by tearing down its hypervisor and resuming from the preserved
+  rootfs — the recovery path for a guest wedged while the hypervisor still
+  reports it running (e.g. left frozen by a snapshot's pause/resume — mjolnir-l4i).
 
-  This is the recovery path for a guest that is wedged while the hypervisor
-  still reports the instance as running — e.g. a guest left frozen by the
-  pause/resume of a snapshot (mjolnir-l4i). It hard-resets the guest, waits for
-  the guest agent to come back, rebuilds the persistent vsock connection, and
-  re-pushes guest-side network + Iroh config (all lost across a guest reset).
+  Mechanism: kill the cloud-hypervisor process at the OS level. That makes the
+  VM GenServer terminate via its `{:hypervisor_exit, _}` path, which *preserves*
+  the `@vms` rootfs subvolume while cleaning up the TAP, virtiofsd, and sockets.
+  We then `resume/1` from the StateStore record, booting a fresh hypervisor +
+  virtiofsd + TAP against the same rootfs. The OS-level kill is deliberate:
+  it works even when the VM GenServer mailbox is blocked (a wedged guest can
+  leave an `:infinity` exec stuck in the mailbox), where a `GenServer.call`
+  based reboot never would.
 
-  Returns `{:ok, %{rebooted: true, guest_healthy: boolean}}`. `guest_healthy`
-  reflects whether the guest agent answered after the reboot.
+  CH's in-place `vm.reboot` is intentionally NOT used: it cannot reconnect
+  Mjolnir's external virtiofsd vhost-user backend and would destroy the VM.
+
+  Returns `{:ok, %{rebooted: true, guest_healthy: boolean}}`.
   """
   @spec reboot(vm_id()) :: {:ok, map()} | {:error, term()}
   def reboot(vm_id) when is_binary(vm_id) do
-    GenServer.call(via_tuple(vm_id), :reboot, 90_000)
-  catch
-    :exit, {:noproc, _} -> {:error, :not_found}
-    :exit, reason -> {:error, reason}
+    case Mjolnir.StateStore.get(vm_id) do
+      {:ok, record} ->
+        _ = kill_hypervisor_process(vm_id)
+
+        if wait_until_deregistered(vm_id, 20_000) do
+          case resume(record) do
+            {:ok, vm} ->
+              {:ok, %{rebooted: true, guest_healthy: guest_alive?(vm, 5)}}
+
+            # Reconcile may have resumed it in the gap — treat as success.
+            {:error, {:already_started, _pid}} ->
+              {:ok, %{rebooted: true, guest_healthy: guest_reachable?(vm_id)}}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+        else
+          {:error, :vm_did_not_stop}
+        end
+
+      :not_found ->
+        {:error, :not_found}
+    end
   end
 
   @doc """
@@ -981,16 +1006,6 @@ defmodule Mjolnir.VM do
     case do_snapshot(state, name, opts) do
       {:ok, metadata} -> verify_after_snapshot(state, name, metadata)
       {:error, _reason} = err -> {:reply, err, state}
-    end
-  end
-
-  def handle_call(:reboot, _from, state) do
-    case reboot_and_reattach(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, %{rebooted: true, guest_healthy: guest_alive?(new_state)}}, new_state}
-
-      {:error, reason, new_state} ->
-        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1972,28 +1987,21 @@ defmodule Mjolnir.VM do
   end
 
   # The snapshot artifact exists, but the pause/resume around it can leave the
-  # live guest wedged (mjolnir-l4i). When verification is enabled, confirm the
-  # guest survived and, if not, reboot it in place — reporting loudly instead of
-  # a bare success. Gated by :snapshot_verify_guest so test/headless paths skip
-  # the live-guest probe.
+  # live guest wedged (mjolnir-l4i). When verification is enabled, rebuild the
+  # vsock connection and confirm the guest survived; if it's genuinely wedged,
+  # report loudly instead of a bare success (recovery is an operator `mj reboot`,
+  # which CH's in-place reboot cannot safely do here). Gated by
+  # :snapshot_verify_guest so test/headless paths skip the live-guest probe.
   defp verify_after_snapshot(state, name, metadata) do
     if Application.get_env(:mjolnir, :snapshot_verify_guest, true) do
       case verify_or_recover_guest(state) do
         {:ok, :healthy, new_state} ->
           {:reply, {:ok, metadata}, new_state}
 
-        {:ok, :recovered, new_state} ->
-          Logger.warning(
-            "VM #{state.id}: guest was wedged after snapshot '#{name}' and was " <>
-              "recovered via in-place reboot"
-          )
-
-          {:reply, {:ok, Map.put(metadata, :guest_recovered_via_reboot, true)}, new_state}
-
         {:error, reason, new_state} ->
           Logger.error(
-            "VM #{state.id}: guest unreachable after snapshot '#{name}' and could " <>
-              "not be recovered: #{inspect(reason)}"
+            "VM #{state.id}: guest unreachable after snapshot '#{name}': #{inspect(reason)}. " <>
+              "Snapshot artifact is intact; recover the live VM with `mj reboot #{state.id}`."
           )
 
           {:reply, {:error, {:guest_unreachable_after_snapshot, reason, metadata}}, new_state}
@@ -2003,31 +2011,24 @@ defmodule Mjolnir.VM do
     end
   end
 
-  # Confirm the guest agent survived an operation that touched the live VM
-  # (snapshot pause/resume). If it's wedged, attempt an in-place reboot and
-  # re-verify. Returns the (possibly rebuilt) state so the caller can persist
-  # the new vsock connection.
+  # Confirm the guest agent survived the snapshot's pause/resume, rebuilding the
+  # persistent vsock connection (which the pause/resume desyncs). Returns the
+  # rebuilt state so the caller persists the fresh connection.
   defp verify_or_recover_guest(state) do
-    if guest_alive?(state) do
-      # The guest answers a fresh probe socket, but the pause/resume can desync
-      # the long-lived vsock connection that exec/PTY use — leaving the next
-      # exec to hang on a stale socket (mjolnir-l4i). Rebuild it proactively so
-      # the connection is fresh by the time the snapshot call returns.
-      {:ok, :healthy, %{state | vsock_conn: rebuild_vsock_conn(state)}}
+    # The pause/resume desyncs the long-lived vsock connection that exec/PTY use
+    # even when the guest itself is fine — leaving the next exec to hang on a
+    # stale socket (mjolnir-l4i). Rebuild it proactively so the connection is
+    # fresh by the time the snapshot call returns.
+    new_state = %{state | vsock_conn: rebuild_vsock_conn(state)}
+
+    if guest_alive?(new_state) do
+      {:ok, :healthy, new_state}
     else
-      Logger.error("VM #{state.id}: guest unreachable; attempting in-place reboot recovery")
-
-      case reboot_and_reattach(state) do
-        {:ok, new_state} ->
-          if guest_alive?(new_state) do
-            {:ok, :recovered, new_state}
-          else
-            {:error, :still_unreachable_after_reboot, new_state}
-          end
-
-        {:error, reason, new_state} ->
-          {:error, reason, new_state}
-      end
+      # Guest is genuinely wedged. We deliberately do NOT auto-reboot here: CH's
+      # in-place vm.reboot cannot reconnect Mjolnir's external virtiofsd backend
+      # and would destroy the VM (mjolnir-l4i). Report loudly; recovery is an
+      # operator `mj reboot` (stop + resume from the preserved rootfs).
+      {:error, :guest_unreachable, new_state}
     end
   end
 
@@ -2063,50 +2064,46 @@ defmodule Mjolnir.VM do
     end
   end
 
-  # Hard-reset the guest in place and re-establish the control-plane attachment:
-  # wait for the agent, rebuild the persistent vsock connection, and re-push the
-  # guest-side network + Iroh config that a reset clears. Returns the updated
-  # state on success, or `{:error, reason, state}` keeping the original state.
-  defp reboot_and_reattach(state) do
-    with :ok <- do_reboot_instance(state),
-         :ok <- wait_for_boot(state.vsock_path, state, 30_000) do
-      {:ok, reattach_after_reboot(state)}
-    else
-      {:error, reason} -> {:error, reason, state}
+  # Kill the cloud-hypervisor process serving this VM's API socket at the OS
+  # level. This works even when the VM GenServer mailbox is blocked (a wedged
+  # guest can leave an :infinity exec stuck in the mailbox). The resulting port
+  # exit makes the GenServer terminate via its preserve-rootfs path, cleaning up
+  # the TAP/virtiofsd/sockets while keeping the @vms subvolume for resume/1.
+  defp kill_hypervisor_process(vm_id) do
+    # Match the CH process precisely by the VM's UUID (it appears in the
+    # --api-socket path) so we never touch another VM's hypervisor. Best-effort:
+    # a missing match is fine (process already dead, or a unit test with no CH).
+    pattern = "cloud-hypervisor.*#{vm_id}"
+
+    case System.cmd("pkill", ["-9", "-f", pattern], stderr_to_stdout: true) do
+      {_, 0} -> Logger.info("VM #{vm_id}: killed hypervisor process for reboot")
+      {_, 1} -> Logger.info("VM #{vm_id}: no hypervisor process matched for reboot")
+      {out, code} -> Logger.warning("VM #{vm_id}: pkill exited #{code}: #{String.trim(out)}")
     end
+  rescue
+    e -> Logger.warning("VM #{vm_id}: kill_hypervisor_process raised: #{inspect(e)}")
   end
 
-  defp do_reboot_instance(%__MODULE__{hypervisor: hv, socket_path: sock})
-       when not is_nil(hv) and not is_nil(sock) do
-    hv.reboot_instance(sock)
+  # Poll until the VM has no live GenServer in the registry (its terminate has
+  # run and cleaned up), up to `timeout_ms`. Returns true once gone.
+  defp wait_until_deregistered(vm_id, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until_deregistered(vm_id, deadline)
   end
 
-  defp do_reboot_instance(_state), do: {:error, :no_hypervisor_or_socket}
+  defp do_wait_until_deregistered(vm_id, deadline) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [] ->
+        true
 
-  defp reattach_after_reboot(state) do
-    new_conn = rebuild_vsock_conn(state)
-
-    if state.net_config do
-      case configure_guest_network(state.vsock_path, state.net_config.guest_ip) do
-        :ok -> :ok
-        err -> Logger.warning("Reboot reattach: network reconfigure failed: #{inspect(err)}")
-      end
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          false
+        else
+          Process.sleep(200)
+          do_wait_until_deregistered(vm_id, deadline)
+        end
     end
-
-    iroh_info =
-      if state.enable_iroh do
-        _ = configure_iroh(state.vsock_path, true)
-        await_iroh_ready(state.vsock_path, 10_000)
-      end
-
-    %{
-      state
-      | vsock_conn: new_conn,
-        iroh_node_id: iroh_info[:node_id] || state.iroh_node_id,
-        iroh_json: iroh_info[:ticket] || state.iroh_json,
-        ticket: (iroh_info && Mjolnir.Ticket.from_hex(iroh_info[:node_id])) || state.ticket,
-        pty_ready: iroh_info != nil || state.pty_ready
-    }
   end
 
   # Stop the (now stale) persistent vsock connection and start a fresh one

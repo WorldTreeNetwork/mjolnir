@@ -20,7 +20,6 @@ defmodule Mjolnir.Hypervisor do
   - `start_instance/1` - Boot the VM
   - `pause_instance/1` - Pause execution
   - `resume_instance/1` - Resume execution
-  - `reboot_instance/1` - Hard-reset the guest in place
   - `stop_instance/1` - Stop the VM
   - `cleanup/1` - Clean up resources
   - `vsock_path/2` - Get the vsock socket path
@@ -112,24 +111,6 @@ defmodule Mjolnir.Hypervisor do
   - `{:error, term}` - Resume failed
   """
   @callback resume_instance(socket_path :: String.t()) :: :ok | {:error, term()}
-
-  @doc """
-  Reboot the VM instance in place.
-
-  Hard-resets the guest (vCPUs reset, kernel re-entered) without tearing down
-  the hypervisor process or its host-side resources. Used to recover a guest
-  that is wedged while the hypervisor still reports the instance as running.
-
-  ## Parameters
-
-  - `socket_path` - Path to the hypervisor's API socket
-
-  ## Returns
-
-  - `:ok` - Reboot issued
-  - `{:error, term}` - Reboot failed
-  """
-  @callback reboot_instance(socket_path :: String.t()) :: :ok | {:error, term()}
 
   @doc """
   Stop the VM instance.

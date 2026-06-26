@@ -77,7 +77,7 @@ mj list [--dormant]                    # List running VMs (--dormant also shows 
 mj info <id>                           # Detailed status
 mj exec <id> "uname -a"                # Run a command
 mj kill <id> | mj kill --all           # Destroy one VM, or all of them
-mj reboot <id> | mj restart <id>       # Hard-reset a wedged guest in place + re-attach
+mj reboot <id> | mj restart <id>       # Restart a wedged VM (kill hypervisor → resume from rootfs)
 mj url <id>                            # Web gateway URL
 mj connect <id>                        # Interactive PTY (WebSocket)
 mj message <id> '{"k":"v"}'            # Send a payload in; wakes a dormant VM

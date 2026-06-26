@@ -90,11 +90,6 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
   end
 
   @impl true
-  def reboot_instance(socket_path) do
-    Client.reboot_vm(socket_path)
-  end
-
-  @impl true
   def stop_instance(socket_path) do
     with :ok <- Client.shutdown_vm(socket_path),
          :ok <- Client.delete_vm(socket_path) do

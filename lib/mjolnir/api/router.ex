@@ -401,9 +401,10 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Hard-reset a running VM's guest in place (CH vm.reboot) and re-attach the
-  # control plane. Recovery for a guest wedged while the hypervisor still
-  # reports Running — e.g. after a snapshot pause/resume (mjolnir-l4i).
+  # Restart a VM (kill hypervisor → resume from preserved rootfs). Recovery for
+  # a guest wedged while the hypervisor still reports Running — e.g. after a
+  # snapshot pause/resume (mjolnir-l4i). Does NOT use CH's in-place vm.reboot,
+  # which cannot reconnect Mjolnir's external virtiofsd backend.
   post "/api/vms/:id/reboot" do
     conn = require_scope(conn, "vms:spawn")
 
