@@ -471,6 +471,45 @@ pub async fn cmd_revive(
     Ok(())
 }
 
+/// Reboot a running VM's guest in place and re-attach the control plane
+/// (`POST /api/vms/{id}/reboot`). Recovery for a guest that is wedged while the
+/// hypervisor still reports Running — e.g. after a snapshot pause/resume
+/// (mjolnir-l4i). The server returns a non-2xx (surfaced here as an error) if
+/// the guest does not answer after the reboot, so a failed recovery is loud.
+pub async fn cmd_reboot(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    let body = send_text(
+        client.post(format!("{}/api/vms/{}/reboot", base, &id)),
+        "reboot",
+    )
+    .await?;
+
+    let healthy = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("guest_healthy").and_then(|h| h.as_bool()))
+        .unwrap_or(false);
+
+    if healthy {
+        eprintln!("Rebooted {} (guest healthy, control plane re-attached)", id);
+    } else {
+        eprintln!(
+            "Rebooted {} (warning: guest did not answer after reboot)",
+            id
+        );
+    }
+    Ok(())
+}
+
 /// Permanently dispose of a stranded/`:failed` record: soft-delete its rootfs to
 /// `@trash` and remove the record (`POST /api/vms/{id}/forget`). Recoverable
 /// from `@trash` until reaped.

@@ -377,15 +377,54 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Revive a :failed record back to :running so the next Reconcile pass boots it.
+  # Revive a record back to :running. For a crashed/:failed record this clears
+  # the failure counter so the next Reconcile pass boots it; for a live-but-
+  # wedged VM it reboots the guest in place and re-attaches (mjolnir-l4i).
   post "/api/vms/:id/revive" do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
       authorize_record(conn, id, fn ->
         case Mjolnir.VM.revive(id) do
-          :ok -> json(conn, 200, %{ok: true, id: id, state: "running"})
-          {:error, :not_found} -> json(conn, 404, %{error: "not_found"})
+          :ok ->
+            json(conn, 200, %{ok: true, id: id, state: "running"})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "not_found"})
+
+          {:error, reason} ->
+            json(conn, 502, %{error: "revive_failed", reason: inspect(reason)})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  # Hard-reset a running VM's guest in place (CH vm.reboot) and re-attach the
+  # control plane. Recovery for a guest wedged while the hypervisor still
+  # reports Running — e.g. after a snapshot pause/resume (mjolnir-l4i).
+  post "/api/vms/:id/reboot" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      authorize_record(conn, id, fn ->
+        case Mjolnir.VM.reboot(id) do
+          {:ok, %{guest_healthy: true} = result} ->
+            json(conn, 200, Map.merge(%{ok: true, id: id}, result))
+
+          {:ok, result} ->
+            json(
+              conn,
+              502,
+              Map.merge(%{ok: false, id: id, error: "guest_unhealthy_after_reboot"}, result)
+            )
+
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "not_found"})
+
+          {:error, reason} ->
+            json(conn, 502, %{error: "reboot_failed", reason: inspect(reason)})
         end
       end)
     else
@@ -844,6 +883,23 @@ defmodule Mjolnir.API.Router do
 
               {:error, :not_found} ->
                 json(conn, 404, %{error: "vm not_found"})
+
+              # The snapshot artifact exists, but the live guest was left wedged
+              # by the pause/resume and could not be auto-recovered (mjolnir-l4i).
+              # Fail loudly so callers don't treat the VM as healthy, but hand
+              # back the snapshot metadata and a recovery hint.
+              {:error, {:guest_unreachable_after_snapshot, reason, metadata}} ->
+                Logger.error(
+                  "Snapshot #{name} created for #{id} but guest is wedged: #{inspect(reason)}"
+                )
+
+                json(conn, 502, %{
+                  error: "guest_unreachable_after_snapshot",
+                  reason: inspect(reason),
+                  snapshot: metadata,
+                  hint:
+                    "snapshot created, but the live guest did not recover; try `mj reboot #{id}`"
+                })
 
               {:error, reason} ->
                 Logger.error("Snapshot create failed for #{id}: #{inspect(reason)}")

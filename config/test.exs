@@ -14,6 +14,10 @@ config :mjolnir,
   api_port: 4001,
   sites_root: "/tmp/mjolnir-test/sites",
   secret_store_root: "/tmp/mjolnir-test/sites/keyspace",
-  deploy_state_dir: "/tmp/mjolnir-test/deploy/registry"
+  deploy_state_dir: "/tmp/mjolnir-test/deploy/registry",
+  # Post-snapshot guest health-verify + in-place reboot recovery (mjolnir-l4i)
+  # probes a real guest agent over vsock; disable it under test so snapshot
+  # paths don't depend on (or block on) a live guest.
+  snapshot_verify_guest: false
 
 config :mjolnir, :auth, bypass_localhost: true

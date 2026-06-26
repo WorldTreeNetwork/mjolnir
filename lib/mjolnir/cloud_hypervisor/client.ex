@@ -56,6 +56,19 @@ defmodule Mjolnir.CloudHypervisor.Client do
   end
 
   @doc """
+  Reboot the VM in place.
+
+  Issues `PUT /api/v1/vm.reboot`, which the hypervisor implements as a hard
+  reset of the guest (vCPUs reset, kernel re-entered) without tearing down the
+  CH process, sockets, TAP, or virtiofs backend. This is the recovery path for
+  a guest that is wedged but whose CH instance still reports `Running` (e.g. a
+  guest left frozen by a pause/resume during snapshot).
+  """
+  def reboot_vm(socket_path) do
+    put(socket_path, "/api/v1/vm.reboot", nil)
+  end
+
+  @doc """
   Shutdown the VM gracefully.
   """
   def shutdown_vm(socket_path) do

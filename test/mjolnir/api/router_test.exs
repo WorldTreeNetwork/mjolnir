@@ -77,6 +77,15 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  describe "POST /api/vms/:id/reboot" do
+    test "returns 404 for non-existent VM" do
+      conn = request(:post, "/api/vms/nonexistent-id/reboot")
+      assert conn.status == 404
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == "not_found"
+    end
+  end
+
   describe "unknown routes" do
     test "returns 404" do
       conn = request(:get, "/api/unknown")

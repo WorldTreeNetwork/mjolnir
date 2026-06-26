@@ -130,6 +130,18 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    /// Reboot a running VM's guest in place and re-attach (recovers a wedged guest)
+    #[command(visible_alias = "restart")]
+    Reboot {
+        /// VM ID or ticket
+        id: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Permanently dispose of a failed VM (soft-delete rootfs to @trash)
     Forget {
         /// VM ID or ticket
@@ -623,6 +635,7 @@ async fn main() {
         }
         Command::Retire { id, api, token } => api::cmd_retire(&profile, &api, &token, &id).await,
         Command::Revive { id, api, token } => api::cmd_revive(&profile, &api, &token, &id).await,
+        Command::Reboot { id, api, token } => api::cmd_reboot(&profile, &api, &token, &id).await,
         Command::Forget { id, api, token } => api::cmd_forget(&profile, &api, &token, &id).await,
         Command::Message {
             id,
