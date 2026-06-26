@@ -13,6 +13,10 @@ if state_dir = System.get_env("MJOLNIR_STATE_DIR") do
   config :mjolnir, state_dir: state_dir
 end
 
+if escrow_dir = System.get_env("MJOLNIR_SECRET_ESCROW_DIR") do
+  config :mjolnir, secret_escrow_dir: escrow_dir
+end
+
 if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST", "false") == "true" do
   config :mjolnir, :auth, bypass_localhost: true
 end

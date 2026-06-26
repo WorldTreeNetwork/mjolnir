@@ -112,6 +112,21 @@ pub enum VsockRequest {
     #[cfg(feature = "full")]
     #[serde(rename = "configure_secrets_auth")]
     ConfigureSecretsAuth { id: String, authorized_peers: Vec<String> },
+    /// Host-escrowed secret injection over vsock (`secrets_mode: :managed`).
+    /// Unlike the Iroh ALPN, the host supplies the passphrase directly — used to
+    /// create the LUKS volume on first boot and re-open it on dormancy wake.
+    /// `init_size_mb` is honored only on creation; `entries` are merged after
+    /// mount (host-pushed secret material).
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_secrets")]
+    InjectSecrets {
+        id: String,
+        passphrase: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        init_size_mb: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entries: Option<std::collections::HashMap<String, String>>,
+    },
 }
 
 /// Messages from guest to host (vsock)
@@ -146,6 +161,15 @@ pub enum VsockResponse {
     #[cfg(feature = "iroh")]
     #[serde(rename = "configure_iroh_response")]
     ConfigureIrohResponse { id: String, ok: bool },
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_secrets_response")]
+    InjectSecretsResponse {
+        id: String,
+        ok: bool,
+        created: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     #[serde(rename = "pty_opened")]
     PtyOpened { id: String, channel: u8 },
     #[serde(rename = "pty_closed")]

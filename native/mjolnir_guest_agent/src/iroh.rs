@@ -374,73 +374,25 @@ async fn handle_secret_inject(
 }
 
 fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
-    use crate::secrets;
-
-    // Atomically claim the injection slot (prevents TOCTOU race)
-    if !secrets::try_claim_injection() {
-        return serde_json::json!({
-            "ok": false,
-            "error": "secrets already injected"
-        });
-    }
-
-    let passphrase = match request.get("passphrase").and_then(|v| v.as_str()) {
-        Some(p) if !p.is_empty() => p,
-        _ => {
-            secrets::release_injection_claim();
-            return serde_json::json!({
-                "ok": false,
-                "error": "passphrase is required"
-            });
-        }
-    };
-
+    let passphrase = request
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let init_size_mb = request
         .get("init_size_mb")
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
-    let luks_exists = std::path::Path::new(secrets::SECRETS_LUKS_PATH).exists();
-
-    let result = if !luks_exists {
-        // Need to create
-        let size = init_size_mb.unwrap_or(secrets::DEFAULT_SECRETS_SIZE_MB);
-        if size < 32 {
-            secrets::release_injection_claim();
-            return serde_json::json!({
-                "ok": false,
-                "error": "init_size_mb must be >= 32 (LUKS2 headers require ~16MB)"
-            });
-        }
-        secrets::init_secrets_volume(size, passphrase)
-            .map(|r| (r.created, r.mounted))
-    } else {
-        secrets::open_secrets_volume(passphrase)
-            .map(|_| (false, true))
-    };
-
-    match result {
-        Ok((created, mounted)) => {
-            // Load env vars after mount
-            if let Err(e) = secrets::load_env_vars() {
-                tracing::warn!("Failed to load env vars: {}", e);
-            }
-
-            // Injection is already claimed via try_claim_injection(); no further marking needed.
-            serde_json::json!({
-                "ok": true,
-                "created": created,
-                "mounted": mounted
-            })
-        }
-        Err(e) => {
-            // Release the claim so injection can be retried after a transient failure
-            secrets::release_injection_claim();
-            serde_json::json!({
-                "ok": false,
-                "error": e
-            })
-        }
+    match crate::secrets::inject(passphrase, init_size_mb) {
+        Ok((created, mounted)) => serde_json::json!({
+            "ok": true,
+            "created": created,
+            "mounted": mounted
+        }),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": e
+        }),
     }
 }
 

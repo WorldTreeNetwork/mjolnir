@@ -316,4 +316,43 @@ defmodule Mjolnir.Vsock.ProtocolTest do
       assert {:incomplete, ^partial} = Protocol.decode_frame(rest)
     end
   end
+
+  describe "inject_secrets_request/2 (managed secrets)" do
+    test "builds a minimal request with just a passphrase" do
+      msg = Protocol.inject_secrets_request("s3cret")
+
+      assert msg["type"] == "inject_secrets"
+      assert msg["passphrase"] == "s3cret"
+      assert is_binary(msg["id"])
+      # optional fields are omitted (guest serde defaults handle absence)
+      refute Map.has_key?(msg, "init_size_mb")
+      refute Map.has_key?(msg, "entries")
+    end
+
+    test "includes init_size_mb and entries when provided" do
+      msg =
+        Protocol.inject_secrets_request("pw",
+          init_size_mb: 64,
+          entries: %{"SMTP_PASS" => "abc"}
+        )
+
+      assert msg["init_size_mb"] == 64
+      assert msg["entries"] == %{"SMTP_PASS" => "abc"}
+    end
+
+    test "accepts an explicit request_id" do
+      msg = Protocol.inject_secrets_request("pw", request_id: "req-1")
+      assert msg["id"] == "req-1"
+    end
+
+    test "round-trips through encode on channel 0" do
+      msg = Protocol.inject_secrets_request("pw", init_size_mb: 32)
+      encoded = Protocol.encode(msg, 0)
+
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 0
+      assert byte_size(payload) == length
+      assert Jason.decode!(payload) == msg
+    end
+  end
 end

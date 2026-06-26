@@ -1055,6 +1055,33 @@ async fn handle_request(
                 stderr: String::new(),
             }
         }
+        #[cfg(feature = "full")]
+        VsockRequest::InjectSecrets { id, passphrase, init_size_mb, entries } => {
+            info!("InjectSecrets (host-escrowed): init_size_mb={:?}", init_size_mb);
+            match crate::secrets::inject(&passphrase, init_size_mb) {
+                Ok((created, _mounted)) => {
+                    // Merge any host-pushed secret material, then re-render the
+                    // tmpfs env file so the new entries are live for exec/login.
+                    if let Some(entries) = entries {
+                        if !entries.is_empty() {
+                            if let Err(e) = crate::secrets::set_env_vars(&entries) {
+                                warn!("InjectSecrets: set_env_vars failed: {}", e);
+                            }
+                        }
+                    }
+                    VsockResponse::InjectSecretsResponse { id, ok: true, created, error: None }
+                }
+                Err(e) => {
+                    warn!("InjectSecrets failed: {}", e);
+                    VsockResponse::InjectSecretsResponse {
+                        id,
+                        ok: false,
+                        created: false,
+                        error: Some(e),
+                    }
+                }
+            }
+        }
         VsockRequest::SpawnSubAgent { id, .. }
         | VsockRequest::SnapshotSelf { id, .. }
         | VsockRequest::EmitEvent { id, .. }

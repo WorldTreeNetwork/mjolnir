@@ -150,6 +150,41 @@ defmodule Mjolnir.API.Router do
             Map.put(opts, :_validation_error, "extra_mounts must be an array")
         end
 
+      # Optional secret material delivered into the LUKS volume on first boot
+      # (managed mode only). Held transiently; ends up encrypted in the volume.
+      opts =
+        case conn.body_params["secrets"] do
+          nil ->
+            opts
+
+          secrets when is_map(secrets) and map_size(secrets) > 0 ->
+            cond do
+              opts[:secrets_mode] != :managed ->
+                Map.put(
+                  opts,
+                  :_validation_error,
+                  "secrets may only be provided with secrets_mode 'managed'"
+                )
+
+              not Enum.all?(secrets, fn {k, v} -> is_binary(k) and is_binary(v) end) ->
+                Map.put(
+                  opts,
+                  :_validation_error,
+                  "secrets must be a flat object of string keys to string values"
+                )
+
+              true ->
+                Map.put(opts, :secrets, secrets)
+            end
+
+          secrets when is_map(secrets) ->
+            # empty object — nothing to inject
+            opts
+
+          _ ->
+            Map.put(opts, :_validation_error, "secrets must be a JSON object")
+        end
+
       # Short-circuit on any validation error (base_image, snapshot, etc.)
       if opts[:_validation_error] do
         json(conn, 400, %{error: opts[:_validation_error]})

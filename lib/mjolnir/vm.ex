@@ -43,6 +43,9 @@ defmodule Mjolnir.VM do
     # :managed (LUKS, passphrase escrowed by host — host re-injects on boot/wake,
     # so dormancy works). See docs/secrets-architecture.md → "Managed Mode".
     secrets_mode: :none,
+    # Transient secret material (KEY=>VALUE) delivered on first :managed inject.
+    # Never persisted — the content ends up encrypted inside the LUKS volume.
+    secrets_payload: nil,
     # Inter-VM message queue (buffered during boot)
     message_queue: [],
     # Resume mode: true when booting an existing VM from StateStore (skips
@@ -814,6 +817,14 @@ defmodule Mjolnir.VM do
       ssh_public_key: ssh_key,
       enable_iroh: enable_iroh,
       owner_id: opts[:owner_id],
+      # secrets_mode flows from spawn opts (router/resume already mapped it to an
+      # atom). Without this it defaulted to :none, silently disabling
+      # :persistent/:managed for every API-spawned VM.
+      secrets_mode: opts[:secrets_mode] || :none,
+      # Optional secret material to write into the volume on first inject
+      # (:managed only). Held transiently in host memory; never persisted to
+      # StateStore/restore_config — the content lives encrypted in the LUKS volume.
+      secrets_payload: opts[:secrets],
       resume_mode: opts[:resume] || false
     }
 
@@ -1221,6 +1232,21 @@ defmodule Mjolnir.VM do
     end
 
     Logger.warning("[vm-terminate] #{state.id} cleanup returned")
+
+    # secrets_mode: :managed — drop the escrowed passphrase ONLY on a real
+    # teardown. Keep it when the rootfs is preserved (Reconcile may resume) or
+    # when the VM went dormant (registered in DormantRegistry — wake must be able
+    # to re-open the snapshot's LUKS volume). A user kill is the one path that
+    # both doesn't preserve and isn't dormant.
+    if state.secrets_mode == :managed and not preserve do
+      case Mjolnir.DormantRegistry.lookup(state.id) do
+        {:ok, _entry} ->
+          :ok
+
+        :not_found ->
+          _ = Mjolnir.SecretEscrow.delete(state.id)
+      end
+    end
 
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
@@ -1941,7 +1967,15 @@ defmodule Mjolnir.VM do
 
     case Mjolnir.SecretEscrow.get_or_create(state.id) do
       {:ok, passphrase, origin} ->
-        request = Mjolnir.Vsock.Protocol.inject_secrets_request(passphrase, init_size_mb: init_size)
+        # Deliver secret material only on first creation — on wake (origin
+        # :existing) it already lives inside the snapshot-carried LUKS volume.
+        entries = if origin == :created, do: state.secrets_payload, else: nil
+
+        request =
+          Mjolnir.Vsock.Protocol.inject_secrets_request(passphrase,
+            init_size_mb: init_size,
+            entries: entries
+          )
 
         # LUKS create (dd + argon2id format + mkfs) can exceed the default 10s.
         case vsock_request(vsock_path, request, 60_000) do
@@ -1957,7 +1991,10 @@ defmodule Mjolnir.VM do
             {:error, {:secrets_inject_rejected, err}}
 
           {:ok, other} ->
-            Logger.warning("Unexpected inject_secrets response for VM #{state.id}: #{inspect(other)}")
+            Logger.warning(
+              "Unexpected inject_secrets response for VM #{state.id}: #{inspect(other)}"
+            )
+
             :ok
 
           {:error, reason} ->

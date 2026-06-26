@@ -46,6 +46,52 @@ pub fn release_injection_claim() {
     SECRETS_INJECTED.store(false, Ordering::SeqCst);
 }
 
+/// Claim the one-shot guard, then create-or-open the LUKS volume with
+/// `passphrase` and load env vars. Creates a new volume (sized `init_size_mb`,
+/// default [`DEFAULT_SECRETS_SIZE_MB`]) when none exists, otherwise opens the
+/// existing one. Returns `(created, mounted)` on success and releases the claim
+/// on failure so a transient error can be retried.
+///
+/// Shared by the Iroh inject ALPN (host-blind `:persistent`) and the vsock
+/// `inject_secrets` action (host-escrowed `:managed`) so the two delivery
+/// channels can never diverge in LUKS handling.
+pub fn inject(passphrase: &str, init_size_mb: Option<u32>) -> Result<(bool, bool), String> {
+    if !try_claim_injection() {
+        return Err("secrets already injected".to_string());
+    }
+
+    if passphrase.is_empty() {
+        release_injection_claim();
+        return Err("passphrase is required".to_string());
+    }
+
+    let luks_exists = Path::new(SECRETS_LUKS_PATH).exists();
+
+    let result = if !luks_exists {
+        let size = init_size_mb.unwrap_or(DEFAULT_SECRETS_SIZE_MB);
+        if size < 32 {
+            release_injection_claim();
+            return Err("init_size_mb must be >= 32 (LUKS2 headers require ~16MB)".to_string());
+        }
+        init_secrets_volume(size, passphrase).map(|r| (r.created, r.mounted))
+    } else {
+        open_secrets_volume(passphrase).map(|_| (false, true))
+    };
+
+    match result {
+        Ok((created, mounted)) => {
+            if let Err(e) = load_env_vars() {
+                warn!("Failed to load env vars after inject: {}", e);
+            }
+            Ok((created, mounted))
+        }
+        Err(e) => {
+            release_injection_claim();
+            Err(e)
+        }
+    }
+}
+
 /// Check if the secrets volume is currently mounted.
 pub fn is_mounted() -> bool {
     Path::new("/dev/mapper").join(SECRETS_MAPPER_NAME).exists()
