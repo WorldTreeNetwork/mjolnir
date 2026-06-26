@@ -34,7 +34,7 @@ Mjolnir provides encrypted secrets management for VMs using LUKS2 encrypted volu
      (direct Iroh QUIC)               (bypasses host entirely)          │ verify peer is authorized
                                                                         │ create/open LUKS volume
                                                                         │ mount /secrets
-                                                                        │ load .env → /etc/mjolnir/secrets.env
+                                                                        │ load .env → /run/mjolnir/secrets.env
                                                                         │ mark injected (one-shot)
                                                                         ✓
   4. Use secrets ───────────────────> POST /api/vms/:id/exec
@@ -72,12 +72,14 @@ The host controls the vsock channel — it can read all traffic. For secrets, we
   files/                    # Arbitrary secret files (certs, keys, etc.)
   metadata.json             # Volume metadata (version, created_at)
 
-/etc/mjolnir/
+/run/mjolnir/               # tmpfs (RAM) — never persisted, never snapshotted
   secrets.env               # Auto-generated: `export KEY='value'` (mode 0600)
+
+/etc/mjolnir/
   vm.json                   # VM identity (vm_id, api_url)
 
 /etc/profile.d/
-  mjolnir-secrets.sh        # Sources secrets.env for interactive shells
+  mjolnir-secrets.sh        # Sources /run/mjolnir/secrets.env for interactive shells
 ```
 
 ### LUKS2 Configuration
@@ -106,7 +108,7 @@ The host controls the vsock channel — it can read all traffic. For secrets, we
 | Keyfile left on disk | Overwritten with zeros before deletion; mode 0600 |
 | Malicious env key names | Validated against `[A-Za-z_][A-Za-z0-9_]*` |
 | secrets.env readable by other users | Written with mode 0600 |
-| Secrets survive snapshot | LUKS file is part of VM filesystem — encrypted at rest |
+| Secrets survive snapshot | Rendered plaintext lives on tmpfs (`/run/mjolnir/secrets.env`) and is never captured by a BTRFS snapshot; only the LUKS file is on the rootfs, and it is ciphertext at rest |
 
 ### One-Shot Injection Guard
 
@@ -234,9 +236,80 @@ Content-Type: application/json
 ```
 
 `secrets_mode` values:
-- `"persistent"` — VM has a LUKS secrets volume; prevents dormancy (can't snapshot encrypted state safely)
+- `"managed"` — LUKS secrets volume whose passphrase is generated and **escrowed by the host**. The host re-injects it over vsock on every boot, including dormancy wake — so managed VMs **can go dormant** and scale to zero. See [Managed Mode](#managed-mode-host-escrowed-secrets) below.
+- `"persistent"` — LUKS secrets volume whose passphrase is held by a remote **Iroh peer** (host-blind). Because only that peer can supply the passphrase, the host cannot autonomously wake the VM, so **dormancy is refused**.
 - `"ephemeral"` — Secrets exist only while VM is running
 - `"none"` (default) — No secrets support
+
+---
+
+## Managed Mode (Host-Escrowed Secrets)
+
+`persistent` mode is host-blind by design — the passphrase only ever lives in a remote Iroh peer, so nobody can unlock the volume when the host auto-wakes a dormant VM on an incoming message. That is exactly why `persistent` refuses dormancy. `managed` mode makes the opposite trade: the **host** holds the passphrase, so it can re-unlock secrets autonomously on wake. This enables scale-to-zero for VMs that need secrets, at the cost of host-blindness.
+
+### Trust model
+
+| Property | `persistent` | `managed` |
+|----------|-------------|-----------|
+| Who holds the passphrase | Remote Iroh peer | The host |
+| Host can read decrypted secrets | No | **Yes** |
+| Survives host compromise | Yes | **No** |
+| Can go dormant / wake-on-message | No | **Yes** |
+| Delivery channel | Iroh QUIC (E2E) | vsock (host↔guest) |
+
+`managed` is **not** zero-knowledge. It is appropriate when the host is already trusted with the workload (e.g. it spawns and execs into the VM anyway) and the goal is operational autonomy, not protection from a compromised host. What the LUKS layer still buys you in this mode:
+
+- **Offsite/backup snapshots stay opaque.** A snapshot's `secrets.luks` is ciphertext; the passphrase is *not* in the snapshot (it lives in the host escrow dir, off the data volume), so a leaked or synced snapshot is useless alone.
+- **Disk theft / decommission** is safe as long as the escrow directory isn't on the stolen volume.
+- **Per-VM blast radius.** Each VM gets an independent random passphrase.
+
+### What the host escrows (and where)
+
+The host escrows **only the passphrase** — never the secret material itself. The `.env` content lives inside the LUKS volume, which is on the VM rootfs subvolume and is therefore captured (as ciphertext) by `btrfs subvolume snapshot`. So waking a dormant VM is just *re-opening an already-present encrypted volume* with the escrowed passphrase.
+
+```
+Host (off the data volume):
+  /var/lib/mjolnir/escrow/<vm_id>     # 32-byte random passphrase, mode 0600
+                                       # NEVER inside @vms/ or @snapshots/ → never snapshotted
+```
+
+`btrfs subvolume snapshot` only copies the VM's own `@vms/<uuid>` subvolume. The escrow directory is a plain host path, never shared into the guest via virtiofs and never inside `@vms`, so it is structurally impossible for it to appear in a snapshot.
+
+### Lifecycle
+
+```
+  Host (Elixir)                              Guest (VM)
+  ─────────────                              ──────────
+
+  Spawn secrets_mode=managed
+  │ boot, wait for agent
+  │ escrow miss → generate passphrase
+  │ write /var/lib/mjolnir/escrow/<id> (0600)
+  │ vsock: inject_secrets{passphrase, init_size_mb} ──> create LUKS, mount /secrets, load env
+  ✓ VM running with secrets
+
+  POST /api/vms/:id/secrets {entries}  ──────────────> set_env → /secrets/.env (encrypted),
+                                                        render /run/mjolnir/secrets.env (tmpfs)
+
+  handle_done (dormancy)
+  │ sync + pause + btrfs snapshot (ciphertext .luks captured)
+  │ KEEP escrow entry
+  ✓ dormant
+
+  incoming message → wake
+  │ clone rootfs from snapshot (.luks present)
+  │ boot, wait for agent
+  │ escrow HIT → read passphrase
+  │ vsock: inject_secrets{passphrase} (no init_size) ─> open existing LUKS, load env
+  ✓ secrets transparently restored, no human in the loop
+
+  kill / destroy
+  │ delete escrow entry  (dormancy does NOT delete it)
+```
+
+### vsock delivery
+
+Unlike `persistent` (Iroh ALPN), `managed` delivers the passphrase over the existing vsock control channel via an `inject_secrets` request, dispatched directly into the same `secrets.rs` LUKS engine (`init_secrets_volume` / `open_secrets_volume` / `load_env_vars`). The per-session one-shot guard (`try_claim_injection`) resets on each fresh agent process, so re-injection on every boot/wake is expected and safe.
 
 ### Authorize an Inject Peer
 
@@ -256,8 +329,8 @@ Tells the guest agent to add this Iroh NodeId to its authorized inject peers lis
 ## How Environment Variables Work
 
 1. **Storage**: Secrets are stored as `KEY=VALUE` in `/secrets/.env` (on the encrypted LUKS volume)
-2. **Export**: On injection (and on `set_env`/`push_env`), the agent generates `/etc/mjolnir/secrets.env` with `export KEY='value'` lines (mode 0600, shell-safe quoting)
-3. **Auto-source**: Every `exec` command is wrapped: `[ -f /etc/mjolnir/secrets.env ] && . /etc/mjolnir/secrets.env; <command>`
+2. **Export**: On injection (and on `set_env`/`push_env`), the agent generates `/run/mjolnir/secrets.env` (tmpfs — plaintext never touches the rootfs or a snapshot) with `export KEY='value'` lines (mode 0600, shell-safe quoting)
+3. **Auto-source**: Every `exec` command is wrapped: `[ -f /run/mjolnir/secrets.env ] && . /run/mjolnir/secrets.env; <command>`
 4. **Interactive shells**: `/etc/profile.d/mjolnir-secrets.sh` sources the env file for login shells (bash, sh)
 
 This means applications don't need any Mjolnir-specific code — they just read environment variables as usual:
@@ -282,7 +355,7 @@ const apiKey = process.env.API_KEY;
 | `init_secrets_volume(size, passphrase)` | Create LUKS file, format, mount, create dirs |
 | `open_secrets_volume(passphrase)` | Open existing LUKS file and mount |
 | `close_secrets_volume()` | Unmount, close LUKS, detach loop device |
-| `load_env_vars()` | Parse .env files → write /etc/mjolnir/secrets.env |
+| `load_env_vars()` | Parse .env files → write /run/mjolnir/secrets.env (tmpfs) |
 | `set_env_vars(entries)` | Merge key-value pairs into .env |
 | `push_env_content(content)` | Replace .env contents |
 | `try_claim_injection()` | Atomic one-shot guard (compare_exchange) |

@@ -233,7 +233,7 @@ Use secrets ──────────────────> exec ──�
 | Passphrase zeroed after use | `zeroize` crate wipes memory |
 | Key file shredded from disk | Overwritten with zeros before deletion |
 | Env key names validated | `[A-Za-z_][A-Za-z0-9_]*` regex prevents injection |
-| Secrets survive snapshot | LUKS file is part of VM filesystem — encrypted at rest |
+| Secrets survive snapshot | Rendered plaintext lives on tmpfs (`/run/mjolnir/secrets.env`) and is never captured by a BTRFS snapshot; only the LUKS file is on the rootfs, and it is ciphertext at rest |
 
 > **Full protocol specification:** `docs/secrets-architecture.md`
 

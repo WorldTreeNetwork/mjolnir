@@ -19,7 +19,7 @@
 - **LUKS2 encrypted secrets volumes** inside guest VMs (AES-XTS-plain64, 512-bit, Argon2id)
 - **Iroh SECRET_INJECT_ALPN** (`mjolnir-secret-inject/1`) for passphrase delivery bypassing the host
 - **Peer authentication** — authorized inject peers configured via vsock, validated via `conn.remote_id()`
-- **Environment variable auto-sourcing** — every `exec` command sources `/etc/mjolnir/secrets.env`
+- **Environment variable auto-sourcing** — every `exec` command sources `/run/mjolnir/secrets.env` (tmpfs)
 - **Security hardened** — zeroize, atomic injection guard, keyfile 0600 + zero-fill before delete, env key validation, secrets.env 0600
 
 ### New/Modified Files

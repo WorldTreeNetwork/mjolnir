@@ -218,9 +218,9 @@ Billing-for-compute wants **scale-to-zero**: idle apps go dormant, wake on reque
 
 ### Keep plaintext off the rootfs (and out of layers)
 
-Today the rendered env is written to `/etc/mjolnir/secrets.env` **plaintext on the rootfs**; snapshotting that rootfs bakes secrets into the layer. Fixes, in order of effort:
+The rendered env must stay off the rootfs — snapshotting the rootfs would otherwise bake secrets into the layer. Fixes, in order of effort:
 
-1. **Ship now — render to tmpfs.** Move the render target from `/etc/mjolnir/secrets.env` to **`/run/mjolnir/secrets.env`**. `/run` is RAM-backed (tmpfs) on any systemd guest, so it is never persisted and never captured by a BTRFS snapshot. The service unit uses `EnvironmentFile=/run/mjolnir/secrets.env`. One-path change in `secrets.rs`. (The LUKS *source* `.env` stays encrypted-at-rest; only the RAM copy is plaintext.)
+1. ~~**Render to tmpfs.**~~ **Shipped.** The render target is **`/run/mjolnir/secrets.env`** (`SECRETS_ENV_PATH` in `secrets.rs`). `/run` is RAM-backed (tmpfs) on any systemd guest, so it is never persisted and never captured by a BTRFS snapshot. A service unit can consume it via `EnvironmentFile=/run/mjolnir/secrets.env`. (The LUKS *source* `.env` stays encrypted-at-rest; only the RAM copy is plaintext.)
 2. **Better — in-memory via unix socket.** The guest agent holds injected secrets in memory and exposes them over a unix socket (or injects them directly into the service process environment at launch). Nothing — cipher or plain — touches disk.
 3. **End-state — recrypt.** Secrets are recrypted to the VM key and decrypted in RAM per boot; no persistent secrets volume at all.
 

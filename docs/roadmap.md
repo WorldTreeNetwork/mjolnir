@@ -86,7 +86,7 @@ These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
 ### Secrets
 - **LUKS2-encrypted secrets volumes** inside the guest, with passphrases delivered over a
   dedicated Iroh ALPN that bypasses the host. Authorized inject peers validated by node ID.
-  Every `exec` auto-sources `/etc/mjolnir/secrets.env`.
+  Every `exec` auto-sources `/run/mjolnir/secrets.env` (tmpfs — plaintext never hits the rootfs).
 
 ### Dormancy & messaging
 - Dormant VMs: `handle_done/1` snapshots a VM and registers it for wake-on-message

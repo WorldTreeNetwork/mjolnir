@@ -55,7 +55,7 @@ mjolnir secrets inject a1b2c3d4 --passphrase "my-strong-passphrase"
 This connects directly to the VM via Iroh QUIC (bypassing the host), sends the passphrase, and the guest agent:
 1. Creates a 32MB LUKS2 encrypted volume (first time) or opens the existing one
 2. Mounts it at `/secrets/`
-3. Loads any `.env` files into `/etc/mjolnir/secrets.env`
+3. Loads any `.env` files into `/run/mjolnir/secrets.env` (tmpfs — never persisted to the rootfs)
 4. Locks the injection slot — no one can inject again this session
 
 ```json
