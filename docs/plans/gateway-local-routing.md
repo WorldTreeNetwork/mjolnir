@@ -1,6 +1,6 @@
 # Gateway Local Routing — kill the cold-start for co-located VMs
 
-**Status:** Design (no code yet)
+**Status:** ✅ Shipped — all phases deployed & verified live 2026-07-01
 **Author:** investigation 2026-06-30
 **Problem:** `zine.identikey.io` spins ~7s on first load, then is fast (~138ms warm),
 then re-spins after ~5 min idle. Email clients give up before images load.
@@ -101,14 +101,14 @@ on redeploy (new VM → new guest IP); Phase 2 automates regeneration.
    backfill the registry. Reading `guest_ip` from the API is simpler and more robust than
    recomputing `allocate_ip(vm_id)`.
 
-### Phase 1 — Drop-in config loader (small Rust, ~40 lines + tests)
+### Phase 1 — Drop-in config loader (small Rust) — ✅ SHIPPED 2026-07-01
 Extend `config::load` to also read `/etc/mjolnir/gateway.d/*.toml` and merge their
 `[[route]]`/`[[alias]]` into the base (apexes/certs/sites_resolver stay in `gateway.toml`).
 Keeps machine-generated routes cleanly separated from the hand-maintained base; SIGHUP
 already re-runs `load()`. *Alternative (zero Rust):* Elixir renders the entire
 `gateway.toml` from an operator base template + generated route blocks.
 
-### Phase 2 — Elixir route generator (`Mjolnir.Gateway.Routes`)
+### Phase 2 — Elixir route generator (`Mjolnir.Gateway.Routes`) — ✅ SHIPPED 2026-07-01
 - Add `custom_domain` (or `domains: [..]`) + `port` to `Deploy.Registry.Entry`; set at
   deploy time (`mj deploy --domain zine.identikey.io`, or app config).
 - New module renders `/etc/mjolnir/gateway.d/apps.toml` from `Deploy.Registry`: for each
@@ -118,10 +118,25 @@ already re-runs `load()`. *Alternative (zero Rust):* Elixir renders the entire
 - Trigger regeneration on: deploy cutover (after `registry_put`), EventBus
   `:vm_restored` / `:vm_started` / resume, and Mjolnir boot (reconcile).
 
-### Phase 3 — Self-healing failover (small Rust, recommended)
+### Phase 3 — Self-healing failover (small Rust) — ✅ SHIPPED 2026-07-01
 In `handle_connection`, when `Disposition::Local` dial fails **and** an alias exists for the
 same `(apex, subdomain)`, fall back to `handle_iroh_connection`. Makes a stale route
 non-fatal — and is the exact seam for multi-host (local-first, Iroh-for-remote).
+Implemented as a loader change (per finding #2): the shadowed alias is **retained** as the
+route's `fallback_node`/`fallback_port` rather than dropped, and the handler dials Iroh with
+it on local-dial failure.
+
+### Deployment — ✅ live 2026-07-01 00:53Z (`just deploy-gateway`)
+Full rollout verified end-to-end in prod (epic `mjolnir-l79`, phases `.2`/`.3`/`.4` closed):
+- Elixir restart resumed zine (`Reconcile` from StateStore, same IP `10.237.178.231`, app
+  `app.service` auto-started); the generator wrote `/etc/mjolnir/gateway.d/apps.toml` on boot
+  (`Gateway.Routes: wrote 1 route(s)`) and reloaded the gateway.
+- Gateway (new binary) logged `config.alias_shadowed_by_route … retaining Iroh node as route
+  fallback` (Phase 3 live) and serves every zine request `route="local"` (~70–150 ms). Other
+  sites (mimir) unaffected.
+- `ExecReload=/bin/kill -HUP $MAINPID` added to the unit; `systemctl reload` works.
+- The manual Phase-0 base `[[route]]` for zine has been removed from `gateway.toml`; the
+  generator's drop-in is the sole source, with the `[[alias]]` as Iroh fallback.
 
 ## Multi-host future (no corner painted)
 The generator only writes local routes for VMs on the current host; VMs on other hosts stay
@@ -133,9 +148,13 @@ here blocks that; it builds toward it.
 ## Secondary wins (cheap, independent of the root fix)
 - Raise `pool_ttl_secs`; add keepalive pre-warm so published-site Iroh conns don't go cold.
 - Fix per-request `reqwest::Client` in `sites.rs:37` (build once, reuse).
-- Enable HTTP/2 at the gateway (multiplex the ~10 `_app/immutable/*` asset requests).
-- Host-side cache of immutable assets so they never touch the VM.
-- Real CDN last — origin is fast by then, so it's pure geo/latency win.
+
+**HTTP/2, host-side asset caching, and a CDN are now decided in
+[ADR 0001 — Edge strategy](../decisions/0001-edge-strategy.md).** Summary: the gateway
+rewrite into a caching HTTP proxy is **rejected** (weeks + risk on the byte-pipe, no geo);
+instead adopt a CDN (Bunny) as a ready-to-pull, low-lock-in lever gated on a real trigger
+(spike `mjolnir-amo`), and steer static assets to IdentiKey Sites. The origin is fast now,
+so any edge layer is pure geo/latency win.
 
 ## Risks / validation
 - Host→guest `:3000` reachability: validated by Phase 0 (guest must bind `0.0.0.0:3000`).

@@ -24,29 +24,40 @@ Browser ──TLS(SNI=zine.identikey.io)──> mjolnir-gateway  (:443 on the ho
 `classify()` (`main.rs:565-585`) checks **local routes before Iroh aliases** — a local
 `[[route]]` shadows the matching `[[alias]]`. `Disposition::Local` is a raw bidirectional
 TCP proxy (`dial_local` → `run_proxy_local`); `Disposition::Iroh` dials the VM over Iroh
-with a pooled connection (`setup_iroh_proxy`, TTL `pool_ttl_secs`, default 300s).
+with a pooled connection (`setup_iroh_proxy`, TTL `pool_ttl_secs`, default 300s). Since
+2026-07-01 a shadowed `[[alias]]` is **retained** as the route's Iroh fallback: if the
+local dial fails, the gateway falls back to Iroh instead of returning 502.
 
 ## Where each mapping lives
 
 | Mapping | Stored in | Notes |
 |---|---|---|
-| `host` → `(apex, subdomain)` | gateway `[[apex]]` list, longest-suffix match | `route.rs::match_host` |
+| `host` → `(apex, subdomain)` | gateway `[[domain]]` list, longest-suffix match | `route.rs::match_host` |
 | `(apex, sub)` → **local TCP backend** | gateway `[[route]] { apex, subdomain, backend }` | `backend` is a `SocketAddr`; checked first |
 | `(apex, sub)` → **Iroh node** | gateway `[[alias]] { apex, subdomain, node, port }` | port appended as synthetic `<z32>-<port>` subdomain |
 | custom domain → IdentiKey static site | `SecretStore` reverse index `_index/aliases/<fqdn>` → `{fp, site}` | served by `VanityHostPlug` on Bandit `:4000`, *not* the gateway |
-| app name → VM | `Deploy.Registry` JSON `/var/lib/mjolnir/deploy/registry/<slug>.json` | `{app_name, release_snapshot, service_vm_id, url}` |
+| app name → VM | `Deploy.Registry` JSON `/var/lib/mjolnir/deploy/registry/<slug>.json` | `{app_name, release_snapshot, service_vm_id, url, custom_domain, port}` |
+| custom domain → local route | generated `/etc/mjolnir/gateway.d/apps.toml` | rendered by `Mjolnir.Gateway.Routes`; merged over the base by the drop-in loader |
 | VM → local IP | computed: `Mjolnir.Network.allocate_ip(vm_id)` | deterministic SHA256 → `10.200.0.0/10`; not stored |
-| app → internal port | `Deploy.BuildPlan.port` (from `Detector`, P0 hardcodes 3000) | baked into `url` string; not stored as structured data |
+| app → internal port | `Deploy.Registry.Entry.port` (+ `BuildPlan.port` from `Detector`, P0 hardcodes 3000) | now stored structured on the registry entry (2026-07-01) |
 
-## Gateway config (`/etc/mjolnir/gateway.toml`)
+## Gateway config (`/etc/mjolnir/gateway.toml` + `gateway.d/*.toml`)
 
-- **Single TOML file**, resolved by `config::resolve_config_path()` (override:
-  `GATEWAY_CONFIG`). No include/merge; `config::load()` reads exactly one path.
-- **Hand-maintained today.** No Elixir code generates `[[route]]`/`[[alias]]` entries — the
-  `zine` alias was entered manually. (This is a known stopgap; see the local-routing plan.)
-- **Hot reload:** `systemctl reload mjolnir-gateway` → SIGHUP → `load()` → atomic `ArcSwap`
-  swap of the `RouteTable` (`main.rs:1338-1459`). A parse error keeps the previous config;
-  in-flight connections keep their snapshot. Listener addr changes still need a restart.
+- **Base file** `/etc/mjolnir/gateway.toml`, resolved by `config::resolve_config_path()`
+  (override: `GATEWAY_CONFIG`). Hand-maintained: apexes (`[[domain]]`), `[[cert]]`, ACME,
+  server settings, and any hand-pinned `[[alias]]`.
+- **Drop-in routes** `/etc/mjolnir/gateway.d/*.toml` (since 2026-07-01): `config::load()`
+  merges their `[[route]]`/`[[alias]]` into the base. Drop-ins **cannot** declare apexes,
+  certs, or server settings (a security boundary). This is where machine-generated routes
+  live.
+- **Routes are generated, not hand-edited.** `Mjolnir.Gateway.Routes` (Elixir) renders
+  `/etc/mjolnir/gateway.d/apps.toml` from live VM state + `Deploy.Registry` custom domains +
+  `:gateway_extra_domains`; `RouteReconciler` regenerates it on VM lifecycle + deploy events
+  (debounced), then reloads. Feature-flagged `:gateway_routes_enabled` (on in prod).
+- **Hot reload:** `systemctl reload mjolnir-gateway` → SIGHUP → re-`load()` (base + drop-ins)
+  → atomic `ArcSwap` swap of the `RouteTable` (`main.rs:1338-1459`). A parse error keeps the
+  previous config; in-flight connections keep their snapshot. Requires `ExecReload` in the
+  unit (added 2026-07-01); listener addr changes still need a restart.
 
 ## TLS / certificates
 
@@ -75,16 +86,20 @@ offset into `10.200.0.0/10` (avoids `.0`/`.255` last octet). Pure function of `v
 `registry_put(app_name, %{release_snapshot, service_vm_id, url})` → on redeploy, stop the
 previous VM (cutover). One JSON file per app.
 
-### Known gaps (for automation / custom domains / multi-host)
+### Binding fields & remaining gaps
 
-- No `custom_domain` / `domains` field — the friendly hostname lives only in the gateway
-  `[[alias]]`, disconnected from the binding.
+`Deploy.Registry.Entry` now carries `custom_domain` + `port` (added 2026-07-01), so the
+route generator derives `(subdomain, apex) → backend` from the binding rather than a
+hand-edited config. Remaining gaps:
+
 - No `host` field — can't tell which physical host a VM is on (needed for local-vs-remote
-  routing once there's more than one host).
-- `port` is baked into the `url` string, not structured — awkward to template into a route
-  backend.
-- Write-once on deploy; not reconciled/observed against live VM state.
+  routing once there's more than one host). The generator emits routes only for VMs it sees
+  running locally.
+- Write-once on deploy; not reconciled/observed against live VM state. The `RouteReconciler`
+  compensates by regenerating on lifecycle events; folding the whole thing into Forge (so it
+  converges/drifts/prunes like any host resource) is tracked as `mjolnir-l79.6`.
+- `zine` is not in `Deploy.Registry` (hand-provisioned) — covered via `:gateway_extra_domains`
+  config until backfilled.
 
-These gaps are why gateway config is still hand-edited. Closing them lets an Elixir
-generator render gateway routes from the binding. See
-[`plans/gateway-local-routing.md`](plans/gateway-local-routing.md).
+The automation gap is closed: gateway routes are rendered from the binding + live VM state,
+not hand-edited. See [`plans/gateway-local-routing.md`](plans/gateway-local-routing.md).
