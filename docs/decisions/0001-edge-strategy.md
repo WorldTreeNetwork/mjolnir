@@ -85,6 +85,19 @@ Net: **status quo now**, with A as a documented, ready-to-pull lever and B as th
 preferred direction for static content. We buy the big user-facing wins (h2/h3, geo,
 caching) from a swappable CNAME layer, not a core rewrite.
 
+### Sub-question: should we add h2/h3 to the gateway *itself*?
+
+Tempting to treat as a small win independent of C, but **in a CDN-backed world it buys
+~nothing.** The CDN already speaks h2/h3 to browsers and fetches the origin over *pooled
+HTTP/1.1 keep-alive* connections, coalescing many user requests onto a few origin sockets
+— so the origin never sees the connection fan-out h2 multiplexing would relieve.
+h2-to-origin saves a sliver (header compression, fewer sockets); h3-to-origin saves
+nothing (its loss/mobility wins are a client-edge concern; origin↔CDN is a stable
+datacenter path). It only helps *direct-to-origin* traffic (no CDN in front), and even
+there the post-local-routing win is modest — while the cost is the *same* "terminate and
+re-emit" rewrite as option C (the byte-pipe can't splice h2). **Verdict:** get h2/h3 from
+the edge; keep the origin a byte-pipe.
+
 ## Consequences
 
 - No engineering committed to an edge rewrite; the gateway stays simple and reliable.
