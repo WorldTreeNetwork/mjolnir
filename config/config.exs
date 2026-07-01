@@ -63,6 +63,21 @@ config :mjolnir,
   # Web gateway domain for Iroh-enabled VMs
   gateway_domain: "vm.worldtree.network",
 
+  # Gateway local-route generation (Mjolnir.Gateway.Routes). When enabled, the
+  # RouteReconciler renders /etc/mjolnir/gateway.d/apps.toml from live VM +
+  # Deploy.Registry state so co-located VMs are served over direct host→guest
+  # TCP (no ~7s Iroh cold-start). OFF by default so `mix test` and Macs never
+  # write /etc; prod.exs flips it on. See docs/plans/gateway-local-routing.md.
+  gateway_routes_enabled: false,
+  # Drop-in file the gateway SIGHUP-merges (must contain only [[route]] blocks).
+  gateway_routes_path: "/etc/mjolnir/gateway.d/apps.toml",
+  # Apexes the gateway declares as [[domain]] entries. A custom-domain fqdn is
+  # split into (subdomain, apex) by the LONGEST matching apex suffix.
+  gateway_apexes: ["vm.worldtree.network", "worldtree.network", "identikey.io"],
+  # Static routes for manually-provisioned apps not in Deploy.Registry. Each is
+  # %{fqdn: "zine.identikey.io", vm_id: "<uuid>", port: 3000} (or app_name:).
+  gateway_extra_domains: [],
+
   # IdentiKey sites — content-addressed chunk store + signed-record secret store.
   # See docs/plans/initiatives/identikey-sites.md.
   sites_root: "/var/lib/mjolnir/btrfs/@sites",

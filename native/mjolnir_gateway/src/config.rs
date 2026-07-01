@@ -79,6 +79,29 @@ pub struct FileConfig {
     pub certs: Vec<CertDecl>,
 }
 
+impl FileConfig {
+    /// True if this (drop-in) config declares anything beyond `[[route]]` /
+    /// `[[alias]]` — i.e. an apex, a cert, or any server/ACME/TLS scalar. Used to
+    /// enforce the drop-in security boundary.
+    fn declares_non_route_alias_content(&self) -> bool {
+        !self.domains.is_empty()
+            || !self.certs.is_empty()
+            || self.acme.is_some()
+            || self.tls.is_some()
+            || self.sites.is_some()
+            || self.listen.is_some()
+            || self.listen_tls.is_some()
+            || self.vm_default_port.is_some()
+            || self.connect_timeout_secs.is_some()
+            || self.response_timeout_secs.is_some()
+            || self.pool_ttl_secs.is_some()
+            || self.pool_max.is_some()
+            || self.pool_probe_timeout_secs.is_some()
+            || self.tls_expiry_fail_secs.is_some()
+            || self.tls_session_cache.is_some()
+    }
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct AcmeSection {
     #[serde(default)]
@@ -178,6 +201,25 @@ pub struct Route {
     pub apex: String,
     pub subdomain: String,
     pub backend: SocketAddr,
+    /// If a `[[route]]` shadows an `[[alias]]` for the same `(apex, subdomain)`,
+    /// the alias's Iroh node is retained here so the gateway can fail over to
+    /// the global overlay when the local backend is unreachable (Phase 3).
+    /// `None` when no alias was shadowed.
+    pub fallback_node: Option<String>,
+    /// Target port for the retained Iroh `fallback_node` (mirrors `Alias::port`).
+    pub fallback_port: Option<u16>,
+}
+
+impl Route {
+    /// Render the synthetic `<node>[-<port>]` subdomain for the retained Iroh
+    /// fallback, ready to feed into the same Iroh proxy path an alias uses.
+    /// `None` when this route has no fallback node.
+    pub fn fallback_target_subdomain(&self) -> Option<String> {
+        self.fallback_node.as_ref().map(|node| match self.fallback_port {
+            Some(p) => format!("{}-{}", node, p),
+            None => node.clone(),
+        })
+    }
 }
 
 /// A validated vanity-subdomain → Iroh node alias. `node_z32` has been verified
@@ -404,16 +446,103 @@ pub fn derive_san_list(apexes: &[Apex], routes: &[Route], aliases: &[Alias]) -> 
 
 /// Load the gateway configuration.
 ///
-/// If `path` exists, TOML is authoritative. Otherwise the env-var fallback path
-/// is used (see [`load_from_env`]).
+/// If `path` exists, TOML is authoritative: the base file is parsed, then every
+/// `*.toml` in the sibling drop-in directory (default `<parent>/gateway.d/`,
+/// overridable via `GATEWAY_CONFIG_D`) is merged in — but drop-ins may declare
+/// ONLY `[[route]]`/`[[alias]]` entries (a security boundary: they cannot add
+/// apexes or change server/ACME/TLS/cert settings). Merging happens *before*
+/// validation so a generated route uniformly shadows a base alias.
+///
+/// Otherwise the env-var fallback path is used (see [`load_from_env`]).
 pub fn load(path: &Path) -> Result<LoadedConfig, ConfigError> {
     if path.exists() {
         let bytes = std::fs::read(path)?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|e| ConfigError::TomlParse(format!("invalid UTF-8 in {}: {}", path.display(), e)))?;
-        load_from_toml_str(text)
+        let mut file: FileConfig =
+            toml::from_str(text).map_err(|e| ConfigError::TomlParse(e.to_string()))?;
+        merge_dropins(&mut file, &config_d_dir(path));
+        validate_and_normalize(file, ConfigSource::Toml)
     } else {
         load_from_env()
+    }
+}
+
+/// Resolve the drop-in directory: `GATEWAY_CONFIG_D` if set, else
+/// `<parent-of-base>/gateway.d/`.
+fn config_d_dir(base: &Path) -> PathBuf {
+    if let Ok(dir) = std::env::var("GATEWAY_CONFIG_D") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    base.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("gateway.d")
+}
+
+/// Merge `[[route]]`/`[[alias]]` entries from every `*.toml` in `dir` into
+/// `base`, in sorted filename order for determinism. Resilient (mirrors the
+/// `[[cert]]` posture): a missing directory is a no-op, and a drop-in that fails
+/// to read/parse is WARN-logged and skipped — never fatal. Any non-route/alias
+/// content in a drop-in (apex, cert, server/ACME/TLS settings) is rejected with
+/// a warning and ignored; only routes and aliases ever merge.
+fn merge_dropins(base: &mut FileConfig, dir: &Path) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return, // missing directory = no-op
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+        .collect();
+    files.sort();
+
+    for path in files {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(
+                    event = "config.dropin_read_error",
+                    path = %path.display(),
+                    error = %e,
+                    "could not read gateway drop-in — skipping"
+                );
+                continue;
+            }
+        };
+        let dropin: FileConfig = match toml::from_str(&text) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(
+                    event = "config.dropin_parse_error",
+                    path = %path.display(),
+                    error = %e,
+                    "malformed gateway drop-in — skipping"
+                );
+                continue;
+            }
+        };
+        // Security boundary: drop-ins must NOT declare apexes, certs, or any
+        // server/ACME/TLS settings. Warn and ignore those; merge only routes/aliases.
+        if dropin.declares_non_route_alias_content() {
+            warn!(
+                event = "config.dropin_forbidden_section",
+                path = %path.display(),
+                "gateway drop-in declares apex/cert/server settings — ignoring those; only [[route]]/[[alias]] are merged"
+            );
+        }
+        let n_routes = dropin.routes.len();
+        let n_aliases = dropin.aliases.len();
+        base.routes.extend(dropin.routes);
+        base.aliases.extend(dropin.aliases);
+        info!(
+            event = "config.dropin_merged",
+            path = %path.display(),
+            routes = n_routes,
+            aliases = n_aliases,
+            "merged gateway drop-in"
+        );
     }
 }
 
@@ -633,6 +762,8 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
             apex: apex_lower,
             subdomain: sub_lower,
             backend,
+            fallback_node: None,
+            fallback_port: None,
         });
     }
 
@@ -671,16 +802,21 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
             continue;
         }
         // A [[route]] for the same (apex, subdomain) wins — classify() checks
-        // local routes before aliases. Warn and skip so behavior is obvious.
-        if routes
-            .iter()
-            .any(|r| r.apex == apex_lower && r.subdomain == sub_lower)
+        // local routes before aliases. The alias is dropped from the standalone
+        // list, but its Iroh node is RETAINED on the shadowing route as a
+        // fallback so the gateway can fail over to the overlay when the local
+        // backend is unreachable (Phase 3).
+        if let Some(route) = routes
+            .iter_mut()
+            .find(|r| r.apex == apex_lower && r.subdomain == sub_lower)
         {
+            route.fallback_node = Some(a.node.clone());
+            route.fallback_port = a.port;
             warn!(
                 event = "config.alias_shadowed_by_route",
                 apex = %apex_lower,
                 subdomain = %sub_lower,
-                "[[alias]] shadowed by a [[route]] with the same (apex, subdomain) — skipping alias"
+                "[[alias]] shadowed by a [[route]] with the same (apex, subdomain) — retaining Iroh node as route fallback"
             );
             continue;
         }
@@ -1175,11 +1311,15 @@ mod tests {
                 apex: "worldtree.network".into(),
                 subdomain: "git".into(),
                 backend: "127.0.0.1:3000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
             },
             Route {
                 apex: "worldtree.network".into(),
                 subdomain: "chat".into(),
                 backend: "127.0.0.1:4000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
             },
         ];
         let sans = derive_san_list(&apexes, &routes, &[]);
@@ -1206,6 +1346,8 @@ mod tests {
             apex: "worldtree.network".into(),
             subdomain: "git".into(),
             backend: "127.0.0.1:3000".parse().unwrap(),
+            fallback_node: None,
+            fallback_port: None,
         }];
         let sans = derive_san_list(&apexes, &routes, &[]);
         assert!(sans.contains(&"*.vm.worldtree.network".to_owned()));
@@ -1278,7 +1420,7 @@ mod tests {
     }
 
     #[test]
-    fn toml_alias_shadowed_by_route_skipped() {
+    fn toml_alias_shadowed_by_route_retained_as_fallback() {
         let toml = format!(
             r#"
             [[domain]]
@@ -1294,11 +1436,43 @@ mod tests {
             apex = "identikey.io"
             subdomain = "zine"
             node = "{TEST_NODE_Z32}"
+            port = 3000
             "#
         );
         let cfg = load_from_toml_str(&toml).expect("loads");
         assert_eq!(cfg.routes.len(), 1);
-        assert!(cfg.aliases.is_empty(), "route wins; shadowed alias dropped");
+        // The alias is dropped from the standalone list...
+        assert!(
+            cfg.aliases.is_empty(),
+            "route wins; shadowed alias dropped from standalone list"
+        );
+        // ...but its Iroh node/port is retained on the route as a fallback.
+        let r = &cfg.routes[0];
+        assert_eq!(r.fallback_node.as_deref(), Some(TEST_NODE_Z32));
+        assert_eq!(r.fallback_port, Some(3000));
+        assert_eq!(
+            r.fallback_target_subdomain().as_deref(),
+            Some(format!("{TEST_NODE_Z32}-3000").as_str())
+        );
+    }
+
+    #[test]
+    fn toml_unshadowed_route_has_no_fallback() {
+        let toml = r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "git"
+            backend = "127.0.0.1:3000"
+        "#;
+        let cfg = load_from_toml_str(toml).expect("loads");
+        assert_eq!(cfg.routes.len(), 1);
+        assert_eq!(cfg.routes[0].fallback_node, None);
+        assert_eq!(cfg.routes[0].fallback_port, None);
+        assert_eq!(cfg.routes[0].fallback_target_subdomain(), None);
     }
 
     #[test]
@@ -1438,5 +1612,218 @@ mod tests {
         let cfg = load_from_toml_str(text).expect("parse");
         assert_eq!(cfg.apexes[0].suffix, "a.com");
         assert_eq!(cfg.routes[0].subdomain, "git");
+    }
+
+    // ── Drop-in directory loader tests (Phase 1) ──────────────────────────────
+
+    const BASE_TOML: &str = r#"
+        [[domain]]
+        suffix = "identikey.io"
+        fallthrough = "none"
+
+        [[route]]
+        apex = "identikey.io"
+        subdomain = "base"
+        backend = "127.0.0.1:1000"
+    "#;
+
+    /// Write `gateway.toml` plus the named drop-in files under `gateway.d/` in a
+    /// fresh temp dir, then `load()` the base path so the drop-in merge runs.
+    fn load_with_dropins(base: &str, dropins: &[(&str, &str)]) -> (tempfile::TempDir, LoadedConfig) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base_path = dir.path().join("gateway.toml");
+        std::fs::write(&base_path, base).expect("write base");
+        let dropin_dir = dir.path().join("gateway.d");
+        std::fs::create_dir_all(&dropin_dir).expect("mkdir gateway.d");
+        for (name, body) in dropins {
+            std::fs::write(dropin_dir.join(name), body).expect("write dropin");
+        }
+        let cfg = load(&base_path).expect("load");
+        (dir, cfg)
+    }
+
+    #[test]
+    fn dropin_merges_routes_and_aliases() {
+        let dropin = format!(
+            r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            backend = "10.0.0.5:3000"
+
+            [[alias]]
+            apex = "identikey.io"
+            subdomain = "vanity"
+            node = "{TEST_NODE_Z32}"
+            port = 8080
+            "#
+        );
+        let (_dir, cfg) = load_with_dropins(BASE_TOML, &[("10-apps.toml", &dropin)]);
+        // Base route still present, drop-in route merged in.
+        assert!(cfg.routes.iter().any(|r| r.subdomain == "base"));
+        let zine = cfg
+            .routes
+            .iter()
+            .find(|r| r.subdomain == "zine")
+            .expect("drop-in route merged");
+        assert_eq!(zine.backend, "10.0.0.5:3000".parse().unwrap());
+        // Drop-in alias merged in.
+        let alias = cfg
+            .aliases
+            .iter()
+            .find(|a| a.subdomain == "vanity")
+            .expect("drop-in alias merged");
+        assert_eq!(alias.node_z32, TEST_NODE_Z32);
+        assert_eq!(alias.port, Some(8080));
+    }
+
+    #[test]
+    fn dropin_generated_route_shadows_base_alias() {
+        // A base alias for `zine` plus a generated drop-in route for the same
+        // (apex, subdomain): the route must win and retain the alias as fallback,
+        // proving the merge happens BEFORE validation.
+        let base = format!(
+            r#"
+            [[domain]]
+            suffix = "identikey.io"
+            fallthrough = "none"
+
+            [[alias]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            node = "{TEST_NODE_Z32}"
+            port = 3000
+            "#
+        );
+        let dropin = r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "zine"
+            backend = "10.0.0.9:3000"
+        "#;
+        let (_dir, cfg) = load_with_dropins(&base, &[("10-apps.toml", dropin)]);
+        assert_eq!(cfg.routes.len(), 1);
+        assert!(cfg.aliases.is_empty(), "route shadows base alias");
+        let r = &cfg.routes[0];
+        assert_eq!(r.backend, "10.0.0.9:3000".parse().unwrap());
+        assert_eq!(r.fallback_node.as_deref(), Some(TEST_NODE_Z32));
+        assert_eq!(r.fallback_port, Some(3000));
+    }
+
+    #[test]
+    fn dropin_cannot_inject_apex_cert_or_server_settings() {
+        // A hostile drop-in tries to add an apex, a cert, and change server +
+        // ACME + TLS settings. All must be ignored; only the route merges.
+        let dropin = r#"
+            listen = "0.0.0.0:9999"
+            vm_default_port = 9
+            connect_timeout_secs = 1
+
+            [acme]
+            enabled = true
+            email = "evil@example.com"
+
+            [tls]
+            cert = "/evil/cert.pem"
+            key = "/evil/key.pem"
+
+            [[domain]]
+            suffix = "evil.example.com"
+
+            [[cert]]
+            host = "evil.example.com"
+            cert = "/evil/c.pem"
+            key = "/evil/k.pem"
+
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "ok"
+            backend = "10.0.0.7:80"
+        "#;
+        let (_dir, cfg) = load_with_dropins(BASE_TOML, &[("10-evil.toml", dropin)]);
+        // Only the base apex survives — no apex injection.
+        assert_eq!(cfg.apexes.len(), 1);
+        assert_eq!(cfg.apexes[0].suffix, "identikey.io");
+        // No cert injection.
+        assert!(cfg.extra_certs.is_empty(), "drop-in cert ignored");
+        // Server/ACME/TLS settings untouched (base declared none → defaults).
+        assert!(!cfg.acme.enabled, "drop-in ACME ignored");
+        assert_eq!(cfg.vm_default_port, 80, "drop-in vm_default_port ignored");
+        assert!(cfg.listen.is_none(), "drop-in listen ignored");
+        assert!(cfg.tls_cert_path.is_none(), "drop-in tls cert ignored");
+        // But the route IS merged.
+        assert!(cfg.routes.iter().any(|r| r.subdomain == "ok"));
+    }
+
+    #[test]
+    fn dropin_malformed_is_skipped_not_fatal() {
+        let good = r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "good"
+            backend = "10.0.0.1:80"
+        "#;
+        let bad = "this is = not : valid toml = at = all";
+        // `00-bad` sorts first; the loader must skip it and still merge `10-good`.
+        let (_dir, cfg) =
+            load_with_dropins(BASE_TOML, &[("00-bad.toml", bad), ("10-good.toml", good)]);
+        assert!(
+            cfg.routes.iter().any(|r| r.subdomain == "good"),
+            "good drop-in merged despite a malformed sibling"
+        );
+    }
+
+    #[test]
+    fn dropin_sorted_deterministic_order() {
+        // Two drop-ins declare the same (apex, subdomain) with different backends.
+        // Files merge in sorted filename order; validation keeps the first, so the
+        // lexicographically-earlier filename wins deterministically.
+        let first = r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "dup"
+            backend = "10.0.0.1:3001"
+        "#;
+        let second = r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "dup"
+            backend = "10.0.0.2:3002"
+        "#;
+        let (_dir, cfg) =
+            load_with_dropins(BASE_TOML, &[("01-a.toml", first), ("02-b.toml", second)]);
+        let dup: Vec<_> = cfg.routes.iter().filter(|r| r.subdomain == "dup").collect();
+        assert_eq!(dup.len(), 1, "duplicate route deduplicated");
+        assert_eq!(
+            dup[0].backend,
+            "10.0.0.1:3001".parse().unwrap(),
+            "earlier filename wins"
+        );
+    }
+
+    #[test]
+    fn dropin_missing_directory_is_noop() {
+        // load() against a base path whose sibling gateway.d/ does not exist must
+        // succeed with just the base routes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base_path = dir.path().join("gateway.toml");
+        std::fs::write(&base_path, BASE_TOML).expect("write base");
+        let cfg = load(&base_path).expect("load with no gateway.d");
+        assert_eq!(cfg.routes.len(), 1);
+        assert_eq!(cfg.routes[0].subdomain, "base");
+    }
+
+    #[test]
+    fn dropin_non_toml_files_ignored() {
+        let dropin = r#"
+            [[route]]
+            apex = "identikey.io"
+            subdomain = "yes"
+            backend = "10.0.0.1:80"
+        "#;
+        // A non-.toml sibling must be skipped entirely.
+        let (_dir, cfg) =
+            load_with_dropins(BASE_TOML, &[("README.md", "not toml"), ("10-x.toml", dropin)]);
+        assert!(cfg.routes.iter().any(|r| r.subdomain == "yes"));
     }
 }

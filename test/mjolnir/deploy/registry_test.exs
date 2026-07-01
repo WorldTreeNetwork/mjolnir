@@ -252,7 +252,85 @@ defmodule Mjolnir.Deploy.RegistryTest do
       assert entry.release_snapshot == "snap-1"
       assert entry.service_vm_id == nil
       assert entry.url == nil
+      assert entry.custom_domain == nil
+      assert entry.port == nil
       assert entry.updated_at == 0
+    end
+  end
+
+  describe "custom_domain + port (gateway routing)" do
+    test "put then get round-trips custom_domain and port", %{name: name} do
+      assert {:ok, entry} =
+               Registry.put(name, "zine", %{
+                 release_snapshot: "snap-z",
+                 service_vm_id: "vm-z",
+                 custom_domain: "zine.identikey.io",
+                 port: 3000
+               })
+
+      assert entry.custom_domain == "zine.identikey.io"
+      assert entry.port == 3000
+
+      assert {:ok, fetched} = Registry.get(name, "zine")
+      assert fetched.custom_domain == "zine.identikey.io"
+      assert fetched.port == 3000
+    end
+
+    test "default nil when not provided", %{name: name} do
+      {:ok, entry} = Registry.put(name, "bare", %{release_snapshot: "snap-1"})
+      assert entry.custom_domain == nil
+      assert entry.port == nil
+    end
+
+    test "new fields are persisted to JSON and reload from disk", %{dir: dir} do
+      name1 = :"registry_newfields_#{System.unique_integer([:positive])}"
+      {:ok, pid1} = Registry.start_link(name: name1, dir: dir)
+
+      Registry.put(name1, "domapp", %{
+        release_snapshot: "snap-1",
+        service_vm_id: "vm-1",
+        custom_domain: "app.identikey.io",
+        port: 8080
+      })
+
+      bin = File.read!(Path.join(dir, "domapp.json"))
+      assert {:ok, map} = Jason.decode(bin)
+      assert map["custom_domain"] == "app.identikey.io"
+      assert map["port"] == 8080
+
+      GenServer.stop(pid1)
+
+      name2 = :"registry_newfields_#{System.unique_integer([:positive])}"
+      {:ok, pid2} = Registry.start_link(name: name2, dir: dir)
+      assert {:ok, entry} = Registry.get(name2, "domapp")
+      assert entry.custom_domain == "app.identikey.io"
+      assert entry.port == 8080
+      GenServer.stop(pid2)
+    end
+
+    test "old JSON file without custom_domain/port still loads (backward compat)", %{dir: dir} do
+      # Simulate a pre-feature record: no custom_domain / port keys.
+      old_json =
+        Jason.encode!(%{
+          "app_name" => "legacy-app",
+          "release_snapshot" => "snap-old",
+          "service_vm_id" => "vm-old",
+          "url" => "https://legacy.example.com",
+          "updated_at" => System.os_time(:second)
+        })
+
+      File.write!(Path.join(dir, "legacy-app.json"), old_json)
+
+      name = :"registry_legacy_#{System.unique_integer([:positive])}"
+      {:ok, pid} = Registry.start_link(name: name, dir: dir)
+
+      assert {:ok, entry} = Registry.get(name, "legacy-app")
+      assert entry.release_snapshot == "snap-old"
+      assert entry.service_vm_id == "vm-old"
+      assert entry.custom_domain == nil
+      assert entry.port == nil
+
+      GenServer.stop(pid)
     end
   end
 end

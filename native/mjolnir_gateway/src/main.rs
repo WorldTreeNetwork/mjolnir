@@ -557,7 +557,10 @@ fn host_without_port(host: &str) -> &str {
 
 /// Outcome of Host → route resolution *before* any network work.
 enum Disposition<'a> {
-    Local(&'a Apex, String, SocketAddr),
+    /// Local TCP backend. The trailing `Option<String>` is the retained Iroh
+    /// fallback target (`<node>[-<port>]`) when this route shadowed an alias —
+    /// used for self-healing failover if the local dial fails (Phase 3).
+    Local(&'a Apex, String, SocketAddr, Option<String>),
     Iroh(&'a Apex, String),
     Reject(ProxyError),
 }
@@ -571,7 +574,8 @@ fn classify<'a>(table: &'a RouteTable, host: &str) -> Disposition<'a> {
         return Disposition::Reject(ProxyError::EmptySubdomain);
     }
     if let Some(backend) = table.lookup_local(apex, &subdomain) {
-        return Disposition::Local(apex, subdomain, backend);
+        let fallback = table.lookup_local_fallback(apex, &subdomain);
+        return Disposition::Local(apex, subdomain, backend, fallback);
     }
     // Vanity alias: a friendly subdomain pinned to an Iroh node ID. Resolves
     // regardless of the apex's fallthrough mode (so a `none` apex can still
@@ -856,7 +860,7 @@ where
     }
 
     match classify(&table, &host) {
-        Disposition::Local(apex, subdomain, backend) => {
+        Disposition::Local(apex, subdomain, backend, fallback) => {
             info!(
                 peer = %peer,
                 apex = %apex.suffix,
@@ -876,7 +880,22 @@ where
                         }
                         _ => warn!("{}: {}", peer, e),
                     }
-                    write_error_and_shutdown(&mut stream, &e).await;
+                    // Phase 3: self-healing failover. If this route retained an
+                    // Iroh node from a shadowed alias, serve over the overlay
+                    // instead of returning 502 — makes a stale local route
+                    // non-fatal.
+                    if let Some(target) = fallback {
+                        info!(
+                            peer = %peer,
+                            apex = %apex.suffix,
+                            subdomain = %subdomain,
+                            route = "iroh-fallback",
+                            "local backend unreachable — failing over to retained Iroh alias"
+                        );
+                        handle_iroh_connection(stream, peer, ctx.clone(), target, header_buf).await;
+                    } else {
+                        write_error_and_shutdown(&mut stream, &e).await;
+                    }
                 }
             }
         }
@@ -1831,6 +1850,19 @@ mod tests {
             apex: apex.to_owned(),
             subdomain: sub.to_owned(),
             backend: backend.parse().unwrap(),
+            fallback_node: None,
+            fallback_port: None,
+        }
+    }
+
+    /// Like `route` but with a retained Iroh fallback (a shadowed alias).
+    fn route_with_fallback(apex: &str, sub: &str, backend: &str, node: &str, port: Option<u16>) -> Route {
+        Route {
+            apex: apex.to_owned(),
+            subdomain: sub.to_owned(),
+            backend: backend.parse().unwrap(),
+            fallback_node: Some(node.to_owned()),
+            fallback_port: port,
         }
     }
 
@@ -1843,7 +1875,7 @@ mod tests {
         );
         let table = RouteTable::from_config(&cfg);
         let d = classify(&table, "special.vm.worldtree.network");
-        assert!(matches!(d, Disposition::Local(_, _, _)));
+        assert!(matches!(d, Disposition::Local(_, _, _, _)));
 
         // Any other subdomain falls through to Iroh.
         let d = classify(&table, "abcdef.vm.worldtree.network");
@@ -1860,7 +1892,7 @@ mod tests {
 
         // Pinned route → Local
         let d = classify(&table, "git.worldtree.network");
-        assert!(matches!(d, Disposition::Local(_, _, _)));
+        assert!(matches!(d, Disposition::Local(_, _, _, _)));
 
         // Unpinned → 404 (NotFound)
         let d = classify(&table, "unknown.worldtree.network");
@@ -1895,6 +1927,45 @@ mod tests {
             classify(&table, "other.identikey.io"),
             Disposition::Reject(ProxyError::NotFound)
         ));
+    }
+
+    #[test]
+    fn local_disposition_carries_retained_iroh_fallback() {
+        // Phase 3: a route that shadowed an alias classifies as Local AND carries
+        // the synthetic `<node>-<port>` fallback target for failover.
+        const NODE: &str = "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u";
+        let cfg = loaded_with(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![route_with_fallback(
+                "identikey.io",
+                "zine",
+                "10.0.0.5:3000",
+                NODE,
+                Some(3000),
+            )],
+        );
+        let table = RouteTable::from_config(&cfg);
+        match classify(&table, "zine.identikey.io") {
+            Disposition::Local(a, sub, _backend, fallback) => {
+                assert_eq!(a.suffix, "identikey.io");
+                assert_eq!(sub, "zine");
+                assert_eq!(fallback.as_deref(), Some(format!("{NODE}-3000").as_str()));
+            }
+            _ => panic!("expected Local disposition with fallback"),
+        }
+    }
+
+    #[test]
+    fn local_disposition_without_alias_has_no_fallback() {
+        let cfg = loaded_with(
+            vec![apex("worldtree.network", Fallthrough::None)],
+            vec![route("worldtree.network", "git", "127.0.0.1:3000")],
+        );
+        let table = RouteTable::from_config(&cfg);
+        match classify(&table, "git.worldtree.network") {
+            Disposition::Local(_, _, _, fallback) => assert!(fallback.is_none()),
+            _ => panic!("expected Local disposition"),
+        }
     }
 
     #[test]
@@ -2032,7 +2103,7 @@ mod tests {
             Disposition::Reject(ProxyError::NotFound) => {}
             other => panic!("expected Reject(NotFound), got variant that is not: {:?}",
                 match other {
-                    Disposition::Local(_, _, _) => "Local",
+                    Disposition::Local(_, _, _, _) => "Local",
                     Disposition::Iroh(_, _) => "Iroh",
                     Disposition::Reject(_) => "Reject(other)",
                 }

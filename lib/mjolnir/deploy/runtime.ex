@@ -121,11 +121,17 @@ defmodule Mjolnir.Deploy.Runtime do
          :ok <- install_unit(ops, vm_id, app_name, unit, workdir) do
       url = gateway_url(ticket, port, domain)
 
-      attrs = %{release_snapshot: release_snapshot, service_vm_id: vm_id, url: url}
+      # `port` is recorded so the gateway local-route generator
+      # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.
+      attrs = %{release_snapshot: release_snapshot, service_vm_id: vm_id, url: url, port: port}
 
       case ops.registry_put.(app_name, attrs) do
         {:ok, _entry} ->
           cutover_previous(ops, app_name, vm_id)
+
+          # Cutover spawned a new VM (new vm_id → new guest IP), so refresh the
+          # gateway's local routes. Debounced + a no-op if the reconciler is off.
+          Mjolnir.Gateway.RouteReconciler.trigger()
 
           {:ok,
            %{

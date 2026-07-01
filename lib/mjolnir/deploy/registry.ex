@@ -31,6 +31,8 @@ defmodule Mjolnir.Deploy.Registry do
             release_snapshot: String.t(),
             service_vm_id: String.t() | nil,
             url: String.t() | nil,
+            custom_domain: String.t() | nil,
+            port: pos_integer() | nil,
             updated_at: integer()
           }
 
@@ -40,6 +42,12 @@ defmodule Mjolnir.Deploy.Registry do
       :release_snapshot,
       :service_vm_id,
       :url,
+      # Custom domain (fqdn, e.g. "zine.identikey.io") this app is served under.
+      # Optional; drives gateway local-route generation (Mjolnir.Gateway.Routes).
+      :custom_domain,
+      # Internal app port inside the VM (e.g. 3000). Optional; the route backend
+      # is "#{guest_ip}:#{port}".
+      :port,
       :updated_at
     ]
   end
@@ -147,6 +155,8 @@ defmodule Mjolnir.Deploy.Registry do
       release_snapshot: Map.fetch!(attrs, :release_snapshot),
       service_vm_id: Map.get(attrs, :service_vm_id),
       url: Map.get(attrs, :url),
+      custom_domain: Map.get(attrs, :custom_domain),
+      port: Map.get(attrs, :port),
       updated_at: Map.get(attrs, :updated_at, System.os_time(:second))
     }
   end
@@ -188,6 +198,8 @@ defmodule Mjolnir.Deploy.Registry do
       "release_snapshot" => entry.release_snapshot,
       "service_vm_id" => entry.service_vm_id,
       "url" => entry.url,
+      "custom_domain" => entry.custom_domain,
+      "port" => entry.port,
       "updated_at" => entry.updated_at
     })
   end
@@ -201,6 +213,9 @@ defmodule Mjolnir.Deploy.Registry do
          release_snapshot: snap,
          service_vm_id: Map.get(map, "service_vm_id"),
          url: Map.get(map, "url"),
+         # Backward compatible: old files predate these keys; Map.get → nil.
+         custom_domain: Map.get(map, "custom_domain"),
+         port: Map.get(map, "port"),
          updated_at: updated_at
        }}
     else

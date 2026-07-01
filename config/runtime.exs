@@ -31,6 +31,12 @@ if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
 end
 
+case System.get_env("MJOLNIR_GATEWAY_ROUTES_ENABLED") do
+  "true" -> config :mjolnir, gateway_routes_enabled: true
+  "false" -> config :mjolnir, gateway_routes_enabled: false
+  _ -> :ok
+end
+
 if base_image = System.get_env("MJOLNIR_BASE_IMAGE") do
   config :mjolnir, default_base_image: base_image
 end

@@ -1,0 +1,62 @@
+{
+  "question": "How should Mjolnir connect its served static applications, static resources, and static assets to a CDN? Compare major CDN options across features, pricing, vendor lock-in, and requirements; produce a comparison rubric, per-option trade-offs, and overall cost, with the 'middleman' constraint called out per option.",
+  "mode": "research",
+  "status": "complete",
+  "confidence": "medium",
+  "executive_summary": "A pull-zone CDN fits Mjolnir's static surface with zero gateway changes and no ACME risk (DNS-01, transparent HTTP/1.1 byte-proxy). Bunny.net is the best fit on the team's lock-in-averse axis (CNAME-only, BYO/origin-keeps-cert, ~$10-50/mo at 1-5 TB), with KeyCDN as the same-shape runner-up at ~4x cost. Cloudflare Free is cheapest ($0 bandwidth) and the only PaaS that fits a single self-hosted origin, but is the literal middleman: full DNS delegation and edge TLS termination on Free/Pro (CNAME-only costs $200/mo). CDN-front only fingerprinted/hash-addressed assets and signed-site blobs; leave SSR-over-Iroh pass-through; enable HTTP/2/3 + host-side cache at the origin first as a free win.",
+  "key_findings": [
+    {
+      "finding": "Mjolnir's gateway is a transparent HTTP/1.1 byte-proxy using DNS-01 ACME, so any pull-zone CDN can front it with zero code changes and no risk to cert issuance/renewal.",
+      "confidence": "high",
+      "sources": ["hypotheses/h4-origin-architecture-fit/findings.md"]
+    },
+    {
+      "finding": "Bunny.net is the strongest lock-in-averse fit: CNAME-only DNS, BYO/auto cert while origin keeps its own LE cert, ~$10-50/mo at 1-5 TB, free WAF/DDoS, Perma-Cache for immutable assets.",
+      "confidence": "high",
+      "sources": ["hypotheses/h1-value-cdns/findings.md"]
+    },
+    {
+      "finding": "Cloudflare is the cheapest (unmetered $0 bandwidth) and only PaaS that fits a single self-hosted origin, but Free/Pro requires full authoritative-DNS delegation and its edge always terminates client TLS (sees plaintext); CNAME-only avoidance costs $200/mo Business.",
+      "confidence": "high",
+      "sources": ["hypotheses/h3-fullproxy-paas/findings.md"]
+    },
+    {
+      "finding": "Netlify and Vercel are build-and-host platforms, not generic reverse proxies; fronting Mjolnir's external origin is unsupported/fragile, making them the deepest lock-in tier.",
+      "confidence": "high",
+      "sources": ["hypotheses/h3-fullproxy-paas/findings.md"]
+    },
+    {
+      "finding": "Hyperscaler CDNs (CloudFront, Fastly, GCP CDN, Azure Front Door, Akamai) all technically front a single HTTP/1.1 origin via CNAME, but diverge sharply: CloudFront is lowest-friction (1 TB free tier), GCP requires a mandatory Load Balancer, Akamai is contract-only and uneconomical at 1-5 TB.",
+      "confidence": "medium",
+      "sources": ["hypotheses/h2-hyperscaler-cdns/findings.md"]
+    },
+    {
+      "finding": "HTTP/2/3 + a host-side immutable-asset cache at the origin is a free, unconditional win that fixes the multiplexing bottleneck but not geographic RTT; a DIY BGP-anycast fleet (~$75-150/mo + ops burden) is plausibly costlier than a Bunny pull zone.",
+      "confidence": "medium",
+      "sources": ["hypotheses/h6-contrarian-no-cdn/findings.md"]
+    },
+    {
+      "finding": "CDN caching must be scoped to hash-addressed paths only; external Sites HTML resolves through a mutable HEAD pointer (stale-head hazard) and SSR-over-Iroh is the wrong CDN target.",
+      "confidence": "high",
+      "sources": ["hypotheses/h4-origin-architecture-fit/findings.md"]
+    }
+  ],
+  "open_questions": [
+    "Production traffic geography and asset-vs-SSR byte ratio (not derivable from code) — decides how much geo-latency a CDN buys.",
+    "Live HTTP/1.1-origin pull test against mjolnir-gateway for the chosen CDN (architecturally near-certain but undocumented).",
+    "Fastly and Akamai real pricing require sales quotes; current figures are secondary/contract-only.",
+    "Netlify true overage rate unresolved ($0.13 vs $0.55/GB, ~4x swing).",
+    "HTTP/3 confirmation for Fastly, Azure Front Door, and KeyCDN.",
+    "Build a CDN-purge-on-publish hook before fronting non-fingerprinted Sites HTML.",
+    "Whether DDoS is a real threat for this deployment or imported from generic CDN framing."
+  ],
+  "contradictions": [
+    "Netlify bandwidth overage: two secondary sources give $0.13/GB vs $0.55/GB, unreconciled (~4x).",
+    "Bunny South America rate: directly-fetched pricing page says $0.045/GB vs one aggregator's $0.035/GB (directly-fetched treated as authoritative).",
+    "Contrarian (H6) vs vendor branches on framing: H6 argues HTTP/2/3 + cache may make a CDN unnecessary for a regionally-concentrated low-traffic audience, while H1/H3 assume a CDN is wanted — resolved by scoping (free win first, CDN for geo+DDoS), not by picking a winner."
+  ],
+  "hypotheses_explored": 5,
+  "hypotheses_total": 5,
+  "verification_status": "PASS_WITH_WARNINGS",
+  "output_dir": "docs/research/cdn-for-static-assets"
+}

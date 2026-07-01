@@ -85,6 +85,18 @@ impl RouteTable {
             .map(|r| r.backend)
     }
 
+    /// Look up the retained Iroh fallback for `(apex, subdomain)`. On hit (the
+    /// route shadowed an alias), returns the synthetic `<node>[-<port>]`
+    /// subdomain to feed into the Iroh proxy path — used for self-healing
+    /// failover when the local backend is unreachable (Phase 3).
+    pub fn lookup_local_fallback(&self, apex: &Apex, subdomain: &str) -> Option<String> {
+        let sub_lower = subdomain.to_ascii_lowercase();
+        self.routes
+            .iter()
+            .find(|r| r.apex == apex.suffix && r.subdomain == sub_lower)
+            .and_then(|r| r.fallback_target_subdomain())
+    }
+
     /// Look up a vanity alias for `(apex, subdomain)`. On hit, returns the
     /// synthetic `<node>[-<port>]` subdomain string to feed into the Iroh proxy
     /// path — letting a friendly name like `zine` resolve to a pinned node ID.
@@ -207,6 +219,8 @@ mod tests {
                 apex: "worldtree.network".into(),
                 subdomain: "git-3001".into(),
                 backend: "127.0.0.1:3000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
             }],
         );
         let (a, sub) = t.match_host("git-3001.worldtree.network").expect("match");
@@ -234,6 +248,8 @@ mod tests {
                 apex: "worldtree.network".into(),
                 subdomain: "git".into(),
                 backend: "127.0.0.1:3000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
             }],
         );
         let (a, sub) = t.match_host("Git.Worldtree.NETWORK").expect("match");
@@ -293,5 +309,44 @@ mod tests {
         // A different subdomain under the same apex misses.
         let (a2, sub2) = t.match_host("other.identikey.io").expect("match");
         assert!(t.lookup_alias(a2, &sub2).is_none());
+    }
+
+    #[test]
+    fn lookup_local_fallback_returns_retained_iroh_target() {
+        // A route that shadowed an alias carries the alias's node as a fallback;
+        // lookup_local_fallback renders the synthetic `<node>-<port>` subdomain.
+        let t = table_with_aliases(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![Route {
+                apex: "identikey.io".into(),
+                subdomain: "zine".into(),
+                backend: "10.0.0.5:3000".parse().unwrap(),
+                fallback_node: Some(NODE_Z32.into()),
+                fallback_port: Some(3000),
+            }],
+            vec![],
+        );
+        let (a, sub) = t.match_host("zine.identikey.io").expect("match");
+        assert!(t.lookup_local(a, &sub).is_some(), "local route present");
+        assert_eq!(
+            t.lookup_local_fallback(a, &sub).as_deref(),
+            Some(format!("{NODE_Z32}-3000").as_str())
+        );
+    }
+
+    #[test]
+    fn lookup_local_fallback_none_when_no_fallback() {
+        let t = table(
+            vec![apex("identikey.io", Fallthrough::None)],
+            vec![Route {
+                apex: "identikey.io".into(),
+                subdomain: "git".into(),
+                backend: "10.0.0.5:3000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
+            }],
+        );
+        let (a, sub) = t.match_host("git.identikey.io").expect("match");
+        assert!(t.lookup_local_fallback(a, &sub).is_none());
     }
 }

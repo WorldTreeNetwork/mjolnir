@@ -12,6 +12,11 @@ Group=mjolnir
 
 ExecStart=/usr/local/bin/mjolnir-gateway
 
+# SIGHUP hot-reloads config (gateway.toml + gateway.d/*.toml) and certs in place —
+# no process restart, in-flight connections keep their route-table snapshot.
+# Without this, `systemctl reload` is a no-op; the route generator relies on it.
+ExecReload=/bin/kill -HUP $MAINPID
+
 EnvironmentFile=-/etc/mjolnir/gateway.env
 
 # CAP_NET_BIND_SERVICE needed for :80 and :443 binding as unprivileged mjolnir user

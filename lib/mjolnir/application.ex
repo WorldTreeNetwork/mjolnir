@@ -92,6 +92,7 @@ defmodule Mjolnir.Application do
           # docs/plans/initiatives/mjolnir-deploy.md.
           Mjolnir.Deploy.Supervisor
         ] ++
+        maybe_gateway_routes_children() ++
         maybe_syslog_children() ++
         maybe_runner_children() ++
         maybe_jwks_strategy() ++
@@ -141,6 +142,18 @@ defmodule Mjolnir.Application do
   defp maybe_runner_children do
     if Application.get_env(:mjolnir, :runner_enabled, false) do
       [Mjolnir.Runner.Supervisor]
+    else
+      []
+    end
+  end
+
+  # Gateway local-route reconciler. Renders /etc/mjolnir/gateway.d/apps.toml from
+  # live VM + Deploy.Registry state so co-located VMs are served over direct TCP.
+  # Off by default (writes to /etc + shells out to systemctl) so `mix test` and
+  # dev machines stay green; prod flips it on. See docs/plans/gateway-local-routing.md.
+  defp maybe_gateway_routes_children do
+    if Application.get_env(:mjolnir, :gateway_routes_enabled, false) do
+      [Mjolnir.Gateway.RouteReconciler]
     else
       []
     end
