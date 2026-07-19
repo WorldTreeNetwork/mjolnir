@@ -27,6 +27,12 @@ defmodule Mjolnir.API.PtyHandler do
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.send_resp(404, Jason.encode!(%{error: "not_found"}))
+
+      # Wedged/unresponsive VM GenServer (mjolnir-8ie) — exists but unreachable.
+      {:error, :unreachable} ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, Jason.encode!(%{error: "vm_unreachable"}))
     end
   end
 

@@ -156,11 +156,24 @@ defmodule Mjolnir.Deploy.Builder do
   # to the layer's content-addressed name. Aborts on the first failure, returning
   # the layers built so far so the caller can see partial progress.
   defp run_steps(ops, vm_id, steps_to_run, prefix, exec_timeout) do
-    Enum.reduce_while(steps_to_run, {:ok, []}, fn step, {:ok, built} ->
+    # `skip_verify` is applied ONLY to the final layer's snapshot. Intermediate
+    # layers must keep the post-snapshot guest health-verify: run_steps snapshots
+    # the SAME running VM and keeps exec-ing it for the next step, so a guest that
+    # the snapshot's pause/resume left wedged (mjolnir-8ie) must surface loudly
+    # *now* rather than as a baffling exec failure on the next step. The final
+    # layer has no successor exec and the ephemeral VM is torn down immediately
+    # after, so a post-snapshot guest hiccup there should not fail an otherwise
+    # intact snapshot — the whole point of the cold/skip-verify mode.
+    last_index = length(steps_to_run) - 1
+
+    steps_to_run
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {step, index}, {:ok, built} ->
       snapshot_name = prefix <> step.cache_key
+      snapshot_opts = if index == last_index, do: [skip_verify: true], else: []
 
       with {:ok, _out} <- ops.exec.(vm_id, step.command, timeout: exec_timeout),
-           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, []) do
+           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, snapshot_opts) do
         {:cont, {:ok, [step.cache_key | built]}}
       else
         {:error, reason} ->

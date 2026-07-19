@@ -147,14 +147,23 @@ defmodule Mjolnir.VM do
   @doc """
   Get the full VM state including configuration and metadata.
   """
-  @spec get(vm_id()) :: {:ok, t()} | {:error, :not_found}
+  @spec get(vm_id()) :: {:ok, t()} | {:error, :not_found | :unreachable}
   def get(vm_id) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
       [{pid, _}] ->
         try do
-          {:ok, GenServer.call(pid, :get_state)}
+          {:ok,
+           GenServer.call(
+             pid,
+             :get_state,
+             Application.get_env(:mjolnir, :vm_get_probe_timeout_ms, 5000)
+           )}
         catch
-          :exit, _ -> {:error, :not_found}
+          # A registered-but-blocked GenServer (e.g. mailbox wedged on a stuck
+          # vsock exec after a snapshot pause/resume — mjolnir-8ie) is NOT a 404.
+          # Return :unreachable so authz/API map it to a 5xx instead of falsely
+          # reporting the VM as gone, which previously broke `mj kill`.
+          :exit, _ -> {:error, :unreachable}
         end
 
       [] ->
@@ -168,8 +177,30 @@ defmodule Mjolnir.VM do
   @spec stop(vm_id()) :: :ok | {:error, term()}
   def stop(vm_id) do
     case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
-      [{pid, _}] -> GenServer.stop(pid, :normal)
-      [] -> {:error, :not_found}
+      [{pid, _}] ->
+        timeout = Application.get_env(:mjolnir, :vm_stop_timeout_ms, 10_000)
+
+        try do
+          GenServer.stop(pid, :normal, timeout)
+        catch
+          # A wedged guest can leave the VM GenServer's mailbox blocked on an
+          # :infinity vsock exec, so a graceful stop never returns and `mj kill`
+          # hangs forever (mjolnir-8ie). Degrade to the same OS-level force-kill
+          # reboot/1 uses: killing the cloud-hypervisor process makes the
+          # GenServer terminate via its preserve-rootfs `{:hypervisor_exit, _}`
+          # path, cleaning up TAP/virtiofsd/sockets even when the mailbox is
+          # blocked. `:noproc` (already gone) also lands here and is a success.
+          :exit, reason ->
+            Logger.warning(
+              "VM #{vm_id}: graceful stop failed (#{inspect(reason)}); force-killing hypervisor"
+            )
+
+            _ = kill_hypervisor_process(vm_id)
+            :ok
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -178,6 +209,15 @@ defmodule Mjolnir.VM do
 
   Quiesces the VM (sync + pause), takes a consistent reflink copy,
   then resumes the VM. The VM is always resumed even if the snapshot fails.
+
+  ## Options
+
+    - `:owner_id` — owner recorded on the snapshot metadata.
+    - `:skip_verify` — when `true`, skip the post-snapshot live-guest health
+      probe (`:guest_unreachable_after_snapshot`). Intended for a VM that is
+      about to be discarded (e.g. the final layer of a deploy build), where a
+      post-snapshot guest hiccup should not fail an otherwise-intact snapshot.
+      Do NOT set this if the same VM will keep being exec'd afterwards.
 
   ## Examples
 
@@ -1020,7 +1060,7 @@ defmodule Mjolnir.VM do
 
   def handle_call({:snapshot, name, opts}, _from, state) do
     case do_snapshot(state, name, opts) do
-      {:ok, metadata} -> verify_after_snapshot(state, name, metadata)
+      {:ok, metadata} -> verify_after_snapshot(state, name, metadata, opts)
       {:error, _reason} = err -> {:reply, err, state}
     end
   end
@@ -1482,7 +1522,7 @@ defmodule Mjolnir.VM do
   defp handle_boot_failure(state, error, socket_path, vsock_path, serial_path) do
     partial = Process.get(:boot_partial, %{})
 
-    if (not state.resume_mode and partial[:rootfs_path]) && transient_boot_error?(error) do
+    if not state.resume_mode and partial[:rootfs_path] && transient_boot_error?(error) do
       Logger.warning(
         "VM #{state.id}: transient boot failure (#{inspect(error)}); " <>
           "preserving rootfs and persisting :running record for Reconcile retry"
@@ -2086,8 +2126,16 @@ defmodule Mjolnir.VM do
   # report loudly instead of a bare success (recovery is an operator `mj reboot`,
   # which CH's in-place reboot cannot safely do here). Gated by
   # :snapshot_verify_guest so test/headless paths skip the live-guest probe.
-  defp verify_after_snapshot(state, name, metadata) do
-    if Application.get_env(:mjolnir, :snapshot_verify_guest, true) do
+  defp verify_after_snapshot(state, name, metadata, opts) do
+    # A caller can opt out per-snapshot (skip_verify: true) for a VM about to be
+    # discarded, so a post-snapshot guest hiccup doesn't fail an intact snapshot
+    # (mjolnir-8ie). The global :snapshot_verify_guest switch still gates the
+    # probe overall; skip_verify is the narrower, call-site override.
+    verify? =
+      Application.get_env(:mjolnir, :snapshot_verify_guest, true) and
+        not Keyword.get(opts, :skip_verify, false)
+
+    if verify? do
       case verify_or_recover_guest(state) do
         {:ok, :healthy, new_state} ->
           {:reply, {:ok, metadata}, new_state}

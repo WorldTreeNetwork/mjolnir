@@ -193,4 +193,51 @@ defmodule Mjolnir.Deploy.BuilderTest do
       assert tags == [:list_snapshots]
     end
   end
+
+  describe "build/3 — cold snapshot (skip_verify)" do
+    # An ops seam that records the exact snapshot *opts*, so we can assert the
+    # cold/skip-verify policy: only the FINAL layer's snapshot skips the
+    # post-snapshot guest health-verify. Intermediate layers keep verify on
+    # because the same VM keeps being exec'd for the next step (mjolnir-8ie).
+    defp opts_recording_ops(agent) do
+      %{
+        list_snapshots: fn -> {:ok, []} end,
+        spawn: fn _boot -> {:ok, %{id: "build-vm-1"}} end,
+        exec: fn _vm, _cmd, _o -> {:ok, "ok"} end,
+        snapshot: fn _vm, name, opts ->
+          Agent.update(agent, &[{:snapshot, name, opts} | &1])
+          {:ok, %{name: name}}
+        end,
+        stop: fn _vm -> :ok end
+      }
+    end
+
+    test "only the final layer's snapshot passes skip_verify: true", %{agent: agent} do
+      ops = opts_recording_ops(agent)
+
+      assert {:ok, _result} = Builder.build(@base, steps(), ops: ops)
+
+      snapshot_opts =
+        events(agent)
+        |> Enum.filter(&match?({:snapshot, _, _}, &1))
+        |> Enum.map(fn {:snapshot, _name, opts} -> opts end)
+
+      # Three layers: first two verify (opts == []), the last skips verify.
+      assert [[], [], [skip_verify: true]] = snapshot_opts
+    end
+
+    test "a single-step build skips verify on its one (final) layer", %{agent: agent} do
+      ops = opts_recording_ops(agent)
+      [one_step | _] = steps()
+
+      assert {:ok, _result} = Builder.build(@base, [one_step], ops: ops)
+
+      snapshot_opts =
+        events(agent)
+        |> Enum.filter(&match?({:snapshot, _, _}, &1))
+        |> Enum.map(fn {:snapshot, _name, opts} -> opts end)
+
+      assert [[skip_verify: true]] = snapshot_opts
+    end
+  end
 end

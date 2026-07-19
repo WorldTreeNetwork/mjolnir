@@ -268,6 +268,11 @@ defmodule Mjolnir.MCP.Server do
 
       {:error, :not_found} ->
         {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+
+      # Registered but wedged (mjolnir-8ie): distinguish from "gone" so callers
+      # don't treat an unreachable VM as destroyed.
+      {:error, :unreachable} ->
+        {:ok, %{content: [text("VM unreachable: #{id}")], is_error?: true}, state}
     end
   end
 

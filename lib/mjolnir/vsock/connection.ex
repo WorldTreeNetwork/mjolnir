@@ -33,16 +33,22 @@ defmodule Mjolnir.Vsock.Connection do
 
   @doc """
   Execute a command in the guest and wait for response.
+
+  `timeout` bounds how long the guest may take to reply. On expiry the call
+  returns `{:error, :timeout}` instead of pinning the caller forever on a
+  wedged guest (mjolnir-8ie). Pass `:infinity` to opt out (long-running builds).
   """
   def exec(pid, command, timeout \\ 30_000) do
-    GenServer.call(pid, {:exec, command}, timeout)
+    GenServer.call(pid, {:exec, command, timeout}, outer_timeout(timeout))
   end
 
   @doc """
   Ping the guest agent to check connectivity.
+
+  Bounded by `timeout`; returns `{:error, :timeout}` if the guest never pongs.
   """
   def ping(pid, timeout \\ 5_000) do
-    GenServer.call(pid, :ping, timeout)
+    GenServer.call(pid, {:ping, timeout}, outer_timeout(timeout))
   end
 
   @doc """
@@ -79,7 +85,7 @@ defmodule Mjolnir.Vsock.Connection do
   The message must contain an "id" field for request/response matching.
   """
   def send_request(pid, message, timeout \\ 30_000) do
-    GenServer.call(pid, {:send_request, message}, timeout)
+    GenServer.call(pid, {:send_request, message, timeout}, outer_timeout(timeout))
   end
 
   @doc """
@@ -160,7 +166,7 @@ defmodule Mjolnir.Vsock.Connection do
   end
 
   @impl true
-  def handle_call({:exec, command}, from, state) do
+  def handle_call({:exec, command, timeout}, from, state) do
     request = Protocol.exec_request(command)
     request_id = request["id"]
 
@@ -168,6 +174,7 @@ defmodule Mjolnir.Vsock.Connection do
       :ok ->
         # Store pending request to match response
         pending = Map.put(state.pending_requests, request_id, from)
+        maybe_schedule_timeout(request_id, timeout)
         {:noreply, %{state | pending_requests: pending}}
 
       {:error, reason} ->
@@ -175,12 +182,13 @@ defmodule Mjolnir.Vsock.Connection do
     end
   end
 
-  def handle_call(:ping, from, state) do
+  def handle_call({:ping, timeout}, from, state) do
     request_id = UUID.uuid4()
 
     case send_message(state.socket, Map.put(Protocol.ping(), "id", request_id), 0) do
       :ok ->
         pending = Map.put(state.pending_requests, request_id, from)
+        maybe_schedule_timeout(request_id, timeout)
         {:noreply, %{state | pending_requests: pending}}
 
       {:error, reason} ->
@@ -303,12 +311,13 @@ defmodule Mjolnir.Vsock.Connection do
     end
   end
 
-  def handle_call({:send_request, message}, from, state) do
+  def handle_call({:send_request, message, timeout}, from, state) do
     request_id = message["id"]
 
     case send_message(state.socket, message, 0) do
       :ok ->
         pending = Map.put(state.pending_requests, request_id, from)
+        maybe_schedule_timeout(request_id, timeout)
         {:noreply, %{state | pending_requests: pending}}
 
       {:error, reason} ->
@@ -639,6 +648,25 @@ defmodule Mjolnir.Vsock.Connection do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  # Client-side GenServer.call timeout. Kept strictly larger than the server-side
+  # pending-timeout so the server always wins the race and replies
+  # {:error, :timeout} — the client call never :exits out from under it.
+  defp outer_timeout(:infinity), do: :infinity
+  defp outer_timeout(timeout) when is_integer(timeout), do: timeout + 5_000
+
+  # Bound a request/reply so a wedged guest can't pin the caller forever
+  # (mjolnir-8ie). Mirrors terminal_send_and_read: when the timer fires,
+  # handle_info({:pending_timeout, id}) replies {:error, :timeout} and drops the
+  # pending entry. `:infinity` opts out (long-running builds). A late guest reply
+  # after the timeout reaches reply_to_pending with an already-removed id and is
+  # safely discarded (no crash, no double reply).
+  defp maybe_schedule_timeout(_request_id, :infinity), do: :ok
+
+  defp maybe_schedule_timeout(request_id, timeout) when is_integer(timeout) do
+    Process.send_after(self(), {:pending_timeout, request_id}, timeout)
+    :ok
+  end
 
   defp reply_to_pending(state, id, result, type_name) do
     case Map.pop(state.pending_requests, id) do

@@ -59,6 +59,14 @@ defmodule Mjolnir.API.Authz do
         |> put_resp_content_type("application/json")
         |> send_resp(404, Jason.encode!(%{error: "not_found"}))
         |> halt()
+
+      # Registered but unresponsive (wedged GenServer mailbox, mjolnir-8ie): the
+      # VM exists, we just can't reach it — a 503, never a 404.
+      {:error, :unreachable} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(503, Jason.encode!(%{error: "vm_unreachable"}))
+        |> halt()
     end
   end
 

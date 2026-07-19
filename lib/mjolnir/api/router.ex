@@ -779,7 +779,8 @@ defmodule Mjolnir.API.Router do
 
             case Mjolnir.VM.get(from_vm_id) do
               {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
-              {:error, :not_found} -> false
+              # Not found or unreachable (mjolnir-8ie): cannot authorize the sender.
+              {:error, _} -> false
             end
           end
 

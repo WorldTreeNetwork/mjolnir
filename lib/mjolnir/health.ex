@@ -35,7 +35,7 @@ defmodule Mjolnir.Health do
           checks: [report_entry()]
         }
 
-  @spec check(String.t()) :: {:ok, vm_report()} | {:error, :not_found}
+  @spec check(String.t()) :: {:ok, vm_report()} | {:error, :not_found | :unreachable}
   def check(vm_id) when is_binary(vm_id) do
     case Mjolnir.VM.get(vm_id) do
       {:ok, vm} ->
@@ -54,12 +54,13 @@ defmodule Mjolnir.Health do
            checks: checks
          }}
 
-      {:error, :not_found} = err ->
+      # Passes through :not_found and :unreachable (mjolnir-8ie) unchanged.
+      {:error, _} = err ->
         err
     end
   end
 
-  @spec heal(String.t(), keyword()) :: {:ok, vm_report()} | {:error, :not_found}
+  @spec heal(String.t(), keyword()) :: {:ok, vm_report()} | {:error, :not_found | :unreachable}
   def heal(vm_id, opts \\ []) when is_binary(vm_id) do
     max_level = Keyword.get(opts, :max_level, 2)
 
@@ -107,7 +108,8 @@ defmodule Mjolnir.Health do
            checks: heal_results
          }}
 
-      {:error, :not_found} = err ->
+      # Passes through :not_found and :unreachable (mjolnir-8ie) unchanged.
+      {:error, _} = err ->
         err
     end
   end
