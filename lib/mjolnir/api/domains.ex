@@ -39,8 +39,6 @@ defmodule Mjolnir.API.Domains do
   alias Mjolnir.Deploy.Registry
   alias Mjolnir.Gateway.Routes
 
-  @default_certs_dir "/etc/mjolnir/certs"
-
   @typedoc "Injectable effect seam; defaults capture the real modules."
   @type ops :: %{
           registry_get: (String.t() -> {:ok, Registry.Entry.t()} | {:error, :not_found}),
@@ -218,12 +216,10 @@ defmodule Mjolnir.API.Domains do
     :exit, _ -> []
   end
 
-  # TODO(gge.12.4): replace this file-existence probe with a
-  # Mjolnir.Gateway.Certs.present?/1 (or /2) call once the cert lane lands. Until
-  # then we only *report* whether a cert file for the fqdn is on disk; we never
-  # provision one here.
+  # Reports whether TLS is wired for the fqdn by checking the authoritative
+  # gateway `[[cert]]` config (via the cert lane). Reporting only — never
+  # provisions; use Mjolnir.Gateway.Certs.ensure/2 for that.
   defp default_cert_present(fqdn) do
-    dir = Application.get_env(:mjolnir, :gateway_certs_dir, @default_certs_dir)
-    Enum.any?([fqdn <> ".crt", fqdn <> ".pem"], &File.exists?(Path.join(dir, &1)))
+    Mjolnir.Gateway.Certs.present?(fqdn)
   end
 end

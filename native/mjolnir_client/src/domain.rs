@@ -41,6 +41,12 @@ struct AppSummary {
     port: Option<u16>,
 }
 
+/// `GET /api/apps` wraps the entries in `{"apps": [...]}`.
+#[derive(Deserialize)]
+struct AppsList {
+    apps: Vec<AppSummary>,
+}
+
 /// `mj domain set <app> <fqdn>` — bind a custom domain to an app.
 pub async fn cmd_domain_set(
     profile: &Profile,
@@ -156,8 +162,9 @@ pub async fn cmd_domain_ls(
         return Ok(());
     }
 
-    let apps: Vec<AppSummary> =
-        serde_json::from_str(&body).context("failed to parse apps list response")?;
+    let apps: Vec<AppSummary> = serde_json::from_str::<AppsList>(&body)
+        .context("failed to parse apps list response")?
+        .apps;
 
     if apps.is_empty() {
         eprintln!("No apps deployed.");

@@ -139,6 +139,23 @@ defmodule Mjolnir.Gateway.Certs do
   end
 
   @doc """
+  Whether a serving `[[cert]]` entry exists for `fqdn` in the gateway config.
+
+  Authoritative for "is TLS wired up for this host" — checks the `[[cert]]`
+  block the gateway actually serves, not just a file on disk.
+  """
+  @spec present?(String.t(), keyword()) :: boolean()
+  def present?(fqdn, opts \\ []) do
+    fqdn = normalize_fqdn(fqdn)
+    eff = effects(opts)
+
+    case read_toml(eff) do
+      {:ok, content} -> toml_has_cert?(content, fqdn)
+      _ -> false
+    end
+  end
+
+  @doc """
   Remove the `[[cert]]` (and optionally `[[domain]]`) for `fqdn` and reload.
 
   Options:
