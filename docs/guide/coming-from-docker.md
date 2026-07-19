@@ -36,7 +36,7 @@ machine, clone it while it's running, and hand someone a peer-to-peer connection
 | `docker run my-commit` | `mj spawn --snapshot <name>` | Restores from a snapshot via an instant CoW clone. A snapshot *is* a spawnable base. |
 | Image layer cache | BTRFS subvolume snapshots | CoW at the *filesystem* level, applied to live machine state — see below. |
 | `docker rm -f` | `mj kill <vm>` | Stops the microVM and deletes its CoW subvolume. |
-| Dockerfile | (no equivalent yet) | Mjolnir has the *primitives* a build cache is made of, but no declarative build file. See "The build-cache vision." |
+| Dockerfile | `Deploy.Detector` build plan | No build *file* — the plan is detected from the repo (zero-config), then each step becomes a cached snapshot layer. See [Deploying a Web App](deploying-an-app.md). |
 | `docker ps` | `mj list` | — |
 | Docker registry / `push` | Iroh content-addressed transfer (emerging) | Cross-host movement is by content-addressed sync, not a central registry. See `docs/archive/storage-architecture.md` §3. |
 | Container = ephemeral, stateless by convention | VM = checkpointable, stateful by design | State is a feature, not something you engineer around with volumes. |
@@ -154,9 +154,10 @@ Honesty keeps this useful:
 - **It's a VM, so it needs Linux + KVM on the host.** The Mjolnir *server* must be a Linux box
   with hardware virtualization. The `mj` CLI runs fine from a Mac, but the VMs live on the
   server. (Containers, by contrast, run anywhere a container runtime does.)
-- **No Dockerfile.** There is no declarative build format today. You build an environment by
-  spawning, `exec`-ing your setup, and snapshotting — imperatively. See the next section for
-  where this is headed.
+- **No Dockerfile — by design.** There is no declarative build *file*. For ad-hoc environments
+  you build imperatively: spawn, `exec` your setup, snapshot. For deploying an app, the build
+  plan is **detected from the repo** rather than declared (see the next section). Whether that
+  zero-config bet holds for messy real-world apps is still being proven.
 - **No registry ecosystem.** There's no Docker Hub to `pull` from. Base images are built on the
   server; cross-host movement uses content-addressed sync, which is still emerging
   (`docs/archive/storage-architecture.md` §3 covers the trajectory).
@@ -167,10 +168,11 @@ Honesty keeps this useful:
 
 ---
 
-## The build-cache vision (what these primitives compose into)
+## The build cache (what these primitives compose into)
 
-Here's the part worth getting excited about, stated plainly as a *design direction* rather than
-a shipped feature.
+Here's the part worth getting excited about. As of mid-2026 this is no longer a sketch — it's
+implemented as the **deploy layer** (`Mjolnir.Deploy.*`). Read the status note at the end of the
+section before you rely on it.
 
 Docker's layer cache is what made iterative `docker build` bearable: change line 12 of your
 Dockerfile, and only steps 12-onward re-run; steps 1–11 are reused from cache. But that cache is
@@ -198,10 +200,16 @@ Docker skips cached layers. The differences that make it *better*:
 - The clone is **size-independent CoW**, so caching a 20 GB environment costs the same as
   caching a 200 MB one.
 
-**Status:** the primitives this is built from — instant CoW clone, snapshot-of-running-machine,
+**Status (verified 2026-07-19).** The primitives — instant CoW clone, snapshot-of-running-machine,
 spawn-from-snapshot — all work today and are exactly what `mj snapshot` / `mj spawn --snapshot`
-expose. The declarative pipeline that orchestrates them into a content-addressed build cache is
-a design direction, not a shipped `mj build`. The foundation is real; the bow on top is roadmap.
+expose. The orchestration on top is **written and shipped in the prod release**:
+`Deploy.Detector` (zero-config build plans), `Deploy.CacheKey` + `Deploy.Builder`
+(content-addressed snapshot layers), `Deploy.Runtime` (boot + cutover), `Deploy.Registry`.
+
+Two honest caveats: there is **no `mj deploy` CLI verb yet** — the layer is driven over
+`mjolnir rpc` — and the pipeline has **not yet been run end to end on the production host**. The
+foundation is real, the machinery exists, and the first real customer is still pending. See
+[Deploying a Web App](deploying-an-app.md) for the current status table and the manual path.
 
 ---
 
@@ -254,6 +262,8 @@ makes "instant clone of any size" a property of the system rather than a feature
 ## Where to go next
 
 - [README → Use it](../../README.md#use-it) — install `mj` and spawn your first VM.
+- [Deploying a Web App](deploying-an-app.md) — the deploy layer: release snapshots, secrets,
+  gateway routing, and what's actually shipped.
 - [Architecture](../architecture.md) — the OTP orchestration and module map.
 - [`docs/archive/storage-architecture.md`](../archive/storage-architecture.md) — deep dive on
   CoW, reflinks, and the content-addressed-storage trajectory. *(Archived: its ext4-image

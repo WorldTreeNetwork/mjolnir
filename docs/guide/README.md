@@ -17,6 +17,9 @@ Read in order if you're new:
 3. **[Coming from Docker](coming-from-docker.md)** — if you think in containers, images, and
    `docker build` layer caches, this maps those concepts onto Mjolnir's microVMs, BTRFS
    subvolumes, and copy-on-write snapshots, and explains where Mjolnir is genuinely better.
+4. **[Deploying a Web App](deploying-an-app.md)** — turning an app into a live HTTPS URL: the
+   release-snapshot model, how a Dockerfile maps onto it, secrets that never enter the
+   artifact, gateway routing and cutover — plus an honest status table of what's shipped.
 
 ## Related (deeper) docs
 

@@ -1,7 +1,29 @@
 # Mjolnir Deploy — the "git push and it's live" layer
 
-**Status**: Design (2026-06-22)
+**Status**: Partially implemented — core modules shipped, pipeline unproven (updated 2026-07-19)
 **Owner**: Duke
+
+> **Implementation reality check (verified against the prod host, 2026-07-19).** This document
+> describes the intended end state; do not read it as a description of a working system.
+>
+> **Shipped and compiled into the prod release:** `Deploy.Detector`, `Deploy.BuildPlan`,
+> `Deploy.CacheKey`, `Deploy.Builder` (+ `Builder.Plan`), `Deploy.Runtime`, `Deploy.Registry`
+> (+ `Entry`), `Deploy.Supervisor`. Gateway route generation, the reconciler, and DNS-01 TLS
+> are shipped and working. Managed (host-escrowed) secrets are implemented.
+>
+> **Not yet true:**
+> - **No `mj deploy` CLI verb exists.** The CLI has no `deploy` subcommand; the layer is
+>   driven over `mjolnir rpc`. The "zero-config `mj deploy`" moment below is still the goal,
+>   not the state.
+> - **The pipeline has never completed end to end on the prod host.** `Deploy.Registry` is
+>   empty, no `release-*` snapshot exists, and the escrow directory is empty.
+> - **Zine — the only real deployment — does not use this layer.** It is hand-provisioned:
+>   a manually built VM, a hand-managed gateway route, no registry entry, and
+>   `secrets_mode: none`. It is the thing this initiative exists to replace, not a reference
+>   implementation.
+>
+> For the user-facing view of what works today and how to drive it manually, see
+> [`../../guide/deploying-an-app.md`](../../guide/deploying-an-app.md).
 **Builds on**: `host-reconcile.md` (Forge), `identikey-sites.md` (Sites), the snapshot/dormancy machinery in `Mjolnir.VM`.
 **CLI surface**: `mj deploy` (and friends) — extends the existing Rust client, authenticated to a server like any other `mj` command.
 

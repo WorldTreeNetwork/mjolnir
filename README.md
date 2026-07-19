@@ -193,9 +193,10 @@ grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualiza
 **New here?** Start with the [Guide](docs/guide/) — user-facing docs for spawning and working
 with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
 [Working with Snapshots](docs/guide/snapshots.md). If you think in containers, read
-[Coming from Docker](docs/guide/coming-from-docker.md).
+[Coming from Docker](docs/guide/coming-from-docker.md). To put an app on a domain, see
+[Deploying a Web App](docs/guide/deploying-an-app.md).
 
-- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md)
+- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md)
 - [Current status / handoff notes](docs/plans/current-status.md)
 - [Roadmap](docs/roadmap.md)
 - [MicroVM Fabric Spec](docs/microvm-fabric.md)

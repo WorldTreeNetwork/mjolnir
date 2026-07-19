@@ -1,5 +1,15 @@
 # Runbook: Migrate Zine to `secrets_mode: :managed`
 
+> **Status: NOT EXECUTED as of 2026-07-19.** This is a prepared procedure, not a record of work
+> done. Verified against the prod host: the escrow directory `/var/lib/mjolnir/escrow/` is
+> **empty**, there is no `/var/lib/mjolnir/zine-secrets.json`, `Deploy.Registry` is **empty**,
+> and Zine's running VM reports **`secrets_mode: none`**. Zine's SMTP credentials are therefore
+> still wherever they were before this migration was written.
+>
+> Note also that Zine is **hand-provisioned** — it is not currently started via
+> `Deploy.Runtime`, so Step 2 below describes the *first* time that path would be used for it,
+> not a change to an existing automated deploy. Expect to shake out first-run issues.
+
 Move Zine's sensitive email (SMTP) credentials out of the app image / unit env
 and into a **host-escrowed LUKS volume** so they are encrypted at rest, kept off
 the data volume, and survive dormancy/wake. Background:
