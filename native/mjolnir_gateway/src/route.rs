@@ -230,6 +230,26 @@ mod tests {
     }
 
     #[test]
+    fn lookup_local_matches_empty_apex_route() {
+        // An apex-level route (subdomain="") is looked up with the empty
+        // subdomain that match_host yields for a bare apex host.
+        let t = table(
+            vec![apex("startupcentral.build", Fallthrough::None)],
+            vec![Route {
+                apex: "startupcentral.build".into(),
+                subdomain: String::new(),
+                backend: "127.0.0.1:3000".parse().unwrap(),
+                fallback_node: None,
+                fallback_port: None,
+            }],
+        );
+        let (a, sub) = t.match_host("startupcentral.build").expect("match");
+        assert_eq!(sub, "", "bare apex yields empty subdomain");
+        let backend = t.lookup_local(a, &sub).expect("apex route hit");
+        assert_eq!(backend, "127.0.0.1:3000".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
     fn nested_subdomain_preserves_dots() {
         // `git.internal.worldtree.network` under apex `worldtree.network` must
         // yield subdomain `git.internal` — the internal dot is preserved verbatim.

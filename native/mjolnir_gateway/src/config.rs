@@ -723,7 +723,12 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
             );
             continue;
         }
-        if !is_ascii_label(&sub_lower) {
+        // An EMPTY subdomain is a valid apex-level route: it serves the bare
+        // apex host (e.g. `startupcentral.build` itself) from a local backend.
+        // Only a NON-EMPTY string that isn't a valid ASCII label is rejected.
+        // (Contrast [[alias]] below, which keeps rejecting empty: an alias is
+        // an Iroh vanity subdomain, so an empty one is meaningless.)
+        if !sub_lower.is_empty() && !is_ascii_label(&sub_lower) {
             warn!(
                 event = "config.invalid_subdomain",
                 apex = %apex_lower,
@@ -1181,6 +1186,43 @@ mod tests {
         "#;
         let cfg = load_from_toml_str(text).expect("parse");
         assert!(cfg.routes.is_empty(), "bad backend must be skipped");
+    }
+
+    #[test]
+    fn toml_apex_route_empty_subdomain_accepted() {
+        // A [[route]] with an empty subdomain is a valid apex-level route: it
+        // serves the bare apex host itself from a local backend.
+        let text = r#"
+            [[domain]]
+            suffix = "startupcentral.build"
+
+            [[route]]
+            apex = "startupcentral.build"
+            subdomain = ""
+            backend = "127.0.0.1:3000"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        assert_eq!(cfg.routes.len(), 1, "empty-subdomain apex route must be kept");
+        assert_eq!(cfg.routes[0].subdomain, "");
+        assert_eq!(cfg.routes[0].apex, "startupcentral.build");
+        assert_eq!(cfg.routes[0].backend.port(), 3000);
+    }
+
+    #[test]
+    fn toml_route_non_empty_invalid_subdomain_skipped() {
+        // A NON-EMPTY subdomain that isn't a valid ASCII label is still rejected;
+        // only the empty case is now accepted as an apex route.
+        let text = r#"
+            [[domain]]
+            suffix = "a.com"
+
+            [[route]]
+            apex = "a.com"
+            subdomain = "not_a_label"
+            backend = "127.0.0.1:3000"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        assert!(cfg.routes.is_empty(), "invalid non-empty label must be skipped");
     }
 
     #[test]

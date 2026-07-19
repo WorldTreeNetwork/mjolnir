@@ -571,6 +571,14 @@ fn classify<'a>(table: &'a RouteTable, host: &str) -> Disposition<'a> {
         return Disposition::Reject(ProxyError::DomainMismatch);
     };
     if subdomain.is_empty() {
+        // Bare apex host (Host == apex). A local [[route]] declared with an
+        // empty subdomain serves the apex directly, exactly like a subdomain
+        // route; only if no such route exists is the bare apex out of scope
+        // (the Iroh/alias paths require a non-empty subdomain).
+        if let Some(backend) = table.lookup_local(apex, &subdomain) {
+            let fallback = table.lookup_local_fallback(apex, &subdomain);
+            return Disposition::Local(apex, subdomain, backend, fallback);
+        }
         return Disposition::Reject(ProxyError::EmptySubdomain);
     }
     if let Some(backend) = table.lookup_local(apex, &subdomain) {
@@ -1981,6 +1989,39 @@ mod tests {
         let cfg = loaded_with(vec![apex("a.com", Fallthrough::Iroh)], vec![]);
         let table = RouteTable::from_config(&cfg);
         let d = classify(&table, "a.com");
+        assert!(matches!(d, Disposition::Reject(ProxyError::EmptySubdomain)));
+    }
+
+    #[test]
+    fn bare_apex_with_apex_route_classifies_local() {
+        // A bare apex host served by a matching apex-level route (subdomain="")
+        // classifies as Local → its backend, exactly like a subdomain route.
+        let cfg = loaded_with(
+            vec![apex("startupcentral.build", Fallthrough::None)],
+            vec![route("startupcentral.build", "", "127.0.0.1:3000")],
+        );
+        let table = RouteTable::from_config(&cfg);
+        match classify(&table, "startupcentral.build") {
+            Disposition::Local(a, sub, backend, fallback) => {
+                assert_eq!(a.suffix, "startupcentral.build");
+                assert_eq!(sub, "");
+                assert_eq!(backend, "127.0.0.1:3000".parse().unwrap());
+                assert!(fallback.is_none());
+            }
+            _ => panic!("expected Local disposition for bare apex with apex route"),
+        }
+    }
+
+    #[test]
+    fn bare_apex_without_apex_route_still_returns_400() {
+        // Bare apex host with NO apex route falls through to EmptySubdomain,
+        // even when the apex is iroh-fallthrough (the Iroh path needs a subdomain).
+        let cfg = loaded_with(
+            vec![apex("startupcentral.build", Fallthrough::Iroh)],
+            vec![route("startupcentral.build", "git", "127.0.0.1:3000")],
+        );
+        let table = RouteTable::from_config(&cfg);
+        let d = classify(&table, "startupcentral.build");
         assert!(matches!(d, Disposition::Reject(ProxyError::EmptySubdomain)));
     }
 
