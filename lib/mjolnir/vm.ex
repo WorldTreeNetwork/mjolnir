@@ -55,6 +55,16 @@ defmodule Mjolnir.VM do
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts)
 
+  # await_boot blocks the caller until do_boot completes. Non-managed boots are
+  # comfortably under 30s. A :managed secrets boot ALSO creates/opens a LUKS
+  # volume over vsock during do_boot (dd + argon2id luksFormat + mkfs), which
+  # regularly pushes total boot past 30s and stranded an appless VM even though
+  # the guest itself reached multi-user.target fine. Managed spawns therefore
+  # get a longer default; any caller can override via the :await_boot_timeout
+  # spawn opt. See await_boot_timeout/1.
+  @default_await_boot_timeout 30_000
+  @managed_await_boot_timeout 90_000
+
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
   @type extra_mount :: %{
@@ -72,7 +82,9 @@ defmodule Mjolnir.VM do
           optional(:preserve_iroh_key) => boolean(),
           optional(:enable_iroh) => boolean(),
           optional(:owner_id) => String.t() | nil,
-          optional(:extra_mounts) => list(extra_mount())
+          optional(:extra_mounts) => list(extra_mount()),
+          optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
+          optional(:await_boot_timeout) => timeout()
         }
 
   # ============================================================================
@@ -89,6 +101,15 @@ defmodule Mjolnir.VM do
   - `:memory_mb` - Memory in MiB (default: 512)
   - `:snapshot` - Snapshot name to spawn from (instead of base image)
   - `:preserve_iroh_key` - Keep the iroh key from snapshot (default: false)
+  - `:owner_id` - Owner recorded on the VM (drives API owner-scoping). Persisted
+    on the VM state/record so `/api/vms/:id/exec` owner checks see it.
+  - `:extra_mounts` - Extra virtiofs shares as
+    `[%{tag: "src", shared_dir: "/host/dir", opts: []}]`. Each starts an extra
+    virtiofsd. The guest-side mount is the caller's responsibility on a plain
+    base image: `mount -t virtiofs <tag> <path>`.
+  - `:await_boot_timeout` - How long `spawn/1` waits for boot to complete
+    (default: 30s; auto-raised to #{@managed_await_boot_timeout}ms for
+    `secrets_mode: :managed`, whose LUKS setup runs during boot).
 
   ## Examples
 
@@ -105,13 +126,26 @@ defmodule Mjolnir.VM do
          ) do
       {:ok, pid} ->
         # Wait for boot to complete
-        case GenServer.call(pid, :await_boot, 30_000) do
+        case GenServer.call(pid, :await_boot, await_boot_timeout(opts)) do
           {:ok, vm} -> {:ok, vm}
           {:error, reason} -> {:error, reason}
         end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # Resolve the await_boot timeout from spawn opts. Explicit :await_boot_timeout
+  # wins; otherwise :managed secrets get the longer default (LUKS setup happens
+  # inside do_boot, before the boot is signalled complete). Everything else keeps
+  # the historical 30s.
+  defp await_boot_timeout(opts) do
+    cond do
+      is_integer(opts[:await_boot_timeout]) -> opts[:await_boot_timeout]
+      opts[:await_boot_timeout] == :infinity -> :infinity
+      opts[:secrets_mode] == :managed -> @managed_await_boot_timeout
+      true -> @default_await_boot_timeout
     end
   end
 
@@ -760,7 +794,7 @@ defmodule Mjolnir.VM do
            {__MODULE__, Map.put(opts, :id, vm_id)}
          ) do
       {:ok, pid} ->
-        case GenServer.call(pid, :await_boot, 30_000) do
+        case GenServer.call(pid, :await_boot, await_boot_timeout(opts)) do
           {:ok, vm} -> {:ok, vm}
           {:error, reason} -> {:error, reason}
         end
@@ -801,7 +835,12 @@ defmodule Mjolnir.VM do
            {__MODULE__, opts}
          ) do
       {:ok, pid} ->
-        case GenServer.call(pid, :await_boot, 60_000) do
+        # Resume keeps its historical 60s floor (an existing subvolume + guest
+        # drift re-push is heavier than a fresh boot); managed re-open of the
+        # snapshot-carried LUKS volume can still push past it, so take the max.
+        resume_timeout = max(60_000, await_boot_timeout(opts))
+
+        case GenServer.call(pid, :await_boot, resume_timeout) do
           {:ok, vm} -> {:ok, vm}
           {:error, reason} -> {:error, reason}
         end
@@ -1342,7 +1381,12 @@ defmodule Mjolnir.VM do
       vsock_cid: generate_vsock_cid(opts.id),
       snapshot: opts[:snapshot],
       preserve_iroh_key: opts[:preserve_iroh_key] || false,
-      resume: opts[:resume] || false
+      resume: opts[:resume] || false,
+      # extra_mounts MUST be threaded into config: do_boot reads it via
+      # Map.get(state.config, :extra_mounts, []) to start the extra virtiofsd
+      # shares. Before this it was never copied from spawn opts, so any
+      # :extra_mounts passed to spawn/1 was silently dropped (gge.1.9).
+      extra_mounts: opts[:extra_mounts] || []
     }
   end
 
@@ -1522,7 +1566,7 @@ defmodule Mjolnir.VM do
   defp handle_boot_failure(state, error, socket_path, vsock_path, serial_path) do
     partial = Process.get(:boot_partial, %{})
 
-    if not state.resume_mode and partial[:rootfs_path] && transient_boot_error?(error) do
+    if (not state.resume_mode and partial[:rootfs_path]) && transient_boot_error?(error) do
       Logger.warning(
         "VM #{state.id}: transient boot failure (#{inspect(error)}); " <>
           "preserving rootfs and persisting :running record for Reconcile retry"
