@@ -14,6 +14,7 @@ defmodule Mjolnir.Deploy.RuntimeTest do
     ticket = Keyword.get(opts, :ticket, "zticketzzz")
     not_ready_times = Keyword.get(opts, :not_ready_times, 0)
     prev = Keyword.get(opts, :prev)
+    prev_custom_domain = Keyword.get(opts, :prev_custom_domain)
     spawn_result = Keyword.get(opts, :spawn_result, {:ok, %{id: "svc-vm-1"}})
     exec_fail_on = Keyword.get(opts, :exec_fail_on)
 
@@ -38,7 +39,14 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       end,
       registry_get: fn app ->
         Agent.update(agent, &[{:registry_get, app} | &1])
-        if prev, do: {:ok, %{service_vm_id: prev}}, else: {:error, :not_found}
+
+        cond do
+          prev || prev_custom_domain ->
+            {:ok, %{service_vm_id: prev, custom_domain: prev_custom_domain}}
+
+          true ->
+            {:error, :not_found}
+        end
       end,
       registry_put: fn app, attrs ->
         Agent.update(agent, &[{:registry_put, app, attrs} | &1])
@@ -124,6 +132,48 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       put_idx = Enum.find_index(ev, &match?({:registry_put, _, _}, &1))
       stop_idx = Enum.find_index(ev, &match?({:stop, "old-svc-vm"}, &1))
       assert put_idx < stop_idx
+    end
+  end
+
+  describe "start/4 — custom_domain preservation (gge.12.1)" do
+    test "carries the prior entry's custom_domain into the new registry attrs", %{agent: agent} do
+      ops = recording_ops(agent, prev: "old-svc-vm", prev_custom_domain: "zine.identikey.io")
+
+      assert {:ok, _r} = Runtime.start("app", @release, @plan, ops: ops, gateway_domain: @domain)
+
+      assert {:registry_put, "app", attrs} =
+               Enum.find(events(agent), &match?({:registry_put, _, _}, &1))
+
+      # Without the fix this key is absent → Registry builds a fresh Entry with
+      # custom_domain: nil → RouteReconciler drops the app's route on redeploy.
+      assert attrs.custom_domain == "zine.identikey.io"
+    end
+
+    test "records custom_domain: nil for a first deploy with no prior entry", %{agent: agent} do
+      ops = recording_ops(agent, [])
+
+      assert {:ok, _r} = Runtime.start("app", @release, @plan, ops: ops, gateway_domain: @domain)
+
+      assert {:registry_put, "app", attrs} =
+               Enum.find(events(agent), &match?({:registry_put, _, _}, &1))
+
+      assert Map.get(attrs, :custom_domain) == nil
+    end
+
+    test "an explicit :custom_domain opt overrides the preserved value", %{agent: agent} do
+      ops = recording_ops(agent, prev: "old-svc-vm", prev_custom_domain: "old.identikey.io")
+
+      assert {:ok, _r} =
+               Runtime.start("app", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 custom_domain: "new.identikey.io"
+               )
+
+      assert {:registry_put, "app", attrs} =
+               Enum.find(events(agent), &match?({:registry_put, _, _}, &1))
+
+      assert attrs.custom_domain == "new.identikey.io"
     end
   end
 

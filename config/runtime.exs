@@ -37,6 +37,35 @@ case System.get_env("MJOLNIR_GATEWAY_ROUTES_ENABLED") do
   _ -> :ok
 end
 
+# :gateway_apexes is runtime-configurable so an operator can add a custom-domain
+# apex DURABLY (e.g. in /etc/mjolnir/env) WITHOUT recompiling/redeploying the
+# orchestrator — the value is re-read on every boot, so it survives restarts.
+# MJOLNIR_GATEWAY_APEXES is a comma-separated apex list; each entry is MERGED
+# into (added to) the compile-time default list from config.exs (dedup,
+# compile-time defaults first). When the env var is unset (or contributes no
+# non-empty entries), the resulting apex list is IDENTICAL to config.exs's.
+# Mjolnir.Gateway.Routes.configured_apexes/0 reads this value unchanged.
+case System.get_env("MJOLNIR_GATEWAY_APEXES") do
+  nil ->
+    :ok
+
+  raw ->
+    default_apexes =
+      Application.get_env(:mjolnir, :gateway_apexes, [
+        "vm.worldtree.network",
+        "worldtree.network",
+        "identikey.io"
+      ])
+
+    extra =
+      raw
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    config :mjolnir, gateway_apexes: Enum.uniq(default_apexes ++ extra)
+end
+
 if base_image = System.get_env("MJOLNIR_BASE_IMAGE") do
   config :mjolnir, default_base_image: base_image
 end

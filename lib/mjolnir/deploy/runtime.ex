@@ -73,6 +73,10 @@ defmodule Mjolnir.Deploy.Runtime do
     - `:gateway_domain` — URL domain. Default from `:mjolnir, :gateway_domain`.
     - `:spawn_opts` — extra spawn options merged into the boot map.
     - `:ticket_timeout` — ms to wait for the Iroh ticket. Default `30_000`.
+    - `:custom_domain` — explicitly set the app's custom domain (fqdn) for
+      first-time assignment. When omitted, any `custom_domain` already recorded
+      for the app is preserved across the redeploy (see `finish/9`); when given,
+      it overrides the preserved value.
 
   Returns `{:ok, result}` (see `t:result/0`) or `{:error, reason}`. On any
   failure after the VM is up, the just-spawned VM is torn down so a failed
@@ -86,6 +90,7 @@ defmodule Mjolnir.Deploy.Runtime do
     domain = Keyword.get(opts, :gateway_domain, gateway_domain())
     ticket_timeout = Keyword.get(opts, :ticket_timeout, 30_000)
     spawn_opts = Keyword.get(opts, :spawn_opts, %{})
+    custom_domain_opt = Keyword.get(opts, :custom_domain)
 
     port = fetch!(plan, :port)
     start_command = fetch!(plan, :start_command)
@@ -108,7 +113,8 @@ defmodule Mjolnir.Deploy.Runtime do
           workdir,
           port,
           domain,
-          ticket_timeout
+          ticket_timeout,
+          custom_domain_opt
         )
 
       {:error, reason} ->
@@ -116,14 +122,38 @@ defmodule Mjolnir.Deploy.Runtime do
     end
   end
 
-  defp finish(ops, app_name, release_snapshot, vm_id, unit, workdir, port, domain, ticket_timeout) do
+  defp finish(
+         ops,
+         app_name,
+         release_snapshot,
+         vm_id,
+         unit,
+         workdir,
+         port,
+         domain,
+         ticket_timeout,
+         custom_domain_opt
+       ) do
     with {:ok, ticket} <- await_ticket(ops, vm_id, ticket_timeout),
          :ok <- install_unit(ops, vm_id, app_name, unit, workdir) do
       url = gateway_url(ticket, port, domain)
 
+      # Preserve the app's custom_domain across the redeploy. Registry.put builds
+      # a FRESH Entry from `attrs`, so any key we omit is wiped — and a wiped
+      # custom_domain makes RouteReconciler.desired_specs (which filters on
+      # is_binary(custom_domain)) DROP the app's gateway route. An explicit
+      # :custom_domain opt (first-time set) overrides the preserved value.
+      custom_domain = custom_domain_opt || preserved_custom_domain(ops, app_name)
+
       # `port` is recorded so the gateway local-route generator
       # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.
-      attrs = %{release_snapshot: release_snapshot, service_vm_id: vm_id, url: url, port: port}
+      attrs = %{
+        release_snapshot: release_snapshot,
+        service_vm_id: vm_id,
+        url: url,
+        port: port,
+        custom_domain: custom_domain
+      }
 
       case ops.registry_put.(app_name, attrs) do
         {:ok, _entry} ->
@@ -152,6 +182,16 @@ defmodule Mjolnir.Deploy.Runtime do
         # The VM came up (or partway) but a later step failed — don't strand it.
         teardown(ops, vm_id)
         {:error, reason}
+    end
+  end
+
+  # Read the custom_domain recorded for the app before this redeploy, so it can
+  # be carried into the fresh registry entry. Uses the same injectable
+  # registry_get seam as cutover. Returns nil when there is no prior entry.
+  defp preserved_custom_domain(ops, app_name) do
+    case ops.registry_get.(app_name) do
+      {:ok, prev} -> Map.get(prev, :custom_domain)
+      _ -> nil
     end
   end
 
