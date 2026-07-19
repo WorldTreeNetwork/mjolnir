@@ -244,7 +244,9 @@ async fn renewal_loop(state: Arc<TlsState>, acme: Arc<AcmeState>) {
         let renew_before = { acme.cfg.read().await.renew_before };
         if should_renew(&state, &renew_before) {
             let cfg_snapshot = acme.cfg.read().await.clone_for_issue();
-            match mjolnir_gateway::acme::issue(&cfg_snapshot, &acme.cf).await {
+            // Cache-aware: reuse a still-valid cert covering the current SAN set
+            // instead of re-requesting from Let's Encrypt on every tick.
+            match mjolnir_gateway::acme::load_or_issue(&cfg_snapshot, &acme.cf).await {
                 Ok(new_cert) => {
                     if let Err(e) = state.swap_from_pem(
                         new_cert.chain_pem.as_bytes(),
@@ -1522,7 +1524,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tls_clone = Arc::clone(tls);
                         let acme_clone = Arc::clone(acme);
                         tokio::spawn(async move {
-                            match mjolnir_gateway::acme::issue(&snapshot, &acme_clone.cf).await {
+                            // Route through the cache-aware path: reuse a still-valid
+                            // cert that already covers the (possibly-changed) SAN set,
+                            // and only hit Let's Encrypt when the cert is missing, near
+                            // expiry, or the SAN set changed. Prevents duplicate-cert
+                            // rate-limit churn from repeated SIGHUP reloads.
+                            match mjolnir_gateway::acme::load_or_issue(&snapshot, &acme_clone.cf).await {
                                 Ok(cert) => {
                                     if let Err(e) = tls_clone.swap_from_pem(
                                         cert.chain_pem.as_bytes(),
