@@ -389,22 +389,56 @@ fn secure_delete_keyfile() {
     let _ = std::fs::remove_file(keyfile);
 }
 
-fn luks_format(loop_dev: &str, passphrase: &str) -> Result<(), String> {
-    let mut passphrase_copy = passphrase.to_string();
-    write_keyfile(&passphrase_copy)?;
-    passphrase_copy.zeroize();
-
-    let result = run_cmd("cryptsetup", &[
+/// Build the argv for `cryptsetup luksFormat` for a managed-secrets volume.
+///
+/// KDF choice: we force a *low-cost* PBKDF2 KDF (`--pbkdf pbkdf2
+/// --pbkdf-force-iterations 1000`) instead of cryptsetup's memory-hard
+/// argon2id default. This is deliberate and safe here:
+///
+///   - The LUKS passphrase is NOT a human password. It is a fresh, random
+///     256-bit key generated per-VM by the host escrow
+///     (`lib/mjolnir/secret_escrow.ex`: `@passphrase_bytes 32`,
+///     `:crypto.strong_rand_bytes`, base64url-encoded).
+///   - A KDF (argon2id, high PBKDF2 iterations) exists to make brute-forcing
+///     a *guessable / low-entropy* passphrase expensive. A random 256-bit key
+///     has a 2^256 keyspace and cannot be brute-forced with ANY KDF, so KDF
+///     slowness buys no additional security in this threat model.
+///   - The managed-secrets threat model (protect data-volume / snapshot
+///     ciphertext from an attacker who holds the ciphertext but NOT the host
+///     escrow) is fully satisfied by the passphrase entropy alone.
+///
+/// Everything else stays strong/default: aes-xts-plain64 cipher, 512-bit key
+/// (256-bit XTS), sha256. Only the KDF work factor is lowered. This keeps
+/// `luksFormat` fast on small-RAM guests so it completes inside the VM's
+/// `await_boot` gate (the 90s timeout band-aid in vm.ex is not the real fix;
+/// this is). NOTE: actual cryptsetup timing is only observable on the
+/// server/Linux guest — it cannot be measured on macOS/dev.
+///
+/// Pure function so the presence of the low-cost KDF flags is unit-testable
+/// without invoking real cryptsetup.
+fn luks_format_args(loop_dev: &str) -> Vec<&str> {
+    vec![
         "luksFormat",
         "--batch-mode",
         "--type", "luks2",
         "--cipher", "aes-xts-plain64",
         "--key-size", "512",
         "--hash", "sha256",
-        "--pbkdf", "argon2id",
+        // Low-cost KDF: random 256-bit passphrase makes memory-hardening
+        // redundant (see doc comment above).
+        "--pbkdf", "pbkdf2",
+        "--pbkdf-force-iterations", "1000",
         "--key-file", "/tmp/.mjolnir-keyfile",
         loop_dev,
-    ]);
+    ]
+}
+
+fn luks_format(loop_dev: &str, passphrase: &str) -> Result<(), String> {
+    let mut passphrase_copy = passphrase.to_string();
+    write_keyfile(&passphrase_copy)?;
+    passphrase_copy.zeroize();
+
+    let result = run_cmd("cryptsetup", &luks_format_args(loop_dev));
 
     secure_delete_keyfile();
     result.map(|_| ())
@@ -617,6 +651,41 @@ mod tests {
         let mut vars = HashMap::new();
         parse_env_into("KEY=first\nKEY=second\n", &mut vars);
         assert_eq!(vars.get("KEY"), Some(&"second".to_string()));
+    }
+
+    #[test]
+    fn test_luks_format_args_low_cost_kdf() {
+        let args = luks_format_args("/dev/loop0");
+
+        // Low-cost KDF must be forced so luksFormat is fast on small-RAM
+        // guests (a random 256-bit passphrase makes memory-hardening
+        // redundant). Assert the exact flag pair is present and adjacent.
+        let pbkdf_idx = args
+            .iter()
+            .position(|a| *a == "--pbkdf")
+            .expect("--pbkdf flag must be present");
+        assert_eq!(args[pbkdf_idx + 1], "pbkdf2", "KDF must be pbkdf2");
+
+        let iter_idx = args
+            .iter()
+            .position(|a| *a == "--pbkdf-force-iterations")
+            .expect("--pbkdf-force-iterations must be present");
+        assert_eq!(args[iter_idx + 1], "1000", "iterations must be forced low");
+
+        // Must NOT fall back to the memory-hard argon2id default.
+        assert!(
+            !args.contains(&"argon2id"),
+            "argon2id must not be used for managed-secrets volumes"
+        );
+
+        // Cipher and key size must stay strong/default.
+        let cipher_idx = args.iter().position(|a| *a == "--cipher").unwrap();
+        assert_eq!(args[cipher_idx + 1], "aes-xts-plain64");
+        let ks_idx = args.iter().position(|a| *a == "--key-size").unwrap();
+        assert_eq!(args[ks_idx + 1], "512");
+
+        // Device is the final argument.
+        assert_eq!(args.last(), Some(&"/dev/loop0"));
     }
 
     #[test]
