@@ -4,8 +4,10 @@ defmodule Mjolnir.Health.Monitor do
 
   Every `interval_ms` (default 30s), the monitor scans `Mjolnir.VMRegistry`
   and runs `Mjolnir.Health.check/1` on each VM. On `:degraded`, it attempts
-  an L1 auto-heal. On `:dead`, it emits an `EventBus` event and stops
-  escalating — a human decides the next step.
+  an L1 auto-heal. On `:agent_unreachable` (guest agent silent on vsock but the
+  VM is provably TCP-live), it attempts an L1 vsock heal rather than declaring
+  death. On `:dead` (unreachable over *both* vsock and TCP), it emits an
+  `EventBus` event and stops escalating — a human decides the next step.
 
   This is the "slow catch" layer for the connection-rot problem: even if
   nothing actively pokes a VM, the monitor notices a stale Iroh or vsock
@@ -72,8 +74,24 @@ defmodule Mjolnir.Health.Monitor do
         Mjolnir.EventBus.publish(vm_id, :vm_unhealthy, report)
         _ = Mjolnir.Health.heal(vm_id, max_level: 1)
 
+      {:ok, %{overall: :agent_unreachable} = report} ->
+        # The guest agent is unreachable over vsock, but an independent TCP probe
+        # confirmed the VM is alive and serving. This is NOT death — it's a
+        # wedged vsock/agent channel (the mjolnir-8ie signature). Attempt the L1
+        # heal (rebuild the vsock connection) instead of crying DEAD.
+        Logger.warning(
+          "Health.Monitor: VM #{vm_id} guest-agent unreachable over vsock but VM is TCP-live; " <>
+            "attempting L1 vsock heal (not declaring DEAD)"
+        )
+
+        Mjolnir.EventBus.publish(vm_id, :vm_agent_unreachable, report)
+        _ = Mjolnir.Health.heal(vm_id, max_level: 1)
+
       {:ok, %{overall: :dead} = report} ->
-        Logger.error("Health.Monitor: VM #{vm_id} DEAD, not auto-healing")
+        Logger.error(
+          "Health.Monitor: VM #{vm_id} DEAD (unreachable over vsock AND TCP), not auto-healing"
+        )
+
         Mjolnir.EventBus.publish(vm_id, :vm_unhealthy, report)
 
       {:error, :not_found} ->

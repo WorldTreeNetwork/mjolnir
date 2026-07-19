@@ -31,12 +31,31 @@ defmodule Mjolnir.Health do
 
   @type vm_report :: %{
           vm_id: String.t(),
-          overall: :ok | :degraded | :dead,
+          overall: :ok | :degraded | :dead | :agent_unreachable,
           checks: [report_entry()]
         }
 
-  @spec check(String.t()) :: {:ok, vm_report()} | {:error, :not_found | :unreachable}
-  def check(vm_id) when is_binary(vm_id) do
+  @doc """
+  Probe a VM and roll the per-check results up into an `overall` verdict.
+
+  Every per-check probe reaches the guest over the vsock guest-agent channel,
+  so a *single* wedged agent makes all of them fail and the naive roll-up is
+  `:dead`. Before reporting `:dead`, `check/2` corroborates with an independent,
+  vsock-free TCP liveness probe (`Mjolnir.Health.TcpLiveness`): if the guest's
+  app port answers over the TAP link (SYN-ACK or even a RST), the VM is provably
+  alive and the verdict is downgraded to `:agent_unreachable` — the agent is
+  unreachable, but the VM is not dead. Only a VM that answers on *neither* vsock
+  *nor* TCP is reported `:dead`.
+
+  ## Options
+
+  - `:liveness` — 2-arity `fn vm, opts -> :alive | :unreachable | :unknown`
+    used in place of `TcpLiveness.probe/2` (for testing). Remaining opts are
+    passed through to it.
+  """
+  @spec check(String.t(), keyword()) ::
+          {:ok, vm_report()} | {:error, :not_found | :unreachable}
+  def check(vm_id, opts \\ []) when is_binary(vm_id) do
     case Mjolnir.VM.get(vm_id) do
       {:ok, vm} ->
         checks =
@@ -50,7 +69,7 @@ defmodule Mjolnir.Health do
         {:ok,
          %{
            vm_id: vm_id,
-           overall: roll_up(checks),
+           overall: corroborated_overall(roll_up(checks), vm, opts),
            checks: checks
          }}
 
@@ -256,6 +275,23 @@ defmodule Mjolnir.Health do
       true -> :ok
     end
   end
+
+  # A naive `:dead` roll-up only means "every vsock guest-agent probe failed".
+  # Corroborate with a vsock-free TCP liveness probe before believing the VM is
+  # actually dead: if the guest answers on its app port, downgrade to
+  # `:agent_unreachable`. `:unknown` liveness (nothing to probe against) keeps
+  # the conservative `:dead`. Non-dead verdicts pass through untouched.
+  @doc false
+  def corroborated_overall(:dead, %Mjolnir.VM{} = vm, opts) do
+    liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
+
+    case liveness.(vm, opts) do
+      :alive -> :agent_unreachable
+      _unreachable_or_unknown -> :dead
+    end
+  end
+
+  def corroborated_overall(other, _vm, _opts), do: other
 
   # --- nuke helpers ---
 
