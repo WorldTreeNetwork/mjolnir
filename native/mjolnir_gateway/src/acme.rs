@@ -138,19 +138,72 @@ pub fn load_cached(cfg: &AcmeConfig) -> Result<Option<IssuedCert>, AcmeError> {
     }))
 }
 
-/// Load a cached cert if present AND fresh; otherwise issue a new one.
+/// Extract the DNS SAN entries from the end-entity (first) cert in a PEM chain.
+/// Returned lowercased for case-insensitive comparison.
+fn cert_dns_sans(chain_pem: &str) -> Result<Vec<String>, AcmeError> {
+    use x509_parser::prelude::*;
+
+    let certs = crate::tls::parse_cert_chain(chain_pem.as_bytes())?;
+    let (_, cert) = X509Certificate::from_der(certs[0].as_ref())
+        .map_err(|e| AcmeError::Parse(format!("x509 parse: {e}")))?;
+
+    let mut sans = Vec::new();
+    if let Ok(Some(san)) = cert.subject_alternative_name() {
+        for name in &san.value.general_names {
+            if let GeneralName::DNSName(dns) = name {
+                sans.push(dns.to_ascii_lowercase());
+            }
+        }
+    }
+    Ok(sans)
+}
+
+/// Whether the cached cert's DNS SANs cover every domain in `domains` (i.e. the
+/// cert is a superset of the requested identifier set). Case-insensitive. An
+/// unparseable chain returns `false`, forcing a re-issue.
+fn cert_covers_domains(chain_pem: &str, domains: &[String]) -> bool {
+    let sans = match cert_dns_sans(chain_pem) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    domains
+        .iter()
+        .all(|d| sans.iter().any(|s| *s == d.to_ascii_lowercase()))
+}
+
+/// Decide whether a fresh ACME issuance is required, given the currently cached
+/// cert (if any) and the desired config. Pure (parses only the in-memory chain)
+/// so it can be unit-tested directly without hitting Let's Encrypt.
+///
+/// Reuse the cache ONLY IF the cached cert is (a) fresh
+/// (`remaining > renew_before`) AND (b) covers every domain in `cfg.domains`.
+/// Re-issue when the cert is missing, near expiry, or the SAN/identifier set
+/// changed (e.g. an apex was added to `[acme].domains` on SIGHUP).
+pub fn should_issue(cached: Option<&IssuedCert>, cfg: &AcmeConfig, now: SystemTime) -> bool {
+    let Some(cached) = cached else {
+        return true; // no cached cert
+    };
+    let remaining = cached.not_after.duration_since(now).unwrap_or_default();
+    if remaining <= cfg.renew_before {
+        return true; // missing time / near expiry
+    }
+    if !cert_covers_domains(&cached.chain_pem, &cfg.domains) {
+        return true; // SAN set changed — cached cert doesn't cover current identifiers
+    }
+    false
+}
+
+/// Load a cached cert if present, fresh, AND covering the current SAN set;
+/// otherwise issue a new one. Used by both startup and the SIGHUP reload path so
+/// repeated reloads with an unchanged, valid SAN set issue ZERO ACME requests.
 pub async fn load_or_issue(
     cfg: &AcmeConfig,
     cf: &CloudflareClient,
 ) -> Result<IssuedCert, AcmeError> {
-    if let Some(cached) = load_cached(cfg)? {
-        let remaining = cached
-            .not_after
-            .duration_since(SystemTime::now())
-            .unwrap_or_default();
-        if remaining > cfg.renew_before {
-            return Ok(cached);
-        }
+    let cached = load_cached(cfg)?;
+    if !should_issue(cached.as_ref(), cfg, SystemTime::now()) {
+        // `should_issue` returning false guarantees `cached` is `Some`.
+        return Ok(cached.expect("cache reuse implies a cached cert exists"));
     }
     issue(cfg, cf).await
 }
@@ -687,6 +740,97 @@ mod tests {
             "cert should be stale: remaining={remaining:?}, renew_before={:?}",
             cfg.renew_before
         );
+    }
+
+    /// Build an in-memory `IssuedCert` from a self-signed cert covering
+    /// `domains`, with the given `not_after`.
+    fn make_issued(domains: &[&str], not_after: SystemTime) -> IssuedCert {
+        let (chain_pem, key_pem) = gen_self_signed(domains);
+        IssuedCert {
+            chain_pem,
+            key_pem,
+            not_after,
+            not_before: SystemTime::now(),
+            fingerprint_sha256: "test".into(),
+        }
+    }
+
+    // ── should_issue predicate (the core reuse/re-issue decision) ────────────
+
+    // A) fresh cached cert covering the full SAN set → do NOT issue (reuse).
+    #[test]
+    fn should_issue_false_when_fresh_and_covers_sans() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_config(dir.path()); // domains: *.vm.worldtree.network + vm.worldtree.network
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        let cached = make_issued(&["*.vm.worldtree.network", "vm.worldtree.network"], fresh);
+        assert!(
+            !should_issue(Some(&cached), &cfg, now),
+            "fresh cert covering the SAN set must be reused (no re-issue)"
+        );
+    }
+
+    // B) no cached cert → issue.
+    #[test]
+    fn should_issue_true_when_cache_missing() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_config(dir.path());
+        assert!(
+            should_issue(None, &cfg, SystemTime::now()),
+            "missing cache must trigger issuance"
+        );
+    }
+
+    // C) cached cert near expiry (within renew_before) → issue.
+    #[test]
+    fn should_issue_true_when_near_expiry() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_config(dir.path()); // renew_before = 30 days
+        let now = SystemTime::now();
+        // Expires in 1h — well within the 30-day renew window.
+        let expiring = now + Duration::from_secs(3600);
+        let cached = make_issued(&["*.vm.worldtree.network", "vm.worldtree.network"], expiring);
+        assert!(
+            should_issue(Some(&cached), &cfg, now),
+            "cert within renew_before must trigger issuance"
+        );
+    }
+
+    // D) SAN set changed: cached cert does NOT cover a newly-added apex → issue,
+    //    even though the cert is otherwise fresh.
+    #[test]
+    fn should_issue_true_when_san_set_changed() {
+        let dir = TempDir::new().unwrap();
+        let mut cfg = make_config(dir.path());
+        // New config adds an apex the cached cert never covered.
+        cfg.domains = vec![
+            "*.vm.worldtree.network".into(),
+            "vm.worldtree.network".into(),
+            "apex.worldtree.network".into(),
+        ];
+        let now = SystemTime::now();
+        let fresh = now + Duration::from_secs(365 * 24 * 3600);
+        // Cached cert only covers the original two SANs.
+        let cached = make_issued(&["*.vm.worldtree.network", "vm.worldtree.network"], fresh);
+        assert!(
+            should_issue(Some(&cached), &cfg, now),
+            "a fresh cert that does not cover the new SAN set must still re-issue"
+        );
+    }
+
+    // E) cert_covers_domains is case-insensitive and treats a superset as covering.
+    #[test]
+    fn cert_covers_domains_superset_and_case_insensitive() {
+        let (chain_pem, _key) =
+            gen_self_signed(&["*.vm.worldtree.network", "vm.worldtree.network", "extra.example.com"]);
+        // Requested set is a subset (differently cased) → covered.
+        assert!(cert_covers_domains(
+            &chain_pem,
+            &["VM.WorldTree.Network".into(), "*.vm.worldtree.network".into()]
+        ));
+        // Requested domain absent from SANs → not covered.
+        assert!(!cert_covers_domains(&chain_pem, &["missing.example.org".into()]));
     }
 
     // 5. strip_wildcard_gives_base_fqdn
