@@ -5,6 +5,50 @@ defmodule Mjolnir.API.Router do
   Provides RESTful endpoints for spawning, listing, inspecting,
   executing commands in, and stopping microVMs. Authentication is
   handled by `Mjolnir.API.Auth` (JWT or localhost bypass).
+
+  ## Deploy API contract (v0)
+
+  The `mj deploy` client lane consumes exactly this shape — keep it stable.
+
+  ### `POST /api/deploy`
+
+  Deploys an app from a source tree and streams progress.
+
+    * **Body**: a **gzipped tar** of the app source. The tar may wrap the source
+      in a single top-level directory or contain it at the root — both work
+      (the server locates the dir holding `package.json`).
+    * **Headers**:
+      * `X-App-Name` — the app's stable name. Fallback: derived from the tar's
+        single top-level directory, else `"app"`.
+      * `X-Memory-MB` — service VM memory. Default `256`.
+      * `X-Domain` — optional custom-domain fqdn to assign on first deploy.
+    * **Response**: `200` with `Content-Type: application/x-ndjson`, a stream of
+      newline-delimited JSON objects. Progress lines are `{"stage": ..., "line":
+      ...}` (stages: `detect`, `build`, `run`, `done`, or a failing stage name).
+      The **final** line is the result object:
+      * success — `{"ok": true, "url": ..., "app_name": ..., "release_snapshot":
+        ..., "service_vm_id": ...}`
+      * failure — `{"ok": false, "error": ..., "stage": ...}`
+    * A malformed/empty/undecompressable body is rejected with a plain `400`
+      JSON error *before* the stream starts.
+
+  ### `PUT /api/apps/:app/domain`
+
+    * **Body**: `{"fqdn": "zine.identikey.io"}`.
+    * **Response**: `200` `{"app", "fqdn", "backend", "apex_registered": true,
+      "cert_present": bool}`. `404` if the app is not deployed; `400`
+      `{"error": "apex_not_registered", ...}` if the fqdn's apex is not in
+      `:gateway_apexes`.
+
+  ### `DELETE /api/apps/:app/domain`
+
+    * **Response**: `200` `{"app", "removed": true}`; `404` if not deployed.
+
+  ### `GET /api/apps`
+
+    * **Response**: `200` `{"apps": [{"app_name", "url", "custom_domain",
+      "service_vm_id", "backend", "port"}]}` (`backend` is `"<ip>:<port>"` when
+      the service VM is running/local, else `null`).
   """
 
   use Plug.Router
@@ -1089,6 +1133,82 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Deploy an app from a gzipped-tar source body; stream NDJSON progress.
+  # See the module doc for the full request/response contract.
+  post "/api/deploy" do
+    conn = require_scope(conn, "vms:spawn")
+
+    if conn.halted, do: conn, else: handle_deploy(conn)
+  end
+
+  # Set (or change) an app's custom domain.
+  put "/api/apps/:app/domain" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      case conn.body_params["fqdn"] do
+        fqdn when is_binary(fqdn) and fqdn != "" ->
+          case Mjolnir.API.Domains.set_domain(app, fqdn) do
+            {:ok, result} ->
+              json(conn, 200, result)
+
+            {:error, :not_found} ->
+              json(conn, 404, %{error: "app_not_found", app: app})
+
+            {:error, {:apex_not_registered, bad_fqdn, apexes}} ->
+              json(conn, 400, %{
+                error: "apex_not_registered",
+                fqdn: bad_fqdn,
+                detail:
+                  "no configured gateway apex matches '#{bad_fqdn}'; " <>
+                    "add it to MJOLNIR_GATEWAY_APEXES (configured: #{Enum.join(apexes, ", ")})"
+              })
+
+            {:error, {:registry_failed, reason}} ->
+              Logger.error("Domain set failed for #{app}: #{inspect(reason)}")
+              json(conn, 500, %{error: "domain_set_failed"})
+          end
+
+        _ ->
+          json(conn, 400, %{error: "fqdn is required"})
+      end
+    else
+      conn
+    end
+  end
+
+  # Clear an app's custom domain.
+  delete "/api/apps/:app/domain" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      case Mjolnir.API.Domains.remove_domain(app) do
+        {:ok, result} ->
+          json(conn, 200, result)
+
+        {:error, :not_found} ->
+          json(conn, 404, %{error: "app_not_found", app: app})
+
+        {:error, {:registry_failed, reason}} ->
+          Logger.error("Domain remove failed for #{app}: #{inspect(reason)}")
+          json(conn, 500, %{error: "domain_remove_failed"})
+      end
+    else
+      conn
+    end
+  end
+
+  # List deployed apps joined with their live gateway backend.
+  get "/api/apps" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      json(conn, 200, %{apps: Mjolnir.API.Domains.list_apps()})
+    else
+      conn
+    end
+  end
+
   # MCP endpoint — Model Context Protocol for AI agent access
   forward("/mcp", to: Mjolnir.MCP.Plug)
 
@@ -1102,12 +1222,181 @@ defmodule Mjolnir.API.Router do
   @parsers_opts Plug.Parsers.init(parsers: [:json], json_decoder: Jason)
   defp maybe_parse_body(%{path_info: ["mcp" | _]} = conn, _opts), do: conn
   defp maybe_parse_body(%{path_info: ["api", "sites" | _]} = conn, _opts), do: conn
+  # /api/deploy carries a raw gzipped-tar body — bypass the JSON parser so the
+  # bytes arrive intact for erl_tar to decompress+extract.
+  defp maybe_parse_body(%{path_info: ["api", "deploy"]} = conn, _opts), do: conn
   defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
 
   defp json(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
+  end
+
+  # --- POST /api/deploy ------------------------------------------------------
+
+  # Cap on the total decompressed-tar upload we buffer in memory (256 MiB).
+  @deploy_max_body 256 * 1024 * 1024
+
+  defp handle_deploy(conn) do
+    with {:ok, body, conn} <- read_full_body(conn),
+         {:ok, requested_name} <- deploy_app_name(conn),
+         dest = deploy_src_dest(requested_name),
+         {:ok, app_dir} <- extract_source(body, dest) do
+      app_name = resolve_app_name(requested_name, app_dir)
+      deployer = conn.assigns[:user_id]
+      memory_mb = deploy_memory_mb(conn)
+      custom_domain = deploy_domain(conn)
+
+      conn = send_chunked(conn, 200)
+      {:ok, agent} = Agent.start_link(fn -> conn end)
+
+      on_progress = fn stage, line ->
+        Agent.update(agent, fn c ->
+          case chunk(c, Jason.encode!(%{stage: stage, line: line}) <> "\n") do
+            {:ok, c2} -> c2
+            {:error, _} -> c
+          end
+        end)
+      end
+
+      result =
+        Mjolnir.Deploy.Orchestrator.deploy(app_name, app_dir,
+          deployer: deployer,
+          memory_mb: memory_mb,
+          custom_domain: custom_domain,
+          on_progress: on_progress
+        )
+
+      final =
+        case result do
+          {:ok, r} -> Map.put(r, :ok, true)
+          {:error, %{stage: stage, reason: reason}} -> %{ok: false, stage: stage, error: inspect(reason)}
+        end
+
+      conn = Agent.get(agent, & &1)
+      Agent.stop(agent)
+
+      case chunk(conn, Jason.encode!(final) <> "\n") do
+        {:ok, conn} -> conn
+        {:error, _} -> conn
+      end
+    else
+      {:error, :too_large} ->
+        json(conn, 413, %{error: "source_too_large", limit_bytes: @deploy_max_body})
+
+      {:error, :bad_app_name} ->
+        json(conn, 400, %{error: "invalid X-App-Name"})
+
+      {:error, {:extract_failed, reason}} ->
+        json(conn, 400, %{error: "invalid_source_archive", reason: inspect(reason)})
+
+      {:error, reason} ->
+        Logger.error("Deploy request failed: #{inspect(reason)}")
+        json(conn, 400, %{error: "deploy_request_failed", reason: inspect(reason)})
+    end
+  end
+
+  # Read the entire (unparsed) request body, bounded by @deploy_max_body.
+  defp read_full_body(conn, acc \\ "") do
+    if byte_size(acc) > @deploy_max_body do
+      {:error, :too_large}
+    else
+      case read_body(conn, length: 8_000_000, read_length: 1_000_000) do
+        {:ok, data, conn} -> {:ok, acc <> data, conn}
+        {:more, data, conn} -> read_full_body(conn, acc <> data)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp deploy_app_name(conn) do
+    case get_req_header(conn, "x-app-name") do
+      [name | _] when is_binary(name) and name != "" ->
+        case Validation.validate_safe_name(name, "X-App-Name") do
+          {:ok, safe} -> {:ok, safe}
+          {:error, _} -> {:error, :bad_app_name}
+        end
+
+      _ ->
+        # Deferred to extract_source, which derives from the tar's top dir.
+        {:ok, :derive}
+    end
+  end
+
+  defp deploy_memory_mb(conn) do
+    case get_req_header(conn, "x-memory-mb") do
+      [val | _] -> Validation.validate_integer(val, 256, 128, 32_768)
+      _ -> 256
+    end
+  end
+
+  defp deploy_domain(conn) do
+    case get_req_header(conn, "x-domain") do
+      [d | _] when is_binary(d) and d != "" -> d
+      _ -> nil
+    end
+  end
+
+  # A provided X-App-Name wins; otherwise derive from the extracted top dir.
+  defp resolve_app_name(name, _app_dir) when is_binary(name), do: name
+
+  defp resolve_app_name(:derive, app_dir) do
+    case Path.basename(app_dir) do
+      "" -> "app"
+      "." -> "app"
+      base -> base
+    end
+  end
+
+  defp deploy_src_dest(:derive), do: deploy_src_dest("app")
+
+  defp deploy_src_dest(app_name) do
+    base = Application.get_env(:mjolnir, :deploy_src_dir, "/var/lib/mjolnir/deploy/src")
+    Path.join(base, safe_slug(app_name))
+  end
+
+  defp safe_slug(app_name) do
+    app_name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9_-]/, "_")
+  end
+
+  # Extract the gzipped tar into `dest` (wiped first) and locate the app root —
+  # the directory containing package.json (dest itself, or its single subdir).
+  defp extract_source(body, dest) do
+    _ = File.rm_rf(dest)
+
+    with :ok <- File.mkdir_p(dest),
+         :ok <- erl_tar_extract(body, dest) do
+      {:ok, app_root(dest)}
+    else
+      {:error, reason} -> {:error, {:extract_failed, reason}}
+    end
+  end
+
+  defp erl_tar_extract(body, dest) do
+    case :erl_tar.extract({:binary, body}, [:compressed, {:cwd, String.to_charlist(dest)}]) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp app_root(dest) do
+    cond do
+      File.exists?(Path.join(dest, "package.json")) ->
+        dest
+
+      true ->
+        case File.ls(dest) do
+          {:ok, [only]} ->
+            sub = Path.join(dest, only)
+            if File.dir?(sub), do: sub, else: dest
+
+          _ ->
+            dest
+        end
+    end
   end
 
   # Run the trash restore + map its result to a response. Split out so the
