@@ -14,6 +14,8 @@ mod api;
 mod auth;
 mod config;
 mod connect;
+mod deploy;
+mod domain;
 mod forge;
 mod forge_tui;
 mod mcp;
@@ -297,6 +299,35 @@ enum Command {
         action: TrashAction,
     },
 
+    // --- Apps ---
+    /// Deploy an app source tree (tar + gzip → POST /api/deploy)
+    #[command(next_help_heading = "Apps")]
+    Deploy {
+        /// Path to the app directory (default: current directory)
+        path: Option<String>,
+        /// App name (default: directory basename)
+        #[arg(long)]
+        name: Option<String>,
+        /// Memory allocation in MB
+        #[arg(long, default_value = "256")]
+        memory: u32,
+        /// Bind a custom domain during deploy
+        #[arg(long)]
+        domain: Option<String>,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Manage custom domains for deployed apps (set / rm / ls)
+    #[command(next_help_heading = "Apps")]
+    Domain {
+        #[command(subcommand)]
+        action: DomainAction,
+    },
+
     // --- Auth ---
     /// Authenticate with the Mjolnir identity provider
     #[command(next_help_heading = "Auth")]
@@ -433,6 +464,43 @@ enum ConfigAction {
     },
     /// List all profiles
     Profiles,
+}
+
+#[derive(Subcommand)]
+enum DomainAction {
+    /// Bind a custom domain to an app
+    Set {
+        /// App name
+        app: String,
+        /// Fully-qualified domain name (e.g. app.example.com)
+        fqdn: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Remove an app's custom domain
+    Rm {
+        /// App name
+        app: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// List apps with their URLs, custom domains, and backends
+    Ls {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -721,6 +789,30 @@ async fn main() {
             }
             TrashAction::Restore { id, api, token } => {
                 api::cmd_trash_restore(&profile, &api, &token, &id, json).await
+            }
+        },
+
+        // --- Apps ---
+        Command::Deploy {
+            path,
+            name,
+            memory,
+            domain,
+            api,
+            token,
+        } => deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain).await,
+        Command::Domain { action } => match action {
+            DomainAction::Set {
+                app,
+                fqdn,
+                api,
+                token,
+            } => domain::cmd_domain_set(&profile, &api, &token, &app, &fqdn, json).await,
+            DomainAction::Rm { app, api, token } => {
+                domain::cmd_domain_rm(&profile, &api, &token, &app, json).await
+            }
+            DomainAction::Ls { api, token } => {
+                domain::cmd_domain_ls(&profile, &api, &token, json).await
             }
         },
 
