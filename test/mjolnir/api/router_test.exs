@@ -10,7 +10,17 @@ defmodule Mjolnir.API.RouterTest do
   setup do
     original = Application.get_env(:mjolnir, :auth, [])
     Application.put_env(:mjolnir, :auth, bypass_localhost: true)
-    on_exit(fn -> Application.put_env(:mjolnir, :auth, original) end)
+
+    orig_src = Application.get_env(:mjolnir, :deploy_src_dir)
+    src_dir = Path.join(System.tmp_dir!(), "deploy-src-#{System.unique_integer([:positive])}")
+    Application.put_env(:mjolnir, :deploy_src_dir, src_dir)
+
+    on_exit(fn ->
+      Application.put_env(:mjolnir, :auth, original)
+      if orig_src, do: Application.put_env(:mjolnir, :deploy_src_dir, orig_src)
+      File.rm_rf(src_dir)
+    end)
+
     :ok
   end
 
@@ -298,6 +308,100 @@ defmodule Mjolnir.API.RouterTest do
         |> Router.call(@opts)
 
       assert conn.status == 404
+    end
+  end
+
+  describe "GET /api/apps" do
+    test "returns 200 with an apps list" do
+      conn = request(:get, "/api/apps")
+      assert conn.status == 200
+      assert is_list(Jason.decode!(conn.resp_body)["apps"])
+    end
+  end
+
+  describe "PUT/DELETE /api/apps/:app/domain" do
+    test "404 setting a domain on an unknown app" do
+      conn = request(:put, "/api/apps/nope-#{System.unique_integer([:positive])}/domain", %{fqdn: "x.identikey.io"})
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
+    end
+
+    test "400 when fqdn is missing" do
+      conn = request(:put, "/api/apps/whatever/domain", %{})
+      assert conn.status == 400
+    end
+
+    test "404 removing a domain from an unknown app" do
+      conn = request(:delete, "/api/apps/nope-#{System.unique_integer([:positive])}/domain")
+      assert conn.status == 404
+    end
+
+    test "400 apex_not_registered for a seeded app with an unconfigured apex" do
+      app = "domtest-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Mjolnir.Deploy.Registry.put(app, %{
+          release_snapshot: "deploy-x",
+          service_vm_id: "svc-x",
+          url: "https://x",
+          port: 3000
+        })
+
+      on_exit(fn -> Mjolnir.Deploy.Registry.delete(app) end)
+
+      conn = request(:put, "/api/apps/#{app}/domain", %{fqdn: "x.example.com"})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "apex_not_registered"
+    end
+  end
+
+  describe "POST /api/deploy" do
+    test "400 for a body that is not a gzipped tar" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "junk-app")
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_source_archive"
+    end
+
+    test "streams NDJSON and reports a detect failure for an unsupported app" do
+      # A valid gzipped tar whose contents are not a recognised app (no
+      # package.json / svelte.config.js) → detection fails. Exercises the full
+      # streaming path with no VM/KVM needed.
+      dir = Path.join(System.tmp_dir!(), "deploytar-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "myapp"))
+      File.write!(Path.join([dir, "myapp", "README.md"]), "# hi")
+      tar = Path.join(dir, "src.tgz")
+
+      :ok =
+        :erl_tar.create(
+          String.to_charlist(tar),
+          [{~c"myapp", String.to_charlist(Path.join(dir, "myapp"))}],
+          [:compressed]
+        )
+
+      body = File.read!(tar)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      conn =
+        conn(:post, "/api/deploy", body)
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "myapp")
+        |> Router.call(@opts)
+
+      assert conn.status == 200
+
+      lines =
+        conn.resp_body
+        |> String.split("\n", trim: true)
+        |> Enum.map(&Jason.decode!/1)
+
+      final = List.last(lines)
+      assert final["ok"] == false
+      assert final["stage"] == "detect"
     end
   end
 end
