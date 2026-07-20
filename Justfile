@@ -130,6 +130,14 @@ deploy-runner: _require-host
 deploy-gateway: _require-host
     ./scripts/deploy.sh {{host}} --gateway
 
+# Verify every registered custom domain still serves (run after a deploy)
+smoke-domains: _require-host
+    MJOLNIR_HOST={{host}} ./scripts/smoke-custom-domain.sh verify
+
+# Record the current routes + ACME cert as the rollback baseline (run before a deploy)
+smoke-domains-snapshot: _require-host
+    MJOLNIR_HOST={{host}} ./scripts/smoke-custom-domain.sh snapshot
+
 # Bootstrap a fresh server (rsync code + run bootstrap script)
 bootstrap: _require-host
     rsync -avz --delete --filter=':- .gitignore' --exclude='.git' . {{host}}:/opt/mjolnir/
