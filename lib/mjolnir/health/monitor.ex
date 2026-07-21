@@ -70,7 +70,14 @@ defmodule Mjolnir.Health.Monitor do
         :ok
 
       {:ok, %{overall: :degraded} = report} ->
-        Logger.warning("Health.Monitor: VM #{vm_id} degraded, attempting L1 heal")
+        # Name the failing checks — a bare "degraded" sends the reader digging
+        # through four subsystems to find which one broke (mjolnir-nf6).
+        Logger.warning(
+          "Health.Monitor: VM #{vm_id} degraded (" <>
+            Enum.join(Mjolnir.Health.failing_check_names(report.checks), ", ") <>
+            "), attempting L1 heal"
+        )
+
         Mjolnir.EventBus.publish(vm_id, :vm_unhealthy, report)
         _ = Mjolnir.Health.heal(vm_id, max_level: 1)
 

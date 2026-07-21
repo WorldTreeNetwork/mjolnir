@@ -31,12 +31,32 @@ defmodule Mjolnir.Health.GuestNetwork do
     #    the load-bearing check: if any of those are broken, this fails.
     #
     # Echoing a token string per branch keeps parsing exit-code-independent.
-    # 2s ping timeout caps latency when TAP is admin-down (no carrier, no
-    # outgoing ARP), which would otherwise hang.
+    # Timeouts cap latency when the TAP is admin-down (no carrier, no outgoing
+    # ARP), which would otherwise hang.
+    #
+    # The egress probe is tool-adaptive, and deliberately prefers TCP over ICMP:
+    #
+    #   * `ping` is NOT present in the ubuntu-24.04 base image (mjolnir-58w).
+    #     The old probe hard-coded it, and `sh: ping: not found` is a non-zero
+    #     exit indistinguishable from a dropped packet — so every VM reported
+    #     `:egress_blocked` while its network was perfectly healthy.
+    #   * ICMP is also the wrong signal: plenty of networks drop echo requests
+    #     while carrying TCP fine. What callers actually care about is whether
+    #     the guest can reach the internet.
+    #
+    # If no probe tool exists at all we must not claim the network is down —
+    # that's the exact false-negative this replaced. Report NOTOOL instead.
     cmd = """
     ip route show default 2>/dev/null | grep -q default || { echo NOROUTE; exit 0; }
-    ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 || { echo NOPING; exit 0; }
-    echo OK
+    if command -v curl >/dev/null 2>&1; then
+      curl -s -o /dev/null -m 3 http://1.1.1.1/ && echo OK || echo NOEGRESS
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q -O /dev/null -T 3 http://1.1.1.1/ && echo OK || echo NOEGRESS
+    elif command -v ping >/dev/null 2>&1; then
+      ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 && echo OK || echo NOEGRESS
+    else
+      echo NOTOOL
+    fi
     """
 
     try do
@@ -45,7 +65,10 @@ defmodule Mjolnir.Health.GuestNetwork do
           case String.trim(out) do
             "OK" -> :ok
             "NOROUTE" -> {:dead, :no_default_route}
-            "NOPING" -> {:dead, :egress_blocked}
+            "NOEGRESS" -> {:dead, :egress_blocked}
+            # No curl/wget/ping in the guest — we learned nothing about the
+            # network, so we must not report it as broken.
+            "NOTOOL" -> {:degraded, :no_egress_probe_tool}
             other -> {:dead, {:unexpected_probe_output, other}}
           end
 

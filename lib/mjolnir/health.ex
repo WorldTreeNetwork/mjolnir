@@ -69,7 +69,7 @@ defmodule Mjolnir.Health do
         {:ok,
          %{
            vm_id: vm_id,
-           overall: corroborated_overall(roll_up(checks), vm, opts),
+           overall: corroborated_overall(roll_up(checks), checks, vm, opts),
            checks: checks
          }}
 
@@ -276,22 +276,66 @@ defmodule Mjolnir.Health do
     end
   end
 
-  # A naive `:dead` roll-up only means "every vsock guest-agent probe failed".
-  # Corroborate with a vsock-free TCP liveness probe before believing the VM is
-  # actually dead: if the guest answers on its app port, downgrade to
-  # `:agent_unreachable`. `:unknown` liveness (nothing to probe against) keeps
-  # the conservative `:dead`. Non-dead verdicts pass through untouched.
-  @doc false
-  def corroborated_overall(:dead, %Mjolnir.VM{} = vm, opts) do
-    liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
+  # Checks that prove the vsock guest-agent channel itself works. If these pass,
+  # the agent is reachable *by definition* and no verdict may claim otherwise
+  # (mjolnir-nf6).
+  @agent_channel_checks ["guest_agent_ping", "vsock_connection"]
 
-    case liveness.(vm, opts) do
-      :alive -> :agent_unreachable
-      _unreachable_or_unknown -> :dead
+  # A naive `:dead` roll-up means "at least one probe failed" — NOT "the agent is
+  # gone". Two corroborations run before we believe the pessimistic verdict:
+  #
+  # 1. Did the agent channel itself fail? Every probe reaches the guest over
+  #    vsock, so a wedged agent makes all of them fail — but the converse does
+  #    not hold. When `guest_agent_ping` and `vsock_connection` both returned
+  #    `:ok`, the agent demonstrably answered, and whatever died is a specific
+  #    subsystem (network, Iroh). Calling that `:agent_unreachable` sends every
+  #    reader hunting a vsock bug that isn't there, which is exactly what
+  #    happened on 2026-07-21: a guest missing the `ping` binary produced 1004
+  #    "guest-agent unreachable over vsock" warnings while exec worked fine.
+  #    Such a VM is `:degraded` — the caller reads `checks` for the culprit.
+  #
+  # 2. Only once the agent channel is genuinely unreachable does the vsock-free
+  #    TCP liveness probe decide between `:agent_unreachable` (guest answers on
+  #    its app port, so it's wedged, not dead) and `:dead`. `:unknown` liveness
+  #    (nothing to probe against) keeps the conservative `:dead`.
+  #
+  # Non-dead verdicts pass through untouched.
+  @doc false
+  def corroborated_overall(overall, vm, opts), do: corroborated_overall(overall, [], vm, opts)
+
+  @doc false
+  def corroborated_overall(:dead, checks, %Mjolnir.VM{} = vm, opts) do
+    if agent_channel_ok?(checks) do
+      :degraded
+    else
+      liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
+
+      case liveness.(vm, opts) do
+        :alive -> :agent_unreachable
+        _unreachable_or_unknown -> :dead
+      end
     end
   end
 
-  def corroborated_overall(other, _vm, _opts), do: other
+  def corroborated_overall(other, _checks, _vm, _opts), do: other
+
+  # True only when every agent-channel check ran AND passed. An absent check is
+  # not evidence of health, so the empty list is `false` — that keeps the
+  # 3-arity call (no check context) on the original conservative behavior.
+  defp agent_channel_ok?(checks) do
+    Enum.all?(@agent_channel_checks, fn name ->
+      Enum.any?(checks, fn c -> c.name == name and c.status == :ok end)
+    end)
+  end
+
+  @doc """
+  Names of the checks that failed, for operator-facing log lines.
+  """
+  def failing_check_names(checks) do
+    checks
+    |> Enum.reject(fn c -> c.status == :ok end)
+    |> Enum.map(fn c -> "#{c.name}=#{inspect(c.status)}" end)
+  end
 
   # --- nuke helpers ---
 
