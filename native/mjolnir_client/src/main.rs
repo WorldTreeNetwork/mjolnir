@@ -475,12 +475,25 @@ enum ConfigAction {
 
 #[derive(Subcommand)]
 enum DomainAction {
-    /// Bind a custom domain to an app
+    /// Bind a custom domain to an app, or (with --keypair-file) to an
+    /// IdentiKey site via a signed alias record
     Set {
-        /// App name
+        /// App name (or site name when --keypair-file is given)
         app: String,
         /// Fully-qualified domain name (e.g. app.example.com)
         fqdn: String,
+        /// Sites target: sign the alias with this IdentiKey keypair JSON;
+        /// <app> is then the site name
+        #[arg(long)]
+        keypair_file: Option<String>,
+        /// Expected IdentiKey fingerprint, cross-checked against the keypair
+        /// (Sites target only)
+        #[arg(long, requires = "keypair_file")]
+        identikey_fp: Option<String>,
+        /// Alias sequence; must exceed the server's current one
+        /// (Sites target only; default: unix-time ms)
+        #[arg(long, requires = "keypair_file")]
+        sequence: Option<u64>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -488,10 +501,25 @@ enum DomainAction {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
-    /// Remove an app's custom domain
+    /// Remove an app's custom domain, or (with --keypair-file) tombstone an
+    /// IdentiKey site's alias
     Rm {
-        /// App name
+        /// App name (or site name when --keypair-file is given)
         app: String,
+        /// Domain to remove (required for the Sites target, unused for apps)
+        fqdn: Option<String>,
+        /// Sites target: sign the tombstone with this IdentiKey keypair JSON;
+        /// <app> is then the site name
+        #[arg(long)]
+        keypair_file: Option<String>,
+        /// Expected IdentiKey fingerprint, cross-checked against the keypair
+        /// (Sites target only)
+        #[arg(long, requires = "keypair_file")]
+        identikey_fp: Option<String>,
+        /// Tombstone sequence; must exceed the server's current one
+        /// (Sites target only; default: unix-time ms)
+        #[arg(long, requires = "keypair_file")]
+        sequence: Option<u64>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -851,12 +879,61 @@ async fn main() {
             DomainAction::Set {
                 app,
                 fqdn,
+                keypair_file,
+                identikey_fp,
+                sequence,
                 api,
                 token,
-            } => domain::cmd_domain_set(&profile, &api, &token, &app, &fqdn, json).await,
-            DomainAction::Rm { app, api, token } => {
-                domain::cmd_domain_rm(&profile, &api, &token, &app, json).await
-            }
+            } => match keypair_file {
+                Some(kp) => {
+                    sites::cmd_alias_set(
+                        &profile,
+                        &api,
+                        &token,
+                        &app,
+                        &fqdn,
+                        &kp,
+                        &identikey_fp,
+                        sequence,
+                        json,
+                    )
+                    .await
+                }
+                None => domain::cmd_domain_set(&profile, &api, &token, &app, &fqdn, json).await,
+            },
+            DomainAction::Rm {
+                app,
+                fqdn,
+                keypair_file,
+                identikey_fp,
+                sequence,
+                api,
+                token,
+            } => match (keypair_file, fqdn) {
+                (Some(kp), Some(fqdn)) => {
+                    sites::cmd_alias_rm(
+                        &profile,
+                        &api,
+                        &token,
+                        &app,
+                        &fqdn,
+                        &kp,
+                        &identikey_fp,
+                        sequence,
+                        json,
+                    )
+                    .await
+                }
+                (Some(_), None) => Err(anyhow::anyhow!(
+                    "the Sites target needs the domain to remove: \
+                     mj domain rm <site> <fqdn> --keypair-file ..."
+                )),
+                (None, Some(_)) => Err(anyhow::anyhow!(
+                    "removing an app's domain takes no <fqdn>; \
+                     to remove a site alias pass --keypair-file"
+                )),
+                (None, None) => domain::cmd_domain_rm(&profile, &api, &token, &app, json).await,
+            },
             DomainAction::Ls { api, token } => {
                 domain::cmd_domain_ls(&profile, &api, &token, json).await
             }

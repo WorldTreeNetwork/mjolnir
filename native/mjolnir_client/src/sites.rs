@@ -1,5 +1,7 @@
 //! `mjolnir sites publish` — publish a local directory as a public-mode
 //! IdentiKey site, and `mjolnir sites keygen` — mint the keypair that signs it.
+//! Also home to the Sites half of `mjolnir domain set/rm` (`cmd_alias_set` /
+//! `cmd_alias_rm`), which sign and upload custom-domain alias records.
 //!
 //! This is a byte-compatible port of the Elixir publisher
 //! (`lib/mjolnir/sites/publisher.ex` + the `mix mjolnir.sites.publish` task).
@@ -779,6 +781,206 @@ pub fn cmd_keygen(out: &str, force: bool) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Custom-domain aliases (`mj domain set/rm --keypair-file`)
+// ---------------------------------------------------------------------------
+
+/// Default alias sequence: unix-time in milliseconds. Strictly increases across
+/// invocations, so re-binding or tombstoning never trips the server's
+/// monotonic-sequence replay check (unlike a fixed default of 1).
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_millis() as u64
+}
+
+/// Load the keypair, derive its fingerprint (cross-checked against
+/// `--identikey-fp` when given), and resolve the API base + client.
+async fn alias_context(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    keypair_file: &str,
+    identikey_fp: &Option<String>,
+) -> Result<(reqwest::Client, String, Keypair, String)> {
+    let json = std::fs::read_to_string(keypair_file)
+        .with_context(|| format!("cannot read keypair file {}", keypair_file))?;
+    let keypair =
+        Keypair::from_json(&json).with_context(|| format!("invalid keypair {}", keypair_file))?;
+    let fp = keypair.fingerprint();
+    if let Some(expected) = identikey_fp {
+        if expected != &fp {
+            bail!(
+                "keypair fingerprint {} does not match --identikey-fp {}",
+                fp,
+                expected
+            );
+        }
+    }
+    let base = crate::config::resolve_api(api_flag, profile)
+        .trim_end_matches('/')
+        .to_string();
+    let client = api_client(token).await;
+    Ok((client, base, keypair, fp))
+}
+
+/// Build and sign an alias record. Both binding and tombstoning use the same
+/// record shape — only the HTTP verb differs (see the AliasRecord doc).
+fn signed_alias_record(
+    keypair: &Keypair,
+    fp: &str,
+    site: &str,
+    fqdn: &str,
+    sequence: u64,
+) -> Result<AliasRecord> {
+    let mut record = AliasRecord {
+        created_at: now_iso8601(),
+        fqdn: fqdn.to_string(),
+        identikey_fp: fp.to_string(),
+        sequence,
+        signature: None,
+        site_name: site.to_string(),
+        version: 1,
+    };
+    let signing_bytes = record.canonical_signing_bytes()?;
+    record.signature = Some(keypair.multi_sig(&signing_bytes));
+    Ok(record)
+}
+
+/// `mj domain set <site> <fqdn> --keypair-file <path>` — bind a custom domain
+/// to an IdentiKey site by publishing a signed alias record.
+#[allow(clippy::too_many_arguments)]
+pub async fn cmd_alias_set(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    site: &str,
+    fqdn: &str,
+    keypair_file: &str,
+    identikey_fp: &Option<String>,
+    sequence: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    let (client, base, keypair, fp) =
+        alias_context(profile, api_flag, token, keypair_file, identikey_fp).await?;
+    let sequence = sequence.unwrap_or_else(now_unix_ms);
+    let record = signed_alias_record(&keypair, &fp, site, fqdn, sequence)?;
+
+    // The server verifies the record's signature against the registered
+    // identity, so make sure it exists. Idempotent, same as publish.
+    register_identity(&client, &base, &fp, &keypair).await?;
+
+    let resp = client
+        .put(format!(
+            "{}/api/sites/{}/{}/aliases/{}",
+            base, fp, site, fqdn
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(serde_json::to_vec(&record)?)
+        .send()
+        .await
+        .context("alias upload request failed")?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if status != reqwest::StatusCode::CREATED {
+        if text.contains("alias_already_claimed") {
+            bail!(
+                "'{}' is already claimed by a different IdentiKey — the current owner \
+                 must tombstone it before it can be re-bound",
+                fqdn
+            );
+        }
+        if text.contains("sequence_regression") {
+            bail!(
+                "alias rejected: sequence {} is not greater than the server's current \
+                 sequence — pass a higher --sequence",
+                sequence
+            );
+        }
+        bail!("alias upload failed ({}): {}", status, text.trim());
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "site": site,
+                "fqdn": fqdn,
+                "identikey_fp": fp,
+                "sequence": sequence,
+            })
+        );
+        return Ok(());
+    }
+
+    println!("Site:      {}", site);
+    println!("Domain:    {}", fqdn);
+    println!("IdentiKey: {}", fp);
+    println!("Sequence:  {}", sequence);
+    eprintln!(
+        "\x1b[33mnote: the gateway serves this host only once DNS for '{}' points at it \
+         and its apex + TLS cert are configured (MJOLNIR_GATEWAY_APEXES / [[cert]]).\x1b[0m",
+        fqdn
+    );
+    Ok(())
+}
+
+/// `mj domain rm <site> <fqdn> --keypair-file <path>` — remove a site's custom
+/// domain by sending a signed tombstone record with a higher sequence.
+#[allow(clippy::too_many_arguments)]
+pub async fn cmd_alias_rm(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    site: &str,
+    fqdn: &str,
+    keypair_file: &str,
+    identikey_fp: &Option<String>,
+    sequence: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    let (client, base, keypair, fp) =
+        alias_context(profile, api_flag, token, keypair_file, identikey_fp).await?;
+    let sequence = sequence.unwrap_or_else(now_unix_ms);
+    let record = signed_alias_record(&keypair, &fp, site, fqdn, sequence)?;
+
+    let resp = client
+        .delete(format!(
+            "{}/api/sites/{}/{}/aliases/{}",
+            base, fp, site, fqdn
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(serde_json::to_vec(&record)?)
+        .send()
+        .await
+        .context("alias tombstone request failed")?;
+
+    let status = resp.status();
+    if status != reqwest::StatusCode::NO_CONTENT {
+        let text = resp.text().await.unwrap_or_default();
+        if text.contains("sequence_regression") {
+            bail!(
+                "tombstone rejected: sequence {} is not greater than the server's current \
+                 sequence — pass a higher --sequence",
+                sequence
+            );
+        }
+        bail!("alias tombstone failed ({}): {}", status, text.trim());
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "site": site, "fqdn": fqdn, "removed": true })
+        );
+    } else {
+        eprintln!("Removed custom domain {} from site {}", fqdn, site);
+    }
+    Ok(())
+}
+
 /// Create-or-truncate `path` with mode 0600 *before* any bytes are written, so
 /// the secret is never briefly world-readable.
 #[cfg(unix)]
@@ -956,6 +1158,12 @@ mod tests {
         r#"{"created_at":"2026-07-21T12:34:56Z","identikey_fp":"FP","sequence":3,"#,
         r#""signature":null,"site_name":"blog","snapshot_hash":"SH","version":1}"#
     );
+    // `AliasRecord.canonical_signing_bytes/1` output: Jason serializes the
+    // 7-key map sorted, signature present-and-null.
+    const ELIXIR_ALIAS_SIGNING_BYTES: &str = concat!(
+        r#"{"created_at":"2026-07-21T12:34:56Z","fqdn":"blog.duke.io","identikey_fp":"FP","#,
+        r#""sequence":3,"signature":null,"site_name":"blog","version":1}"#
+    );
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{:02X}", b)).collect()
@@ -1081,6 +1289,40 @@ mod tests {
     fn head_signing_bytes_match_elixir() {
         let bytes = sample_head().canonical_signing_bytes().unwrap();
         assert_eq!(String::from_utf8(bytes).unwrap(), ELIXIR_HEAD_SIGNING_BYTES);
+    }
+
+    #[test]
+    fn alias_signing_bytes_match_elixir() {
+        let record = AliasRecord {
+            created_at: "2026-07-21T12:34:56Z".into(),
+            fqdn: "blog.duke.io".into(),
+            identikey_fp: "FP".into(),
+            sequence: 3,
+            signature: None,
+            site_name: "blog".into(),
+            version: 1,
+        };
+        let bytes = record.canonical_signing_bytes().unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            ELIXIR_ALIAS_SIGNING_BYTES
+        );
+    }
+
+    #[test]
+    fn signed_alias_record_verifies_and_clears_to_canonical_bytes() {
+        use ed25519_dalek::Verifier;
+        let kp = Keypair::generate();
+        let record =
+            signed_alias_record(&kp, &kp.fingerprint(), "blog", "blog.duke.io", 7).unwrap();
+
+        let sig_b64 = record.signature.clone().expect("signed").ed25519;
+        let sig = decode_b64_fixed::<64>(&sig_b64, "sig").unwrap();
+        let signing_bytes = record.canonical_signing_bytes().unwrap();
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&kp.public).unwrap();
+        assert!(vk
+            .verify(&signing_bytes, &ed25519_dalek::Signature::from_bytes(&sig))
+            .is_ok());
     }
 
     #[test]

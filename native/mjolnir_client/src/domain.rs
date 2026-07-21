@@ -3,6 +3,11 @@
 //!   mj domain set <app> <fqdn>   bind a custom domain (PUT /api/apps/:app/domain)
 //!   mj domain rm  <app>          remove it (DELETE /api/apps/:app/domain)
 //!   mj domain ls                 list apps + their domains (GET /api/apps)
+//!
+//! With `--keypair-file`, `set`/`rm` instead target an IdentiKey **site**: the
+//! positional is the site name and the domain is bound via a signed alias
+//! record. That path lives in `sites::cmd_alias_set` / `sites::cmd_alias_rm`,
+//! next to the rest of the byte-exact envelope code.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
