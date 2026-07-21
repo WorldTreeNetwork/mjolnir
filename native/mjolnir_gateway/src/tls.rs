@@ -341,6 +341,10 @@ pub fn load_server_config_from_bytes(
         .with_cert_resolver(Arc::clone(&resolver) as Arc<dyn ResolvesServerCert>);
 
     config.session_storage = rustls::server::ServerSessionMemoryCache::new(session_cache);
+    // HTTP/1.1 only. `sites_serve::serve_connection` runs a hyper http1 server,
+    // so adding b"h2" here breaks statically-served Sites (worldtree.network)
+    // and NOTHING else — every other gateway path byte-shovels and is
+    // ALPN-agnostic, so the breakage would look unrelated to this line.
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     config.max_early_data_size = 0;
 
@@ -388,6 +392,9 @@ pub fn load_server_config_with_sni(
         .with_cert_resolver(Arc::clone(&sni_resolver) as Arc<dyn ResolvesServerCert>);
 
     config.session_storage = rustls::server::ServerSessionMemoryCache::new(session_cache);
+    // HTTP/1.1 only — see the note on the other alpn_protocols assignments in
+    // this file. `sites_serve::serve_connection` is a hyper http1 server and is
+    // the only path that breaks if b"h2" is added here.
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     config.max_early_data_size = 0;
 
@@ -445,6 +452,10 @@ pub fn load_server_config(
     config.session_storage = rustls::server::ServerSessionMemoryCache::new(session_cache);
 
     // ALPN: HTTP/1.1 only (h2 is gated behind a future feature flag).
+    // TRIPWIRE: `sites_serve::serve_connection` is a hyper http1 server, so
+    // adding b"h2" here breaks statically-served Sites (worldtree.network) and
+    // NOTHING else — every other gateway path byte-shovels and is
+    // ALPN-agnostic, so the breakage would look unrelated to this line.
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
 
     // Explicitly disable TLS 1.3 early data / 0-RTT (default in rustls 0.23,
