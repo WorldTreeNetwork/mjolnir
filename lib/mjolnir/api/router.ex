@@ -1270,8 +1270,11 @@ defmodule Mjolnir.API.Router do
 
       final =
         case result do
-          {:ok, r} -> Map.put(r, :ok, true)
-          {:error, %{stage: stage, reason: reason}} -> %{ok: false, stage: stage, error: inspect(reason)}
+          {:ok, r} ->
+            Map.put(r, :ok, true)
+
+          {:error, %{stage: stage, reason: reason}} ->
+            %{ok: false, stage: stage, error: inspect(reason)}
         end
 
       conn = Agent.get(agent, & &1)

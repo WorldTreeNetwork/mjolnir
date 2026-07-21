@@ -6,8 +6,15 @@ defmodule Mjolnir.Sites.Server do
   See `docs/plans/initiatives/identikey-sites.md` §6.1.
 
   Phase 1: implemented as a plain handler module (not a separate process). The
-  actual transport — HTTP-over-Iroh from the gateway — calls `serve/3` with
-  the bound endpoint's `(identikey_fp, site_name)` and the requested path.
+  transport is plain TCP — `native/mjolnir_gateway/src/sites.rs` forwards the
+  request to a `SocketAddr` on the Mjolnir host, which routes it here with the
+  bound endpoint's `(identikey_fp, site_name)` and the requested path. (Iroh
+  carries VM traffic elsewhere in the gateway; it is not in the Sites path.)
+
+  This is now the *fallback* path. `Mjolnir.Sites.Materializer` writes each
+  published snapshot to a plaintext directory at publish time and the gateway
+  serves those files directly; `serve/3` covers sites published before
+  materialization existed, or whose materialization failed.
 
   Public-mode decryption is real: `decrypt_public/4` derives the per-file key as
   `HKDF-SHA256(snapshot.sym_seed, info=entry.path, length=32)` and runs
@@ -104,22 +111,29 @@ defmodule Mjolnir.Sites.Server do
     end
   end
 
-  # Public-mode decryption: derive sym_key from snapshot sym_seed + entry path
-  # via HKDF-SHA256, then XChaCha20-decrypt. Using the file path (not bao_hash)
-  # as the HKDF info breaks the chicken-and-egg cycle on the publish side, where
-  # the bao_hash is not known until after encryption. Both publish (Publisher)
-  # and serve agree on: sym_key = HKDF(sym_seed, info=entry.path, 32).
-  defp decrypt_public(%Manifest{mode: :public, sym_seed: seed}, entry, ciphertext, _outboard)
-       when is_binary(seed) and byte_size(seed) == 32 do
+  @doc """
+  Public-mode decryption: derive sym_key from snapshot sym_seed + entry path
+  via HKDF-SHA256, then XChaCha20-decrypt.
+
+  Using the file path (not bao_hash) as the HKDF info breaks the chicken-and-egg
+  cycle on the publish side, where the bao_hash is not known until after
+  encryption. Publish (`Publisher`), serve, and materialization
+  (`Mjolnir.Sites.Materializer`) all agree on:
+  `sym_key = HKDF(sym_seed, info=entry.path, 32)`.
+  """
+  @spec decrypt_public(Manifest.t(), Manifest.Entry.t(), binary(), binary()) ::
+          {:ok, binary()} | {:error, term()}
+  def decrypt_public(%Manifest{mode: :public, sym_seed: seed}, entry, ciphertext, _outboard)
+      when is_binary(seed) and byte_size(seed) == 32 do
     sym_key = Crypto.hkdf_sha256(seed, entry.path, 32)
     {:ok, Crypto.xchacha20_decrypt(sym_key, entry.nonce, ciphertext)}
   end
 
-  defp decrypt_public(%Manifest{mode: :public, sym_seed: nil}, _entry, _ct, _ob) do
+  def decrypt_public(%Manifest{mode: :public, sym_seed: nil}, _entry, _ct, _ob) do
     {:error, :missing_sym_seed}
   end
 
-  defp decrypt_public(%Manifest{mode: mode}, _entry, _ct, _ob) do
+  def decrypt_public(%Manifest{mode: mode}, _entry, _ct, _ob) do
     {:error, {:mode_not_supported_in_phase_1, mode}}
   end
 end

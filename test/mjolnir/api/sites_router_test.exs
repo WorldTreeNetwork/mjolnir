@@ -19,10 +19,14 @@ defmodule Mjolnir.API.SitesRouterTest do
     keyspace = Path.join(tmp, "keyspace")
     File.mkdir_p!(keyspace)
 
+    materialized = Path.join(tmp, "materialized")
+
     orig_sites = Application.get_env(:mjolnir, :sites_root)
     orig_secret = Application.get_env(:mjolnir, :secret_store_root)
+    orig_materialized = Application.get_env(:mjolnir, :sites_materialized_root)
     Application.put_env(:mjolnir, :sites_root, tmp)
     Application.put_env(:mjolnir, :secret_store_root, keyspace)
+    Application.put_env(:mjolnir, :sites_materialized_root, materialized)
 
     # Generate a keypair and register its identity for the default fp
     keypair = IdentiKey.gen_keypair()
@@ -38,6 +42,7 @@ defmodule Mjolnir.API.SitesRouterTest do
     on_exit(fn ->
       Application.put_env(:mjolnir, :sites_root, orig_sites)
       Application.put_env(:mjolnir, :secret_store_root, orig_secret)
+      Application.put_env(:mjolnir, :sites_materialized_root, orig_materialized)
       File.rm_rf!(tmp)
     end)
 
@@ -252,6 +257,53 @@ defmodule Mjolnir.API.SitesRouterTest do
     assert conn.status == 200
     assert conn.resp_body == plaintext_body
     assert {"content-type", "text/html; charset=utf-8"} in conn.resp_headers
+  end
+
+  test "POST head materializes the snapshot to disk", %{keypair: kp, fp: fp} do
+    alias Mjolnir.Sites.{Crypto, Materializer}
+
+    sym_seed = :crypto.strong_rand_bytes(32)
+    nonce = :crypto.strong_rand_bytes(24)
+    plaintext_body = "<h1>materialized</h1>"
+    sym_key = Crypto.hkdf_sha256(sym_seed, "/index.html", 32)
+    ciphertext = Crypto.xchacha20_encrypt(sym_key, nonce, plaintext_body)
+    chunk_hash = Crypto.blake3_hash_base58(ciphertext)
+
+    m = %Manifest{
+      version: 1,
+      identikey_fp: fp,
+      site_name: "blog",
+      mode: :public,
+      created_at: ~U[2026-05-13 12:00:00Z],
+      sym_seed: sym_seed,
+      signatures: <<1, 2, 3>>,
+      entries: [
+        %Entry{
+          path: "/index.html",
+          content_type: "text/html; charset=utf-8",
+          bao_hash: chunk_hash,
+          ciphertext_size: byte_size(ciphertext),
+          plaintext_size: byte_size(plaintext_body),
+          nonce: nonce,
+          wrapped_key: nil,
+          content_encoding: nil
+        }
+      ]
+    }
+
+    mbytes = Manifest.serialize(m)
+    snapshot_hash = Manifest.snapshot_hash(mbytes)
+
+    _ = call(:post, "/#{fp}/blog/snapshot", mbytes)
+    _ = call(:put, "/blob/#{chunk_hash}", frame_chunk(ciphertext, "ob"))
+
+    assert 200 ==
+             call(:post, "/#{fp}/blog/head", signed_head_bytes(kp, mbytes, fp, "blog", 1)).status
+
+    assert {:ok, ^snapshot_hash} = Materializer.current_snapshot(fp, "blog")
+
+    assert File.read!(Path.join(Materializer.current_link(fp, "blog"), "index.html")) ==
+             plaintext_body
   end
 
   test "serve trailing slash falls back to index.html", %{keypair: kp, fp: fp} do

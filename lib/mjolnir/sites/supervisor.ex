@@ -6,6 +6,8 @@ defmodule Mjolnir.Sites.Supervisor do
 
   Children:
     * `Mjolnir.Sites.Store` — chunk store (BTRFS-backed, content-addressed)
+    * `Mjolnir.Sites.TokenStore` — scoped publish credentials (must be up before
+      the HTTP API, which Bandit guarantees by starting last)
     * `Mjolnir.Sites.Endpoints` — Iroh endpoint binder
     * `Mjolnir.Sites.TimestampUpgrader` — periodic OTS proof upgrader
 
@@ -24,6 +26,7 @@ defmodule Mjolnir.Sites.Supervisor do
   def init(_opts) do
     children = [
       Mjolnir.Sites.Store,
+      Mjolnir.Sites.TokenStore,
       Mjolnir.Sites.Endpoints,
       Mjolnir.Sites.TimestampUpgrader
     ]

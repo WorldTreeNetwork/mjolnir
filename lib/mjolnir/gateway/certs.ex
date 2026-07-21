@@ -358,7 +358,10 @@ defmodule Mjolnir.Gateway.Certs do
         {:ok, tag}
 
       {:error, reason} = err ->
-        Logger.error("Gateway.Certs: failed to write #{eff.gateway_toml_path}: #{inspect(reason)}")
+        Logger.error(
+          "Gateway.Certs: failed to write #{eff.gateway_toml_path}: #{inspect(reason)}"
+        )
+
         err
     end
   end

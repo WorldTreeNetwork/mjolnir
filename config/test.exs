@@ -14,6 +14,8 @@ config :mjolnir,
   api_port: 4001,
   sites_root: "/tmp/mjolnir-test/sites",
   secret_store_root: "/tmp/mjolnir-test/sites/keyspace",
+  sites_materialized_root: "/tmp/mjolnir-test/sites/materialized",
+  sites_token_dir: "/tmp/mjolnir-test/sites-tokens",
   deploy_state_dir: "/tmp/mjolnir-test/deploy/registry",
   # Post-snapshot guest health-verify + in-place reboot recovery (mjolnir-l4i)
   # probes a real guest agent over vsock; disable it under test so snapshot

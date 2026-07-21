@@ -162,7 +162,8 @@ defmodule Mjolnir.Gateway.CertsTest do
 
     test "writes cert/key to the slug dir with correct owner + modes", %{pid: pid} do
       assert {:ok, :installed} =
-               Certs.ensure("startupcentral.build",
+               Certs.ensure(
+                 "startupcentral.build",
                  [mode: :origin_ca, cert: @cert_pem, key: @key_pem] ++ Fake.opts(pid)
                )
 
@@ -181,7 +182,8 @@ defmodule Mjolnir.Gateway.CertsTest do
 
     test "appends a [[cert]] block and reloads", %{pid: pid} do
       assert {:ok, :installed} =
-               Certs.ensure("startupcentral.build",
+               Certs.ensure(
+                 "startupcentral.build",
                  [mode: :origin_ca, cert: @cert_pem, key: @key_pem] ++ Fake.opts(pid)
                )
 
@@ -196,7 +198,8 @@ defmodule Mjolnir.Gateway.CertsTest do
     end
 
     test "adds a [[domain]] block for a new apex", %{pid: pid} do
-      Certs.ensure("startupcentral.build",
+      Certs.ensure(
+        "startupcentral.build",
         [mode: :origin_ca, cert: @cert_pem, key: @key_pem] ++ Fake.opts(pid)
       )
 
@@ -205,7 +208,8 @@ defmodule Mjolnir.Gateway.CertsTest do
 
     test "does NOT duplicate a [[domain]] that already exists for the apex", %{pid: pid} do
       # apex identikey.io already has a [[domain]] block in @base_toml
-      Certs.ensure("zine2.identikey.io",
+      Certs.ensure(
+        "zine2.identikey.io",
         [mode: :origin_ca, cert: @cert_pem, key: @key_pem, apex: "identikey.io"] ++ Fake.opts(pid)
       )
 

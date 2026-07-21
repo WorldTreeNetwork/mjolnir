@@ -82,6 +82,21 @@ config :mjolnir,
   # See docs/plans/initiatives/identikey-sites.md.
   sites_root: "/var/lib/mjolnir/btrfs/@sites",
   secret_store_root: "/var/lib/mjolnir/btrfs/@sites/keyspace",
+  # Plaintext snapshot trees written at publish time by Mjolnir.Sites.Materializer
+  # and served directly by the gateway's static file handler. Layout:
+  #   <root>/<identikey_fp>/<site_name>/snapshots/<snapshot_hash>/…
+  #   <root>/<identikey_fp>/<site_name>/current  → snapshots/<snapshot_hash>
+  # A derived cache — safe to delete, rebuildable with mix mjolnir.sites.materialize.
+  # Scoped service credentials for unattended Sites publishing (CI). One JSON
+  # file per token; only a SHA-256 of the secret is stored. Deliberately on the
+  # filesystem rather than Postgres — auth must not depend on an optional
+  # sidecar. See Mjolnir.Sites.TokenStore.
+  sites_token_dir: "/var/lib/mjolnir/state/sites-tokens",
+  sites_materialized_root: "/var/lib/mjolnir/btrfs/@sites/materialized",
+  # Snapshot directories kept per site. Older ones are pruned after each
+  # publish; the one `current` points at is never pruned. Rollback is a symlink
+  # flip as long as the target is still retained.
+  sites_snapshot_retention: 5,
   sites_ots_upgrade_interval_ms: 30 * 60 * 1_000,
   # Chunk-store backend behind Mjolnir.Sites.Store. Default keeps blobs on local
   # BTRFS (recrypt LocalFileStorage layout). Switch to

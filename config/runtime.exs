@@ -82,6 +82,14 @@ if flush_delay = System.get_env("MJOLNIR_DORMANT_FLUSH_DELAY_MS") do
   config :mjolnir, dormant_flush_delay_ms: String.to_integer(flush_delay)
 end
 
+if materialized_root = System.get_env("MJOLNIR_SITES_MATERIALIZED_ROOT") do
+  config :mjolnir, sites_materialized_root: materialized_root
+end
+
+if retention = System.get_env("MJOLNIR_SITES_SNAPSHOT_RETENTION") do
+  config :mjolnir, sites_snapshot_retention: String.to_integer(retention)
+end
+
 if recrypt_storage_url = System.get_env("MJOLNIR_RECRYPT_STORAGE_URL") do
   config :mjolnir,
     sites_storage_backend: Mjolnir.Sites.Storage.Recrypt,

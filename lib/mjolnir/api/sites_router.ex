@@ -22,6 +22,28 @@ defmodule Mjolnir.API.SitesRouter do
       PUT    /manifests/:hash/ots          — upload an OpenTimestamps receipt
 
   Chunk-upload framing: `<8-byte BE u64 ct_len><ciphertext><8-byte BE u64 ob_len><outboard>`.
+
+  ## Service-token scoping
+
+  When a request authenticates with a `Mjolnir.Sites.Token`, `Auth` puts the
+  token on `conn.assigns[:sites_token]` and `enforce_token_binding/2` (below)
+  requires the token's bound fingerprint to equal the `:fp` path parameter,
+  and its bound site — when it has one — to equal `:name`. Mismatches are 403.
+
+  Three routes carry no `:fp` and are therefore *not* fingerprint-scoped:
+
+    * `PUT|GET /blob/:hash` — chunks are content-addressed and immutable.
+      `Store.put_chunk/3` recomputes the Blake3 hash of the supplied ciphertext
+      and refuses to write unless it equals `:hash`, so a chunk write can only
+      ever produce the one byte-string that hashes to that name. There is no
+      cross-tenant *write* to prevent: a chunk is not owned by a fingerprint,
+      it is named by its own content. Residual risk is storage growth from
+      orphan chunks and the ability to read any chunk's ciphertext by hash —
+      see the module doc of `Mjolnir.Sites.Token` and the follow-ups noted
+      there.
+    * `GET /manifests/:hash[/ots]` — read-only, and public-mode manifests are
+      published to be served publicly.
+    * `GET /aliases/lookup` — read-only resolver.
   """
 
   use Plug.Router
@@ -35,13 +57,57 @@ defmodule Mjolnir.API.SitesRouter do
     HeadRecord,
     Manifest,
     ManifestIndex,
+    Materializer,
     OpenTimestamps,
     Server,
     Store
   }
 
   plug(:match)
+  plug(:enforce_token_binding)
   plug(:dispatch)
+
+  # A Sites service token is bound to one IdentiKey fingerprint (and optionally
+  # one site). Enforce that binding against the matched route's path parameters
+  # before any handler runs, so a CI credential for one site cannot publish
+  # under another fingerprint.
+  #
+  # Runs after `:match` because that is what populates `conn.path_params`.
+  # Requests authenticated any other way (loopback bypass, JWT) carry no
+  # `:sites_token` assign and pass through unchanged — this plug only ever
+  # narrows what a sites token can reach.
+  defp enforce_token_binding(conn, _opts) do
+    case conn.assigns[:sites_token] do
+      nil -> conn
+      token -> check_binding(conn, token)
+    end
+  end
+
+  defp check_binding(conn, token) do
+    fp = conn.path_params["fp"]
+    name = conn.path_params["name"]
+
+    cond do
+      # Routes with no `:fp` in their path (/blob/:hash, /manifests/:hash,
+      # /aliases/lookup). Content-addressed or read-only; see the module doc.
+      is_nil(fp) ->
+        conn
+
+      not Mjolnir.Sites.Token.authorizes?(token, fp, name) ->
+        Logger.warning(
+          "Sites token #{token.id} (fp=#{token.identikey_fp} site=#{inspect(token.site_name)}) " <>
+            "denied for fp=#{fp} site=#{inspect(name)}"
+        )
+
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(403, Jason.encode!(%{error: "token_scope_mismatch"}))
+        |> halt()
+
+      true ->
+        conn
+    end
+  end
 
   ## Snapshot upload
 
@@ -107,6 +173,7 @@ defmodule Mjolnir.API.SitesRouter do
           # Index for hot-path serve lookups. Best-effort; envelope is the
           # source of truth on disk.
           _ = HeadIndex.upsert(record)
+          materialize(record)
           json(conn, 200, %{ok: true, sequence: record.sequence})
 
         {:error, reason} ->
@@ -339,6 +406,23 @@ defmodule Mjolnir.API.SitesRouter do
       end
     else
       "skipped_unavailable"
+    end
+  end
+
+  # Write the newly-published snapshot out as a plaintext directory the gateway
+  # can serve with a static file handler. Best-effort: the materialized tree is
+  # a derived cache rebuildable from the manifest + chunk store, and
+  # `Server.serve/3` still answers for sites that have none, so a failure here
+  # must not fail the publish.
+  defp materialize(%HeadRecord{} = record) do
+    case Materializer.materialize(record.identikey_fp, record.site_name, record.snapshot_hash) do
+      {:ok, dir} ->
+        Logger.info("Sites: materialized #{record.snapshot_hash} → #{dir}")
+
+      {:error, reason} ->
+        Logger.warning(
+          "Sites: materialization failed for #{record.snapshot_hash}: #{inspect(reason)}"
+        )
     end
   end
 

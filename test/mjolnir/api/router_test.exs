@@ -321,7 +321,11 @@ defmodule Mjolnir.API.RouterTest do
 
   describe "PUT/DELETE /api/apps/:app/domain" do
     test "404 setting a domain on an unknown app" do
-      conn = request(:put, "/api/apps/nope-#{System.unique_integer([:positive])}/domain", %{fqdn: "x.identikey.io"})
+      conn =
+        request(:put, "/api/apps/nope-#{System.unique_integer([:positive])}/domain", %{
+          fqdn: "x.identikey.io"
+        })
+
       assert conn.status == 404
       assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
     end

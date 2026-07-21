@@ -387,13 +387,22 @@ defmodule Mjolnir.Sites.Publisher do
         Enum.flat_map(entries, fn name ->
           full = Path.join(path, name)
 
-          case File.stat(full) do
+          # lstat, not stat: `stat` follows symlinks, so a `build/creds ->
+          # ~/.ssh/id_ed25519` in the directory being published would be
+          # dereferenced and its *contents* copied into the snapshot. That is a
+          # foot-gun for whoever runs the publish (they ship their own secret),
+          # not a remote attack — but it is silent, so skip symlinks and say so.
+          case File.lstat(full) do
             {:ok, %{type: :regular}} ->
               rel = "/" <> Path.relative_to(full, base)
               [{full, rel}]
 
             {:ok, %{type: :directory}} ->
               do_collect(full, base)
+
+            {:ok, %{type: :symlink}} ->
+              Logger.warning("Sites.Publisher: skipping symlink #{full}")
+              []
 
             _ ->
               []
@@ -412,16 +421,28 @@ defmodule Mjolnir.Sites.Publisher do
   @doc false
   @spec mime_of(String.t()) :: String.t()
   def mime_of(path) do
-    case Path.extname(path) do
+    case path |> Path.extname() |> String.downcase() do
       ".html" -> "text/html; charset=utf-8"
+      ".htm" -> "text/html; charset=utf-8"
       ".css" -> "text/css; charset=utf-8"
       ".js" -> "application/javascript"
+      ".mjs" -> "application/javascript"
       ".json" -> "application/json"
+      ".map" -> "application/json"
+      ".xml" -> "application/xml"
+      ".txt" -> "text/plain; charset=utf-8"
       ".svg" -> "image/svg+xml"
       ".png" -> "image/png"
       ".jpg" -> "image/jpeg"
       ".jpeg" -> "image/jpeg"
-      ".txt" -> "text/plain; charset=utf-8"
+      ".gif" -> "image/gif"
+      ".webp" -> "image/webp"
+      ".avif" -> "image/avif"
+      ".ico" -> "image/x-icon"
+      ".woff" -> "font/woff"
+      ".woff2" -> "font/woff2"
+      ".ttf" -> "font/ttf"
+      ".wasm" -> "application/wasm"
       _ -> "application/octet-stream"
     end
   end

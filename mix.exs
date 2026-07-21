@@ -35,6 +35,10 @@ defmodule Mjolnir.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.6"},
+      # Brotli NIF — used by Mjolnir.Sites.Materializer to write `.br` siblings
+      # at publish time so the gateway never compresses per request. Optional at
+      # runtime: the materializer falls back to gzip-only if it is not loaded.
+      {:brotli, "~> 0.3.3"},
       {:ecto, "~> 3.12"},
       {:ecto_sql, "~> 3.12"},
       {:hackney, "~> 1.20"},
