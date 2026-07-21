@@ -61,11 +61,26 @@ defmodule Mjolnir.Health.Monitor do
       Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1"}}]}])
       |> Enum.map(fn {id} -> id end)
 
-    Enum.each(vm_ids, &probe_one/1)
+    # Isolate per-VM failures: the tick-level rescue is too coarse — one VM
+    # raising there skips every *later* VM plus the trash reap. Contain it here
+    # so a single sick VM can't blind the monitor to the rest of the fleet.
+    Enum.each(vm_ids, fn vm_id ->
+      try do
+        probe_one(vm_id)
+      rescue
+        e -> Logger.error("Health.Monitor: probe of #{vm_id} raised: #{inspect(e)}")
+      end
+    end)
   end
 
-  defp probe_one(vm_id) do
-    case Mjolnir.Health.check(vm_id) do
+  defp probe_one(vm_id), do: handle_check_result(vm_id, Mjolnir.Health.check(vm_id))
+
+  # Split from the probe call so every result shape is unit-testable without a
+  # live VM registry — the CaseClauseError this replaced was only reachable in
+  # production precisely because this dispatch had no seam.
+  @doc false
+  def handle_check_result(vm_id, result) do
+    case result do
       {:ok, %{overall: :ok}} ->
         :ok
 
@@ -103,6 +118,24 @@ defmodule Mjolnir.Health.Monitor do
 
       {:error, :not_found} ->
         :ok
+
+      # The VM's GenServer is registered but not answering (mjolnir-8ie).
+      # Health.check/1 documents this as a pass-through return, but it used to
+      # fall off the end of this case and raise CaseClauseError, aborting the
+      # whole tick. It's a real signal — a wedged VM process — so surface it,
+      # but there is nothing to heal through: every heal path also goes via
+      # VM.get and would hit the same wall.
+      {:error, :unreachable} ->
+        Logger.warning(
+          "Health.Monitor: VM #{vm_id} GenServer unreachable (call timed out); " <>
+            "skipping probe this tick"
+        )
+
+        Mjolnir.EventBus.publish(vm_id, :vm_unreachable, %{vm_id: vm_id})
+
+      # Never let an unanticipated return shape take down the tick.
+      other ->
+        Logger.error("Health.Monitor: unexpected check result for #{vm_id}: #{inspect(other)}")
     end
   end
 end
