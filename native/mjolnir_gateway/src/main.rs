@@ -23,6 +23,7 @@ use mjolnir_gateway::cloudflare::CloudflareClient;
 use mjolnir_gateway::config::{self, Apex, Fallthrough, SitesResolver};
 use mjolnir_gateway::route::RouteTable;
 use mjolnir_gateway::sites::{self as sites_mod, LookupResult};
+use mjolnir_gateway::sites_serve;
 use mjolnir_gateway::tls::{
     build_certified_key, load_server_config_with_sni, CertEntryRuntime, SniCertResolver, TlsError,
 };
@@ -919,16 +920,61 @@ where
             );
             handle_iroh_connection(stream, peer, ctx.clone(), subdomain, header_buf).await;
         }
-        Disposition::Reject(ref e @ ProxyError::DomainMismatch) => {
-            // No configured apex matched — try the sites-alias resolver before
-            // falling through to 404.
+        Disposition::Reject(
+            ref e @ (ProxyError::DomainMismatch
+            | ProxyError::EmptySubdomain
+            | ProxyError::NotFound),
+        ) => {
+            // Nothing in the loaded config serves this Host. Three distinct ways
+            // to get here, and a Sites alias can legitimately cover all of them:
+            //   - DomainMismatch:  no declared apex matched at all
+            //   - EmptySubdomain:  Host IS a declared apex, but no [[route]]
+            //                      claims the bare apex (serving an apex like
+            //                      `worldtree.network` itself from Sites)
+            //   - NotFound:        declared apex, fallthrough="none", and no
+            //                      route/alias matched the subdomain
+            // Consult the resolver before falling through. On Miss/Error we emit
+            // the SAME status this arm would have produced anyway (`e` is
+            // preserved), so widening the match cannot change any response that
+            // isn't a Sites hit.
             if let Some(ref resolver) = ctx.sites_resolver {
                 // HTTP hostnames are case-insensitive; the Mjolnir-side index
                 // is keyed on lowercase fqdn, so normalise here before lookup.
                 let host_bare_owned = host_without_port(&host).to_ascii_lowercase();
                 let host_bare = host_bare_owned.as_str();
                 match sites_mod::lookup(resolver, host_bare).await {
-                    LookupResult::Hit(backend) => {
+                    LookupResult::Hit(backend, site) => {
+                        // Preferred path: serve the materialized plaintext
+                        // snapshot straight off disk. Only when it isn't there
+                        // (published before materialization existed, or a
+                        // publish is mid-flight) do we forward to Mjolnir and
+                        // let it decrypt per request.
+                        let current = site.current_dir(&resolver.sites_root);
+                        if let Some(dir) =
+                            sites_serve::resolve_snapshot_dir(&resolver.sites_root, &current).await
+                        {
+                            info!(
+                                peer = %peer,
+                                host = %host_bare,
+                                route = "sites-static",
+                                dir = %dir.display(),
+                                "sites alias hit — serving materialized snapshot"
+                            );
+                            sites_serve::serve_connection(
+                                stream,
+                                header_buf,
+                                dir,
+                                host_bare.to_owned(),
+                            )
+                            .await;
+                            return;
+                        }
+                        debug!(
+                            peer = %peer,
+                            host = %host_bare,
+                            path = %current.display(),
+                            "no materialized snapshot — falling back to mjolnir backend"
+                        );
                         info!(
                             peer = %peer,
                             host = %host_bare,
@@ -2317,6 +2363,305 @@ mod tests {
             response_str.starts_with("HTTP/1.1 421 Misdirected Request"),
             "expected 421, got: {:?}",
             &response_str[..response_str.len().min(120)]
+        );
+    }
+
+    // ── Sites: materialized static serving vs. backend fallback ───────────────
+
+    /// Build a `LoadedConfig` whose only apex is unrelated to the test host, so
+    /// `classify` rejects with `DomainMismatch` and the sites resolver runs.
+    fn sites_ctx(resolver: SitesResolver) -> Arc<AppCtx> {
+        sites_ctx_with(
+            resolver,
+            vec![apex("vm.worldtree.network", Fallthrough::None)],
+            vec![],
+        )
+    }
+
+    /// As `sites_ctx`, but with an explicit apex/route table so a test can
+    /// reproduce a real production config.
+    fn sites_ctx_with(
+        resolver: SitesResolver,
+        apexes: Vec<Apex>,
+        routes: Vec<Route>,
+    ) -> Arc<AppCtx> {
+        let cfg = loaded_with(apexes, routes);
+        let table = Arc::new(ArcSwap::from_pointee(RouteTable::from_config(&cfg)));
+        let ep = futures_block_on_endpoint();
+        Arc::new(AppCtx {
+            ep: Arc::new(ep),
+            pool: Arc::new(ConnectionPool::new(Duration::from_secs(300), 256)),
+            routes: table,
+            iroh_cfg: Arc::new(IrohConfig {
+                connect_timeout: Duration::from_millis(500),
+                response_timeout: Duration::from_secs(5),
+                pool_probe_timeout: Duration::from_secs(5),
+                default_port: 80,
+            }),
+            sites_resolver: Some(resolver),
+        })
+    }
+
+    /// The Iroh endpoint is irrelevant to the sites path but `AppCtx` requires
+    /// one; bind a throwaway.
+    fn futures_block_on_endpoint() -> iroh::endpoint::Endpoint {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                iroh::endpoint::Endpoint::builder(iroh::endpoint::presets::N0)
+                    .bind()
+                    .await
+                    .expect("iroh endpoint")
+            })
+        })
+    }
+
+    /// Drive one request through `handle_connection` and return the response.
+    async fn sites_round_trip(ctx: Arc<AppCtx>, request: &'static [u8]) -> String {
+        let (client_end, proxy_side) = tokio::io::duplex(65536);
+        let collected: Arc<tokio::sync::Mutex<Vec<u8>>> =
+            Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let sink = collected.clone();
+        tokio::spawn(async move {
+            let (mut cr, mut cw) = tokio::io::split(client_end);
+            cw.write_all(request).await.unwrap();
+            let mut buf = Vec::new();
+            let _ = tokio::io::copy(&mut cr, &mut buf).await;
+            *sink.lock().await = buf;
+        });
+
+        handle_connection(proxy_side, "127.0.0.1:9999".parse().unwrap(), ctx, None).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let bytes = collected.lock().await.clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// Materialize `<root>/<fp>/<site>/current -> snapshots/h1` holding `index.html`.
+    fn materialize(root: &std::path::Path, fp: &str, site: &str, body: &str) {
+        let snap = root.join(fp).join(site).join("snapshots").join("h1");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::write(snap.join("index.html"), body).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&snap, root.join(fp).join(site).join("current")).unwrap();
+    }
+
+    /// An alias hit whose materialized snapshot exists is served off disk — the
+    /// Mjolnir backend is never dialled (it points at a closed port here, so a
+    /// forward would surface as a 502).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sites_alias_hit_serves_materialized_snapshot() {
+        let mut api = mockito::Server::new_async().await;
+        let _m = api
+            .mock("GET", "/api/sites/aliases/lookup?host=blog.duke.io")
+            .with_status(200)
+            .with_body(r#"{"identikey_fp":"fp1","site_name":"mysite"}"#)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        materialize(tmp.path(), "fp1", "mysite", "<h1>from-disk</h1>");
+
+        // Guaranteed-unbound backend: proves nothing was forwarded.
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = probe.local_addr().unwrap();
+        drop(probe);
+
+        let ctx = sites_ctx(SitesResolver {
+            api_url: api.url(),
+            backend: dead,
+            sites_root: tmp.path().to_path_buf(),
+        });
+
+        let resp = sites_round_trip(
+            ctx,
+            b"GET / HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("<h1>from-disk</h1>"), "got: {resp}");
+        assert!(resp.contains("public, max-age=0, must-revalidate"), "got: {resp}");
+    }
+
+    /// No materialized directory → the pre-existing behavior is preserved: the
+    /// bytes are forwarded verbatim to the Mjolnir backend.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sites_alias_hit_without_materialized_dir_forwards_to_backend() {
+        let mut api = mockito::Server::new_async().await;
+        let _m = api
+            .mock("GET", "/api/sites/aliases/lookup?host=blog.duke.io")
+            .with_status(200)
+            .with_body(r#"{"identikey_fp":"fp1","site_name":"notmaterialized"}"#)
+            .create_async()
+            .await;
+
+        // sites_root exists but holds no snapshot for this site.
+        let tmp = tempfile::tempdir().unwrap();
+        materialize(tmp.path(), "fp1", "someothersite", "<h1>irrelevant</h1>");
+
+        // Stub Mjolnir backend that answers every connection.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nFROM-BACKEND",
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let ctx = sites_ctx(SitesResolver {
+            api_url: api.url(),
+            backend,
+            sites_root: tmp.path().to_path_buf(),
+        });
+
+        let resp = sites_round_trip(
+            ctx,
+            b"GET / HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("FROM-BACKEND"), "expected backend fallback, got: {resp}");
+    }
+
+    /// Reproduces the production `worldtree.network` config exactly: the apex is
+    /// DECLARED with fallthrough="none" and carries one unrelated route
+    /// (`mimir` → Forgejo). A request for the BARE APEX must reach the sites
+    /// resolver and be served from the materialized snapshot.
+    ///
+    /// Before the resolver arm was widened this returned 400 "Empty subdomain":
+    /// `classify` short-circuits at main.rs:585 for an empty subdomain, which
+    /// landed in the catch-all `Reject` arm and never consulted Sites.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bare_apex_reaches_sites_resolver_and_is_served() {
+        let mut api = mockito::Server::new_async().await;
+        let _m = api
+            .mock("GET", "/api/sites/aliases/lookup?host=worldtree.network")
+            .with_status(200)
+            .with_body(r#"{"identikey_fp":"fp1","site_name":"wtnf"}"#)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        materialize(tmp.path(), "fp1", "wtnf", "<h1>apex-from-sites</h1>");
+
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = probe.local_addr().unwrap();
+        drop(probe);
+
+        let ctx = sites_ctx_with(
+            SitesResolver {
+                api_url: api.url(),
+                backend: dead,
+                sites_root: tmp.path().to_path_buf(),
+            },
+            vec![apex("worldtree.network", Fallthrough::None)],
+            vec![route("worldtree.network", "mimir", "127.0.0.1:3000")],
+        );
+
+        let resp = sites_round_trip(
+            ctx,
+            b"GET / HTTP/1.1\r\nHost: worldtree.network\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("<h1>apex-from-sites</h1>"), "got: {resp}");
+        assert!(
+            !resp.contains("Empty subdomain"),
+            "bare apex must not short-circuit to 400: {resp}"
+        );
+    }
+
+    /// The existing `mimir` route on the same apex must be unaffected by
+    /// widening the resolver arm — a declared [[route]] still wins and never
+    /// consults Sites.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn declared_route_on_same_apex_still_wins_over_sites() {
+        // Alias lookup that would answer if (wrongly) consulted.
+        let mut api = mockito::Server::new_async().await;
+        let _m = api
+            .mock("GET", "/api/sites/aliases/lookup?host=mimir.worldtree.network")
+            .with_status(200)
+            .with_body(r#"{"identikey_fp":"fp1","site_name":"wtnf"}"#)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        materialize(tmp.path(), "fp1", "wtnf", "<h1>WRONG-sites-content</h1>");
+
+        // Stub Forgejo.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let forgejo = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nFORGEJO",
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let ctx = sites_ctx_with(
+            SitesResolver {
+                api_url: api.url(),
+                backend: forgejo,
+                sites_root: tmp.path().to_path_buf(),
+            },
+            vec![apex("worldtree.network", Fallthrough::None)],
+            vec![route("worldtree.network", "mimir", &forgejo.to_string())],
+        );
+
+        let resp = sites_round_trip(
+            ctx,
+            b"GET / HTTP/1.1\r\nHost: mimir.worldtree.network\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.contains("FORGEJO"), "declared route must still win: {resp}");
+        assert!(!resp.contains("WRONG-sites-content"), "got: {resp}");
+        _m.assert_async().await; // resolver never consulted
+    }
+
+    /// A miss on the widened arm must still produce the ORIGINAL status, not a
+    /// blanket 400/404 — proves widening changed nothing for non-Sites hosts.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolver_miss_preserves_original_reject_status() {
+        let mut api = mockito::Server::new_async().await;
+        let _m = api
+            .mock("GET", "/api/sites/aliases/lookup?host=worldtree.network")
+            .with_status(404)
+            .with_body(r#"{"error":"not_found"}"#)
+            .create_async()
+            .await;
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path()).unwrap();
+
+        let ctx = sites_ctx_with(
+            SitesResolver {
+                api_url: api.url(),
+                backend: "127.0.0.1:1".parse().unwrap(),
+                sites_root: tmp.path().to_path_buf(),
+            },
+            vec![apex("worldtree.network", Fallthrough::None)],
+            vec![route("worldtree.network", "mimir", "127.0.0.1:3000")],
+        );
+
+        let resp = sites_round_trip(
+            ctx,
+            b"GET / HTTP/1.1\r\nHost: worldtree.network\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(
+            resp.starts_with("HTTP/1.1 400 Bad Request") && resp.contains("Empty subdomain"),
+            "a Sites miss on the bare apex must still yield the original 400: {resp}"
         );
     }
 }

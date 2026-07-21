@@ -133,6 +133,11 @@ pub struct SitesSection {
     pub mjolnir_api: Option<String>,
     #[serde(default)]
     pub mjolnir_backend: Option<String>,
+    /// Root of the materialized-plaintext site tree the Elixir publisher writes
+    /// to. Layout: `<sites_root>/<identikey_fp>/<site_name>/current`. Omitted →
+    /// [`DEFAULT_SITES_ROOT`].
+    #[serde(default)]
+    pub sites_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -267,14 +272,23 @@ pub struct AcmeSettings {
     pub explicit_domains: Option<Vec<String>>,
 }
 
+/// Default root of the materialized-plaintext site tree. Must track the Elixir
+/// side's `:mjolnir, :sites_materialized_root` (see `config/config.exs` and
+/// `Mjolnir.Sites.Materializer.root/0`) — the two sides meet only here.
+pub const DEFAULT_SITES_ROOT: &str = "/var/lib/mjolnir/btrfs/@sites/materialized";
+
 /// Validated sites-alias resolver config. Present only when both `mjolnir_api`
 /// and `mjolnir_backend` are set in the `[sites]` section.
 #[derive(Debug, Clone)]
 pub struct SitesResolver {
     /// Base URL of Mjolnir's HTTP API, e.g. `"http://127.0.0.1:4000"`.
     pub api_url: String,
-    /// TCP address to forward bytes to on an alias hit.
+    /// TCP address to forward bytes to when the site cannot be served locally.
     pub backend: SocketAddr,
+    /// Root of the materialized-plaintext site tree. The gateway serves
+    /// `<sites_root>/<fp>/<site>/current/` directly when it exists, and only
+    /// falls back to `backend` when it doesn't.
+    pub sites_root: PathBuf,
 }
 
 /// Fully-validated runtime config consumed by `main.rs`.
@@ -957,7 +971,14 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
                         source: e,
                     }
                 })?;
-                Some(SitesResolver { api_url, backend })
+                let sites_root = s
+                    .sites_root
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_SITES_ROOT));
+                Some(SitesResolver {
+                    api_url,
+                    backend,
+                    sites_root,
+                })
             }
             _ => None,
         },
@@ -1867,5 +1888,36 @@ mod tests {
         let (_dir, cfg) =
             load_with_dropins(BASE_TOML, &[("README.md", "not toml"), ("10-x.toml", dropin)]);
         assert!(cfg.routes.iter().any(|r| r.subdomain == "yes"));
+    }
+
+    #[test]
+    fn sites_root_defaults_to_the_elixir_side_location() {
+        let text = r#"
+            [[domain]]
+            suffix = "identikey.io"
+
+            [sites]
+            mjolnir_api = "http://127.0.0.1:4000"
+            mjolnir_backend = "127.0.0.1:4000"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        let sites = cfg.sites_resolver.expect("resolver configured");
+        assert_eq!(sites.sites_root, PathBuf::from(DEFAULT_SITES_ROOT));
+    }
+
+    #[test]
+    fn sites_root_is_overridable() {
+        let text = r#"
+            [[domain]]
+            suffix = "identikey.io"
+
+            [sites]
+            mjolnir_api = "http://127.0.0.1:4000"
+            mjolnir_backend = "127.0.0.1:4000"
+            sites_root = "/srv/materialized"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        let sites = cfg.sites_resolver.expect("resolver configured");
+        assert_eq!(sites.sites_root, PathBuf::from("/srv/materialized"));
     }
 }

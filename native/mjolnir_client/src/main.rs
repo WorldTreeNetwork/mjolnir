@@ -20,6 +20,7 @@ mod forge;
 mod forge_tui;
 mod mcp;
 mod server;
+mod sites;
 
 use clap::{Parser, Subcommand};
 
@@ -327,6 +328,12 @@ enum Command {
         #[command(subcommand)]
         action: DomainAction,
     },
+    /// Publish static sites owned by an IdentiKey (publish / keygen)
+    #[command(next_help_heading = "Apps")]
+    Sites {
+        #[command(subcommand)]
+        action: SitesAction,
+    },
 
     // --- Auth ---
     /// Authenticate with the Mjolnir identity provider
@@ -500,6 +507,45 @@ enum DomainAction {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SitesAction {
+    /// Publish a local directory as a public-mode IdentiKey site
+    Publish {
+        /// Directory to publish (e.g. ./build)
+        directory: String,
+        /// Base58 fingerprint of the publishing IdentiKey
+        #[arg(long)]
+        identikey_fp: String,
+        /// Site name, e.g. "blog"
+        #[arg(long)]
+        site: String,
+        /// Mjolnir host API base URL (default: the profile's API)
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Path to a JSON keypair file; required by hosts that verify signatures
+        #[arg(long)]
+        keypair_file: Option<String>,
+        /// HEAD sequence number; must exceed the server's current sequence
+        #[arg(long, default_value = "1")]
+        sequence: u64,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Generate an IdentiKey keypair file and print its fingerprint
+    Keygen {
+        /// Where to write the keypair JSON (mode 0600)
+        #[arg(long, default_value = "identikey.json")]
+        out: String,
+        /// Overwrite an existing keypair file
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -814,6 +860,32 @@ async fn main() {
             DomainAction::Ls { api, token } => {
                 domain::cmd_domain_ls(&profile, &api, &token, json).await
             }
+        },
+        Command::Sites { action } => match action {
+            SitesAction::Publish {
+                directory,
+                identikey_fp,
+                site,
+                base_url,
+                keypair_file,
+                sequence,
+                api,
+                token,
+            } => {
+                sites::cmd_publish(
+                    &profile,
+                    &api,
+                    &token,
+                    &directory,
+                    &identikey_fp,
+                    &site,
+                    &base_url,
+                    &keypair_file,
+                    sequence,
+                )
+                .await
+            }
+            SitesAction::Keygen { out, force } => sites::cmd_keygen(&out, force),
         },
 
         // --- Auth ---

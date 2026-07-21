@@ -5,27 +5,77 @@
 //! the request to the configured Mjolnir backend.
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use serde::Deserialize;
 
 use crate::config::SitesResolver;
 
-/// Result of an alias lookup. On hit, the gateway forwards bytes unmodified
-/// to the returned backend (Mjolnir does the actual serving via its own
-/// vanity-host handler).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The `(identikey_fp, site_name)` pair an alias resolves to, already validated
+/// as safe to use as filesystem path components (see [`validate_component`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteRef {
+    pub identikey_fp: String,
+    pub site_name: String,
+}
+
+impl SiteRef {
+    /// The materialized snapshot directory for this site:
+    /// `<sites_root>/<fp>/<site>/current`. Both components have already been
+    /// validated, so this can never escape `sites_root`.
+    pub fn current_dir(&self, sites_root: &Path) -> PathBuf {
+        sites_root
+            .join(&self.identikey_fp)
+            .join(&self.site_name)
+            .join("current")
+    }
+}
+
+/// Result of an alias lookup. On hit the gateway knows *which* site the host
+/// maps to; it serves that site from the materialized directory when one
+/// exists, and otherwise forwards bytes unmodified to `resolver.backend`
+/// (Mjolnir does the decrypt-per-request serving via its vanity-host handler).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupResult {
-    Hit(SocketAddr),
+    Hit(SocketAddr, SiteRef),
     Miss,
     Error,
+}
+
+/// Wire shape of the `/api/sites/aliases/lookup` 200 response
+/// (`lib/mjolnir/api/sites_router.ex`).
+#[derive(Debug, Deserialize)]
+struct LookupBody {
+    identikey_fp: String,
+    site_name: String,
+}
+
+/// True if `s` is safe to use verbatim as a single filesystem path component.
+///
+/// This is a real security boundary: a malicious or compromised Mjolnir
+/// response must not be able to turn into an arbitrary filesystem read. We
+/// allow only an explicit ASCII set and reject anything with a separator, a
+/// NUL, a leading dot, or a `..` sequence.
+pub fn validate_component(s: &str) -> bool {
+    if s.is_empty() || s.len() > 128 {
+        return false;
+    }
+    if s.starts_with('.') {
+        return false;
+    }
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
 /// Hit Mjolnir's `/api/sites/aliases/lookup?host=<host>` endpoint.
 ///
 /// Returns:
-/// - `Hit(backend)` on HTTP 200
+/// - `Hit(backend, site_ref)` on HTTP 200 with a well-formed, path-safe body
 /// - `Miss` on HTTP 404
-/// - `Error` on any other status or transport failure (caller may log and fall
-///   through to its existing 404 response)
+/// - `Error` on any other status, a transport failure, or a 200 whose body is
+///   unparseable or carries a path-unsafe `identikey_fp`/`site_name` (caller
+///   may log and fall through to its existing 404 response)
 pub async fn lookup(resolver: &SitesResolver, host: &str) -> LookupResult {
     let encoded_host = percent_encode(host);
     let url = format!(
@@ -43,7 +93,29 @@ pub async fn lookup(resolver: &SitesResolver, host: &str) -> LookupResult {
     };
 
     match client.get(&url).send().await {
-        Ok(resp) if resp.status() == reqwest::StatusCode::OK => LookupResult::Hit(resolver.backend),
+        Ok(resp) if resp.status() == reqwest::StatusCode::OK => match resp.json::<LookupBody>().await
+        {
+            Ok(body) => {
+                if !validate_component(&body.identikey_fp) || !validate_component(&body.site_name) {
+                    tracing::warn!(
+                        event = "sites.unsafe_lookup_body",
+                        host = %host,
+                        identikey_fp = %body.identikey_fp,
+                        site_name = %body.site_name,
+                        "alias lookup returned a path-unsafe identity — refusing"
+                    );
+                    return LookupResult::Error;
+                }
+                LookupResult::Hit(
+                    resolver.backend,
+                    SiteRef {
+                        identikey_fp: body.identikey_fp,
+                        site_name: body.site_name,
+                    },
+                )
+            }
+            Err(_) => LookupResult::Error,
+        },
         Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => LookupResult::Miss,
         Ok(_) => LookupResult::Error,
         Err(_) => LookupResult::Error,
@@ -83,6 +155,7 @@ mod tests {
         SitesResolver {
             api_url: base_url.to_owned(),
             backend: "127.0.0.1:4000".parse().unwrap(),
+            sites_root: PathBuf::from(crate::config::DEFAULT_SITES_ROOT),
         }
     }
 
@@ -98,7 +171,91 @@ mod tests {
 
         let resolver = resolver_for(&server.url());
         let result = lookup(&resolver, "blog.duke.io").await;
-        assert_eq!(result, LookupResult::Hit("127.0.0.1:4000".parse().unwrap()));
+        assert_eq!(
+            result,
+            LookupResult::Hit(
+                "127.0.0.1:4000".parse().unwrap(),
+                SiteRef {
+                    identikey_fp: "abc".into(),
+                    site_name: "myblog".into(),
+                },
+            )
+        );
+    }
+
+    /// A 200 whose body is not the expected JSON shape must not be treated as a
+    /// hit — we have no identity to serve from.
+    #[tokio::test]
+    async fn lookup_returns_error_on_malformed_body() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/sites/aliases/lookup?host=blog.duke.io")
+            .with_status(200)
+            .with_body("not json")
+            .create_async()
+            .await;
+
+        let resolver = resolver_for(&server.url());
+        assert_eq!(lookup(&resolver, "blog.duke.io").await, LookupResult::Error);
+    }
+
+    /// Security: a compromised Mjolnir must not be able to walk the gateway out
+    /// of `sites_root` via the lookup response.
+    #[tokio::test]
+    async fn lookup_rejects_traversal_in_response_body() {
+        for body in [
+            r#"{"identikey_fp":"../../etc","site_name":"myblog"}"#,
+            r#"{"identikey_fp":"abc","site_name":"../../../etc/passwd"}"#,
+            r#"{"identikey_fp":"a/b","site_name":"myblog"}"#,
+            r#"{"identikey_fp":"abc","site_name":""}"#,
+        ] {
+            let mut server = mockito::Server::new_async().await;
+            let _m = server
+                .mock("GET", "/api/sites/aliases/lookup?host=evil.example.com")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+
+            let resolver = resolver_for(&server.url());
+            assert_eq!(
+                lookup(&resolver, "evil.example.com").await,
+                LookupResult::Error,
+                "path-unsafe body must not produce a Hit: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_component_accepts_realistic_identities() {
+        assert!(validate_component("z6MkfSomeBase58Fingerprint"));
+        assert!(validate_component("wtnf-web"));
+        assert!(validate_component("my_site.v2"));
+    }
+
+    #[test]
+    fn validate_component_rejects_path_escapes() {
+        assert!(!validate_component(""));
+        assert!(!validate_component(".."));
+        assert!(!validate_component("."));
+        assert!(!validate_component("../etc"));
+        assert!(!validate_component("a/b"));
+        assert!(!validate_component("a\\b"));
+        assert!(!validate_component("a\0b"));
+        assert!(!validate_component(".hidden"));
+        assert!(!validate_component(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn current_dir_is_confined_to_sites_root() {
+        let site = SiteRef {
+            identikey_fp: "abc".into(),
+            site_name: "myblog".into(),
+        };
+        assert_eq!(
+            site.current_dir(Path::new("/srv/sites")),
+            PathBuf::from("/srv/sites/abc/myblog/current")
+        );
     }
 
     #[tokio::test]
@@ -136,6 +293,7 @@ mod tests {
         let resolver = SitesResolver {
             api_url: "http://127.0.0.1:1".to_owned(),
             backend: "127.0.0.1:4000".parse().unwrap(),
+            sites_root: PathBuf::from(crate::config::DEFAULT_SITES_ROOT),
         };
         let result = lookup(&resolver, "any.example.com").await;
         assert_eq!(result, LookupResult::Error);

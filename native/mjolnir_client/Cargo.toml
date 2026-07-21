@@ -23,6 +23,14 @@ dirs = "6"
 open = "5"
 sha2 = "0.10"
 rand = "0.8"
+# Sites publish: ED25519 signing, HKDF-SHA256, base64 envelope fields, and
+# second-precision UTC timestamps. XChaCha20 and base58 are implemented in
+# `sites.rs` because they must match the Elixir side byte-for-byte (notably
+# base58, which drops leading zeros unlike `bs58`).
+ed25519-dalek = "3.0.0-rc.0"
+hmac = "0.12"
+base64 = "0.22"
+chrono = "0.4"
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 ratatui = "0.29"

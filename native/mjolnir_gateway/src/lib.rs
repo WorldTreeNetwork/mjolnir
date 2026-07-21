@@ -3,4 +3,5 @@ pub mod cloudflare;
 pub mod config;
 pub mod route;
 pub mod sites;
+pub mod sites_serve;
 pub mod tls;
