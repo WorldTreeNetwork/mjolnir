@@ -8,7 +8,11 @@ config :mjolnir,
   btrfs_root: "/var/lib/mjolnir/btrfs",
   ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",
   cloud_hypervisor_bin: "/usr/local/bin/cloud-hypervisor",
-  virtiofsd_bin: "/usr/libexec/virtiofsd",
+  # /usr/local/bin, not the distro's /usr/libexec: Ubuntu noble ships virtiofsd
+  # 1.10, which cannot serialize its inode table and so cannot survive a
+  # snapshot/restore. Needs >= 1.11 for :virtiofsd_migration_mode below.
+  virtiofsd_bin: "/usr/local/bin/virtiofsd",
+  virtiofsd_migration_mode: "find-paths",
   vm_storage_subdir: "@vms",
 
   # Defaults

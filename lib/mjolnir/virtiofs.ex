@@ -48,6 +48,9 @@ defmodule Mjolnir.VirtioFS do
   - `opts`: Optional configuration
     - `:thread_pool_size` - Number of worker threads (default: #{@default_thread_pool_size})
     - `:virtiofsd_bin` - Path to virtiofsd binary (default: "virtiofsd")
+    - `:migration_mode` - virtiofsd `--migration-mode` (default: from the
+      `:virtiofsd_migration_mode` config key). Set to `nil` to omit the flag for
+      virtiofsd < 1.11, which does not recognise it and will refuse to start.
 
   ## Returns
 
@@ -99,13 +102,27 @@ defmodule Mjolnir.VirtioFS do
 
     thread_pool_size = Keyword.get(opts, :thread_pool_size, @default_thread_pool_size)
 
-    args = [
-      "--socket-path=#{socket_path}",
-      "--shared-dir=#{shared_dir}",
-      "--cache=auto",
-      "--sandbox=none",
-      "--thread-pool-size=#{thread_pool_size}"
-    ]
+    # Without a migration mode, virtiofsd cannot serialize its inode table, so a
+    # restored guest holds nodeids the fresh backend knows nothing about and panics
+    # on first filesystem access. `find-paths` (rather than `file-handles`) is the
+    # mode that tolerates restoring onto a CoW *clone* of the snapshotted subvolume
+    # instead of the identical directory. Requires virtiofsd >= 1.11.
+    migration_mode =
+      Keyword.get(
+        opts,
+        :migration_mode,
+        Application.get_env(:mjolnir, :virtiofsd_migration_mode, "find-paths")
+      )
+
+    args =
+      [
+        "--socket-path=#{socket_path}",
+        "--shared-dir=#{shared_dir}",
+        "--cache=auto",
+        "--sandbox=none",
+        "--thread-pool-size=#{thread_pool_size}"
+      ] ++
+        if migration_mode, do: ["--migration-mode=#{migration_mode}"], else: []
 
     Logger.info("Starting virtiofsd: #{shared_dir} -> #{socket_path}")
 
