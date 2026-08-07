@@ -77,7 +77,23 @@ config :mjolnir,
   gateway_routes_path: "/etc/mjolnir/gateway.d/apps.toml",
   # Apexes the gateway declares as [[domain]] entries. A custom-domain fqdn is
   # split into (subdomain, apex) by the LONGEST matching apex suffix.
-  gateway_apexes: ["vm.worldtree.network", "worldtree.network", "identikey.io"],
+  #
+  # An apex MUST be listed here (or merged in via MJOLNIR_GATEWAY_APEXES) for
+  # RouteReconciler to emit a [[route]] for it. A Deploy.Registry custom_domain
+  # whose apex is missing produces no route at all, and the gateway answers the
+  # bare apex with 400 "Empty subdomain" — an outage with no error anywhere in
+  # the pipeline that created it.
+  #
+  # startupcentral.build was added at runtime via put_env on 2026-07-20 and never
+  # persisted, so it survived only in the running BEAM. The next restart
+  # (2026-08-07) regenerated apps.toml without it and took the site down for ~10
+  # minutes. Runtime put_env is not a durable config mechanism; this list is.
+  gateway_apexes: [
+    "vm.worldtree.network",
+    "worldtree.network",
+    "identikey.io",
+    "startupcentral.build"
+  ],
   # Static routes for manually-provisioned apps not in Deploy.Registry. Each is
   # %{fqdn: "zine.identikey.io", vm_id: "<uuid>", port: 3000} (or app_name:).
   gateway_extra_domains: [],
