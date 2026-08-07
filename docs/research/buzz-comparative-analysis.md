@@ -79,7 +79,7 @@ tamper-evident audit.
 | **Audit** | ✅ ships | Hash-chain, tamper-evident. Soft-deleted events remain. eDiscovery works on everything (because nothing is E2E encrypted — see §5). |
 | **Buzz Mesh** | ✅ ships | Community members pool idle GPUs; `mesh-llm` over **iroh**; agents consume via a local OpenAI-compatible endpoint. Large models split across several machines. Relay membership *is* the mesh admission gate. |
 | **Agent personas & teams** | ✅ ships | Persona = model + system prompt. Team = named group of personas. |
-| **Remote agents** | 📋 spec in review | Deploy an agent onto remote substrate via a swappable **provider binary**; Kubernetes first. |
+| **Remote agents** | ✅ **shipped** (see §9) | Deploy an agent onto remote substrate via a swappable **provider binary** (`buzz-backend-<id>`); Kubernetes is the reference binding. Governed by a 1,780-line formal spec at `docs/remote-agents.md`, `protocol_version: 1`. |
 | **Multi-tenant communities** | 🚧 spec | URL is the tenant boundary. Isolation mechanized in **TLA+** and authorization in **Tamarin**, mutation-tested. (Notably rigorous.) |
 | **Mobile** | 🚧 | Flutter, in development. |
 
@@ -244,10 +244,14 @@ Ranked by leverage-to-effort.
 
 ### 7.1 ⭐ Build a Mjolnir remote-agent provider for Buzz *(highest leverage)*
 
-Their remote-agent spec is **in review, Kubernetes-first, and provider-based by design** — a small
-swappable binary the desktop discovers and interrogates. The provider contract "never mentions
-containers." They explicitly name the future substrates: *"a cluster today; a VM, a PaaS, or
-something serverless-shaped tomorrow."*
+> **Corrected 2026-08-06 — see §9.** This section originally said the provider contract was "in
+> review." It is not: it is published, versioned, and already has third-party implementations.
+> The correction makes the recommendation stronger, not weaker.
+
+Their remote-agent contract is **published, Kubernetes-referenced, and provider-based by design** —
+a small swappable binary the desktop discovers and interrogates. The provider contract "never
+mentions containers." They explicitly name the future substrates: *"a cluster today; a VM, a PaaS,
+or something serverless-shaped tomorrow."*
 
 Read their five contract obligations against what Mjolnir already does:
 
@@ -273,9 +277,8 @@ Apache-2.0 project Block is dogfooding, at exactly the layer we're strongest, fi
 they've published as known weaknesses. Cost is bounded: implement one provider binary against a
 documented contract plus their conformance suite.
 
-**Action:** read `VISION_AGENT.md` and the remote-agent provider spec (in review — this is the
-moment to influence the contract), then prototype `mjolnir-buzz-provider` against `Mjolnir.MCP` and
-`Mjolnir.VM`.
+**Action:** ✅ **done — see `docs/plans/initiatives/buzz-provider.md` (Mjolnir-side work) and the
+`buzz-backend-mjolnir` repo (the provider itself).**
 
 ### 7.2 Run Buzz on Mjolnir, self-hosted, and dogfood it
 
@@ -347,15 +350,51 @@ opposed). Compete on the substrate, integrate at the surface.
 
 ---
 
-## Appendix: open questions to resolve before acting
+## 9. Corrections and resolved questions (deeper read, 2026-08-06)
 
-1. Is the remote-agent provider contract published in a form we can implement against, or still
-   internal? (`VISION_REMOTE_AGENTS.md` says "spec in review" — timing matters for influencing it.)
-2. Does `buzz-acp` assume a POSIX-local agent process, or can it target a remote body cleanly?
-3. Is the "agent keypair is tied to a human owner via a second signature" claim (reported by
-   tftc.io) actually in the code? **Not confirmed in `VISION.md`, `AGENTS.md`, or `NOSTR.md`** —
-   primary sources show only that agents hold their own key and carry a bot role on channel
-   membership. Verify before repeating.
-4. Does Buzz Mesh's iroh usage conflict or compose with Mjolnir's iroh endpoints on the same host?
-5. Licensing: Buzz is Apache-2.0; recrypt is multi-licensed (AGPL / Apache / BSD-2-Patent /
+Two of the original open questions resolved, and both change the plan **in favor of moving sooner**.
+
+**9.1 — The provider contract is published, not in review.** `VISION.md`'s 📋 status lags the code.
+`docs/remote-agents.md` is a **1,780-line formal specification** — *"Remote Agents and Their
+Management"* — at `protocol_version: 1`, with five RFC-2119 invariants (**I1** identity fail-closed,
+**I2** no secrets in configuration, **I3** presence is the status, **I4** at most one live instance
+per key per scope, **I5** intentional termination is final), a three-layer conformance model
+(**[L1]** launcher / **[L2]** provider / **[L3]** binding), a reference binding
+`buzz-backend-kubernetes`, and a §Known Defects section listing 8 open entries. Third parties are
+already shipping `buzz-backend-*` binaries — [issue #4730](https://github.com/block/buzz/issues/4730)
+reproduces a bug against "a third-party backend provider implementing the documented provider
+protocol."
+
+The contract is also **much smaller than assumed** — two JSON ops over stdio, and no `undeploy` in
+v1:
+
+```
+info:   {"op":"info","request_id":…}                            → {ok,name,version,protocol_version,description,config_schema}   10s
+deploy: {"op":"deploy","request_id":…,"agent":{…},"provider_config":{…}} → {ok,agent_id}                                        600s
+```
+
+**9.2 — The owner-attestation claim is confirmed.** The `deploy` payload carries an `auth_tag` field,
+documented as a **NIP-OA owner attestation**. So the secondary reporting that agent keys are tied to
+a human owner via a second signature is accurate; §5 of this report flagged it as unverified on the
+strength of `VISION.md`/`AGENTS.md`/`NOSTR.md` alone.
+
+**9.3 — Two spec passages that materially help us.**
+
+- **§Launchers:** *"The desktop is therefore one launcher among many, and the provider protocol is
+  the desktop's door to substrates, not the only door."* A bash script, a systemd unit, or a CI job
+  are all blessed launchers owing only the [L1] obligations. Mjolnir can therefore deploy Buzz
+  agents **without going through their desktop at all** — two integration surfaces, and we can ship
+  the deeper one on our own schedule.
+- **I5 boundary (a):** the wedged-body problem is explicitly punted to the substrate ("a
+  namespace-level TTL policy… out of scope"). Mjolnir's out-of-guest health probe is a strictly
+  better answer than a TTL, and is offered upstream as such.
+
+### Still open
+
+1. Does `buzz-acp` assume a POSIX-local agent process, or can it target a remote body cleanly?
+2. Does Buzz Mesh's iroh usage conflict or compose with Mjolnir's iroh endpoints on the same host?
+3. Licensing: Buzz is Apache-2.0; recrypt is multi-licensed (AGPL / Apache / BSD-2-Patent /
    commercial). Which recrypt license path allows a Buzz-side integration?
+4. Buzz's relay runs permission-aware **Postgres FTS over message content**, which collides head-on
+   with encrypting message bodies. This is why the encryption wedge is **Blossom blobs first**, not
+   DMs — see the initiative doc.
