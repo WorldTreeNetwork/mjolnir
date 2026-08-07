@@ -1392,15 +1392,29 @@ defmodule Mjolnir.API.Router do
   # send_chunked/2 runs, the status is committed and cannot be changed.
   defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain) do
     conn = send_chunked(conn, 200)
-    {:ok, agent} = Agent.start_link(fn -> conn end)
+
+    # The evolving conn is held in the process dictionary rather than an Agent.
+    #
+    # This used to be an Agent, and `on_progress` did the chunk/2 inside
+    # Agent.update — i.e. from the AGENT's process. Bandit requires every write
+    # to come from the process that owns the stream, so the first progress line
+    # raised "Adapter functions must be called by stream owner", killing the
+    # request; the client saw "unexpected EOF during chunk size line" and every
+    # deploy failed before the build even started.
+    #
+    # The Agent bought nothing: Orchestrator.deploy/3 runs synchronously right
+    # here and calls `on_progress` from this very process, so a plain
+    # per-process cell is both correct and one less hop. (Same reason
+    # Mjolnir.VM uses Process.put for :boot_partial.)
+    Process.put(:deploy_conn, conn)
 
     on_progress = fn stage, line ->
-      Agent.update(agent, fn c ->
-        case chunk(c, Jason.encode!(%{stage: stage, line: line}) <> "\n") do
-          {:ok, c2} -> c2
-          {:error, _} -> c
-        end
-      end)
+      current = Process.get(:deploy_conn)
+
+      case chunk(current, Jason.encode!(%{stage: stage, line: line}) <> "\n") do
+        {:ok, next} -> Process.put(:deploy_conn, next)
+        {:error, _} -> :ok
+      end
     end
 
     result =
@@ -1420,8 +1434,7 @@ defmodule Mjolnir.API.Router do
           %{ok: false, stage: stage, error: inspect(reason)}
       end
 
-    conn = Agent.get(agent, & &1)
-    Agent.stop(agent)
+    conn = Process.delete(:deploy_conn) || conn
 
     case chunk(conn, Jason.encode!(final) <> "\n") do
       {:ok, conn} -> conn
