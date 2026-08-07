@@ -28,14 +28,67 @@ memory snapshot is the *freezing* story, and only the second one gives you:
 - Fork a live VM at a decision point
 - Survive a host reboot without the guest noticing
 
-## It is achievable
+## Spike result (2026-08-07): blocked on CH v50, fixed by CH v52
 
-Verified against the deployed hypervisor on 45.76.77.97:
+The spike ran end to end on 45.76.77.97. **Memory snapshot does not work on the deployed
+stack**, and the reason is a Cloud Hypervisor version, not an architectural problem.
 
-- `cloud-hypervisor v50.0.0`, features `io_uring, kvm, mshv`
-- Binary exports `vm.snapshot`, `vm.restore` (alongside `vm.pause` / `vm.resume`)
-- Binary contains `Restoring vhost-user-fs` — **virtio-fs restore is supported in v50**,
-  which was the blocker in older CH releases and the main risk to this design
+What works on v50.0.0:
+
+- `vm.snapshot` succeeds (204) and writes `config.json`, `state.json`, `memory-ranges`
+- A VM with **no vhost-user device** snapshots and restores perfectly: `RESTORE=204`,
+  `RESUME=204`, `STATE=Running`, live `vcpu0` in `kvm_vcpu_block`
+
+What breaks — every real Mjolnir VM, because the rootfs is virtio-fs:
+
+| virtiofsd | Symptom |
+|---|---|
+| 1.10.0 (Ubuntu noble) | `vm.restore` hangs forever. CH's `vmm` thread blocks in `unix_stream_data_wait` on the vhost-user socket; no `_fs1` thread, no vcpu thread; the API call never returns |
+| 1.14.0 (current upstream) | `vm.restore`/`vm.resume` return 204, CH logs `Resuming virtio-fs` / `vm resumed`, then immediately `<vcpu0> i8042 reset signalled` → `VM reset event` → `rebooting`. The guest panics on first filesystem access and `panic=1 reboot=k` cold-boots it |
+
+**Root cause: CH v50 never transfers vhost-user backend state at all.** Evidence:
+
+- `grep -icE 'device.state|migration|GET_DEVICE|SET_DEVICE'` over CH's `-vvv` log → **0 hits**
+- The source virtiofsd logged nothing about serializing state
+- `state.json`'s `_fs0` entry holds only *front-end* virtio state (`avail_features`,
+  `acked_features`, config tag) — no FUSE/backend state
+
+So the destination virtiofsd starts with an empty inode table while the restored guest
+holds nodeids from the dead source instance. Hazard 1b, confirmed — it simply surfaces as
+a guest panic instead of a hang once the backend (1.14) stops deadlocking. virtiofsd 1.14
+is not the blocker: it implements device state correctly (`--migration-mode`,
+`src/passthrough/device_state/*`), CH just never asks.
+
+**The fix is a version bump, not a virtio-blk fork.** Cloud Hypervisor
+[v52.0](https://github.com/cloud-hypervisor/cloud-hypervisor/releases/tag/v52.0)
+(2025-05-14) resolves this and three other hazards below:
+
+- *"Snapshot/restore support for `vhost-user` devices has been filled out (#7908),
+  including migration support for `virtio-fs` (#7937)"* → hazard 1b
+- *"Vsock connections are now reset on snapshot restore to avoid stale half-open
+  connections on the guest side (#7958)"* → hazard 4
+- *"The KVM clock is now restored before vCPUs are resumed (#7932)"* → hazard 6
+- New `memory_restore_mode` populates guest memory lazily via `userfaultfd` instead of
+  reading the whole snapshot before resume → restore latency
+
+Upstream issue
+[#6931](https://github.com/cloud-hypervisor/cloud-hypervisor/issues/6931), "Unable to
+restore a snapshot of vm using virtiofs root", is the same hang and is closed.
+
+Tracked as `mjolnir-3y6.15`; everything else in the epic is gated behind it.
+
+### Also found: a long pause wedges the VM permanently (`mjolnir-8ie`)
+
+Independent of restore. A pause long enough to write RAM to disk severs the host↔guest-agent
+vsock; the agent does not re-establish on resume; the next `exec` hits
+`vm.ex:2161` `Connection.exec(..., :infinity)` and blocks the VM GenServer mailbox forever.
+Health.Monitor then logs `GenServer unreachable (call timed out)` every tick and never
+recovers, because every heal path goes through that same GenServer.
+
+`mjolnir-8ie` was filed in June with no reliable reproduction; this is one. Of the recovery
+endpoints, only `POST /vms/:id/reboot` works (it kills CH at the OS level, bypassing the
+mailbox) — `nuke`, `retire`, and `forget` all return `vm_unreachable`. Since the freeze
+pause window is inherently long, this must be fixed before freeze/thaw can work at all.
 
 ## CH protocol
 
@@ -192,11 +245,13 @@ reachability, not just guest-agent ping.
 
 ## Cost note
 
-A btrfs snapshot is ~free (CoW). A memory snapshot of a 2GB VM is 2GB on disk, every
-time. Snapshot storage needs compression (zstd on the btrfs subvolume holding memory
-ranges) and a retention policy, or a busy host fills up. This changes the economics of
-"snapshot everything" and should inform where memory snapshots are used vs. plain
-filesystem snapshots — they are complementary, not a replacement.
+A btrfs snapshot is ~free (CoW). A memory snapshot is the full RAM, uncompressed:
+**measured in the spike, a 1 GiB VM produced a `memory-ranges` file of exactly
+1073741824 bytes**, with the snapshot directory totalling 1.1G. Snapshot storage needs
+compression (zstd on the btrfs subvolume holding memory ranges) and a retention policy,
+or a busy host fills up. v52's `memory_restore_mode` helps restore *latency*, not on-disk
+*size*. This changes the economics of "snapshot everything": memory and filesystem
+snapshots are complementary, not substitutes, and callers should choose deliberately.
 
 ## Sequencing
 
