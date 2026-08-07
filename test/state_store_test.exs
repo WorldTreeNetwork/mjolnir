@@ -82,10 +82,24 @@ defmodule Mjolnir.StateStoreTest do
       assert {:error, :schema_version_mismatch} = Record.from_json(json)
     end
 
-    test "rejects wrong schema_version" do
+    test "reports an unknown but well-formed schema_version distinctly" do
+      # Distinct from a *malformed* version, because the correct response differs:
+      # a file from the future is intact and must not be quarantined.
       json =
         Jason.encode!(%{
           "schema_version" => 999,
+          "uuid" => "x",
+          "intent" => "running",
+          "created_at" => "2026-04-21T10:00:00Z"
+        })
+
+      assert {:error, {:unsupported_schema_version, 999}} = Record.from_json(json)
+    end
+
+    test "rejects a malformed schema_version" do
+      json =
+        Jason.encode!(%{
+          "schema_version" => "not-a-version",
           "uuid" => "x",
           "intent" => "running",
           "created_at" => "2026-04-21T10:00:00Z"
@@ -242,21 +256,21 @@ defmodule Mjolnir.StateStoreTest do
       assert Enum.any?(quarantined, &String.starts_with?(&1, "bogus.json.bad-"))
     end
 
-    test "schema version mismatch is quarantined", %{state_dir: dir} do
+    test "a malformed schema_version is quarantined", %{state_dir: dir} do
       bad =
         Jason.encode!(%{
-          "schema_version" => 42,
-          "uuid" => "future",
+          "schema_version" => "forty-two",
+          "uuid" => "garbled",
           "intent" => "running",
           "created_at" => "2026-04-21T10:00:00Z"
         })
 
-      File.write!(Path.join(dir, "future.json"), bad)
+      File.write!(Path.join(dir, "garbled.json"), bad)
       assert :ok = StateStore.reload()
-      assert :not_found = StateStore.get("future")
+      assert :not_found = StateStore.get("garbled")
 
       quarantined = Path.join(dir, "quarantine") |> File.ls!()
-      assert Enum.any?(quarantined, &String.starts_with?(&1, "future.json.bad-"))
+      assert Enum.any?(quarantined, &String.starts_with?(&1, "garbled.json.bad-"))
     end
 
     test "valid records loaded alongside quarantined ones", %{state_dir: dir} do
@@ -470,6 +484,89 @@ defmodule Mjolnir.StateStoreTest do
 
       assert {:ok, record} = Record.from_json(json)
       assert record.generation == 1
+    end
+  end
+
+  describe "rollback survival (record written by a newer schema version)" do
+    defp write_future_record(dir, uuid, version \\ 3) do
+      File.write!(
+        Path.join(dir, "#{uuid}.json"),
+        Jason.encode!(%{
+          "schema_version" => version,
+          "uuid" => uuid,
+          "intent" => "running",
+          "created_at" => "2026-08-07T10:00:00Z"
+        })
+      )
+    end
+
+    test "the file is left exactly where it is, not quarantined", %{state_dir: dir} do
+      # Quarantine *renames*. Doing it here would mean that rolling forward again
+      # could not find the record either — the rollback itself destroys the data.
+      write_future_record(dir, "from-the-future")
+      assert :ok = StateStore.reload()
+
+      assert File.exists?(Path.join(dir, "from-the-future.json"))
+      assert Path.join(dir, "quarantine") |> File.ls!() == []
+    end
+
+    test "the record is not served from the cache" do
+      # We cannot read it, so we must not pretend to.
+      assert :not_found = StateStore.get("from-the-future")
+    end
+
+    test "the uuid is reported as unreadable with its version", %{state_dir: dir} do
+      write_future_record(dir, "reported", 7)
+      assert :ok = StateStore.reload()
+
+      assert %{"reported" => {:unsupported_schema_version, 7}} = StateStore.unreadable()
+    end
+
+    test "writes to that uuid are refused rather than clobbering it", %{state_dir: dir} do
+      write_future_record(dir, "protected")
+      assert :ok = StateStore.reload()
+
+      assert {:error, :record_unreadable} =
+               StateStore.put(Record.new("protected", :running))
+
+      assert {:error, :record_unreadable} = StateStore.delete("protected")
+      assert {:error, :record_unreadable} = StateStore.delete_if_match("protected", 1)
+      assert {:error, :record_unreadable} = StateStore.merge_metadata("protected", %{"a" => "b"})
+
+      # Still intact and still from the future.
+      on_disk = Path.join(dir, "protected.json") |> File.read!() |> Jason.decode!()
+      assert on_disk["schema_version"] == 3
+    end
+
+    test "readable records alongside it still load", %{state_dir: dir} do
+      write_future_record(dir, "unreadable-one")
+      :ok = StateStore.put(Record.new("readable-one", :running))
+      assert :ok = StateStore.reload()
+
+      assert {:ok, _} = StateStore.get("readable-one")
+      assert :not_found = StateStore.get("unreadable-one")
+      assert Map.has_key?(StateStore.unreadable(), "unreadable-one")
+    end
+
+    test "rolling forward recovers the record", %{state_dir: dir} do
+      # The whole point: the older binary left the bytes alone, so a build that
+      # understands the version reads it back unharmed.
+      write_future_record(dir, "recovered")
+      assert :ok = StateStore.reload()
+      assert :not_found = StateStore.get("recovered")
+
+      # Simulate the newer build: rewrite at a version this one speaks.
+      contents = Path.join(dir, "recovered.json") |> File.read!() |> Jason.decode!()
+
+      File.write!(
+        Path.join(dir, "recovered.json"),
+        Jason.encode!(%{contents | "schema_version" => Record.schema_version()})
+      )
+
+      assert :ok = StateStore.reload()
+      assert {:ok, record} = StateStore.get("recovered")
+      assert record.uuid == "recovered"
+      assert StateStore.unreadable() == %{}
     end
   end
 end

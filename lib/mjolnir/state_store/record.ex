@@ -13,9 +13,19 @@ defmodule Mjolnir.StateStore.Record do
 
   # Schema versions this module can still read. A v1 file is upgraded in memory
   # on load (metadata defaults to empty, generation to 1) and rewritten as v2 on
-  # its next `StateStore.put/1`. Reading old-but-valid records is emphatically
-  # not the "quarantine, don't discard" case — quarantine is for *corrupt* files,
-  # and quarantining every VM on a server during a deploy would be an outage.
+  # its next `StateStore.put/1`.
+  #
+  # Version skew cuts both ways and quarantine is wrong in both directions:
+  #
+  #   - **older file, newer binary** (a deploy): handled here, by keeping the old
+  #     version readable.
+  #   - **newer file, older binary** (a *rollback*): handled in `StateStore`, by
+  #     leaving the file where it is. This is the more dangerous direction — a
+  #     rollback is what you do during an incident, and quarantine *renames* the
+  #     file, so rolling forward again would not find it either.
+  #
+  # Quarantine is for files nobody can read. A file from the future is perfectly
+  # readable by the binary that wrote it.
   @readable_schema_versions [1, 2]
 
   @type intent :: :running | :dormant | :stopped | :failed
@@ -104,7 +114,12 @@ defmodule Mjolnir.StateStore.Record do
 
   @spec from_json(String.t()) ::
           {:ok, t()}
-          | {:error, :invalid_json | :schema_version_mismatch | :missing_field | :invalid_intent}
+          | {:error,
+             :invalid_json
+             | :schema_version_mismatch
+             | {:unsupported_schema_version, pos_integer()}
+             | :missing_field
+             | :invalid_intent}
   def from_json(binary) when is_binary(binary) do
     with {:ok, map} <- Jason.decode(binary) |> normalize_decode(),
          :ok <- check_schema_version(map),
@@ -142,6 +157,14 @@ defmodule Mjolnir.StateStore.Record do
   defp normalize_decode({:error, _}), do: {:error, :invalid_json}
 
   defp check_schema_version(%{"schema_version" => v}) when v in @readable_schema_versions, do: :ok
+
+  # A well-formed version we do not speak. Distinguished from a malformed one
+  # because the correct response differs: a file that tells us it is from the
+  # future is intact and readable by the binary that wrote it, so it must be
+  # left alone rather than quarantined. See `Mjolnir.StateStore`'s load path.
+  defp check_schema_version(%{"schema_version" => v}) when is_integer(v) and v > 0,
+    do: {:error, {:unsupported_schema_version, v}}
+
   defp check_schema_version(_), do: {:error, :schema_version_mismatch}
 
   defp fetch(map, key) do

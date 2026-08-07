@@ -124,15 +124,46 @@ StateStore.delete_if_match(uuid, generation)                # :ok | {:error, :co
 
 ---
 
-## Schema migration
+## Schema migration, in both directions
 
-The record schema went from **v1 to v2**. v1 files are still read: `metadata` defaults to empty,
-`generation` to 1, and the record is rewritten as v2 on its next write.
+The record schema went from **v1 to v2**. Version skew cuts two ways, and quarantine — which
+*renames* the file — is the wrong answer to both.
 
-This matters because `StateStore` **quarantines** files whose schema version it does not recognise.
-Quarantine exists for *corrupt* files; applying it to every record on a server during a deploy
-would be an outage, not a safety measure. A malformed `generation` value likewise reads as 1 rather
-than failing the load — a record we cannot fence is still a record we must not lose.
+### Older file, newer binary (a deploy)
+
+v1 files are still read: `metadata` defaults to empty, `generation` to 1, and the record is
+rewritten as v2 on its next write. `@readable_schema_versions` in `Mjolnir.StateStore.Record` is the
+list to extend when the schema next moves.
+
+A malformed `generation` likewise reads as 1 rather than failing the load — a record we cannot
+fence is still a record we must not lose.
+
+### Newer file, older binary (a **rollback**)
+
+This is the more dangerous direction, because a rollback is what you do *during* an incident.
+
+A record whose `schema_version` we do not speak is **intact** — the binary that wrote it can still
+read it. So it is **left exactly where it is**:
+
+- the file is not moved, not rewritten, not deleted;
+- the UUID is held back from writes — `put/1`, `delete/1`, `delete_if_match/2` and
+  `merge_metadata/2` all return `{:error, :record_unreadable}`, so the older binary cannot
+  overwrite a record it could not read;
+- it is listed by `StateStore.unreadable/0` and reported by `mj doctor` as
+  `state_records: degraded` with the UUIDs and the fix.
+
+**The fix is to roll forward.** Because the bytes were never touched, the newer build reads them
+back unharmed.
+
+> Quarantining here would have been an outage of our own making: quarantine renames the file, so
+> rolling *forward* again would not find it either. The rollback itself would have destroyed the
+> data.
+
+### What still gets quarantined
+
+Files nobody can read: invalid JSON, a missing or malformed `schema_version`, missing required
+fields. Those are moved to `<state_dir>/quarantine/` and logged, never deleted. That is the case
+quarantine was designed for and it is unchanged.
 
 ---
 

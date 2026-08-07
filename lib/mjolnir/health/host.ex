@@ -24,7 +24,8 @@ defmodule Mjolnir.Health.Host do
       check_nat(),
       check_btrfs_mount(),
       check_socket_dir(),
-      check_state_dir()
+      check_state_dir(),
+      check_state_records()
     ]
   end
 
@@ -181,6 +182,29 @@ defmodule Mjolnir.Health.Host do
   defp heal_state_dir do
     dir = Application.get_env(:mjolnir, :state_dir)
     if dir, do: File.mkdir_p(dir), else: :ok
+  end
+
+  # Records on disk this build refuses to read because they state a newer schema
+  # version — the signature of a rollback. They are left untouched and held back
+  # from writes, so nothing is lost, but the VMs behind them are not rehydrated.
+  # Degraded rather than dead: the host still serves every record it can read.
+  defp check_state_records do
+    case Mjolnir.StateStore.unreadable() do
+      empty when map_size(empty) == 0 ->
+        entry("state_records", :ok)
+
+      unreadable ->
+        entry(
+          "state_records",
+          {:degraded, :unsupported_schema_version},
+          "#{map_size(unreadable)} record(s) written by a newer Mjolnir; " <>
+            "roll forward to recover: #{unreadable |> Map.keys() |> Enum.sort() |> Enum.join(", ")}"
+        )
+    end
+  catch
+    # The store may not be up yet during early boot; a health check must never
+    # be the reason a host looks dead.
+    :exit, _ -> entry("state_records", :ok)
   end
 
   defp check_writable_dir(name, nil), do: entry(name, {:dead, :not_configured})

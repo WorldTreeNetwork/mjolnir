@@ -12,9 +12,14 @@ defmodule Mjolnir.StateStore do
   - **Cache coherence**: ETS is updated under the GenServer's serialized
     write path, after the file rename succeeds. A write that fails to reach
     disk is not reflected in ETS.
-  - **Quarantine, don't discard**: files with invalid JSON or unknown schema
-    versions are moved to `<state_dir>/quarantine/` and logged. They are
-    never silently deleted.
+  - **Quarantine, don't discard**: files nobody can read — invalid JSON, a
+    missing or malformed schema version, missing required fields — are moved to
+    `<state_dir>/quarantine/` and logged. They are never silently deleted.
+  - **Never quarantine a record from the future**: a file whose `schema_version`
+    is a version we do not speak is *intact*, just not ours to read. It is left
+    exactly where it is, and the UUID is held back from writes (see
+    `unreadable/0`). Quarantining it would turn a rollback into data loss:
+    quarantine *renames*, so rolling forward again would not find the file.
 
   ## Reads vs writes
 
@@ -146,6 +151,23 @@ defmodule Mjolnir.StateStore do
     end)
   end
 
+  @doc """
+  UUIDs present on disk that this binary refused to read, as `%{uuid => reason}`.
+
+  Populated when a record states a `schema_version` we do not speak — the
+  signature of running an older binary than the one that wrote the state, i.e. a
+  rollback. Those files are left untouched, and `put/1` / `delete/1` refuse the
+  UUID so a partially-understood state directory cannot be silently overwritten
+  by the older binary.
+
+  The fix is to roll forward. Surfaced by health checks so it is visible before
+  someone notices a VM missing.
+  """
+  @spec unreadable() :: %{String.t() => term()}
+  def unreadable do
+    GenServer.call(__MODULE__, :unreadable)
+  end
+
   @doc "Reload the cache from disk. Used by tests and by `Mjolnir.Reconcile`."
   @spec reload() :: :ok
   def reload do
@@ -164,23 +186,74 @@ defmodule Mjolnir.StateStore do
   def init(_opts) do
     :ets.new(@table, [:set, :named_table, :public, read_concurrency: true])
     :ok = ensure_dirs()
-    :ok = load_from_disk()
-    {:ok, %{}}
+    {:ok, %{unreadable: load_from_disk()}}
   end
 
   @impl true
   def handle_call({:put, %Record{uuid: uuid} = record}, _from, state) do
-    case do_put(succeed(record)) do
-      {:ok, _stored} ->
-        {:reply, :ok, state}
+    if unreadable?(state, uuid) do
+      {:reply, {:error, :record_unreadable}, state}
+    else
+      case do_put(succeed(record)) do
+        {:ok, _stored} ->
+          {:reply, :ok, state}
 
-      {:error, reason} = err ->
-        Logger.error("StateStore put failed for #{uuid}: #{inspect(reason)}")
-        {:reply, err, state}
+        {:error, reason} = err ->
+          Logger.error("StateStore put failed for #{uuid}: #{inspect(reason)}")
+          {:reply, err, state}
+      end
     end
   end
 
   def handle_call({:merge_metadata, uuid, metadata}, _from, state) do
+    cond do
+      unreadable?(state, uuid) ->
+        {:reply, {:error, :record_unreadable}, state}
+
+      true ->
+        merge_metadata_into(uuid, metadata, state)
+    end
+  end
+
+  def handle_call({:delete, uuid}, _from, state) do
+    if unreadable?(state, uuid) do
+      {:reply, {:error, :record_unreadable}, state}
+    else
+      {:reply, do_delete(uuid), state}
+    end
+  end
+
+  def handle_call({:delete_if_match, uuid, generation}, _from, state) do
+    reply =
+      cond do
+        unreadable?(state, uuid) ->
+          {:error, :record_unreadable}
+
+        true ->
+          case lookup(uuid) do
+            # Delete-of-absent is success: a delete retried after a crash must
+            # not look like a conflict.
+            nil -> :ok
+            %Record{generation: ^generation} -> do_delete(uuid)
+            %Record{} -> {:error, :conflict}
+          end
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call(:unreadable, _from, state) do
+    {:reply, state.unreadable, state}
+  end
+
+  def handle_call(:reload, _from, state) do
+    :ets.delete_all_objects(@table)
+    {:reply, :ok, %{state | unreadable: load_from_disk()}}
+  end
+
+  ## Internals
+
+  defp merge_metadata_into(uuid, metadata, state) do
     case lookup(uuid) do
       nil ->
         {:reply, :not_found, state}
@@ -198,31 +271,6 @@ defmodule Mjolnir.StateStore do
         end
     end
   end
-
-  def handle_call({:delete, uuid}, _from, state) do
-    {:reply, do_delete(uuid), state}
-  end
-
-  def handle_call({:delete_if_match, uuid, generation}, _from, state) do
-    reply =
-      case lookup(uuid) do
-        # Delete-of-absent is success: a delete retried after a crash must not
-        # look like a conflict.
-        nil -> :ok
-        %Record{generation: ^generation} -> do_delete(uuid)
-        %Record{} -> {:error, :conflict}
-      end
-
-    {:reply, reply, state}
-  end
-
-  def handle_call(:reload, _from, state) do
-    :ets.delete_all_objects(@table)
-    :ok = load_from_disk()
-    {:reply, :ok, state}
-  end
-
-  ## Internals
 
   defp lookup(uuid) do
     case :ets.lookup(@table, uuid) do
@@ -301,21 +349,29 @@ defmodule Mjolnir.StateStore do
     end
   end
 
+  defp unreadable?(%{unreadable: map}, uuid), do: Map.has_key?(map, uuid)
+  defp unreadable?(_state, _uuid), do: false
+
+  # Returns %{uuid => reason} for files left in place because this binary does
+  # not speak their schema version.
   defp load_from_disk do
     case File.ls(state_path()) do
       {:ok, entries} ->
         entries
         |> Enum.filter(&String.ends_with?(&1, ".json"))
-        |> Enum.each(&load_one/1)
-
-        :ok
+        |> Enum.reduce(%{}, fn filename, acc ->
+          case load_one(filename) do
+            :ok -> acc
+            {:unreadable, uuid, reason} -> Map.put(acc, uuid, reason)
+          end
+        end)
 
       {:error, :enoent} ->
-        :ok
+        %{}
 
       {:error, reason} ->
         Logger.error("StateStore could not list #{state_path()}: #{inspect(reason)}")
-        :ok
+        %{}
     end
   end
 
@@ -327,8 +383,24 @@ defmodule Mjolnir.StateStore do
       :ets.insert(@table, {record.uuid, record})
       :ok
     else
+      # A record from a version we do not speak. The file is intact — the binary
+      # that wrote it can still read it — so leave it exactly where it is and
+      # hold the UUID back from writes. Quarantining here would rename the file
+      # and turn a rollback into permanent data loss.
+      {:error, {:unsupported_schema_version, version} = reason} ->
+        uuid = Path.basename(filename, ".json")
+
+        Logger.error(
+          "StateStore: #{path} was written by schema version #{version}, which this build " <>
+            "does not support. Leaving it untouched and refusing writes to #{uuid}. " <>
+            "This is the signature of a rollback — roll forward to recover."
+        )
+
+        {:unreadable, uuid, reason}
+
       {:error, reason} ->
         quarantine(path, reason)
+        :ok
     end
   end
 
