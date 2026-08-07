@@ -11,6 +11,35 @@ defmodule Mjolnir.Reconcile do
   Dormant VMs are NOT handled here — `Mjolnir.DormantRegistry` owns its own
   file-backed persistence and restores itself on start.
 
+  ## Restart policy — when NOT to rehydrate (mjolnir-yhr)
+
+  Rehydration is right for a VM the *host* lost: a BEAM restart, a hypervisor
+  crash, an eviction. It is wrong for a VM that ended *itself*. Reconcile cannot
+  tell those apart from the outside — both leave a `:running` record with no live
+  hypervisor — so the distinction has to be declared up front, by whoever created
+  the VM, as `restart_policy` in the spawn config:
+
+  - `:always` (default) — today's behavior. A stranded record is resumed.
+  - `:never` — a stranded record is **finalized**, not resumed: intent flips to
+    `:stopped` and the rootfs subvolume is preserved. Nothing brings it back
+    except an explicit, owner-initiated action (`Mjolnir.VM.revive/1`, or a
+    fresh spawn from its snapshot).
+
+  This is the substrate primitive Buzz remote agents need. `docs/remote-agents.md`
+  invariant **I5** makes intentional termination terminal — an owner `!shutdown`
+  or an inactivity reap must not be undone by the substrate — and
+  `buzz-backend-mjolnir`'s L3 binding states it ships with no revive policy at
+  all. Without `:never`, Mjolnir revived every agent that shut itself down,
+  roughly seven seconds later, and that claim was false.
+
+  Deliberately a **declared policy, not an inferred one.** Reconcile does not
+  decide by reading anything the guest wrote: a body wedged badly enough to need
+  reaping cannot write a marker, and a guest that *can* write one should not be
+  the thing that decides whether the host may restart it. When a guest-written
+  exit marker happens to be present it is recorded on the record as evidence for
+  the operator (and for the provider's intentional-vs-abnormal reporting), and it
+  changes no decision here.
+
   ## Failure modes
 
   - **Resume fails (boot timeout, CH crash, etc.)** — logged; the record's
@@ -51,6 +80,14 @@ defmodule Mjolnir.Reconcile do
   @type plan_entry ::
           {:resume, Record.t(), rootfs_path :: String.t()}
           | {:missing_rootfs, Record.t(), expected_path :: String.t()}
+          | {:finalize, Record.t(), rootfs_path :: String.t()}
+
+  # Guest-written exit evidence, read from the stopped VM's subvolume when
+  # finalizing a :never record. Non-decisional — see the moduledoc. Path is
+  # relative to the rootfs; the cap is there because this is guest-controlled
+  # content being read by the host.
+  @harness_exit_rel_path "var/lib/buzz/harness-exit"
+  @harness_exit_max_bytes 4_096
 
   @doc """
   Entrypoint called by the supervision tree at boot, and periodically by
@@ -112,8 +149,13 @@ defmodule Mjolnir.Reconcile do
 
   @doc """
   Pure planning function: given a list of :running records, produce a list of
-  actions — either `{:resume, record, rootfs_path}` if the subvolume exists,
-  or `{:missing_rootfs, record, expected_path}` if it doesn't.
+  actions:
+
+  - `{:finalize, record, rootfs_path}` — `restart_policy: :never`. Not resumed;
+    intent flips to `:stopped`. Checked **first**, ahead of the rootfs test,
+    because the policy holds whether or not the data is still there.
+  - `{:resume, record, rootfs_path}` — the subvolume exists.
+  - `{:missing_rootfs, record, expected_path}` — it doesn't.
 
   Extracted from `run/0` so unit tests can cover the decision logic without
   booting real VMs.
@@ -123,13 +165,32 @@ defmodule Mjolnir.Reconcile do
     Enum.map(records, fn record ->
       path = rootfs_path(record.uuid)
 
-      if File.exists?(path) do
-        {:resume, record, path}
-      else
-        {:missing_rootfs, record, path}
+      cond do
+        restart_policy(record) == :never -> {:finalize, record, path}
+        File.exists?(path) -> {:resume, record, path}
+        true -> {:missing_rootfs, record, path}
       end
     end)
   end
+
+  @doc """
+  The record's declared restart policy: `:never` or `:always` (the default).
+
+  Read from `spawn_config["restart_policy"]`, which round-trips through
+  `Mjolnir.StateStore` already — so this needed no record schema bump and no
+  migration. Anything unrecognised reads as `:always`: an unparseable policy must
+  not silently become "never restart this VM", which would strand a fleet on a
+  typo.
+  """
+  @spec restart_policy(Record.t()) :: :always | :never
+  def restart_policy(%Record{spawn_config: cfg}) when is_map(cfg) do
+    case Map.get(cfg, "restart_policy") do
+      "never" -> :never
+      _ -> :always
+    end
+  end
+
+  def restart_policy(_), do: :always
 
   @doc """
   Computes the expected rootfs path for a given VM UUID.
@@ -158,6 +219,37 @@ defmodule Mjolnir.Reconcile do
     catch
       kind, reason ->
         record_failure(record, "resume #{kind}: #{inspect(reason)}")
+    end
+  end
+
+  # restart_policy: :never — the VM is gone and stays gone. Flip intent to
+  # :stopped so it drops out of the stranded set instead of being re-examined on
+  # every Health.Monitor tick, and preserve the rootfs: for a Buzz agent that
+  # subvolume IS the agent's desk (checkout, working tree, half-finished edit),
+  # and snapshot-resume on the next owner-initiated Start clones from it.
+  defp execute({:finalize, %Record{uuid: uuid} = record, path}) do
+    exit_evidence = read_harness_exit(path)
+
+    runtime =
+      (record.runtime || %{})
+      |> Map.put("finalized_at", DateTime.to_iso8601(DateTime.utc_now()))
+      |> Map.put("finalized_reason", "restart_policy=never")
+      |> Map.merge(exit_evidence)
+
+    updated = %{record | intent: :stopped, runtime: runtime}
+
+    Logger.info(
+      "Reconcile: VM #{uuid} has restart_policy=never — not resuming. " <>
+        "Intent set to :stopped, rootfs preserved at #{path}." <>
+        describe_exit(exit_evidence)
+    )
+
+    case StateStore.put(updated) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Reconcile: failed to finalize #{uuid}: #{inspect(reason)}")
     end
   end
 
@@ -236,6 +328,50 @@ defmodule Mjolnir.Reconcile do
       {:retry, %{record | runtime: runtime}}
     end
   end
+
+  @doc """
+  Read the guest-written harness exit marker out of a stopped VM's rootfs, if it
+  left one.
+
+  Returns a `runtime`-shaped map with `harness_exit_reason` / `harness_exit_status`
+  / `harness_service_result`, or `%{}` when there is no marker — which is the
+  common case and not an error: only bodies built from `@base/buzz-agent` write
+  one, and a wedged body writes nothing at all.
+
+  **This never decides anything.** It is evidence for the operator and for the
+  provider's I5 intentional-vs-abnormal reporting (`exited`/`0` is intentional;
+  anything else abnormal). The decision not to restart came from the declared
+  `restart_policy`, before this file was even opened. Guest-controlled content,
+  so the read is size-capped and only the three known keys are kept.
+  """
+  @spec read_harness_exit(String.t()) :: %{String.t() => String.t()}
+  def read_harness_exit(rootfs_path) do
+    path = Path.join(rootfs_path, @harness_exit_rel_path)
+
+    with {:ok, %File.Stat{size: size}} when size <= @harness_exit_max_bytes <- File.stat(path),
+         {:ok, contents} <- File.read(path) do
+      contents
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(%{}, fn line, acc ->
+        case String.split(line, "=", parts: 2) do
+          ["exit_reason", v] -> Map.put(acc, "harness_exit_reason", String.trim(v))
+          ["exit_status", v] -> Map.put(acc, "harness_exit_status", String.trim(v))
+          ["service_result", v] -> Map.put(acc, "harness_service_result", String.trim(v))
+          _ -> acc
+        end
+      end)
+    else
+      _ -> %{}
+    end
+  end
+
+  defp describe_exit(%{"harness_exit_reason" => "exited", "harness_exit_status" => "0"}),
+    do: " Harness exited cleanly (0) — intentional termination."
+
+  defp describe_exit(%{"harness_exit_reason" => reason, "harness_exit_status" => status}),
+    do: " Harness died abnormally (#{reason}/#{status})."
+
+  defp describe_exit(_), do: ""
 
   defp failure_streak_seconds(first_at_iso, now) do
     case DateTime.from_iso8601(first_at_iso) do

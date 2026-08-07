@@ -74,10 +74,202 @@ defmodule Mjolnir.ReconcileTest do
     end
   end
 
+  describe "restart_policy — build_plan/1 (mjolnir-yhr)" do
+    test "restart_policy=never yields :finalize, never :resume", ctx do
+      uuid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      record = Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:finalize, ^record, path}] = Reconcile.build_plan([record])
+      assert String.ends_with?(path, uuid)
+    end
+
+    test "the policy holds even when the rootfs is gone" do
+      # A :never record whose data has vanished must still not be treated as a
+      # resume candidate — the policy is about restarting, not about recovery.
+      uuid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+      record = Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:finalize, ^record, _}] = Reconcile.build_plan([record])
+    end
+
+    test "restart_policy=always resumes, as before", ctx do
+      uuid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      record = Record.new(uuid, :running, spawn_config: %{"restart_policy" => "always"})
+      assert [{:resume, ^record, _}] = Reconcile.build_plan([record])
+    end
+
+    test "a record with no policy at all resumes — the default is unchanged", ctx do
+      uuid = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      assert [{:resume, _, _}] = Reconcile.build_plan([Record.new(uuid, :running)])
+    end
+  end
+
+  describe "restart_policy/1" do
+    test "only the exact string \"never\" means never" do
+      assert Reconcile.restart_policy(rec_with(%{"restart_policy" => "never"})) == :never
+    end
+
+    test "fails open to :always on anything unrecognised" do
+      # Deliberate: a typo'd or half-migrated policy must not silently become
+      # "never restart this VM" — that strands a fleet, and only shows up during
+      # the recovery you were relying on.
+      for value <- ["Never", "NEVER", "nope", "", nil, 1, %{}] do
+        assert Reconcile.restart_policy(rec_with(%{"restart_policy" => value})) == :always,
+               "expected #{inspect(value)} to read as :always"
+      end
+
+      assert Reconcile.restart_policy(rec_with(%{})) == :always
+    end
+
+    defp rec_with(spawn_config) do
+      Record.new("policy-test", :running, spawn_config: spawn_config)
+    end
+  end
+
+  describe "read_harness_exit/1" do
+    setup do
+      dir = Path.join(System.tmp_dir!(), "harness-exit-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "var/lib/buzz"))
+      on_exit(fn -> File.rm_rf!(dir) end)
+      {:ok, rootfs: dir}
+    end
+
+    test "parses the three known keys", ctx do
+      write_exit(ctx.rootfs, "exit_reason=exited\nexit_status=0\nservice_result=success\n")
+
+      assert Reconcile.read_harness_exit(ctx.rootfs) == %{
+               "harness_exit_reason" => "exited",
+               "harness_exit_status" => "0",
+               "harness_service_result" => "success"
+             }
+    end
+
+    test "ignores unknown keys and junk lines", ctx do
+      write_exit(ctx.rootfs, "exit_reason=killed\ngarbage\nBUZZ_PRIVATE_KEY=nsec1leak\n")
+
+      evidence = Reconcile.read_harness_exit(ctx.rootfs)
+
+      assert evidence == %{"harness_exit_reason" => "killed"}
+      # The marker is guest-controlled. Only the three known keys are kept, so a
+      # guest cannot smuggle arbitrary content onto the host's durable record.
+      refute Enum.any?(evidence, fn {_k, v} -> String.contains?(v, "nsec1") end)
+    end
+
+    test "returns empty when there is no marker — the common case", ctx do
+      assert Reconcile.read_harness_exit(ctx.rootfs) == %{}
+    end
+
+    test "refuses an oversized marker rather than reading it into the record", ctx do
+      write_exit(ctx.rootfs, "exit_reason=exited\n" <> String.duplicate("x", 8_192))
+      assert Reconcile.read_harness_exit(ctx.rootfs) == %{}
+    end
+
+    defp write_exit(rootfs, contents) do
+      File.write!(Path.join(rootfs, "var/lib/buzz/harness-exit"), contents)
+    end
+  end
+
   describe "rootfs_path/1" do
     test "respects configured btrfs_root and subdir", ctx do
       path = Reconcile.rootfs_path("some-uuid")
       assert path == Path.join([ctx.btrfs_root, "@vms", "some-uuid"])
+    end
+  end
+
+  describe "run/0 with restart_policy=never (mjolnir-yhr)" do
+    setup ctx do
+      # Reuse the supervised StateStore with a per-test state_dir, the same way
+      # state_store_test.exs does — stopping it ourselves would race the
+      # supervisor.
+      state_dir = Path.join(ctx.btrfs_root, "state")
+      File.mkdir_p!(Path.join(state_dir, "quarantine"))
+
+      prev = Application.get_env(:mjolnir, :state_dir)
+      Application.put_env(:mjolnir, :state_dir, state_dir)
+      :ok = Mjolnir.StateStore.reload()
+
+      on_exit(fn ->
+        if prev, do: Application.put_env(:mjolnir, :state_dir, prev)
+        :ok = Mjolnir.StateStore.reload()
+      end)
+
+      :ok
+    end
+
+    test "finalizes to :stopped instead of resuming, and preserves the rootfs", ctx do
+      uuid = "11112222-3333-4444-5555-666677778888"
+      rootfs = Path.join([ctx.btrfs_root, "@vms", uuid])
+      File.mkdir_p!(Path.join(rootfs, "var/lib/buzz"))
+
+      File.write!(
+        Path.join(rootfs, "var/lib/buzz/harness-exit"),
+        "exit_reason=exited\nexit_status=0\nservice_result=success\n"
+      )
+
+      :ok =
+        Mjolnir.StateStore.put(
+          Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+        )
+
+      # No VM is booted: a :never record must never reach Mjolnir.VM.resume/1,
+      # which would try to start a hypervisor and fail loudly in a unit test.
+      assert :ok = Reconcile.run()
+
+      assert {:ok, record} = Mjolnir.StateStore.get(uuid)
+      assert record.intent == :stopped
+      assert record.runtime["finalized_reason"] == "restart_policy=never"
+      assert record.runtime["finalized_at"]
+
+      # Exit evidence is recorded for the operator — it decided nothing.
+      assert record.runtime["harness_exit_reason"] == "exited"
+      assert record.runtime["harness_exit_status"] == "0"
+
+      # The desk survives: snapshot-resume on the next owner-initiated start
+      # clones from this subvolume.
+      assert File.exists?(rootfs)
+    end
+
+    test "is idempotent — a finalized record is no longer in the stranded set", ctx do
+      uuid = "99998888-7777-6666-5555-444433332222"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      :ok =
+        Mjolnir.StateStore.put(
+          Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+        )
+
+      assert :ok = Reconcile.run()
+      {:ok, first} = Mjolnir.StateStore.get(uuid)
+
+      # A second pass must not touch it: run/0 only looks at :running records,
+      # so a finalized VM stops costing anything on every Health.Monitor tick.
+      assert :ok = Reconcile.run()
+      {:ok, second} = Mjolnir.StateStore.get(uuid)
+
+      assert second.intent == :stopped
+      assert second.generation == first.generation
+    end
+
+    test "finalizes even with no harness marker — a wedged body writes nothing", ctx do
+      uuid = "abababab-cdcd-efef-0101-232323232323"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      :ok =
+        Mjolnir.StateStore.put(
+          Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+        )
+
+      assert :ok = Reconcile.run()
+      assert {:ok, record} = Mjolnir.StateStore.get(uuid)
+
+      assert record.intent == :stopped
+      refute Map.has_key?(record.runtime, "harness_exit_reason")
     end
   end
 

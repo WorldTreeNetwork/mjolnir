@@ -56,10 +56,20 @@ defmodule Mjolnir.VM do
     # VMs it created. Carried into the first StateStore record so there is no
     # window where a created VM exists unlabelled — a crash in that window would
     # strand a VM its creator can no longer recognise as its own.
-    metadata: %{}
+    metadata: %{},
+    # Lifetime policy (mjolnir-yhr). :always (default) lets Mjolnir.Reconcile
+    # rehydrate this VM if it is found stranded — right when the HOST lost it.
+    # :never means a stranded record is finalized to :stopped instead, rootfs
+    # preserved, and only an explicit owner-initiated action starts it again.
+    #
+    # :never exists because Reconcile cannot tell "the host lost the VM" from
+    # "the guest ended itself" — both look identical from outside — so the
+    # creator has to declare it. Required by Buzz invariant I5 (intentional
+    # termination is terminal); see Mjolnir.Reconcile's moduledoc.
+    restart_policy: :always
   ]
 
-  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts)
+  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
 
   # await_boot blocks the caller until do_boot completes. Non-managed boots are
   # comfortably under 30s. A :managed secrets boot ALSO creates/opens a LUKS
@@ -102,6 +112,7 @@ defmodule Mjolnir.VM do
           optional(:owner_id) => String.t() | nil,
           optional(:extra_mounts) => list(extra_mount()),
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
+          optional(:restart_policy) => :always | :never,
           optional(:await_boot_timeout) => timeout()
         }
 
@@ -128,6 +139,11 @@ defmodule Mjolnir.VM do
   - `:await_boot_timeout` - How long `spawn/1` waits for boot to complete
     (default: 30s; auto-raised to #{@managed_await_boot_timeout}ms for
     `secrets_mode: :managed`, whose LUKS setup runs during boot).
+  - `:restart_policy` - `:always` (default) or `:never`. `:never` stops
+    `Mjolnir.Reconcile` from rehydrating this VM if it is later found stranded;
+    the record is finalized to `:stopped` with the rootfs preserved. Use it for
+    any workload where the guest may legitimately end itself and must stay
+    ended — see `Mjolnir.Reconcile`'s moduledoc.
 
   ## Examples
 
@@ -373,6 +389,23 @@ defmodule Mjolnir.VM do
   @spec list_failed() :: [Mjolnir.StateStore.Record.t()]
   def list_failed do
     Mjolnir.StateStore.list_by_intent(:failed)
+  end
+
+  @doc """
+  List VMs that ended and were **not** restarted — records `Mjolnir.Reconcile`
+  finalized because their `restart_policy` is `:never` (mjolnir-yhr).
+
+  Distinct from `:failed`: a failed record is one that could not be resumed and
+  an operator may want to fix; a stopped one is working as designed. Both keep
+  their rootfs subvolume, which is the point — for an agent workload that
+  subvolume is the workspace a later owner-initiated start resumes from.
+
+  Listed separately rather than left invisible: the rootfs is still on disk, and
+  storage you cannot see in the API is storage nobody reclaims.
+  """
+  @spec list_stopped() :: [Mjolnir.StateStore.Record.t()]
+  def list_stopped do
+    Mjolnir.StateStore.list_by_intent(:stopped)
   end
 
   @doc """
@@ -856,7 +889,13 @@ defmodule Mjolnir.VM do
           "persistent" -> :persistent
           "ephemeral" -> :ephemeral
           _ -> :none
-        end
+        end,
+      # Carried across the resume so a VM that survives one rehydration doesn't
+      # quietly lose its lifetime policy and become revivable on the next one.
+      # (Reconcile refuses to resume a :never record at all, so this is belt to
+      # that braces — it also covers Mjolnir.VM.revive/1, which goes through
+      # resume/1 by an operator's explicit choice.)
+      restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy"))
     }
 
     case DynamicSupervisor.start_child(
@@ -934,7 +973,14 @@ defmodule Mjolnir.VM do
       # StateStore/restore_config — the content lives encrypted in the LUKS volume.
       secrets_payload: opts[:secrets],
       resume_mode: opts[:resume] || false,
-      metadata: Mjolnir.StateStore.Record.normalize_metadata(opts[:metadata] || %{})
+      metadata: Mjolnir.StateStore.Record.normalize_metadata(opts[:metadata] || %{}),
+      # Anything other than an explicit :never is :always. A malformed policy
+      # must not silently become "never restart" — that would strand VMs on a
+      # typo, and the failure would only show up much later, during a recovery.
+      # The string form is accepted too: the dormant-restore path round-trips
+      # its config through JSON, so a policy that only matched the atom would be
+      # silently downgraded to :always on the way back.
+      restart_policy: normalize_restart_policy(opts[:restart_policy])
     }
 
     {:ok, state, {:continue, :boot}}
@@ -1441,6 +1487,12 @@ defmodule Mjolnir.VM do
   defp via_tuple(vm_id) do
     {:via, Registry, {Mjolnir.VMRegistry, vm_id}}
   end
+
+  # Fail-open to :always. See the comment at the call site in init/1: an
+  # unrecognised policy becoming :never would strand VMs silently.
+  defp normalize_restart_policy(:never), do: :never
+  defp normalize_restart_policy("never"), do: :never
+  defp normalize_restart_policy(_), do: :always
 
   defp build_config(opts) do
     %{
@@ -2468,7 +2520,12 @@ defmodule Mjolnir.VM do
         "enable_iroh" => state.enable_iroh,
         "owner_id" => state.owner_id,
         "ssh_public_key" => state.ssh_public_key,
-        "secrets_mode" => Atom.to_string(state.secrets_mode)
+        "secrets_mode" => Atom.to_string(state.secrets_mode),
+        # Reconcile reads this back to decide whether a stranded record may be
+        # rehydrated. It has to be on the FIRST record written, not added later:
+        # a crash between boot and a second write would leave a :never VM
+        # looking restartable, which is exactly the I5 violation this prevents.
+        "restart_policy" => Atom.to_string(state.restart_policy)
       },
       identity: %{
         "iroh_node_id" => state.iroh_node_id,
@@ -2534,7 +2591,8 @@ defmodule Mjolnir.VM do
       enable_iroh: state.enable_iroh,
       ssh_public_key: state.ssh_public_key,
       owner_id: state.owner_id,
-      secrets_mode: state.secrets_mode
+      secrets_mode: state.secrets_mode,
+      restart_policy: state.restart_policy
     }
   end
 

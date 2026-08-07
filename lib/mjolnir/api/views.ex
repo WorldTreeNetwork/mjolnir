@@ -20,6 +20,7 @@ defmodule Mjolnir.API.Views do
       iroh_node_id: vm.iroh_node_id,
       iroh_addr: vm.iroh_json,
       enable_iroh: vm.enable_iroh,
+      restart_policy: vm.restart_policy || :always,
       web_url: web_url(vm),
       config: render_config(vm.config),
       boot_time: vm.boot_time,
@@ -118,6 +119,41 @@ defmodule Mjolnir.API.Views do
       resume_failures: Map.get(runtime, "resume_failures"),
       first_failure_at: Map.get(runtime, "first_failure_at"),
       last_failure_at: Map.get(runtime, "last_failure_at")
+    }
+  end
+
+  @doc """
+  Render a VM that ended and was deliberately not restarted — a record
+  `Mjolnir.Reconcile` finalized because its `restart_policy` is `:never`
+  (mjolnir-yhr).
+
+  `state: :stopped`, not `:failed`: nothing went wrong. The rootfs is preserved,
+  so a later owner-initiated start can resume from it. Any harness exit evidence
+  the guest left behind is surfaced here so the operator can see *how* it ended
+  (`exited`/`0` is an intentional termination) without shelling into the
+  subvolume.
+  """
+  def render_stopped_summary(record) do
+    config = record.spawn_config || %{}
+    runtime = record.runtime || %{}
+
+    %{
+      id: record.uuid,
+      state: :stopped,
+      owner_id: Map.get(config, "owner_id"),
+      hypervisor: nil,
+      guest_ip: nil,
+      pty_ready: false,
+      ticket: nil,
+      iroh_node_id: nil,
+      web_url: nil,
+      rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid)),
+      metadata: record.metadata || %{},
+      generation: record.generation,
+      restart_policy: Map.get(config, "restart_policy", "always"),
+      finalized_at: Map.get(runtime, "finalized_at"),
+      harness_exit_reason: Map.get(runtime, "harness_exit_reason"),
+      harness_exit_status: Map.get(runtime, "harness_exit_status")
     }
   end
 

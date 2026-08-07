@@ -174,6 +174,27 @@ defmodule Mjolnir.API.Router do
             )
         end
 
+      # Lifetime policy (mjolnir-yhr). "never" stops Mjolnir.Reconcile from
+      # rehydrating this VM if it later ends up stranded — required by callers
+      # whose guest may legitimately end itself and must stay ended (Buzz I5).
+      # Unrecognised values are rejected rather than defaulted: a caller that
+      # asked for "Never" and silently got "always" would believe it had a
+      # guarantee it does not have.
+      opts =
+        case conn.body_params["restart_policy"] do
+          nil ->
+            opts
+
+          "always" ->
+            Map.put(opts, :restart_policy, :always)
+
+          "never" ->
+            Map.put(opts, :restart_policy, :never)
+
+          _ ->
+            Map.put(opts, :_validation_error, "restart_policy must be 'always' or 'never'")
+        end
+
       opts =
         case conn.body_params["extra_mounts"] do
           nil ->
@@ -315,7 +336,19 @@ defmodule Mjolnir.API.Router do
         end)
         |> Enum.map(&Views.render_failed_summary/1)
 
-      json(conn, 200, %{vms: vms ++ stranded ++ failed})
+      # Stopped VMs: records Reconcile finalized because restart_policy=never
+      # (mjolnir-yhr). Not gone — the rootfs is preserved for a later
+      # owner-initiated start — so they are listed rather than silently dropped.
+      stopped =
+        Mjolnir.VM.list_stopped()
+        |> Enum.filter(fn record ->
+          (user_id == "localhost" or
+             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+            metadata_matches?(record.metadata, selector)
+        end)
+        |> Enum.map(&Views.render_stopped_summary/1)
+
+      json(conn, 200, %{vms: vms ++ stranded ++ failed ++ stopped})
     else
       conn
     end
