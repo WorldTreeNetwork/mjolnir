@@ -67,10 +67,48 @@ subvolume snapshot and the CH memory snapshot are taken at different moments —
 subvolume is written after the memory snapshot — you resume a kernel whose cached inodes
 disagree with the filesystem. That is silent corruption, not a crash.
 
-Both snapshots must be taken inside a single pause window, and the restore must be
-pinned to the exact subvolume generation the memory snapshot was taken against.
-Store the btrfs subvolume generation (`btrfs subvolume show`) in the snapshot metadata
+**Flushing is not the fix.** `do_snapshot/3` already runs `sync` in the guest, but `sync`
+only writes back *dirty* pages. The hazard is *clean* cached pages: the guest keeps them
+and has no reason to re-read, so they go stale the moment the disk moves underneath.
+`drop_caches` doesn't close it either — it cannot evict pages that are mmap'd or in
+active use (every running binary's text pages, every mmap'd file), and it trades a
+correctness hole for a cold-cache performance cliff. It is a mitigation, not a guarantee.
+
+**The fix is immutability, not flushing.** A stale cache is only *wrong* if the disk
+changed. If restore always presents a filesystem byte-identical to what the guest saw at
+snapshot time, every cached page is correct by construction and cache state stops being
+something anyone has to reason about.
+
+Concretely: restore must never point virtiofsd at the live `@vms/<uuid>/` subvolume —
+which is exactly what it does today (`--shared-dir=/var/lib/mjolnir/btrfs/@vms/<uuid>`).
+It must point at a fresh CoW clone of the `@snapshots/<name>/` subvolume captured in the
+same pause window. The memory image and the filesystem snapshot are one indivisible
+artifact; store the btrfs subvolume generation (`btrfs subvolume show`) in the metadata
 and refuse to restore a mismatch.
+
+### 1b. virtiofsd nodeid stability — the likely spike-killer
+
+Sharper than the page cache, and specific to virtio-fs: the guest does not cache "blocks
+of a disk". It holds FUSE-level state — inode IDs (nodeids) and file handles that
+*virtiofsd assigned* — and that state lives in guest RAM.
+
+On restore a **fresh virtiofsd process** starts assigning nodeids from scratch, while the
+restored guest holds the previous process's numbering. Unless that mapping is preserved or
+deterministic, every open file in the guest refers to the wrong inode or to nothing.
+
+CH's `Restoring vhost-user-fs` restores *CH's* device state (virtqueues, config space).
+virtiofsd is a separate process whose state is **not** in the CH snapshot. Whether v50 +
+our virtiofsd preserve nodeids across a restore is unknown and is the single most likely
+reason the spike fails.
+
+If it does not hold, the options are:
+
+- a virtiofsd supporting vhost-user backend state transfer
+  (`VHOST_USER_PROTOCOL_F_DEVICE_STATE`), or
+- a rootfs on **virtio-blk** (a block image on btrfs) for freezable VMs, which is a
+  significant architecture fork from the current virtio-fs design.
+
+Determine this first. It gates the shape of everything else.
 
 ### 2. virtiofsd lifecycle
 
@@ -88,11 +126,41 @@ If virtiofsd isn't listening, restore fails or the guest wedges on first I/O.
 
 Restoring one memory snapshot twice yields two VMs with **identical RNG state**. They will
 generate the same session keys, the same TLS nonces, the same UUIDs. This is the classic
-VM-snapshot cloning vulnerability and it is a real key-compromise path, not a theoretical one.
+VM-snapshot cloning vulnerability and it is a real key-compromise path, not a theoretical
+one. Note the asymmetry: thawing a snapshot *once* and discarding it is far less exposed
+than *forking* N VMs from one image — and forking is a feature we want, so this cannot be
+deferred as an edge case.
 
-Mitigation: reseed at resume — virtio-rng plus an explicit guest-agent
-`reseed` op writing fresh entropy to `/dev/urandom` before any userspace unfreezes.
-Applies to *every* restore, including the first.
+**The correct mechanism is VMGENID.** An ACPI device holding a 128-bit generation ID that
+the hypervisor changes on restore. Linux's `drivers/virt/vmgenid.c` (5.18+) notices the
+change and reseeds the CRNG **in the kernel, before userspace is scheduled** — which is
+precisely the non-racy property required, and which no userspace reseed can provide.
+
+Neither half is available today (checked against the deployment, 2026-08-07):
+
+- `cloud-hypervisor v50.0.0` — no VMGENID strings in the binary; not implemented
+- `/var/lib/mjolnir/vmlinux-ch` — no `vmgenid` / `VM_GEN_COUNTER` symbols; driver not built in
+- The CH config has **no virtio-rng device at all** (`Mjolnir.CloudHypervisor.Config` never
+  emits one), though the guest kernel does carry the `virtio_rng` driver
+
+So the target is: enable `CONFIG_VMGENID` in our PVH kernel (cheap — we already build it)
+and add the ACPI device to CH (an upstream contribution or a patched build).
+
+Until then, a layered interim — honest about its limits:
+
+1. **Add a virtio-rng device.** Missing entirely today, and a prerequisite for everything
+   else. Note it does not by itself force a reseed; it only makes entropy available.
+2. **Guest-agent reseed via `RNDADDENTROPY`** on `/dev/random`, with fresh bytes supplied
+   by the host over vsock. Use the ioctl, not a write to `/dev/urandom`: a plain write
+   mixes into the pool but does **not** credit the entropy count.
+3. **Gate reachability on the host** to shrink the race. vCPUs all resume at once, so the
+   agent cannot beat userspace — but the host can hold the VM unreachable (no PTY, no
+   ticket, no network attach) until the agent confirms reseed. Exposure narrows to
+   processes already inside that autonomously generate keys in the first milliseconds,
+   rather than anything an outside caller can induce.
+
+The residual race in (2)/(3) is unavoidable without VMGENID. That is the argument for
+doing VMGENID properly rather than treating the interim as the destination.
 
 ### 4. vsock reconnect
 
