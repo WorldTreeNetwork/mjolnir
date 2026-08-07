@@ -367,6 +367,37 @@ echo "--- Installing systemd services ---"
 cp "$CI_ASSETS/mount-workspace.service" "$R/etc/systemd/system/mount-workspace.service"
 chroot "$R" systemctl enable mount-workspace.service
 
+# mjolnir-agent: WITHOUT this the VM boots but never pings the host over vsock,
+# so Mjolnir.VM.spawn/1 fails with :boot_timeout after 30s and the image is
+# unusable — which is exactly how the first build of this image failed.
+#
+# The binary itself is NOT baked in: Mjolnir injects the current build into each
+# VM's rootfs clone at boot (inject_guest_agent/1 -> usr/local/bin/mjolnir-agent),
+# so the image only needs the unit that starts it. basic.target, matching
+# @base/ubuntu-24.04 and @base/ci-ubuntu-24.04, so the agent is up before
+# multi-user services that might want the network the agent configures.
+#
+# NOTE: build-ci-image.sh does not install this either — @base/ci-ubuntu-24.04
+# has it only because someone added it out of band. See mjolnir-gge.1.10.
+cat > "$R/etc/systemd/system/mjolnir-agent.service" << 'EOF'
+[Unit]
+Description=Mjolnir Guest Agent
+After=sysinit.target
+Wants=sysinit.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mjolnir-agent
+Restart=on-failure
+RestartSec=2
+StartLimitBurst=3
+StartLimitIntervalSec=30
+
+[Install]
+WantedBy=basic.target
+EOF
+chroot "$R" systemctl enable mjolnir-agent.service
+
 # ── Network setup script ──────────────────────────────────────────────────────
 #
 # Called by the Mjolnir guest agent after the TAP interface is attached.
