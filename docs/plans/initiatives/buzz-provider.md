@@ -239,22 +239,69 @@ instead of standing plaintext for whoever runs the box. Strictly better on both 
 
 ---
 
+## 6.5 🔴 The hosted-community finding — and why it moves B forward
+
+**On Block-hosted communities (`*.communities.buzz.xyz`), provider-deployed agents cannot connect
+at all.** The deploy payload carries a desktop-minted key plus a NIP-OA `auth_tag`, and that
+identity class is refused at auth from datacenter origins with `restricted: not a relay member`.
+A plain member identity from the same host, same binary, same minute, connects fine.
+
+Source: [block/buzz#2663](https://github.com/block/buzz/issues/2663), comment of **2026-08-05** —
+an explicit correction by its own author of an earlier "it's connection origin" conclusion. The
+discriminator is **identity class**, not origin. (Cite the August comment, never the July one.)
+
+This affects **every** provider — `ssh`, `gce`, `hetzner`, `crabbox`, and ours. It is platform
+policy, not a bug in any of them, and the policy question is still unanswered upstream.
+
+Three consequences, in increasing order of importance:
+
+1. **Deliverable A's ceiling is self-hosted relays.** Documented in the provider's README up front
+   rather than discovered at deploy time. Same ceiling as every peer, so it is not a competitive
+   disadvantage — but it is a real cap on the free provider's reach.
+2. **The workaround is non-conforming and must not become the default.** Claiming a plain
+   membership for the agent's key works, but costs owner control commands — *"buzz-acp logs `no
+   agent owner configured`, so lifecycle is systemd's job"*. **That kills `!shutdown`, which is
+   I5's primary intentional-termination trigger.** Where the reporter says "systemd's job", ours is
+   Mjolnir's job — and our health probe + inactivity + dormant machinery is a genuinely better
+   answer than a systemd unit. That is a reason to document the mode, not to default to it.
+3. **⭐ It is the strongest argument yet for hosting Buzz ourselves.** Block's own hosted platform
+   refuses provider-deployed agents. If we host the relay, we set the policy.
+
+> **"Provider-deployed agents actually work here."**
+
+That is a capability the first-party hosted offering does not have, and it stacks with the exit
+guarantee (§4). Two independent, concrete reasons to host with us rather than with Block — neither
+of which is "cheaper" or "we try harder".
+
+**Sequencing consequence: B moves alongside A, not after it.** The free provider's best — and for
+now its *only* fully-working — demo target is a relay we run. Shipping A without B means shipping
+something a user can only try if they already self-host.
+
+---
+
 ## 7. Sequencing
 
 ```
-NOW      #4730 fix upstream ──────────────────────────────┐ (credibility, days)
-         mjolnir-cm2: VM metadata + generation  🔴 BLOCKING│
-              │                                            │
-P1       @base/buzz-agent  +  provider deploy happy path ◄─┘
-              │            "agent boots in a VM, answers a mention in a channel"  ← the demo
+NOW      #4730 fix upstream ── ✅ submitted as block/buzz#5138
+         mjolnir-oux: VM metadata + generation  🔴 BLOCKING
+              │
+              ├─────────────────────────┐
+P1       @base/buzz-agent  +  deploy    │   B0  self-hosted Buzz relay on Mjolnir
+         happy path                      │       (§6.5 — the only target where the
+              │  "agent boots in a VM,   │        provider fully works, so it is the
+              │   answers a mention"     │        demo environment, not a later product)
+              └─────────────┬────────────┘
 P2–P3    reconciliation (I4) · graceful stop (I3) · lifetime (I5) · wedged-body reaping
               │            ← minimum publishable provider; announce here
 P4       snapshot-resume   ← the reason anyone switches
 P5       IdentiKey custody ← the reason we built it
          ────────────────────────────────────────────────
-B        hosted Buzz-on-Mjolnir + egress guarantee (needs P1–P3, not P4)
+B1       hosted Buzz-on-Mjolnir as a product: egress guarantee + billing
 C        recrypt for Blossom blobs (independent of A; can run in parallel)
 ```
+
+**B0 is not the hosted business** — it is one relay we run so that P1 has somewhere to demo. It is
+small, it unblocks the visible milestone, and it is the first half of B1 anyway.
 
 **Announce at P3, not P1.** A provider that deploys but mishandles termination will be judged
 against a spec that is public, precise, and unusually well written. The comparison is unforgiving
@@ -267,5 +314,6 @@ and the audience will actually read it.
 | Spec churns (8 known defects, no `undeploy`, `launch` unemitted) | Surface is two ops; churn is cheap. Being early is how our VM constraints land in v2 instead of us adapting to someone else's. |
 | `mjolnir-cm2` slips | P1 ships the degraded-but-conforming subset; demo doesn't need destructive repair |
 | Buzz attention fades before we ship | A and B stand on their own merits; the substrate arguments outlive the news cycle |
+| **Hosted communities refuse provider-deployed agents (§6.5)** | Not ours to fix and it caps A's reach — but it is *why* B is differentiated. Track #2663; if Block ships an opt-in, A's ceiling lifts and we lose one of B's two arguments (the exit guarantee remains). |
 | We accidentally violate I5 with `DormantRegistry` | Called out in §3.6; make it a review checklist item, not a comment |
 | Hosting inherits Buzz's data-exit failure | §4 egress is a **launch requirement**, not a follow-on |
