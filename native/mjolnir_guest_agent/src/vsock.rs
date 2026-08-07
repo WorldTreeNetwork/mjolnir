@@ -255,7 +255,11 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                     Ok(VsockRequest::Ping { id }) => {
                                         VsockResponse::Pong { id, agent: Some("boot".to_string()) }
                                     }
-                                    Ok(VsockRequest::PtyOpen { id, rows, cols }) => {
+                                    // `session` is ignored here on purpose: the boot agent
+                                    // runs in the initramfs, which has no tmux. A named
+                                    // session only becomes meaningful after the pivot to
+                                    // the real rootfs and the full agent.
+                                    Ok(VsockRequest::PtyOpen { id, rows, cols, .. }) => {
                                         let mut manager = pty_manager.lock().await;
                                         match manager.allocate_channel() {
                                             Some(ch) => {
@@ -838,14 +842,52 @@ async fn handle_request(
                 VsockResponse::ConfigureIrohResponse { id, ok: false }
             }
         }
-        VsockRequest::PtyOpen { id, rows, cols } => {
-            info!("PtyOpen: rows={}, cols={}", rows, cols);
+        VsockRequest::PtyOpen {
+            id,
+            rows,
+            cols,
+            session,
+        } => {
+            info!(
+                "PtyOpen: rows={}, cols={}, session={:?}",
+                rows, cols, session
+            );
+
+            // A named session attaches this PTY to a shared tmux session, so several
+            // clients — and the in-VM agent driving the same session through the
+            // terminal_* API — all see and drive ONE terminal. No name keeps the
+            // historical behaviour of a private, unshared bash.
+            // `String` error rather than anyhow: this function is also compiled into
+            // the boot agent, where the tmux module (and anyhow) do not exist.
+            let argv: Result<Vec<String>, String> = match session.as_deref() {
+                #[cfg(feature = "full")]
+                Some(name) => crate::tmux::attach_argv(name).map_err(|e| e.to_string()),
+                #[cfg(not(feature = "full"))]
+                Some(_) => Err(
+                    "named tmux sessions require the full agent, not the boot agent".to_string(),
+                ),
+                None => Ok(vec!["/bin/bash".to_string()]),
+            };
+
+            let argv = match argv {
+                Ok(argv) => argv,
+                Err(e) => {
+                    warn!("PtyOpen rejected: {}", e);
+                    return VsockResponse::ExecResponse {
+                        id,
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stderr: format!("Invalid pty session name: {}", e),
+                    };
+                }
+            };
+            let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
+
             let mut manager = pty_manager.lock().await;
 
             match manager.allocate_channel() {
                 Some(channel) => {
-                    // Spawn PTY session with /bin/bash
-                    match PtySession::spawn("/bin/bash", cols, rows) {
+                    match PtySession::spawn_argv(&argv_ref, cols, rows) {
                         Ok(session) => {
                             // Split into reader (for output task) and writer (for input/resize).
                             // No shared mutex — reader and writer use separate dup'd fds.

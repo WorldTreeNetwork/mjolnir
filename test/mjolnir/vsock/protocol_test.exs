@@ -136,6 +136,22 @@ defmodule Mjolnir.Vsock.ProtocolTest do
       assert request["id"] == "custom-id"
     end
 
+    test "pty_open_request/4 carries a tmux session name when given" do
+      request = Protocol.pty_open_request(24, 80, "custom-id", "main")
+
+      assert request["session"] == "main"
+    end
+
+    test "pty_open_request/4 omits the session key entirely when nil" do
+      # Older guest agents reject unknown keys, and a private shell is the
+      # historical behaviour — so nil must produce a byte-identical message,
+      # not `"session" => null`.
+      assert Protocol.pty_open_request(24, 80, "custom-id") ==
+               Protocol.pty_open_request(24, 80, "custom-id", nil)
+
+      refute Map.has_key?(Protocol.pty_open_request(24, 80, "id", nil), "session")
+    end
+
     test "pty_resize_request/3 builds correct message" do
       request = Protocol.pty_resize_request(5, 40, 100)
 

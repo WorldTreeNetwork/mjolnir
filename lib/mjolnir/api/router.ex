@@ -360,17 +360,36 @@ defmodule Mjolnir.API.Router do
   end
 
   # WebSocket PTY endpoint (must be before /api/vms/:id to avoid being captured)
+  #
+  # `?session=<name>` attaches the PTY to a shared tmux session in the guest instead
+  # of spawning a private shell. Two sockets naming the same session drive one
+  # terminal — that is how multiple humans, or a human and the in-VM agent (which
+  # reaches the same session via the terminal_* API), end up collaborating.
+  # Omitting the param preserves the original private-shell behaviour.
   get "/api/vms/:id/pty" do
     conn = require_scope(conn, "pty:connect")
 
     unless conn.halted do
-      authorize_vm(conn, id, :pty, fn _vm ->
-        Mjolnir.API.PtyHandler.call(conn, id)
-      end)
+      # nil means "no shared session", which is distinct from validate_session_name/2's
+      # nil case — that one defaults to "dev" and would silently opt every existing
+      # caller into a shared terminal.
+      case pty_session_param(conn.query_params["session"]) do
+        {:ok, session} ->
+          authorize_vm(conn, id, :pty, fn _vm ->
+            Mjolnir.API.PtyHandler.call(conn, id, session)
+          end)
+
+        {:error, message} ->
+          json(conn, 400, %{error: "invalid_session", message: message})
+      end
     else
       conn
     end
   end
+
+  defp pty_session_param(nil), do: {:ok, nil}
+  defp pty_session_param(""), do: {:ok, nil}
+  defp pty_session_param(name), do: Validation.validate_session_name(name, "session")
 
   # Get VM details
   get "/api/vms/:id" do

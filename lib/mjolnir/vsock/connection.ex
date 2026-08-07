@@ -54,9 +54,12 @@ defmodule Mjolnir.Vsock.Connection do
   @doc """
   Open a new PTY session in the guest.
   Returns {:ok, channel_id} on success.
+
+  `session` names a tmux session to attach to instead of spawning a private shell.
+  Two callers passing the same name land in the same terminal.
   """
-  def open_pty(pid, rows \\ 24, cols \\ 80, timeout \\ 10_000) do
-    GenServer.call(pid, {:open_pty, rows, cols}, timeout)
+  def open_pty(pid, rows \\ 24, cols \\ 80, timeout \\ 10_000, session \\ nil) do
+    GenServer.call(pid, {:open_pty, rows, cols, session}, timeout)
   end
 
   @doc """
@@ -196,8 +199,8 @@ defmodule Mjolnir.Vsock.Connection do
     end
   end
 
-  def handle_call({:open_pty, rows, cols}, from, state) do
-    request = Protocol.pty_open_request(rows, cols)
+  def handle_call({:open_pty, rows, cols, session}, from, state) do
+    request = Protocol.pty_open_request(rows, cols, nil, session)
     request_id = request["id"]
 
     case send_message(state.socket, request, 0) do

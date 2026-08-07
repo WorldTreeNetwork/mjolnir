@@ -18,12 +18,39 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    /// Spawn a new PTY session running the given command.
+    /// Spawn a new PTY session running the given command with no arguments.
     pub fn spawn(
         cmd: &str,
         cols: u16,
         rows: u16,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::spawn_argv(&[cmd], cols, rows)
+    }
+
+    /// Spawn a new PTY session running `argv[0]` with the full `argv` as its arguments.
+    ///
+    /// Needed for anything that takes flags — notably `tmux new-session -A -s <name>`,
+    /// which is how several PTY clients end up sharing one terminal. Callers are
+    /// responsible for validating any untrusted component of `argv` (see
+    /// `tmux::attach_argv`, which validates the session name before building argv).
+    pub fn spawn_argv(
+        argv: &[&str],
+        cols: u16,
+        rows: u16,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        if argv.is_empty() {
+            return Err("argv must not be empty".into());
+        }
+
+        // Build the CStrings before forking. After fork() in a multithreaded process
+        // only async-signal-safe work is sound, and allocation is not — so any
+        // failure here must surface in the parent, not the child.
+        let argv_cstr = argv
+            .iter()
+            .map(|a| CString::new(*a))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "argv must not contain null bytes")?;
+
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -92,10 +119,9 @@ impl PtySession {
                 }
                 chdir("/root").ok();
 
-                // Exec shell
-                let cmd_cstr = CString::new(cmd).unwrap();
-                let args = [cmd_cstr.clone()];
-                execvp(&cmd_cstr, &args).ok();
+                // Exec. argv[0] is both the program to resolve on PATH and the
+                // conventional program name handed to the child.
+                execvp(&argv_cstr[0], &argv_cstr).ok();
 
                 // If exec fails, exit
                 std::process::exit(127);

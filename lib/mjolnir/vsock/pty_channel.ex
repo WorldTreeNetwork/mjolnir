@@ -63,9 +63,10 @@ defmodule Mjolnir.Vsock.PtyChannel do
     subscriber = Keyword.fetch!(opts, :subscriber)
     rows = Keyword.get(opts, :rows, 24)
     cols = Keyword.get(opts, :cols, 80)
+    session = Keyword.get(opts, :session)
 
     # Open PTY session and get assigned channel
-    case Connection.open_pty(conn, rows, cols) do
+    case Connection.open_pty(conn, rows, cols, 10_000, session) do
       {:ok, channel} ->
         # Register this process as the handler for the channel
         :ok = Connection.register_channel_handler(conn, channel, self())

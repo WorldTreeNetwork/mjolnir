@@ -22,7 +22,13 @@ pub struct CommandOutput {
 ///
 /// Tmux interprets `-t` arguments with special syntax: `session:window.pane`.
 /// A malicious session name like "foo:0.0" could target arbitrary windows/panes.
-/// We restrict to alphanumeric, hyphens, and underscores only.
+/// We restrict to ASCII alphanumerics, hyphens, and underscores only.
+///
+/// The name must also START with an alphanumeric: a leading hyphen would be parsed
+/// by tmux as a flag rather than a value (`new-session -s -d` is not a session named
+/// "-d"), which is argument injection by another route. ASCII-only, rather than
+/// Unicode `is_alphanumeric`, keeps this identical to the API-layer check in
+/// `Mjolnir.API.Validation.validate_session_name/2` and rules out confusables.
 fn validate_session_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(anyhow!("Session name cannot be empty"));
@@ -30,15 +36,38 @@ fn validate_session_name(name: &str) -> Result<()> {
     if name.len() > 64 {
         return Err(anyhow!("Session name too long (max 64 characters)"));
     }
+    if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err(anyhow!(
+            "Session name must start with an alphanumeric character"
+        ));
+    }
     if !name
         .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(anyhow!(
             "Session name must contain only alphanumeric characters, hyphens, or underscores"
         ));
     }
     Ok(())
+}
+
+/// Build the argv that attaches a PTY to the named tmux session.
+///
+/// `new-session -A` attaches to an existing session instead of failing when one is
+/// already there, so N callers naming the same session converge on ONE terminal —
+/// that is the whole multiplayer mechanism. It also means the in-VM agent driving
+/// this session through `send_keys`/`capture_pane` and a human on a PTY are looking
+/// at the same pane.
+pub fn attach_argv(session: &str) -> Result<Vec<String>> {
+    validate_session_name(session)?;
+    Ok(vec![
+        "tmux".to_string(),
+        "new-session".to_string(),
+        "-A".to_string(),
+        "-s".to_string(),
+        session.to_string(),
+    ])
 }
 
 /// Validate a command string for null bytes and length.
@@ -408,4 +437,63 @@ fn extract_output(content: &str, sent_command: &str, sentinel_prefix: &str) -> S
         .join("\n")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_argv_builds_a_shared_session() {
+        assert_eq!(
+            attach_argv("main").unwrap(),
+            vec!["tmux", "new-session", "-A", "-s", "main"]
+        );
+    }
+
+    #[test]
+    fn attach_argv_accepts_hyphens_and_underscores_after_the_first_char() {
+        assert!(attach_argv("dev_1-a").is_ok());
+        assert!(attach_argv("9").is_ok());
+    }
+
+    #[test]
+    fn attach_argv_rejects_leading_hyphen_argument_injection() {
+        // Without the leading-alphanumeric rule these become tmux FLAGS, not values:
+        // `new-session -A -s -d` detaches instead of naming a session.
+        assert!(attach_argv("-d").is_err());
+        assert!(attach_argv("-t").is_err());
+    }
+
+    #[test]
+    fn attach_argv_rejects_target_syntax() {
+        // `session:window.pane` would let a caller aim at an arbitrary pane.
+        assert!(attach_argv("foo:0.0").is_err());
+        assert!(attach_argv("foo.0").is_err());
+        assert!(attach_argv("foo:0").is_err());
+    }
+
+    #[test]
+    fn attach_argv_rejects_shell_metacharacters_and_whitespace() {
+        assert!(attach_argv("a b").is_err());
+        assert!(attach_argv("a;rm -rf /").is_err());
+        assert!(attach_argv("a$(id)").is_err());
+        assert!(attach_argv("a\nb").is_err());
+    }
+
+    #[test]
+    fn attach_argv_rejects_empty_and_overlong() {
+        assert!(attach_argv("").is_err());
+        assert!(attach_argv(&"a".repeat(65)).is_err());
+        assert!(attach_argv(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn attach_argv_rejects_non_ascii_alphanumerics() {
+        // Unicode `is_alphanumeric` would admit these; the API layer's
+        // `[a-zA-Z0-9]` check would not. Keep the two ends identical so a name
+        // that passes the host never fails in the guest (or vice versa).
+        assert!(attach_argv("café").is_err());
+        assert!(attach_argv("Ωmega").is_err());
+    }
 }

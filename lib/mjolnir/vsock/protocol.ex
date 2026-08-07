@@ -175,14 +175,21 @@ defmodule Mjolnir.Vsock.Protocol do
   @doc """
   Build a pty_open request message.
   Opens a new PTY session with the specified dimensions.
+
+  When `session` is a binary, the guest attaches the PTY to that tmux session
+  (creating it on first use) rather than spawning a private shell — which is what
+  lets several clients share one terminal. The key is omitted entirely when nil so
+  the message stays byte-identical to what older guest agents expect.
   """
-  def pty_open_request(rows \\ 24, cols \\ 80, request_id \\ nil) do
-    %{
+  def pty_open_request(rows \\ 24, cols \\ 80, request_id \\ nil, session \\ nil) do
+    base = %{
       "type" => "pty_open",
       "id" => request_id || UUID.uuid4(),
       "rows" => rows,
       "cols" => cols
     }
+
+    if is_binary(session), do: Map.put(base, "session", session), else: base
   end
 
   @doc """

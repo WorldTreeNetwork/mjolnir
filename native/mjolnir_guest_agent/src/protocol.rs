@@ -37,7 +37,16 @@ pub enum VsockRequest {
     #[serde(rename = "configure_iroh")]
     ConfigureIroh { id: String, enabled: bool },
     #[serde(rename = "pty_open")]
-    PtyOpen { id: String, rows: u16, cols: u16 },
+    PtyOpen {
+        id: String,
+        rows: u16,
+        cols: u16,
+        /// Attach the PTY to this tmux session (created on first use) instead of
+        /// spawning a private shell. Optional and defaulted so older hosts, which
+        /// never send the field, keep getting the private-shell behaviour.
+        #[serde(default)]
+        session: Option<String>,
+    },
     #[serde(rename = "pty_resize")]
     PtyResize {
         id: String,

@@ -10,8 +10,11 @@ defmodule Mjolnir.API.PtyHandler do
 
   defstruct [:vm_id, :channel, :conn_pid]
 
-  # Called by the router to initiate WebSocket upgrade
-  def call(conn, vm_id) do
+  # Called by the router to initiate WebSocket upgrade.
+  # `session`, when given, is a tmux session name the PTY attaches to — several
+  # sockets naming the same session share one terminal. Already validated by the
+  # router; nil means a private shell.
+  def call(conn, vm_id, session \\ nil) do
     # The conn has already been through Auth plug, so we can check scopes
     # Look up the VM
     case Mjolnir.VM.get(vm_id) do
@@ -19,7 +22,7 @@ defmodule Mjolnir.API.PtyHandler do
         conn
         |> WebSockAdapter.upgrade(
           __MODULE__,
-          %{vm: vm, vm_id: vm_id},
+          %{vm: vm, vm_id: vm_id, session: session},
           timeout: 60_000
         )
 
@@ -37,11 +40,16 @@ defmodule Mjolnir.API.PtyHandler do
   end
 
   @impl WebSock
-  def init(%{vm: vm, vm_id: vm_id}) do
-    Logger.info("PTY WebSocket init for VM #{vm_id}, vsock_conn=#{inspect(vm.vsock_conn)}")
+  def init(%{vm: vm, vm_id: vm_id} = args) do
+    session = Map.get(args, :session)
+
+    Logger.info(
+      "PTY WebSocket init for VM #{vm_id}, vsock_conn=#{inspect(vm.vsock_conn)}, " <>
+        "session=#{inspect(session)}"
+    )
 
     # Open PTY channel through the VM's vsock connection
-    case Mjolnir.Vsock.Connection.open_pty(vm.vsock_conn, 24, 80) do
+    case Mjolnir.Vsock.Connection.open_pty(vm.vsock_conn, 24, 80, 10_000, session) do
       {:ok, channel_id} ->
         # Register this process to receive data from the channel
         :ok =
