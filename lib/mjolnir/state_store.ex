@@ -18,9 +18,30 @@ defmodule Mjolnir.StateStore do
 
   ## Reads vs writes
 
-  Reads (`get/1`, `list/0`, `list_by_intent/1`) go straight to ETS —
-  concurrent, lock-free, O(1) lookups. Writes (`put/1`, `delete/1`) go
-  through the GenServer to serialize disk + ETS updates.
+  Reads (`get/1`, `list/0`, `list_by_intent/1`, `list_by_metadata/1`) go
+  straight to ETS — concurrent, lock-free, O(1) lookups. Writes (`put/1`,
+  `delete/1`, `delete_if_match/2`) go through the GenServer to serialize
+  disk + ETS updates.
+
+  ## Metadata and generations
+
+  A record carries an opaque `metadata` map (`string => string`) that Mjolnir
+  never interprets, and a monotonic `generation` counter.
+
+  Together they let an external orchestrator manage a subset of VMs safely:
+
+  - **select** candidates with `list_by_metadata/1`,
+  - **positively identify** one by reading a full identifier back out of its
+    metadata — a truncated selector is collision-*resistant*, not
+    collision-*free*, so the exact-match read is what makes it safe,
+  - **fence** a destructive write with `delete_if_match/2`, which refuses if
+    the record changed since it was read.
+
+  The generation is owned by this module, not by callers. `put/1` assigns
+  `previous + 1` (or `1` for a new record) regardless of what the passed record
+  carries. That matters because callers such as `Mjolnir.VM.build_running_record/1`
+  construct a *fresh* struct on every persist; a caller-supplied generation
+  would reset to 1 each time and silently void the fencing guarantee.
   """
 
   use GenServer
@@ -46,16 +67,52 @@ defmodule Mjolnir.StateStore do
     end
   end
 
-  @doc "Persist a record to disk and cache. Overwrites any existing record for the same UUID."
+  @doc """
+  Persist a record to disk and cache. Overwrites any existing record for the
+  same UUID, and assigns the next `generation` (see moduledoc).
+
+  Metadata is preserved across writes: a caller that rebuilds a record from live
+  VM state without metadata does not thereby erase labels an orchestrator set.
+  Pass metadata explicitly (or use `merge_metadata/2`) to change them.
+  """
   @spec put(Record.t()) :: :ok | {:error, term()}
   def put(%Record{} = record) do
     GenServer.call(__MODULE__, {:put, record})
+  end
+
+  @doc """
+  Merge `metadata` onto an existing record, bumping its generation.
+
+  Returns the stored record so a caller can fence a later delete against the
+  generation this write produced.
+  """
+  @spec merge_metadata(String.t(), map()) ::
+          {:ok, Record.t()} | :not_found | {:error, term()}
+  def merge_metadata(uuid, metadata) when is_binary(uuid) and is_map(metadata) do
+    GenServer.call(__MODULE__, {:merge_metadata, uuid, Record.normalize_metadata(metadata)})
   end
 
   @doc "Delete a record from disk and cache. Idempotent — no error if already gone."
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(uuid) when is_binary(uuid) do
     GenServer.call(__MODULE__, {:delete, uuid})
+  end
+
+  @doc """
+  Delete a record only if its generation is exactly `generation`.
+
+  The compare-and-delete half of the fencing contract: a caller that observed a
+  record at generation N can delete it and know nothing has changed in between.
+
+  - `:ok` — deleted, or already absent. Delete-of-absent is success, so a
+    retried delete after a crash is not an error.
+  - `{:error, :conflict}` — the record exists at a *different* generation.
+    Something changed since the observation that authorized this delete; the
+    caller must re-read and decide again, never retry blindly.
+  """
+  @spec delete_if_match(String.t(), pos_integer()) :: :ok | {:error, :conflict} | {:error, term()}
+  def delete_if_match(uuid, generation) when is_binary(uuid) and is_integer(generation) do
+    GenServer.call(__MODULE__, {:delete_if_match, uuid, generation})
   end
 
   @doc "All records currently in the cache, in unspecified order."
@@ -70,6 +127,23 @@ defmodule Mjolnir.StateStore do
   @spec list_by_intent(Record.intent()) :: [Record.t()]
   def list_by_intent(intent) when intent in [:running, :dormant, :stopped, :failed] do
     list() |> Enum.filter(&(&1.intent == intent))
+  end
+
+  @doc """
+  All records whose metadata contains every key/value pair in `selector`.
+
+  An empty selector matches everything, matching the convention that a filter
+  with no constraints is not a filter. Callers that mean "only labelled records"
+  should select on the label they care about.
+  """
+  @spec list_by_metadata(map()) :: [Record.t()]
+  def list_by_metadata(selector) when is_map(selector) do
+    normalized = Record.normalize_metadata(selector)
+
+    list()
+    |> Enum.filter(fn record ->
+      Enum.all?(normalized, fn {k, v} -> Map.get(record.metadata, k) == v end)
+    end)
   end
 
   @doc "Reload the cache from disk. Used by tests and by `Mjolnir.Reconcile`."
@@ -96,9 +170,8 @@ defmodule Mjolnir.StateStore do
 
   @impl true
   def handle_call({:put, %Record{uuid: uuid} = record}, _from, state) do
-    case write_atomic(record) do
-      :ok ->
-        :ets.insert(@table, {uuid, record})
+    case do_put(succeed(record)) do
+      {:ok, _stored} ->
         {:reply, :ok, state}
 
       {:error, reason} = err ->
@@ -107,17 +180,39 @@ defmodule Mjolnir.StateStore do
     end
   end
 
-  def handle_call({:delete, uuid}, _from, state) do
-    path = record_path(uuid)
+  def handle_call({:merge_metadata, uuid, metadata}, _from, state) do
+    case lookup(uuid) do
+      nil ->
+        {:reply, :not_found, state}
 
+      existing ->
+        merged = %{existing | metadata: Map.merge(existing.metadata, metadata)}
+
+        case do_put(succeed(merged)) do
+          {:ok, stored} ->
+            {:reply, {:ok, stored}, state}
+
+          {:error, reason} = err ->
+            Logger.error("StateStore merge_metadata failed for #{uuid}: #{inspect(reason)}")
+            {:reply, err, state}
+        end
+    end
+  end
+
+  def handle_call({:delete, uuid}, _from, state) do
+    {:reply, do_delete(uuid), state}
+  end
+
+  def handle_call({:delete_if_match, uuid, generation}, _from, state) do
     reply =
-      case File.rm(path) do
-        :ok -> :ok
-        {:error, :enoent} -> :ok
-        {:error, _} = err -> err
+      case lookup(uuid) do
+        # Delete-of-absent is success: a delete retried after a crash must not
+        # look like a conflict.
+        nil -> :ok
+        %Record{generation: ^generation} -> do_delete(uuid)
+        %Record{} -> {:error, :conflict}
       end
 
-    :ets.delete(@table, uuid)
     {:reply, reply, state}
   end
 
@@ -128,6 +223,53 @@ defmodule Mjolnir.StateStore do
   end
 
   ## Internals
+
+  defp lookup(uuid) do
+    case :ets.lookup(@table, uuid) do
+      [{^uuid, record}] -> record
+      [] -> nil
+    end
+  end
+
+  # Assign the record's place in the sequence: previous generation + 1, or 1 for
+  # a record we have not seen. Callers never set this — see moduledoc.
+  #
+  # Metadata is carried forward when the incoming record has none, so a caller
+  # that rebuilds a record from live VM state (`build_running_record/1`) does
+  # not silently erase labels an orchestrator set out of band.
+  defp succeed(%Record{uuid: uuid} = record) do
+    case lookup(uuid) do
+      nil ->
+        %{record | generation: 1}
+
+      %Record{} = previous ->
+        metadata = if map_size(record.metadata) == 0, do: previous.metadata, else: record.metadata
+        %{record | generation: previous.generation + 1, metadata: metadata}
+    end
+  end
+
+  defp do_put(%Record{uuid: uuid} = record) do
+    case write_atomic(record) do
+      :ok ->
+        :ets.insert(@table, {uuid, record})
+        {:ok, record}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp do_delete(uuid) do
+    reply =
+      case File.rm(record_path(uuid)) do
+        :ok -> :ok
+        {:error, :enoent} -> :ok
+        {:error, _} = err -> err
+      end
+
+    :ets.delete(@table, uuid)
+    reply
+  end
 
   defp ensure_dirs do
     with :ok <- File.mkdir_p(state_dir()),

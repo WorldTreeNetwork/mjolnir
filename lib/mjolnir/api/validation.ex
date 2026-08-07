@@ -145,4 +145,59 @@ defmodule Mjolnir.API.Validation do
   end
 
   def validate_integer(_, default, _min, _max), do: default
+  @max_metadata_keys 32
+  @max_metadata_key_bytes 128
+  @max_metadata_value_bytes 512
+
+  @doc """
+  Validate an opaque orchestrator metadata map.
+
+  Mjolnir never interprets these labels, so the only constraints are the ones
+  that keep them from becoming a liability: they are persisted on every record
+  and echoed on every list, so an unbounded map is a cheap way to bloat the
+  state directory and every response body.
+
+  Control characters are refused in both keys and values. Metadata is echoed
+  into JSON responses and written to a file, and a caller has no business
+  smuggling a newline into either.
+  """
+  @spec validate_metadata(term()) :: {:ok, %{String.t() => String.t()}} | {:error, String.t()}
+  def validate_metadata(map) when is_map(map) do
+    cond do
+      map_size(map) > @max_metadata_keys ->
+        {:error, "metadata has too many keys (max #{@max_metadata_keys})"}
+
+      true ->
+        Enum.reduce_while(map, {:ok, %{}}, fn {k, v}, {:ok, acc} ->
+          key = to_string(k)
+          value = to_string(v)
+
+          cond do
+            key == "" ->
+              {:halt, {:error, "metadata keys cannot be empty"}}
+
+            byte_size(key) > @max_metadata_key_bytes ->
+              {:halt, {:error, "metadata key too long (max #{@max_metadata_key_bytes} bytes)"}}
+
+            byte_size(value) > @max_metadata_value_bytes ->
+              {:halt,
+               {:error,
+                "metadata value for #{key} too long (max #{@max_metadata_value_bytes} bytes)"}}
+
+            has_control_chars?(key) or has_control_chars?(value) ->
+              {:halt, {:error, "metadata for #{key} contains control characters"}}
+
+            true ->
+              {:cont, {:ok, Map.put(acc, key, value)}}
+          end
+        end)
+    end
+  end
+
+  def validate_metadata(_), do: {:error, "metadata must be an object"}
+
+  defp has_control_chars?(str) do
+    String.to_charlist(str)
+    |> Enum.any?(fn c -> c < 0x20 or c == 0x7F end)
+  end
 end

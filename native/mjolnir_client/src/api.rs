@@ -86,18 +86,45 @@ pub async fn cmd_spawn(
     Ok(())
 }
 
+/// Turn repeated `--filter key=value` flags into `metadata.<key>=<value>` query
+/// pairs for reqwest to encode.
+///
+/// A flag without `=`, or with an empty key, is a usage error rather than a
+/// silently-ignored filter: quietly dropping a selector would widen a
+/// destructive `mj list | xargs` pipeline instead of narrowing it.
+fn metadata_query(filters: &[String]) -> Result<Vec<(String, String)>> {
+    filters
+        .iter()
+        .map(|f| {
+            let (key, value) = f
+                .split_once('=')
+                .with_context(|| format!("--filter must be key=value, got `{f}`"))?;
+            if key.is_empty() {
+                anyhow::bail!("--filter key cannot be empty (got `{f}`)");
+            }
+            Ok((format!("metadata.{key}"), value.to_string()))
+        })
+        .collect()
+}
+
 pub async fn cmd_list(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     dormant: bool,
+    filters: &[String],
     json: bool,
 ) -> Result<()> {
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
+    let query = metadata_query(filters)?;
 
-    let list_body = send_text(client.get(format!("{}/api/vms", base)), "VM list").await?;
+    let list_body = send_text(
+        client.get(format!("{}/api/vms", base)).query(&query),
+        "VM list",
+    )
+    .await?;
     let dormant_body = if dormant {
         Some(send_text(client.get(format!("{}/api/dormant", base)), "dormant list").await?)
     } else {
@@ -997,4 +1024,48 @@ pub async fn cmd_ticket_get(
         serde_json::from_str(&body).context("failed to parse ticket response")?;
     println!("{}", tr.ticket);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::metadata_query;
+
+    #[test]
+    fn builds_prefixed_pairs_in_order() {
+        let filters = vec!["app=buzz".to_string(), "id=aaa".to_string()];
+        let got = metadata_query(&filters).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("metadata.app".to_string(), "buzz".to_string()),
+                ("metadata.id".to_string(), "aaa".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_filters_is_an_empty_query_not_an_error() {
+        assert!(metadata_query(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_value_may_contain_equals_signs() {
+        // Only the first `=` separates; base64-ish values survive intact.
+        let got = metadata_query(&["k=a=b=c".to_string()]).unwrap();
+        assert_eq!(got, vec![("metadata.k".to_string(), "a=b=c".to_string())]);
+    }
+
+    #[test]
+    fn an_empty_value_is_allowed() {
+        let got = metadata_query(&["k=".to_string()]).unwrap();
+        assert_eq!(got, vec![("metadata.k".to_string(), String::new())]);
+    }
+
+    #[test]
+    fn a_malformed_filter_is_an_error_not_a_dropped_selector() {
+        // Silently ignoring this would WIDEN a `mj list --filter ... | xargs mj kill`
+        // pipeline from "my VMs" to "every VM". Fail loudly.
+        assert!(metadata_query(&["nokey".to_string()]).is_err());
+        assert!(metadata_query(&["=value".to_string()]).is_err());
+    }
 }

@@ -134,6 +134,21 @@ defmodule Mjolnir.API.Router do
           do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
 
+      # Opaque orchestrator labels. Bounded because they are persisted on every
+      # record and returned on every list; an unbounded map here would be a cheap
+      # way to bloat the state directory.
+      opts =
+        case conn.body_params["metadata"] do
+          nil ->
+            opts
+
+          metadata ->
+            case Validation.validate_metadata(metadata) do
+              {:ok, normalized} -> Map.put(opts, :metadata, normalized)
+              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+            end
+        end
+
       opts =
         case conn.body_params["secrets_mode"] do
           "managed" ->
@@ -265,10 +280,16 @@ defmodule Mjolnir.API.Router do
     unless conn.halted do
       user_id = conn.assigns[:user_id]
 
+      # ?metadata.<key>=<value>, repeatable. Every pair must match, so a caller
+      # can narrow with a cheap selector and then verify with an exact one —
+      # a truncated selector is collision-resistant, not collision-free.
+      selector = metadata_selector(conn.query_params)
+
       vms =
         Mjolnir.VM.list()
         |> Enum.filter(fn vm ->
-          user_id == "localhost" or vm.owner_id == user_id
+          (user_id == "localhost" or vm.owner_id == user_id) and
+            metadata_matches?(vm.metadata, selector)
         end)
         |> Enum.map(&Views.render_vm_summary/1)
 
@@ -277,7 +298,9 @@ defmodule Mjolnir.API.Router do
       stranded =
         Mjolnir.VM.list_stranded()
         |> Enum.filter(fn record ->
-          user_id == "localhost" or Map.get(record.spawn_config || %{}, "owner_id") == user_id
+          (user_id == "localhost" or
+             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+            metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_stranded_summary/1)
 
@@ -286,7 +309,9 @@ defmodule Mjolnir.API.Router do
       failed =
         Mjolnir.VM.list_failed()
         |> Enum.filter(fn record ->
-          user_id == "localhost" or Map.get(record.spawn_config || %{}, "owner_id") == user_id
+          (user_id == "localhost" or
+             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+            metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_failed_summary/1)
 
@@ -874,16 +899,34 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :stop, fn _vm ->
-        case Mjolnir.VM.stop(id) do
+        # Optional compare-and-delete fence. A caller that observed the VM at
+        # generation N can prove nothing has changed since; without the header
+        # the delete is unconditional, exactly as before.
+        case check_if_match(conn, id) do
           :ok ->
-            json(conn, 200, %{ok: true})
+            case Mjolnir.VM.stop(id) do
+              :ok ->
+                json(conn, 200, %{ok: true})
 
-          {:error, :not_found} ->
-            json(conn, 404, %{error: "not_found"})
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
 
-          {:error, reason} ->
-            Logger.error("VM stop failed for #{id}: #{inspect(reason)}")
-            json(conn, 500, %{error: "stop_failed"})
+              {:error, reason} ->
+                Logger.error("VM stop failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "stop_failed"})
+            end
+
+          {:error, :conflict, current} ->
+            json(conn, 409, %{
+              error: "generation_conflict",
+              expected: current,
+              message:
+                "VM #{id} is at generation #{current}; the delete was fenced to a different one. " <>
+                  "Re-read the VM and decide again."
+            })
+
+          {:error, :malformed} ->
+            json(conn, 400, %{error: "If-Match must be a positive integer generation"})
         end
       end)
     else
@@ -1473,6 +1516,54 @@ defmodule Mjolnir.API.Router do
     case Map.get(entry, :detail) do
       nil -> base
       d -> Map.put(base, :detail, to_string(d))
+    end
+  end
+
+  # Build a metadata selector from repeatable `?metadata.<key>=<value>` params.
+  defp metadata_selector(query_params) when is_map(query_params) do
+    query_params
+    |> Enum.flat_map(fn
+      {"metadata." <> key, value} when key != "" and is_binary(value) -> [{key, value}]
+      _ -> []
+    end)
+    |> Map.new()
+  end
+
+  defp metadata_selector(_), do: %{}
+
+  # Every pair must match. An empty selector matches everything, so the
+  # unfiltered list keeps its existing behaviour.
+  defp metadata_matches?(_metadata, selector) when map_size(selector) == 0, do: true
+
+  defp metadata_matches?(metadata, selector) when is_map(metadata) do
+    Enum.all?(selector, fn {k, v} -> Map.get(metadata, k) == v end)
+  end
+
+  defp metadata_matches?(_metadata, _selector), do: false
+
+  # Compare-and-delete fence. Absent header means unconditional, which is the
+  # pre-existing contract; a present-but-unparseable one is a client error, not
+  # a licence to delete unconditionally.
+  defp check_if_match(conn, vm_id) do
+    case Plug.Conn.get_req_header(conn, "if-match") do
+      [] ->
+        :ok
+
+      [raw | _] ->
+        case Integer.parse(String.trim(raw)) do
+          {generation, ""} when generation > 0 -> compare_generation(vm_id, generation)
+          _ -> {:error, :malformed}
+        end
+    end
+  end
+
+  defp compare_generation(vm_id, expected) do
+    case Mjolnir.StateStore.get(vm_id) do
+      {:ok, %{generation: ^expected}} -> :ok
+      {:ok, %{generation: current}} -> {:error, :conflict, current}
+      # No durable record to fence against — let the delete proceed and report
+      # its own not_found rather than inventing a conflict.
+      :not_found -> :ok
     end
   end
 

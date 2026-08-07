@@ -61,7 +61,9 @@ defmodule Mjolnir.API.Views do
       pty_ready: vm.pty_ready || false,
       ticket: vm.ticket,
       iroh_node_id: vm.iroh_node_id,
-      web_url: web_url(vm)
+      web_url: web_url(vm),
+      metadata: vm.metadata || %{},
+      generation: generation_of(vm.id)
     }
   end
 
@@ -83,7 +85,9 @@ defmodule Mjolnir.API.Views do
       ticket: nil,
       iroh_node_id: nil,
       web_url: nil,
-      rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid))
+      rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid)),
+      metadata: record.metadata || %{},
+      generation: record.generation
     }
   end
 
@@ -109,10 +113,22 @@ defmodule Mjolnir.API.Views do
       iroh_node_id: nil,
       web_url: nil,
       rootfs_present: File.exists?(Mjolnir.Reconcile.rootfs_path(record.uuid)),
+      metadata: record.metadata || %{},
+      generation: record.generation,
       resume_failures: Map.get(runtime, "resume_failures"),
       first_failure_at: Map.get(runtime, "first_failure_at"),
       last_failure_at: Map.get(runtime, "last_failure_at")
     }
+  end
+
+  # The live VM struct carries metadata, but `generation` belongs to the durable
+  # record — it is the fencing token, so it has to come from the thing being
+  # fenced. An ETS read, so cheap enough to do per row.
+  defp generation_of(vm_id) do
+    case Mjolnir.StateStore.get(vm_id) do
+      {:ok, record} -> record.generation
+      :not_found -> nil
+    end
   end
 
   defp get_in_net(vm, key) do

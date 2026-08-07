@@ -66,6 +66,9 @@ enum Command {
         /// Also list dormant (parked) VMs
         #[arg(long)]
         dormant: bool,
+        /// Filter by metadata, repeatable: --filter key=value. All must match.
+        #[arg(long = "filter", value_name = "KEY=VALUE")]
+        filter: Vec<String>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -750,9 +753,10 @@ async fn main() {
         } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot).await,
         Command::List {
             dormant,
+            filter,
             api,
             token,
-        } => api::cmd_list(&profile, &api, &token, dormant, json).await,
+        } => api::cmd_list(&profile, &api, &token, dormant, &filter, json).await,
         Command::Info { id, api, token } => api::cmd_info(&profile, &api, &token, &id, json).await,
         Command::Exec {
             id,

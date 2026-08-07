@@ -269,4 +269,207 @@ defmodule Mjolnir.StateStoreTest do
       assert :not_found = StateStore.get("bad")
     end
   end
+
+  describe "metadata" do
+    test "round-trips through JSON and defaults to empty" do
+      r = Record.new("m1", :running, metadata: %{"buzz.managed-by" => "buzz-backend-mjolnir"})
+      assert {:ok, back} = Record.from_json(Record.to_json(r))
+      assert back.metadata == %{"buzz.managed-by" => "buzz-backend-mjolnir"}
+
+      assert {:ok, plain} = Record.from_json(Record.to_json(Record.new("m2", :running)))
+      assert plain.metadata == %{}
+    end
+
+    test "coerces non-string keys and values at the boundary" do
+      r = Record.new("m3", :running, metadata: %{:atom_key => 42})
+      assert r.metadata == %{"atom_key" => "42"}
+    end
+
+    test "list_by_metadata requires every pair in the selector to match" do
+      :ok = StateStore.put(Record.new("s1", :running, metadata: %{"app" => "buzz", "id" => "a"}))
+      :ok = StateStore.put(Record.new("s2", :running, metadata: %{"app" => "buzz", "id" => "b"}))
+      :ok = StateStore.put(Record.new("s3", :running, metadata: %{"app" => "other"}))
+
+      assert StateStore.list_by_metadata(%{"app" => "buzz"}) |> Enum.map(& &1.uuid) |> Enum.sort() ==
+               ["s1", "s2"]
+
+      assert StateStore.list_by_metadata(%{"app" => "buzz", "id" => "b"}) |> Enum.map(& &1.uuid) ==
+               ["s2"]
+
+      assert StateStore.list_by_metadata(%{"app" => "buzz", "id" => "zzz"}) == []
+    end
+
+    test "an empty selector matches everything" do
+      :ok = StateStore.put(Record.new("e1", :running))
+      assert length(StateStore.list_by_metadata(%{})) == length(StateStore.list())
+    end
+
+    test "merge_metadata adds keys without dropping existing ones" do
+      :ok = StateStore.put(Record.new("mm", :running, metadata: %{"keep" => "yes"}))
+
+      assert {:ok, stored} = StateStore.merge_metadata("mm", %{"added" => "1"})
+      assert stored.metadata == %{"keep" => "yes", "added" => "1"}
+
+      assert {:ok, reread} = StateStore.get("mm")
+      assert reread.metadata == %{"keep" => "yes", "added" => "1"}
+    end
+
+    test "merge_metadata on an unknown uuid is :not_found" do
+      assert :not_found = StateStore.merge_metadata("nope", %{"a" => "b"})
+    end
+
+    test "a rebuilt record without metadata does not erase existing labels" do
+      # `Mjolnir.VM.build_running_record/1` constructs a fresh struct on every
+      # persist. Without carry-forward, every VM boot would silently strip the
+      # labels an orchestrator uses to find its own VMs.
+      :ok = StateStore.put(Record.new("carry", :running, metadata: %{"owner" => "buzz"}))
+      :ok = StateStore.put(Record.new("carry", :running))
+
+      assert {:ok, record} = StateStore.get("carry")
+      assert record.metadata == %{"owner" => "buzz"}
+    end
+
+    test "explicitly passed metadata replaces the previous set" do
+      :ok = StateStore.put(Record.new("replace", :running, metadata: %{"a" => "1"}))
+      :ok = StateStore.put(Record.new("replace", :running, metadata: %{"b" => "2"}))
+
+      assert {:ok, record} = StateStore.get("replace")
+      assert record.metadata == %{"b" => "2"}
+    end
+  end
+
+  describe "generation" do
+    test "starts at 1 and increments on every put" do
+      :ok = StateStore.put(Record.new("g", :running))
+      assert {:ok, %{generation: 1}} = StateStore.get("g")
+
+      :ok = StateStore.put(Record.new("g", :running))
+      assert {:ok, %{generation: 2}} = StateStore.get("g")
+
+      :ok = StateStore.put(Record.new("g", :dormant))
+      assert {:ok, %{generation: 3}} = StateStore.get("g")
+    end
+
+    test "is owned by the store, so a stale caller cannot reset it" do
+      :ok = StateStore.put(Record.new("owned", :running))
+      :ok = StateStore.put(Record.new("owned", :running))
+      assert {:ok, %{generation: 2}} = StateStore.get("owned")
+
+      # A caller holding a struct from before — the shape every rebuild-from-live-state
+      # caller has. If this reset to 1, a fenced delete would pass against a stale read.
+      stale = %{Record.new("owned", :running) | generation: 1}
+      :ok = StateStore.put(stale)
+      assert {:ok, %{generation: 3}} = StateStore.get("owned")
+    end
+
+    test "merge_metadata bumps it too" do
+      :ok = StateStore.put(Record.new("gm", :running))
+      assert {:ok, %{generation: 2}} = StateStore.merge_metadata("gm", %{"k" => "v"})
+    end
+
+    test "survives a reload from disk" do
+      :ok = StateStore.put(Record.new("persisted", :running, metadata: %{"a" => "b"}))
+      :ok = StateStore.put(Record.new("persisted", :running))
+      :ok = StateStore.reload()
+
+      assert {:ok, record} = StateStore.get("persisted")
+      assert record.generation == 2
+      assert record.metadata == %{"a" => "b"}
+    end
+  end
+
+  describe "delete_if_match (compare-and-delete fencing)" do
+    test "deletes when the generation matches" do
+      :ok = StateStore.put(Record.new("f1", :running))
+      assert {:ok, %{generation: gen}} = StateStore.get("f1")
+
+      assert :ok = StateStore.delete_if_match("f1", gen)
+      assert :not_found = StateStore.get("f1")
+    end
+
+    test "refuses with :conflict when the record moved since it was read" do
+      :ok = StateStore.put(Record.new("f2", :running))
+      assert {:ok, %{generation: observed}} = StateStore.get("f2")
+
+      # Someone else writes between our read and our delete.
+      :ok = StateStore.put(Record.new("f2", :dormant))
+
+      assert {:error, :conflict} = StateStore.delete_if_match("f2", observed)
+      assert {:ok, _still_there} = StateStore.get("f2")
+    end
+
+    test "delete-of-absent is success, so a retried delete is not an error" do
+      assert :ok = StateStore.delete_if_match("never-existed", 1)
+    end
+
+    test "removes the file from disk, not just the cache", %{state_dir: dir} do
+      :ok = StateStore.put(Record.new("f3", :running))
+      assert File.exists?(Path.join(dir, "f3.json"))
+
+      assert {:ok, %{generation: gen}} = StateStore.get("f3")
+      assert :ok = StateStore.delete_if_match("f3", gen)
+      refute File.exists?(Path.join(dir, "f3.json"))
+    end
+  end
+
+  describe "schema v1 -> v2 migration" do
+    test "a v1 file loads instead of being quarantined", %{state_dir: dir} do
+      # Quarantine is for corrupt files. Quarantining every record on a server
+      # during a deploy would be an outage, not a safety measure.
+      v1 =
+        Jason.encode!(%{
+          "schema_version" => 1,
+          "uuid" => "legacy",
+          "intent" => "running",
+          "created_at" => "2026-04-21T10:00:00Z",
+          "spawn_config" => %{"vcpus" => 2},
+          "identity" => %{},
+          "runtime" => %{}
+        })
+
+      File.write!(Path.join(dir, "legacy.json"), v1)
+      :ok = StateStore.reload()
+
+      assert {:ok, record} = StateStore.get("legacy")
+      assert record.spawn_config == %{"vcpus" => 2}
+      assert record.metadata == %{}
+      assert record.generation == 1
+      refute File.exists?(Path.join([dir, "quarantine", "legacy.json.bad"]))
+    end
+
+    test "a v1 record is rewritten as v2 on its next put", %{state_dir: dir} do
+      v1 =
+        Jason.encode!(%{
+          "schema_version" => 1,
+          "uuid" => "upgrade",
+          "intent" => "running",
+          "created_at" => "2026-04-21T10:00:00Z"
+        })
+
+      File.write!(Path.join(dir, "upgrade.json"), v1)
+      :ok = StateStore.reload()
+
+      assert {:ok, loaded} = StateStore.get("upgrade")
+      :ok = StateStore.put(loaded)
+
+      on_disk = Path.join(dir, "upgrade.json") |> File.read!() |> Jason.decode!()
+      assert on_disk["schema_version"] == 2
+      assert on_disk["generation"] == 2
+      assert on_disk["metadata"] == %{}
+    end
+
+    test "a malformed generation reads as 1 rather than losing the record" do
+      json =
+        Jason.encode!(%{
+          "schema_version" => 2,
+          "uuid" => "weird",
+          "intent" => "running",
+          "created_at" => "2026-04-21T10:00:00Z",
+          "generation" => "not-a-number"
+        })
+
+      assert {:ok, record} = Record.from_json(json)
+      assert record.generation == 1
+    end
+  end
 end

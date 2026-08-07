@@ -408,4 +408,145 @@ defmodule Mjolnir.API.RouterTest do
       assert final["stage"] == "detect"
     end
   end
+
+  describe "metadata validation" do
+    alias Mjolnir.API.Validation
+
+    test "accepts a plain string map and coerces non-string values" do
+      assert {:ok, %{"buzz.managed-by" => "buzz-backend-mjolnir"}} =
+               Validation.validate_metadata(%{"buzz.managed-by" => "buzz-backend-mjolnir"})
+
+      assert {:ok, %{"n" => "42"}} = Validation.validate_metadata(%{"n" => 42})
+    end
+
+    test "rejects a non-object" do
+      assert {:error, _} = Validation.validate_metadata("nope")
+      assert {:error, _} = Validation.validate_metadata([1, 2])
+    end
+
+    test "rejects empty keys" do
+      assert {:error, msg} = Validation.validate_metadata(%{"" => "v"})
+      assert msg =~ "empty"
+    end
+
+    test "bounds the number of keys" do
+      too_many = Map.new(1..33, fn i -> {"k#{i}", "v"} end)
+      assert {:error, msg} = Validation.validate_metadata(too_many)
+      assert msg =~ "too many keys"
+    end
+
+    test "bounds key and value length" do
+      assert {:error, msg} = Validation.validate_metadata(%{String.duplicate("k", 129) => "v"})
+      assert msg =~ "key too long"
+
+      assert {:error, msg} = Validation.validate_metadata(%{"k" => String.duplicate("v", 513)})
+      assert msg =~ "too long"
+    end
+
+    test "refuses control characters in keys and values" do
+      # Metadata is echoed into JSON and written to a file; a newline has no
+      # business in either.
+      assert {:error, msg} = Validation.validate_metadata(%{"k" => "a\nb"})
+      assert msg =~ "control characters"
+
+      assert {:error, _} = Validation.validate_metadata(%{"a\tb" => "v"})
+      assert {:error, _} = Validation.validate_metadata(%{"k" => "a\u0000b"})
+    end
+
+    test "allows the punctuation an orchestrator actually uses in label keys" do
+      assert {:ok, _} =
+               Validation.validate_metadata(%{
+                 "app.kubernetes.io/managed-by" => "x",
+                 "buzz.agent-pubkey" => String.duplicate("a", 64)
+               })
+    end
+  end
+
+  describe "GET /api/vms metadata filtering" do
+    alias Mjolnir.StateStore
+    alias Mjolnir.StateStore.Record
+
+    setup do
+      tmp =
+        Path.join([
+          System.tmp_dir!(),
+          "mjolnir-router-meta",
+          "#{System.unique_integer([:positive])}"
+        ])
+
+      File.mkdir_p!(Path.join(tmp, "quarantine"))
+      prev = Application.get_env(:mjolnir, :state_dir)
+      Application.put_env(:mjolnir, :state_dir, tmp)
+      :ok = StateStore.reload()
+
+      on_exit(fn ->
+        File.rm_rf!(tmp)
+        if prev, do: Application.put_env(:mjolnir, :state_dir, prev)
+        :ok = StateStore.reload()
+      end)
+
+      # Records with :running intent and no live GenServer surface as stranded,
+      # which is enough to exercise the filter without booting a hypervisor.
+      :ok =
+        StateStore.put(
+          Record.new("meta-a", :running, metadata: %{"app" => "buzz", "id" => "aaa"})
+        )
+
+      :ok =
+        StateStore.put(
+          Record.new("meta-b", :running, metadata: %{"app" => "buzz", "id" => "bbb"})
+        )
+
+      :ok = StateStore.put(Record.new("meta-c", :running, metadata: %{"app" => "other"}))
+
+      :ok
+    end
+
+    defp vm_ids(conn) do
+      conn.resp_body
+      |> Jason.decode!()
+      |> Map.fetch!("vms")
+      |> Enum.map(& &1["id"])
+      |> Enum.sort()
+    end
+
+    test "no selector returns everything" do
+      conn = request(:get, "/api/vms")
+      assert conn.status == 200
+      assert vm_ids(conn) == ["meta-a", "meta-b", "meta-c"]
+    end
+
+    test "a single pair narrows the list" do
+      conn = request(:get, "/api/vms?metadata.app=buzz")
+      assert vm_ids(conn) == ["meta-a", "meta-b"]
+    end
+
+    test "every pair must match" do
+      conn = request(:get, "/api/vms?metadata.app=buzz&metadata.id=bbb")
+      assert vm_ids(conn) == ["meta-b"]
+    end
+
+    test "a non-matching value returns nothing rather than everything" do
+      conn = request(:get, "/api/vms?metadata.app=nosuch")
+      assert vm_ids(conn) == []
+    end
+
+    test "an unknown key matches nothing" do
+      conn = request(:get, "/api/vms?metadata.nokey=x")
+      assert vm_ids(conn) == []
+    end
+
+    test "metadata and generation are exposed on each row" do
+      conn = request(:get, "/api/vms?metadata.id=aaa")
+      [row] = conn.resp_body |> Jason.decode!() |> Map.fetch!("vms")
+
+      assert row["metadata"] == %{"app" => "buzz", "id" => "aaa"}
+      assert row["generation"] == 1
+    end
+
+    test "a non-metadata query param is not treated as a selector" do
+      conn = request(:get, "/api/vms?dormant=true")
+      assert vm_ids(conn) == ["meta-a", "meta-b", "meta-c"]
+    end
+  end
 end

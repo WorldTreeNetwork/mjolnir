@@ -50,7 +50,13 @@ defmodule Mjolnir.VM do
     message_queue: [],
     # Resume mode: true when booting an existing VM from StateStore (skips
     # rootfs clone + guest agent re-injection). Set by Mjolnir.Reconcile.
-    resume_mode: false
+    resume_mode: false,
+    # Opaque string=>string labels supplied at spawn. Mjolnir never interprets
+    # them; they let an external orchestrator select and positively identify the
+    # VMs it created. Carried into the first StateStore record so there is no
+    # window where a created VM exists unlabelled — a crash in that window would
+    # strand a VM its creator can no longer recognise as its own.
+    metadata: %{}
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts)
@@ -904,7 +910,8 @@ defmodule Mjolnir.VM do
       # (:managed only). Held transiently in host memory; never persisted to
       # StateStore/restore_config — the content lives encrypted in the LUKS volume.
       secrets_payload: opts[:secrets],
-      resume_mode: opts[:resume] || false
+      resume_mode: opts[:resume] || false,
+      metadata: Mjolnir.StateStore.Record.normalize_metadata(opts[:metadata] || %{})
     }
 
     {:ok, state, {:continue, :boot}}
@@ -1566,7 +1573,7 @@ defmodule Mjolnir.VM do
   defp handle_boot_failure(state, error, socket_path, vsock_path, serial_path) do
     partial = Process.get(:boot_partial, %{})
 
-    if (not state.resume_mode and partial[:rootfs_path]) && transient_boot_error?(error) do
+    if not state.resume_mode and partial[:rootfs_path] && transient_boot_error?(error) do
       Logger.warning(
         "VM #{state.id}: transient boot failure (#{inspect(error)}); " <>
           "preserving rootfs and persisting :running record for Reconcile retry"
@@ -2399,6 +2406,7 @@ defmodule Mjolnir.VM do
         "ch_api_socket" => state.socket_path,
         "vsock_uds" => state.vsock_path
       },
+      metadata: state.metadata,
       last_boot_at: DateTime.utc_now()
     )
   end
