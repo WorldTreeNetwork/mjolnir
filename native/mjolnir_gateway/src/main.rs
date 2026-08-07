@@ -542,9 +542,33 @@ where
 }
 
 fn extract_host(header_bytes: &[u8]) -> Option<String> {
-    let header_str = std::str::from_utf8(header_bytes).ok()?;
+    // `read_until_headers` returns whatever the socket handed us, which is the
+    // header block PLUS however much of the request BODY arrived in the same
+    // read. Decoding the whole buffer as UTF-8 therefore fails for any binary
+    // upload — a gzipped tarball starts `1f 8b`, and 0x8b is an invalid
+    // continuation byte — and the caller turns that None into a 400
+    // "Missing Host header" even though the Host header was perfectly fine.
+    //
+    // That broke `mj deploy` (gzip tarball) and any raw-binary POST to
+    // /api/sites over the gateway, while leaving GETs and text bodies working,
+    // which made it look like a size or auth problem rather than an encoding
+    // one. Cut at the header terminator first, then decode lossily: headers are
+    // ASCII, so a stray byte should degrade one line, never fail the request.
+    let end = header_bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(header_bytes.len());
+
+    let header_str = String::from_utf8_lossy(&header_bytes[..end]);
+
     for line in header_str.split("\r\n") {
-        if line.len() > 5 && line[..5].eq_ignore_ascii_case("host:") {
+        let bytes = line.as_bytes();
+        // Compare as bytes: after a lossy decode a line may contain multi-byte
+        // replacement chars, and slicing a &str by byte index can panic on a
+        // char boundary. If the first five bytes are ASCII "host:", index 5 is
+        // guaranteed to be a boundary.
+        if bytes.len() > 5 && bytes[..5].eq_ignore_ascii_case(b"host:") {
             return Some(line[5..].trim().to_string());
         }
     }
@@ -1610,6 +1634,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use mjolnir_gateway::config::{Alias, Apex, Fallthrough, LoadedConfig, Route};
+
+    // ── extract_host: binary request bodies ──────────────────────────────────
+    //
+    // read_until_headers hands us the header block plus whatever of the BODY
+    // shared the same read. These guard the regression where decoding that
+    // whole buffer as UTF-8 failed on binary uploads and surfaced as a 400
+    // "Missing Host header" — which broke `mj deploy` entirely.
+
+    fn req_with_body(body: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"POST /api/deploy HTTP/1.1\r\nHost: api.vm.worldtree.network\r\n");
+        v.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        v.extend_from_slice(body);
+        v
+    }
+
+    #[test]
+    fn extract_host_handles_a_gzip_body_in_the_same_read() {
+        // 1f 8b is gzip's magic; 0x8b alone is an invalid UTF-8 continuation.
+        let req = req_with_body(&[0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x42]);
+        assert_eq!(
+            extract_host(&req).as_deref(),
+            Some("api.vm.worldtree.network")
+        );
+    }
+
+    #[test]
+    fn extract_host_handles_arbitrary_binary_bodies() {
+        let body: Vec<u8> = (0u16..=255).map(|b| b as u8).collect();
+        assert_eq!(
+            extract_host(&req_with_body(&body)).as_deref(),
+            Some("api.vm.worldtree.network")
+        );
+    }
+
+    #[test]
+    fn extract_host_ignores_a_host_line_inside_the_body() {
+        // Only the header block is parsed, so a body that happens to contain a
+        // Host: line cannot spoof routing.
+        let req = req_with_body(b"Host: evil.example.com\r\n");
+        assert_eq!(
+            extract_host(&req).as_deref(),
+            Some("api.vm.worldtree.network")
+        );
+    }
+
+    #[test]
+    fn extract_host_still_works_for_a_plain_bodyless_request() {
+        let req = b"GET / HTTP/1.1\r\nHost: zine.identikey.io\r\n\r\n";
+        assert_eq!(extract_host(req).as_deref(), Some("zine.identikey.io"));
+    }
+
+    #[test]
+    fn extract_host_is_case_insensitive_and_trims() {
+        let req = b"GET / HTTP/1.1\r\nhOsT:   example.com  \r\n\r\n";
+        assert_eq!(extract_host(req).as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn extract_host_returns_none_when_genuinely_absent() {
+        let req = b"GET / HTTP/1.1\r\nUser-Agent: x\r\n\r\n";
+        assert_eq!(extract_host(req), None);
+    }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
