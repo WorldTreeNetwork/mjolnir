@@ -111,7 +111,8 @@ defmodule Mjolnir.Deploy.Orchestrator do
     Logger.info("Deploy.Orchestrator: deploying '#{app_name}' from #{src_dir}")
 
     with {:detect, {:ok, plan}} <- {:detect, ops.detect.(src_dir)},
-         :ok <- emit(progress, "detect", "detected #{plan.package_manager} app (#{plan.runtime})"),
+         :ok <-
+           emit(progress, "detect", "detected #{plan.package_manager} app (#{plan.runtime})"),
          {:translate, {:ok, steps}} <- {:translate, plan_to_steps(plan, src_dir, ops)},
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
          {:build, {:ok, build}} <-
@@ -130,7 +131,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
               app_name,
               build.release_snapshot,
               plan,
-              run_opts(app_name, memory_mb, custom_domain, ops)
+              run_opts(app_name, memory_mb, custom_domain, deployer, ops)
             )} do
       emit(progress, "done", svc.url)
 
@@ -268,12 +269,16 @@ defmodule Mjolnir.Deploy.Orchestrator do
     ]
   end
 
-  defp run_opts(app_name, memory_mb, custom_domain, ops) do
+  defp run_opts(app_name, memory_mb, custom_domain, deployer, ops) do
     spawn_opts =
       %{memory_mb: memory_mb}
       |> Map.merge(secrets_spawn_opts(app_name, ops))
+      |> then(fn o -> if deployer, do: Map.put(o, :owner_id, deployer), else: o end)
 
-    base = [spawn_opts: spawn_opts]
+    # owner_id is recorded on the REGISTRY ENTRY too, not just the service VM:
+    # Policy.App authorizes redeploy and domain changes off the entry, which
+    # outlives any individual VM (mjolnir-xuv).
+    base = [spawn_opts: spawn_opts, owner_id: deployer]
 
     if is_binary(custom_domain) and custom_domain != "" do
       [{:custom_domain, custom_domain} | base]

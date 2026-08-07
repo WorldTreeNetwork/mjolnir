@@ -331,8 +331,30 @@ defmodule Mjolnir.API.RouterTest do
     end
 
     test "400 when fqdn is missing" do
-      conn = request(:put, "/api/apps/whatever/domain", %{})
+      # The app must exist: since mjolnir-xuv, ownership is resolved BEFORE the
+      # body is validated, so an unknown app is a 404 regardless of the body —
+      # a caller should not learn their payload was malformed for a resource
+      # they cannot see.
+      app = "domtest-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Mjolnir.Deploy.Registry.put(app, %{
+          release_snapshot: "deploy-x",
+          service_vm_id: "svc-x",
+          url: "https://x",
+          port: 3000
+        })
+
+      on_exit(fn -> Mjolnir.Deploy.Registry.delete(app) end)
+
+      conn = request(:put, "/api/apps/#{app}/domain", %{})
       assert conn.status == 400
+    end
+
+    test "404, not 400, when the app is unknown and the body is also invalid" do
+      conn = request(:put, "/api/apps/whatever-#{System.unique_integer()}/domain", %{})
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
     end
 
     test "404 removing a domain from an unknown app" do

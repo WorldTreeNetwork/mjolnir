@@ -29,7 +29,13 @@ defmodule Mjolnir.Policy.CoverageTest do
     # inline ownership filter (vm list, snapshot list, dormant list)
     ~S|user_id == "localhost" or|,
     # ownership stamped at resource creation (spawn)
-    ":owner_id, conn.assigns"
+    ":owner_id, conn.assigns",
+    # deployed-app ownership (mjolnir-xuv): registry-entry owner checks for the
+    # domain endpoints, POST /api/deploy (checked inside handle_deploy, once the
+    # app name is known from the uploaded source), and the /api/apps list filter
+    "authorize_app",
+    "authorize_deploy",
+    "Policy.App.filter_readable"
   ]
 
   test "all non-whitelisted endpoints have policy enforcement" do

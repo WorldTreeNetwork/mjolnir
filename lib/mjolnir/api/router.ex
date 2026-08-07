@@ -1200,6 +1200,9 @@ defmodule Mjolnir.API.Router do
   post "/api/deploy" do
     conn = require_scope(conn, "vms:spawn")
 
+    # Ownership is checked inside handle_deploy: the app name is only known
+    # after the uploaded source is extracted (resolve_app_name reads
+    # package.json), so authorize_deploy runs there rather than here.
     if conn.halted, do: conn, else: handle_deploy(conn)
   end
 
@@ -1208,32 +1211,37 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
-      case conn.body_params["fqdn"] do
-        fqdn when is_binary(fqdn) and fqdn != "" ->
-          case Mjolnir.API.Domains.set_domain(app, fqdn) do
-            {:ok, result} ->
-              json(conn, 200, result)
+      # mjolnir-xuv: retargeting a domain is the highest-leverage action on this
+      # surface — it aims a hostname at a VM — so it requires ownership of the
+      # app, not merely a token with the right scope.
+      authorize_app(conn, app, :set_domain, fn _entry ->
+        case conn.body_params["fqdn"] do
+          fqdn when is_binary(fqdn) and fqdn != "" ->
+            case Mjolnir.API.Domains.set_domain(app, fqdn) do
+              {:ok, result} ->
+                json(conn, 200, result)
 
-            {:error, :not_found} ->
-              json(conn, 404, %{error: "app_not_found", app: app})
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "app_not_found", app: app})
 
-            {:error, {:apex_not_registered, bad_fqdn, apexes}} ->
-              json(conn, 400, %{
-                error: "apex_not_registered",
-                fqdn: bad_fqdn,
-                detail:
-                  "no configured gateway apex matches '#{bad_fqdn}'; " <>
-                    "add it to MJOLNIR_GATEWAY_APEXES (configured: #{Enum.join(apexes, ", ")})"
-              })
+              {:error, {:apex_not_registered, bad_fqdn, apexes}} ->
+                json(conn, 400, %{
+                  error: "apex_not_registered",
+                  fqdn: bad_fqdn,
+                  detail:
+                    "no configured gateway apex matches '#{bad_fqdn}'; " <>
+                      "add it to MJOLNIR_GATEWAY_APEXES (configured: #{Enum.join(apexes, ", ")})"
+                })
 
-            {:error, {:registry_failed, reason}} ->
-              Logger.error("Domain set failed for #{app}: #{inspect(reason)}")
-              json(conn, 500, %{error: "domain_set_failed"})
-          end
+              {:error, {:registry_failed, reason}} ->
+                Logger.error("Domain set failed for #{app}: #{inspect(reason)}")
+                json(conn, 500, %{error: "domain_set_failed"})
+            end
 
-        _ ->
-          json(conn, 400, %{error: "fqdn is required"})
-      end
+          _ ->
+            json(conn, 400, %{error: "fqdn is required"})
+        end
+      end)
     else
       conn
     end
@@ -1244,17 +1252,19 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
-      case Mjolnir.API.Domains.remove_domain(app) do
-        {:ok, result} ->
-          json(conn, 200, result)
+      authorize_app(conn, app, :remove_domain, fn _entry ->
+        case Mjolnir.API.Domains.remove_domain(app) do
+          {:ok, result} ->
+            json(conn, 200, result)
 
-        {:error, :not_found} ->
-          json(conn, 404, %{error: "app_not_found", app: app})
+          {:error, :not_found} ->
+            json(conn, 404, %{error: "app_not_found", app: app})
 
-        {:error, {:registry_failed, reason}} ->
-          Logger.error("Domain remove failed for #{app}: #{inspect(reason)}")
-          json(conn, 500, %{error: "domain_remove_failed"})
-      end
+          {:error, {:registry_failed, reason}} ->
+            Logger.error("Domain remove failed for #{app}: #{inspect(reason)}")
+            json(conn, 500, %{error: "domain_remove_failed"})
+        end
+      end)
     else
       conn
     end
@@ -1265,7 +1275,18 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:read")
 
     unless conn.halted do
-      json(conn, 200, %{apps: Mjolnir.API.Domains.list_apps()})
+      # mjolnir-xuv: scope alone would list every tenant's app names, URLs and
+      # custom domains. Localhost still sees everything (ops); a regular user
+      # sees only apps they own. filter_readable/2 also hides legacy nil-owner
+      # entries from regular users, consistent with Policy.App.authorize/3.
+      user = %{user_id: conn.assigns[:user_id]}
+
+      apps =
+        Mjolnir.API.Domains.list_apps()
+        |> Mjolnir.Policy.App.filter_readable(user)
+        |> Enum.map(&Map.delete(&1, :owner_id))
+
+      json(conn, 200, %{apps: apps})
     else
       conn
     end
@@ -1310,42 +1331,13 @@ defmodule Mjolnir.API.Router do
       memory_mb = deploy_memory_mb(conn)
       custom_domain = deploy_domain(conn)
 
-      conn = send_chunked(conn, 200)
-      {:ok, agent} = Agent.start_link(fn -> conn end)
-
-      on_progress = fn stage, line ->
-        Agent.update(agent, fn c ->
-          case chunk(c, Jason.encode!(%{stage: stage, line: line}) <> "\n") do
-            {:ok, c2} -> c2
-            {:error, _} -> c
-          end
-        end)
-      end
-
-      result =
-        Mjolnir.Deploy.Orchestrator.deploy(app_name, app_dir,
-          deployer: deployer,
-          memory_mb: memory_mb,
-          custom_domain: custom_domain,
-          on_progress: on_progress
-        )
-
-      final =
-        case result do
-          {:ok, r} ->
-            Map.put(r, :ok, true)
-
-          {:error, %{stage: stage, reason: reason}} ->
-            %{ok: false, stage: stage, error: inspect(reason)}
-        end
-
-      conn = Agent.get(agent, & &1)
-      Agent.stop(agent)
-
-      case chunk(conn, Jason.encode!(final) <> "\n") do
-        {:ok, conn} -> conn
-        {:error, _} -> conn
-      end
+      # mjolnir-xuv: a redeploy of an EXISTING app requires ownership. Checked
+      # here, not at the route, because the app name comes from the uploaded
+      # source. Must run before send_chunked/2 — once the response is chunked
+      # we can no longer send a 403/404 status.
+      authorize_deploy(conn, app_name, fn _entry ->
+        do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain)
+      end)
     else
       {:error, :too_large} ->
         json(conn, 413, %{error: "source_too_large", limit_bytes: @deploy_max_body})
@@ -1359,6 +1351,48 @@ defmodule Mjolnir.API.Router do
       {:error, reason} ->
         Logger.error("Deploy request failed: #{inspect(reason)}")
         json(conn, 400, %{error: "deploy_request_failed", reason: inspect(reason)})
+    end
+  end
+
+  # Streams build progress as chunked JSON. Split out of handle_deploy/1 so the
+  # ownership check (mjolnir-xuv) can still return a 403/404 status — once
+  # send_chunked/2 runs, the status is committed and cannot be changed.
+  defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain) do
+    conn = send_chunked(conn, 200)
+    {:ok, agent} = Agent.start_link(fn -> conn end)
+
+    on_progress = fn stage, line ->
+      Agent.update(agent, fn c ->
+        case chunk(c, Jason.encode!(%{stage: stage, line: line}) <> "\n") do
+          {:ok, c2} -> c2
+          {:error, _} -> c
+        end
+      end)
+    end
+
+    result =
+      Mjolnir.Deploy.Orchestrator.deploy(app_name, app_dir,
+        deployer: deployer,
+        memory_mb: memory_mb,
+        custom_domain: custom_domain,
+        on_progress: on_progress
+      )
+
+    final =
+      case result do
+        {:ok, r} ->
+          Map.put(r, :ok, true)
+
+        {:error, %{stage: stage, reason: reason}} ->
+          %{ok: false, stage: stage, error: inspect(reason)}
+      end
+
+    conn = Agent.get(agent, & &1)
+    Agent.stop(agent)
+
+    case chunk(conn, Jason.encode!(final) <> "\n") do
+      {:ok, conn} -> conn
+      {:error, _} -> conn
     end
   end
 

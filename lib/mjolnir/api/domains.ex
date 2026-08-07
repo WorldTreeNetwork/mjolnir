@@ -135,7 +135,11 @@ defmodule Mjolnir.API.Domains do
         custom_domain: entry.custom_domain,
         service_vm_id: entry.service_vm_id,
         port: entry.port,
-        backend: live_backend(entry, running, ops)
+        backend: live_backend(entry, running, ops),
+        # Carried for Mjolnir.Policy.App.filter_readable/2 (mjolnir-xuv). The
+        # router strips it before rendering so the documented GET /api/apps
+        # response shape is unchanged.
+        owner_id: entry.owner_id
       }
     end
   end

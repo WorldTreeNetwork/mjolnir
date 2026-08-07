@@ -33,6 +33,7 @@ defmodule Mjolnir.Deploy.Registry do
             url: String.t() | nil,
             custom_domain: String.t() | nil,
             port: pos_integer() | nil,
+            owner_id: String.t() | nil,
             updated_at: integer()
           }
 
@@ -48,6 +49,12 @@ defmodule Mjolnir.Deploy.Registry do
       # Internal app port inside the VM (e.g. 3000). Optional; the route backend
       # is "#{guest_ip}:#{port}".
       :port,
+      # The user_id that deployed this app. Drives Mjolnir.Policy.App, which
+      # gates redeploy and domain retargeting (mjolnir-xuv). nil means a legacy
+      # entry written before ownership existed: Policy.App denies those to
+      # regular users and allows only localhost, matching Policy.VM's treatment
+      # of nil-owner VMs. Back-fill rather than relaxing the policy.
+      :owner_id,
       :updated_at
     ]
   end
@@ -157,6 +164,7 @@ defmodule Mjolnir.Deploy.Registry do
       url: Map.get(attrs, :url),
       custom_domain: Map.get(attrs, :custom_domain),
       port: Map.get(attrs, :port),
+      owner_id: Map.get(attrs, :owner_id),
       updated_at: Map.get(attrs, :updated_at, System.os_time(:second))
     }
   end
@@ -200,6 +208,7 @@ defmodule Mjolnir.Deploy.Registry do
       "url" => entry.url,
       "custom_domain" => entry.custom_domain,
       "port" => entry.port,
+      "owner_id" => entry.owner_id,
       "updated_at" => entry.updated_at
     })
   end
@@ -216,6 +225,9 @@ defmodule Mjolnir.Deploy.Registry do
          # Backward compatible: old files predate these keys; Map.get → nil.
          custom_domain: Map.get(map, "custom_domain"),
          port: Map.get(map, "port"),
+         # nil here means a pre-ownership entry. Policy.App treats that as
+         # "localhost only" rather than "anyone", so a legacy file fails closed.
+         owner_id: Map.get(map, "owner_id"),
          updated_at: updated_at
        }}
     else

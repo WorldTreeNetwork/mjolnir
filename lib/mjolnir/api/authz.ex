@@ -106,4 +106,82 @@ defmodule Mjolnir.API.Authz do
         |> halt()
     end
   end
+
+  @doc """
+  Authorize a resource-level action on a deployed app (mjolnir-xuv).
+
+  Looks the app up in `Mjolnir.Deploy.Registry`, checks `Mjolnir.Policy.App`,
+  and calls the callback with the entry. Denial returns **404, not 403** —
+  matching `authorize_vm/4`, so a caller cannot enumerate other tenants' app
+  names by distinguishing "exists but forbidden" from "does not exist".
+  """
+  def authorize_app(conn, app_name, action, callback) do
+    user = %{user_id: conn.assigns[:user_id]}
+
+    case Mjolnir.Deploy.Registry.get(app_name) do
+      {:ok, entry} ->
+        case Mjolnir.Policy.App.authorize(action, user, entry) do
+          :ok ->
+            callback.(entry)
+
+          :error ->
+            Logger.debug(
+              "Authz denied: user=#{inspect(user.user_id)} action=#{action} app=#{app_name}"
+            )
+
+            app_not_found(conn, app_name)
+        end
+
+      {:error, :not_found} ->
+        app_not_found(conn, app_name)
+    end
+  end
+
+  @doc """
+  Authorize `POST /api/deploy`, which both creates and updates.
+
+  A first deploy is a collection action — any authenticated user, with ownership
+  stamped at creation (the same shape as VM spawn). A REDEPLOY of an existing
+  app is a resource action and requires ownership; without this, any
+  authenticated caller could push code to, or cut over, someone else's app.
+
+  The callback receives the existing entry, or `nil` for a first deploy.
+  """
+  def authorize_deploy(conn, app_name, callback) do
+    user = %{user_id: conn.assigns[:user_id]}
+
+    case Mjolnir.Deploy.Registry.get(app_name) do
+      {:ok, entry} ->
+        case Mjolnir.Policy.App.authorize(:deploy, user, entry) do
+          :ok ->
+            callback.(entry)
+
+          :error ->
+            Logger.debug(
+              "Authz denied: user=#{inspect(user.user_id)} action=deploy app=#{app_name}"
+            )
+
+            app_not_found(conn, app_name)
+        end
+
+      {:error, :not_found} ->
+        case Mjolnir.Policy.App.authorize(:deploy_new, user, nil) do
+          :ok ->
+            callback.(nil)
+
+          :error ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(403, Jason.encode!(%{error: "forbidden"}))
+            |> halt()
+        end
+    end
+  end
+
+  defp app_not_found(conn, app_name) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(404, Jason.encode!(%{error: "app_not_found", app: app_name}))
+    |> halt()
+  end
 end

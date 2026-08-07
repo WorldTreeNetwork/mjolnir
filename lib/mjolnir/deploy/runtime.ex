@@ -91,6 +91,7 @@ defmodule Mjolnir.Deploy.Runtime do
     ticket_timeout = Keyword.get(opts, :ticket_timeout, 30_000)
     spawn_opts = Keyword.get(opts, :spawn_opts, %{})
     custom_domain_opt = Keyword.get(opts, :custom_domain)
+    owner_id_opt = Keyword.get(opts, :owner_id)
 
     port = fetch!(plan, :port)
     start_command = fetch!(plan, :start_command)
@@ -114,7 +115,8 @@ defmodule Mjolnir.Deploy.Runtime do
           port,
           domain,
           ticket_timeout,
-          custom_domain_opt
+          custom_domain_opt,
+          owner_id_opt
         )
 
       {:error, reason} ->
@@ -132,7 +134,8 @@ defmodule Mjolnir.Deploy.Runtime do
          port,
          domain,
          ticket_timeout,
-         custom_domain_opt
+         custom_domain_opt,
+         owner_id_opt
        ) do
     with {:ok, ticket} <- await_ticket(ops, vm_id, ticket_timeout),
          :ok <- install_unit(ops, vm_id, app_name, unit, workdir) do
@@ -145,6 +148,12 @@ defmodule Mjolnir.Deploy.Runtime do
       # :custom_domain opt (first-time set) overrides the preserved value.
       custom_domain = custom_domain_opt || preserved_custom_domain(ops, app_name)
 
+      # Same preservation rule as custom_domain, for the same reason: Registry.put
+      # rebuilds the Entry from attrs, so an omitted owner_id is wiped — and a
+      # wiped owner makes Policy.App treat the app as legacy/unowned, locking its
+      # real owner out of their own redeploys and domain changes (mjolnir-xuv).
+      owner_id = owner_id_opt || preserved_owner_id(ops, app_name)
+
       # `port` is recorded so the gateway local-route generator
       # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.
       attrs = %{
@@ -152,7 +161,8 @@ defmodule Mjolnir.Deploy.Runtime do
         service_vm_id: vm_id,
         url: url,
         port: port,
-        custom_domain: custom_domain
+        custom_domain: custom_domain,
+        owner_id: owner_id
       }
 
       case ops.registry_put.(app_name, attrs) do
@@ -191,6 +201,16 @@ defmodule Mjolnir.Deploy.Runtime do
   defp preserved_custom_domain(ops, app_name) do
     case ops.registry_get.(app_name) do
       {:ok, prev} -> Map.get(prev, :custom_domain)
+      _ -> nil
+    end
+  end
+
+  # As above, for the app's owner. An explicit :owner_id opt (first deploy) wins;
+  # otherwise the prior entry's owner is carried forward so a redeploy never
+  # silently changes who owns the app.
+  defp preserved_owner_id(ops, app_name) do
+    case ops.registry_get.(app_name) do
+      {:ok, prev} -> Map.get(prev, :owner_id)
       _ -> nil
     end
   end
