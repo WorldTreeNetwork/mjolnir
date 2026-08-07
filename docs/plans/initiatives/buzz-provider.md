@@ -142,17 +142,49 @@ without lying.
       `service_result` to `/var/lib/buzz/harness-exit` on the **rootfs**, so the host reads the
       classification out of the stopped VM's subvolume rather than inferring it.
 
-> 🔴 **Verifying this surfaced `mjolnir-yhr`, and it blocks the I5 claim.** The guest powers itself
-> off correctly — and Mjolnir's `Reconcile` rehydrates it seven seconds later, because the VM record's
-> intent is still `:running`. Intentional termination is currently *not* final on this substrate.
-> Note this is a **second, independent** trigger from the `DormantRegistry` hazard in §3.6: no relay
-> traffic is involved, the reconciler does it unprompted.
+> ✅ **`mjolnir-yhr` — found here, fixed here.** Verification caught `Reconcile` rehydrating the
+> body seven seconds after it powered itself off, because the record's intent was still `:running`.
+> Intentional termination was not final on this substrate. Fixed with a per-VM `restart_policy`
+> (§3.7); the provider must spawn with `"restart_policy": "never"`.
 
 > ⚠️ Also surfaced: `mjolnir-0e8`. `build-ci-image.sh` and `build-deploy-base.sh` bake neither the
 > `mjolnir-agent` binary nor its unit, and `inject_guest_agent/1` is a silent no-op on this host
 > (`:guest_agent_bin` points at a path that does not exist), so a freshly built CI or deploy image
 > boots and then fails every spawn with `:boot_timeout`. `@base/ci-ubuntu-24.04` works today only
 > because both were added to it by hand months after it was built.
+
+### 3.7 `restart_policy` — intentional termination is final (`mjolnir-yhr`) — ✅ 2026-08-07
+
+`Mjolnir.Reconcile` rehydrated any `:running` record with no live hypervisor. Right when the *host*
+lost the VM; wrong when the guest ended *itself* — and from outside those are indistinguishable, so
+the difference has to be **declared, not inferred**.
+
+- [x] Per-VM lifetime policy in `spawn_config` (no record schema bump, no migration):
+      `:always` (default, unchanged) vs `:never`
+- [x] A stranded `:never` record is **finalized** — intent → `:stopped`, rootfs preserved — not
+      resumed. Nothing automatic starts it again.
+- [x] `POST /api/vms` accepts `"restart_policy": "always" | "never"`. Unrecognised values are
+      **rejected**, never defaulted: a caller that asked for a guarantee and silently didn't get one
+      is worse off than a caller that got a 400.
+- [x] An owner-issued Start still works. I5 calls that "resurrection working as designed" — what it
+      forbids is the *substrate* deciding. `VM.revive/1` stamps a one-shot token that authorizes
+      exactly one resume, consumed automatically when the boot re-persists the record. (Without it,
+      revive was a silent no-op and `:never` VMs were recoverable only by `forget/1`, which destroys
+      them — a worse bug than the original.)
+- [x] `GET /api/vms` lists `:stopped` records, with the harness exit evidence. Their rootfs is still
+      on disk; storage nobody can see in the API is storage nobody reclaims.
+
+**The provider must spawn with `"restart_policy": "never"`.** Without it the default is `:always`
+and the I5 claim in `docs/L3-mjolnir-binding.md` is false again.
+
+Guest-written exit evidence (`/var/lib/buzz/harness-exit`) is recorded on the durable record when
+present — `exited`/`0` is intentional, anything else abnormal — and **decides nothing**. A body
+wedged badly enough to need reaping writes no marker, and a guest that *can* write one should not be
+what decides whether the host may restart it. That keeps `mjolnir-j5o`'s rule intact: a force-reap
+stays classified abnormal.
+
+Verified end-to-end on 45.76.77.97: self-exit → `:stopped` (not resumed) → operator revive → resumed
+once → second self-exit → `:stopped` again. A default-policy VM still resumes exactly as before.
 
 ### 3.3 Secret injection path (`mjolnir-1pe`) — the I2 story, and our best one
 
