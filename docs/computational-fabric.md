@@ -138,6 +138,141 @@ interface RemoteClosure<T, R> {
 }
 ```
 
+### 1.4 Typed Channels & Session Types
+
+§1.1 gives channels names but not types. `everything-is-a-channel.md` states the
+requirement in one line — *"typed channels: types determine what goes through the
+channel"* — and this section is what that line turns out to mean once you try to
+write it down.
+
+The finding, recorded 2026-08-07, is that a type system for Mjolnir's channels
+**already exists in draft form in a sibling project**, arrived at independently
+and for unrelated reasons. Dreamball's *action manifest* (an archiform declares
+its operations as data; see `Dreamball/docs/PROTOCOL.md` §16 and
+`docs/decisions/2026-04-25-action-manifest.md`) is a session-type declaration
+language that does not know it is one.
+
+#### Formal Definition
+
+A **session type** `S` describes a channel as a protocol rather than as a
+container for one value:
+
+```
+S ::= !T.S        send a T, continue as S
+    | ?T.S        receive a T, continue as S
+    | S₁ ⊕ S₂     internal choice — we select the branch
+    | S₁ & S₂     external choice — they select
+    | μX.S | X    recursion
+    | end
+```
+
+Every endpoint has a **dual**, and the two ends of a channel must be dual for the
+session to be well-typed:
+
+```
+dual(!T.S)   = ?T.dual(S)
+dual(?T.S)   = !T.dual(S)
+dual(S₁ ⊕ S₂) = dual(S₁) & dual(S₂)
+dual(end)    = end
+```
+
+Orthogonally, i/o types (Pierce–Sangiorgi) split a channel's capabilities, and
+the variance differs by direction — which is the property that makes channel
+subtyping unlike record subtyping:
+
+```
+x : ch^i(T)   input capability    covariant in T
+x : ch^o(T)   output capability   contravariant in T
+x : ch^b(T)   both                invariant in T
+```
+
+#### The Correspondence
+
+An action declaration is the **degenerate request–response session** — one
+round trip, no choice, no recursion:
+
+```
+mint  ≡  !Inputs . ?Outputs . end        (caller's endpoint)
+         ?Inputs . !Outputs . end        (callee's — its dual)
+```
+
+The remaining manifest fields, accumulated for reasons that had nothing to do
+with process calculus, turn out to be the rest of the calculus:
+
+| manifest field | channel-theoretic reading |
+|---|---|
+| `inputs` / `outputs` | the carried types, one per direction |
+| `streaming: bool` | a one-bit approximation of a recursion constructor — `!In.?Out*.end` |
+| `effects` | **sends on other channels**: `x(in).( ȳ⟨op⟩ ∣ x̄⟨out⟩ )`. A static effect system layered over the calculus, and what makes an action more than a function signature |
+| `idempotency` | a channel **reliability** requirement — may this send be replayed at-least-once? |
+| `requiresConfirmation` | a **dependency between channels** — obtain a token on the user channel before sending on this one |
+| `agentVisible` | **scope restriction** `(νx)P` — who may hold the send capability |
+| `implementation: {wasm: blake3}` | the **process body**, content-addressed. This is `P` in `⟨P, σ, κ⟩` from §1.1 |
+| `requires` / `optional` | the process's **free names**. Resolver binding is substitution, `P{store := kuzuChannel}`; `optional` + `degradesTo` is a choice |
+
+The last row is the most striking. An archiform's capability requirements are
+literally the free channel names in its process expression: a Memory Palace
+cannot run until `store`, `embed` and `scene` are bound, which is exactly why an
+unbound *required* capability is fatal and an unbound *optional* one degrades.
+That design was reached by analogy to Nix and `ld.so`, and landed on π-calculus
+name binding regardless.
+
+#### What Is Missing
+
+Two operations are routinely conflated, and only one of them is solved:
+
+- **Payload admission** — *may this value pass this channel?* This is subtyping
+  over records (width and depth), and Dreamball's morphism machinery does it
+  today.
+- **Channel typing** — *is this channel usable this way?* This is not the same
+  operation, and needs four things neither project currently has:
+
+1. **i/o variance.** Record subtyping has one direction; channel subtyping has
+   two, and which applies depends on **which end you hold**. Nothing in the
+   manifest expresses an endpoint.
+2. **Duality.** The manifest declares only the callee's side. Where both ends are
+   processes — Mjolnir's case, unlike a CLI's — duality must be first class.
+3. **Linearity.** A session channel is consumed by use. `idempotency` gestures at
+   this from the reliability side; it is not the same property.
+4. **Sequencing and choice.** `streaming: bool` is the only sequencing
+   constructor in the manifest today.
+
+#### Consequence for Mjolnir
+
+Do not design a channel type system for Mjolnir independently. Extend the action
+manifest's vocabulary instead, so that a CLI verb, a REST route, an MCP tool and
+a Mjolnir channel are the **same declaration projected differently** rather than
+four systems that resemble each other. The path is additive:
+
+```
+today          !In . ?Out . end                 every action
++ streaming    !In . ?Out* . end                the field already exists
++ choice       !In . (?Ok ⊕ ?Err) . end         error channels stop being untyped
++ recursion    μX. !In . ?Out . X               long-lived channels
++ duality      both endpoints named             required once both ends are processes
++ i/o variance the morphism gains a direction
+```
+
+#### Caveat — this is not ready for implementation
+
+Recorded deliberately, because the correspondence is seductive.
+
+Of the five actions declared in the only archiform that exists
+(`memory-palace-0.1.0.json`), four carry an all-zeros placeholder where their
+`implementation.wasm` fingerprint should be, and **none declares `effects` at
+all** — despite that vocabulary being specified since D-019. The action manifest
+is a well-specified notation whose sole consumer uses roughly 60% of it.
+
+Adding `⊕`, `&` and `μX` to a notation that a *second* archiform has never
+stressed means designing constructors against one imagined use. The cheaper
+sequence is to get a second real consumer onto the vocabulary that already
+exists, and let the missing constructors be discovered rather than specified.
+`streaming: bool` is the instructive precedent here: a crude one-bit
+approximation of recursion that someone added because they actually needed it,
+and more honest for having been earned.
+
+---
+
 ## 2. service discovery & ρ-calculus
 
 ### 2.1 reflective higher-order processes
