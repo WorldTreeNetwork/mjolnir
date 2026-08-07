@@ -223,20 +223,65 @@ chroot "$R" /bin/bash -c "HOME=/root /root/.local/bin/mise reshim"
 
 echo ""
 echo "--- Symlinking toolchain into /usr/local/bin (PATH-independent of shell activation) ---"
-for bin in mise node npm npx bun bunx; do
-    src=""
-    if [[ -x "$R/root/.local/bin/$bin" ]]; then
-        src="/root/.local/bin/$bin"
-    elif [[ -x "$R/root/.local/share/mise/shims/$bin" ]]; then
-        src="/root/.local/share/mise/shims/$bin"
+
+# Link the REAL install paths, not mise's shims.
+#
+# The shims are symlinks to an ABSOLUTE path that exists in neither this rootfs
+# nor the host (observed on the first real run: node -> /mise). They therefore
+# dangle both ways: a `-x` test from the host resolves that absolute target
+# against the HOST's /, and inside the guest there is no /mise either. The old
+# loop tested the shims with `-x`, found nothing, warned, and left
+# /usr/local/bin empty — after which the verify step below correctly aborted the
+# whole build.
+#
+# The installs/ binaries are ordinary executables needing no mise resolution at
+# exec time, which is what "PATH-independent" was meant to buy in the first
+# place: Mjolnir.Deploy.Builder execs build steps over vsock through a bare,
+# non-login shell.
+#
+# Versions must be DISCOVERED, not constructed: mise resolves NODE_VERSION="20"
+# to e.g. 20.20.2 and BUN_VERSION="latest" to e.g. 1.3.14.
+find_tool() {
+    local tool="$1" bin="$2" path
+    path=$(find "$R/root/.local/share/mise/installs/$tool" -maxdepth 4 \
+        \( -type f -o -type l \) -name "$bin" 2>/dev/null | head -1)
+    [[ -n "$path" ]] && printf '%s' "${path#"$R"}"
+}
+
+link_tool() {
+    local bin="$1" src="$2"
+
+    # Fail loudly rather than warn: a missing toolchain binary makes the image
+    # useless for its one purpose, and the old code's `Warning:` was easy to
+    # scroll past in 1300 lines of debootstrap output.
+    if [[ -z "$src" || ! -e "$R$src" ]]; then
+        echo "ERROR: $bin not found after mise install (looked for '${src:-<nothing found>}')" >&2
+        return 1
     fi
 
-    if [[ -n "$src" ]]; then
-        ln -sf "$src" "$R/usr/local/bin/$bin"
-    else
-        echo "Warning: $bin not found after mise install — skipping symlink"
-    fi
-done
+    # A WRAPPER, not a symlink. npm and npx are shell scripts that derive their
+    # install prefix from $0 (`dirname $(dirname $0)`), so a symlink at
+    # /usr/local/bin/npm makes npm compute a prefix of /usr/local and die with
+    #   Cannot find module '/usr/local/lib/node_modules/npm/bin/npm-cli.js'
+    # exec'ing the real path keeps $0 inside the mise install, so the prefix
+    # math lands where the files actually are. node/bun are real binaries and
+    # would survive a symlink, but wrapping everything uniformly means nobody
+    # has to remember which tools do prefix arithmetic.
+    # rm first: a leftover ABSOLUTE symlink from an earlier run dangles when
+    # seen from the host (it resolves against the host's /), and `>` onto a
+    # dangling symlink fails.
+    rm -f "$R/usr/local/bin/$bin"
+    cat > "$R/usr/local/bin/$bin" << EOF
+#!/bin/sh
+exec "$src" "\$@"
+EOF
+    chmod 755 "$R/usr/local/bin/$bin"
+    echo "  $bin -> $src"
+}
+
+link_tool mise /root/.local/bin/mise
+for bin in node npm npx; do link_tool "$bin" "$(find_tool node "$bin")"; done
+for bin in bun bunx; do link_tool "$bin" "$(find_tool bun "$bin")"; done
 
 # HOME + PATH for interactive/login shells (mise shims dir first so a session
 # that explicitly wants the mise-managed version wins over the /usr/local/bin
