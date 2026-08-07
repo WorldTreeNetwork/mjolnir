@@ -465,7 +465,30 @@ defmodule Mjolnir.VM do
           {:ok, record} ->
             runtime =
               (record.runtime || %{})
-              |> Map.drop(["resume_failures", "first_failure_at", "last_failure_at"])
+              |> Map.drop([
+                "resume_failures",
+                "first_failure_at",
+                "last_failure_at",
+                "finalized_at",
+                "finalized_reason"
+              ])
+
+            # restart_policy: :never bars the automatic path, not the owner —
+            # I5 calls an owner-issued Start "resurrection working as designed".
+            # Stamp a one-shot token so the next Reconcile pass resumes this VM
+            # once instead of finalizing it straight back to :stopped, which
+            # would make revive a silent no-op. See Reconcile.revive_authorized?/1.
+            runtime =
+              if Mjolnir.Reconcile.restart_policy(record) == :never do
+                Logger.info(
+                  "VM #{vm_id} has restart_policy=never; revive is an explicit " <>
+                    "operator start and authorizes exactly one resume."
+                )
+
+                Map.put(runtime, "revive_authorized_at", DateTime.to_iso8601(DateTime.utc_now()))
+              else
+                runtime
+              end
 
             Mjolnir.StateStore.put(%{record | intent: :running, runtime: runtime})
 

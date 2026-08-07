@@ -166,9 +166,14 @@ defmodule Mjolnir.Reconcile do
       path = rootfs_path(record.uuid)
 
       cond do
-        restart_policy(record) == :never -> {:finalize, record, path}
-        File.exists?(path) -> {:resume, record, path}
-        true -> {:missing_rootfs, record, path}
+        restart_policy(record) == :never and not revive_authorized?(record) ->
+          {:finalize, record, path}
+
+        File.exists?(path) ->
+          {:resume, record, path}
+
+        true ->
+          {:missing_rootfs, record, path}
       end
     end)
   end
@@ -191,6 +196,32 @@ defmodule Mjolnir.Reconcile do
   end
 
   def restart_policy(_), do: :always
+
+  @doc """
+  Whether an operator has explicitly authorized one start of a `:never` VM.
+
+  `restart_policy: :never` bars the *automatic* path, not the owner. I5 is
+  explicit that an owner-issued Start is "resurrection working as designed" —
+  what it forbids is the substrate deciding on its own. So `Mjolnir.VM.revive/1`
+  stamps `runtime["revive_authorized_at"]` and this pass honours it exactly once.
+
+  One-shot without any extra bookkeeping: a successful resume re-persists the
+  record through `Mjolnir.VM`'s own boot path, which rebuilds `runtime` from live
+  state and drops the token with it. If the resume *fails*, the token survives and
+  the VM is retried — same as any other resume failure, and the operator's
+  authorization has not been silently spent on a boot that never happened.
+
+  Without this, revive on a `:never` record would flip intent to `:running` and
+  the next pass would finalize it straight back to `:stopped` — an operator
+  action that silently does nothing, leaving the VM recoverable only by
+  `forget/1`, which destroys it.
+  """
+  @spec revive_authorized?(Record.t()) :: boolean()
+  def revive_authorized?(%Record{runtime: runtime}) when is_map(runtime) do
+    is_binary(Map.get(runtime, "revive_authorized_at"))
+  end
+
+  def revive_authorized?(_), do: false
 
   @doc """
   Computes the expected rootfs path for a given VM UUID.

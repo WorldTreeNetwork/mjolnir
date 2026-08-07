@@ -94,6 +94,38 @@ defmodule Mjolnir.ReconcileTest do
       assert [{:finalize, ^record, _}] = Reconcile.build_plan([record])
     end
 
+    test "an operator-authorized revive beats the policy, exactly once", ctx do
+      # :never bars the AUTOMATIC path, not the owner. Without this, revive/1 on
+      # a :never record would flip intent to :running and the next pass would
+      # finalize it right back — an operator action that silently does nothing.
+      uuid = "12121212-3434-5656-7878-909090909090"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      record =
+        Record.new(uuid, :running,
+          spawn_config: %{"restart_policy" => "never"},
+          runtime: %{"revive_authorized_at" => "2026-08-07T23:00:00Z"}
+        )
+
+      assert [{:resume, ^record, _}] = Reconcile.build_plan([record])
+    end
+
+    test "the authorization token must be a string, not merely present", ctx do
+      uuid = "13131313-3434-5656-7878-909090909090"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      for token <- [nil, true, 1] do
+        record =
+          Record.new(uuid, :running,
+            spawn_config: %{"restart_policy" => "never"},
+            runtime: %{"revive_authorized_at" => token}
+          )
+
+        assert [{:finalize, _, _}] = Reconcile.build_plan([record]),
+               "expected #{inspect(token)} not to authorize a resume"
+      end
+    end
+
     test "restart_policy=always resumes, as before", ctx do
       uuid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
       File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
