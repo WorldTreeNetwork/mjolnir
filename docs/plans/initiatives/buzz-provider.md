@@ -115,13 +115,44 @@ without lying.
 - [ ] API: conditional delete (`If-Match: <generation>`) → 409 on mismatch
 - [ ] `mj` surface for the above (`mj list --filter`, at minimum for debugging)
 
-### 3.2 The `@base/buzz-agent` rootfs (`mjolnir-cxz`)
+### 3.2 The `@base/buzz-agent` rootfs (`mjolnir-cxz`) — ✅ built 2026-08-07
 
-- [ ] Base subvolume carrying `buzz-acp` plus the ACP agents (goose / codex / claude-code)
-- [ ] Add to `just build-ci-image` alongside the existing CI rootfs recipe
-- [ ] **Open:** which agents to bake in vs. fetch at boot — sizing vs. cold-start
-- [ ] Guest must run the harness as the **signal-receiving process**, so harness exit terminates the
-      VM (required by the [L3] realization of I5)
+`scripts/build-buzz-agent-image.sh`, `just build-buzz-agent-image`. 1.6 GB; spawn-verified on
+45.76.77.97.
+
+- [x] Base subvolume carrying `buzz-acp` plus the ACP agents
+- [x] Justfile recipe alongside `build-ci-image`
+- [x] **Resolved:** everything is baked, nothing is fetched at boot. The open question dissolved
+      once `block/buzz@main:Dockerfile.sprig` was read: `sprig` is one multi-call binary that IS
+      `buzz-acp`, `buzz-agent`, `buzz`, `buzz-dev-mcp`, `rg`, `tree` and the two git-nostr helpers,
+      so harness + default agent cost zero marginal bytes over each other. goose 1.45.0 and the two
+      npm ACP agents (`@agentclientprotocol/claude-agent-acp`, `codex-acp`, on pinned node 20.20.2)
+      are baked too, behind `WITH_GOOSE` / `WITH_NPM_AGENTS`: unlike the SSH/GCE providers we own
+      the image, so `discover_harnesses` (block/buzz#3449) can answer authoritatively from
+      `/etc/buzz-agent-image.json` instead of probing — and a fetch-at-boot would put a registry
+      round trip inside the cold start of a body whose whole pitch is that BTRFS makes starts
+      instant.
+- [x] Harness as the **signal-receiving process**. The reference image gets this from
+      `exec buzz-acp "$@"` as the container ENTRYPOINT; a Mjolnir guest runs systemd, so:
+      `buzz-harness.path` (watching `/run/mjolnir/buzz.env`, tmpfs) → `buzz-harness.service`
+      (`Type=exec`, entrypoint `exec`s the harness, `TimeoutStopSec=60`, `Restart=no`,
+      `SuccessAction`/`FailureAction=poweroff` **in `[Unit]`** — in `[Service]` systemd silently
+      reports `SuccessAction=none` and a clean exit leaves the body alive).
+- [x] Exit-code evidence for I5: `ExecStopPost` records `exit_reason`/`exit_status`/
+      `service_result` to `/var/lib/buzz/harness-exit` on the **rootfs**, so the host reads the
+      classification out of the stopped VM's subvolume rather than inferring it.
+
+> 🔴 **Verifying this surfaced `mjolnir-yhr`, and it blocks the I5 claim.** The guest powers itself
+> off correctly — and Mjolnir's `Reconcile` rehydrates it seven seconds later, because the VM record's
+> intent is still `:running`. Intentional termination is currently *not* final on this substrate.
+> Note this is a **second, independent** trigger from the `DormantRegistry` hazard in §3.6: no relay
+> traffic is involved, the reconciler does it unprompted.
+
+> ⚠️ Also surfaced: `mjolnir-0e8`. `build-ci-image.sh` and `build-deploy-base.sh` bake neither the
+> `mjolnir-agent` binary nor its unit, and `inject_guest_agent/1` is a silent no-op on this host
+> (`:guest_agent_bin` points at a path that does not exist), so a freshly built CI or deploy image
+> boots and then fails every spawn with `:boot_timeout`. `@base/ci-ubuntu-24.04` works today only
+> because both were added to it by hand months after it was built.
 
 ### 3.3 Secret injection path (`mjolnir-1pe`) — the I2 story, and our best one
 

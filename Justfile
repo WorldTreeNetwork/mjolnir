@@ -122,6 +122,12 @@ deploy-rootfs distro="ubuntu-24.04": _require-host
 build-ci-image: _require-host
     ssh {{host}} "cd /opt/mjolnir && sudo bash scripts/build-ci-image.sh /var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04"
 
+# Set with_goose=0 / with_npm_agents=0 for a minimal buzz-agent-only body.
+# Build Buzz remote-agent body image on the server (@base/buzz-agent)
+build-buzz-agent-image with_goose="1" with_npm_agents="1": _require-host
+    ssh {{host}} "cd /opt/mjolnir && sudo WITH_GOOSE={{with_goose}} WITH_NPM_AGENTS={{with_npm_agents}} \
+        bash scripts/build-buzz-agent-image.sh /var/lib/mjolnir/btrfs/@base/buzz-agent"
+
 # Deploy code + build Forgejo runner with Mjolnir VM backend
 deploy-runner: _require-host
     ./scripts/deploy.sh {{host}} --runner
