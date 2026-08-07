@@ -52,6 +52,10 @@ defmodule Mjolnir.Deploy.Orchestrator do
   @src_mount "/mnt/deploy-src"
   @default_memory_mb 256
 
+  # Build VMs, unlike service VMs, must hold a whole dependency graph plus a
+  # bundler run in memory. Overridable via :deploy_build_memory_mb.
+  @default_build_memory_mb 2048
+
   # Commands Detector emits, used to classify each step's cache-input source.
   @install_commands [
     "npm ci",
@@ -264,9 +268,20 @@ defmodule Mjolnir.Deploy.Orchestrator do
       base_image: base_image,
       spawn_opts: %{
         extra_mounts: [%{tag: "src", shared_dir: src_dir, opts: []}],
-        owner_id: deployer
+        owner_id: deployer,
+        # Build VMs are memory-hungry in a way service VMs are not: `bun install`
+        # / `npm ci` resolve a whole dependency graph in memory, and a bundler
+        # run peaks higher still. Omitting this silently inherited
+        # :default_memory_mb (512), sized for small service VMs, and the build VM
+        # died mid-`bun install` — surfacing as {:vsock_unavailable, ...} when its
+        # agent went away, with the HOST still showing 29GB free.
+        memory_mb: build_memory_mb()
       }
     ]
+  end
+
+  defp build_memory_mb do
+    Application.get_env(:mjolnir, :deploy_build_memory_mb, @default_build_memory_mb)
   end
 
   defp run_opts(app_name, memory_mb, custom_domain, deployer, ops) do
