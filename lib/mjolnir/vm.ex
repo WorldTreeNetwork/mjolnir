@@ -71,6 +71,18 @@ defmodule Mjolnir.VM do
   @default_await_boot_timeout 30_000
   @managed_await_boot_timeout 90_000
 
+  # Generous but BOUNDED default for `exec/3` (mjolnir-8ie). A fixed short
+  # timeout is wrong — CI builds legitimately run for many minutes — but
+  # `:infinity` means a wedged guest pins the caller forever. Callers who
+  # genuinely need no bound pass `timeout: :infinity` explicitly.
+  @default_exec_timeout 900_000
+
+  # Internal housekeeping commands the VM runs on its own behalf (e.g. the
+  # pre-snapshot `sync`). These are never long-running, so a short bound is
+  # right: if the guest can't answer in 30s it is wedged, and we want to find
+  # that out instead of blocking the caller mid-snapshot.
+  @internal_exec_timeout 30_000
+
   @type t :: %__MODULE__{}
   @type vm_id :: String.t()
   @type extra_mount :: %{
@@ -156,15 +168,26 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Execute a command in the VM and return its output.
+  Execute a command in the guest and return its output.
 
-  Uses serial console for command execution.
+  `:timeout` (default #{@default_exec_timeout}ms) bounds how long the guest may
+  take to reply; `:infinity` opts out for genuinely unbounded work like CI
+  builds. The bound is applied to the *vsock request itself*, not just to the
+  surrounding `GenServer.call` — see `handle_call({:exec, ...})` for why that
+  distinction is the whole bug in mjolnir-8ie.
   """
   @spec exec(vm_id(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def exec(vm_id, command, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
-    GenServer.call(via_tuple(vm_id), {:exec, command}, timeout)
+    timeout = Keyword.get(opts, :timeout, @default_exec_timeout)
+    GenServer.call(via_tuple(vm_id), {:exec, command, timeout}, outer_call_timeout(timeout))
   end
+
+  # Keep the caller's GenServer.call strictly longer than the inner vsock bound
+  # so the inner timeout always wins the race and returns {:error, :timeout},
+  # rather than the caller exiting out from under an in-flight request. Mirrors
+  # Mjolnir.Vsock.Connection.outer_timeout/1.
+  defp outer_call_timeout(:infinity), do: :infinity
+  defp outer_call_timeout(timeout) when is_integer(timeout), do: timeout + 10_000
 
   @doc """
   Get the current status of a VM.
@@ -1006,9 +1029,48 @@ defmodule Mjolnir.VM do
     end
   end
 
-  def handle_call({:exec, command}, _from, state) do
-    result = execute_command(state, command)
-    {:reply, result, state}
+  # Runs the vsock round-trip OFF the GenServer (mjolnir-8ie).
+  #
+  # Handling exec inline blocks this process's mailbox for the whole duration of
+  # the command. With the old `:infinity` inner timeout that was forever: a guest
+  # whose agent stopped answering (which a long CH pause reliably causes) left
+  # the VM permanently unreachable — every later `status`, health probe, and stop
+  # timed out, and no heal path could help because they all route through here.
+  #
+  # The caller still blocks exactly as before; the difference is that everyone
+  # else keeps being served. Nothing here mutates state, so there is no
+  # serialization to preserve, and Connection multiplexes concurrent requests by
+  # id already.
+  def handle_call({:exec, command, timeout}, from, state) do
+    case state.vsock_conn do
+      nil ->
+        {:reply, {:error, :no_vsock_connection}, state}
+
+      conn ->
+        # Task.start/1, not spawn/1: this module defines its own spawn/1 (the VM
+        # lifecycle API), and Task.start is unlinked so a failure here cannot take
+        # the VM down.
+        {:ok, _pid} =
+          Task.start(fn ->
+            result =
+              try do
+                Mjolnir.Vsock.Connection.exec(conn, command, timeout)
+              catch
+                # The Connection died mid-request (or was never alive). Reply with
+                # an error rather than letting the caller hang to its own timeout.
+                :exit, reason -> {:error, {:vsock_unavailable, reason}}
+              end
+
+            GenServer.reply(from, result)
+          end)
+
+        {:noreply, state}
+    end
+  end
+
+  # Back-compat for any in-flight 2-tuple exec call.
+  def handle_call({:exec, command}, from, state) do
+    handle_call({:exec, command, @default_exec_timeout}, from, state)
   end
 
   def handle_call({:authorize_inject_peer, peer_node_id}, _from, state) do
@@ -2163,9 +2225,16 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp execute_command(state, command) do
+  # Synchronous exec for commands the VM runs on its OWN behalf from inside a
+  # handle_call (e.g. the pre-snapshot `sync`). Bounded by default: this path
+  # does block the mailbox, so an unbounded wait here is the mjolnir-8ie wedge.
+  defp execute_command(state, command, timeout \\ @internal_exec_timeout) do
     if state.vsock_conn do
-      Mjolnir.Vsock.Connection.exec(state.vsock_conn, command, :infinity)
+      try do
+        Mjolnir.Vsock.Connection.exec(state.vsock_conn, command, timeout)
+      catch
+        :exit, reason -> {:error, {:vsock_unavailable, reason}}
+      end
     else
       {:error, :no_vsock_connection}
     end
