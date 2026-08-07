@@ -31,6 +31,8 @@ defmodule Mjolnir.Gateway.RouteReconcilerTest do
     init_args = [
       name: name,
       debounce_ms: Keyword.get(opts, :debounce_ms, 50),
+      # Default to none so existing tests see exactly one boot render.
+      settle_delays_ms: Keyword.get(opts, :settle_delays_ms, []),
       render_opts: render_opts
     ]
 
@@ -83,5 +85,51 @@ defmodule Mjolnir.Gateway.RouteReconcilerTest do
 
     assert RouteReconciler.trigger(name) == :ok
     assert_receive :rendered, 500
+  end
+
+  describe "post-boot settle sweep (mjolnir-do5)" do
+    test "re-renders after boot so VMs that were still resuming get routes" do
+      # The boot render fires before service VMs finish resuming, sees them as
+      # not-running, and emits no route for their custom domains. Nothing used
+      # to re-trigger afterwards, so the route stayed missing until some
+      # unrelated VM event happened — on 2026-08-07 that meant a customer domain
+      # 400ed until an operator noticed.
+      {_pid, _name} = start_reconciler(settle_delays_ms: [60, 120])
+
+      # Boot render, then one per settle delay.
+      assert_receive :rendered, 1_000
+      assert_receive :rendered, 1_000
+      assert_receive :rendered, 1_000
+    end
+
+    test "the sweep is enabled by default, not just when a test configures it" do
+      # Guards the DEFAULT. The tests below inject :settle_delays_ms, so they
+      # would keep passing if the default were emptied — which is precisely the
+      # regression (a boot render with no follow-up drops live routes).
+      delays = RouteReconciler.default_settle_delays_ms()
+
+      refute Enum.empty?(delays),
+             "post-boot settle sweep is disabled; a boot render that races VM " <>
+               "resume would drop customer routes permanently (mjolnir-do5)"
+
+      assert Enum.all?(delays, &(is_integer(&1) and &1 > 0))
+
+      assert Enum.max(delays) >= 60_000,
+             "the last sweep must land after VM resume realistically completes"
+    end
+
+    test "the settle pass leaves the debounce chain working" do
+      # Settle renders are sent as their own message precisely so they neither
+      # cancel nor get cancelled by the debounce timer. Delays are chosen so the
+      # two passes cannot coalesce: boot at ~30ms, settle at ~300ms.
+      {_pid, name} = start_reconciler(debounce_ms: 30, settle_delays_ms: [300])
+
+      assert_receive :rendered, 1_000, "boot render"
+      assert_receive :rendered, 2_000, "settle render"
+
+      # A later trigger must still produce its own render.
+      RouteReconciler.trigger(name)
+      assert_receive :rendered, 1_000, "triggered render after the settle pass"
+    end
   end
 end

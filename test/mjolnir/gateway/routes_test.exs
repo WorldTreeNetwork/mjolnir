@@ -242,4 +242,91 @@ defmodule Mjolnir.Gateway.RoutesTest do
       refute File.exists?(path <> ".tmp")
     end
   end
+
+  describe "render_and_reload/1 — destructive-render guards (mjolnir-do5)" do
+    # Both of 2026-08-07's startupcentral.build outages were a render that
+    # silently dropped a live route. These guard the two mechanisms.
+
+    setup do
+      dir =
+        Path.join([
+          System.tmp_dir!(),
+          "mjolnir-gw-do5",
+          "#{System.unique_integer([:positive])}"
+        ])
+
+      File.mkdir_p!(dir)
+      path = Path.join(dir, "apps.toml")
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      entries = [
+        struct!(%Entry{app_name: "sc", release_snapshot: "s", updated_at: 0},
+          service_vm_id: "vm-1",
+          custom_domain: "startupcentral.build",
+          port: 3000
+        )
+      ]
+
+      %{path: path, entries: entries}
+    end
+
+    defp render(path, entries, running, reload \\ fn -> :ok end) do
+      Routes.render_and_reload(
+        registry_entries: entries,
+        extra_domains: [],
+        running_vm_ids: running,
+        apexes: ["startupcentral.build" | @apexes],
+        ip_resolver: &ip/1,
+        path: path,
+        reload: reload
+      )
+    end
+
+    test "an UNKNOWN running-VM set never overwrites the file", ctx do
+      # Establish a good file first.
+      assert {:ok, [_]} = render(ctx.path, ctx.entries, ["vm-1"])
+      good = File.read!(ctx.path)
+      assert good =~ "startupcentral.build"
+
+      # VM.list could not be determined (one wedged VM is enough — mjolnir-8ie).
+      # Returning [] here is what wiped every route; :unknown must be inert.
+      test_pid = self()
+
+      assert {:error, :running_vms_unknown} =
+               render(ctx.path, ctx.entries, :unknown, fn -> send(test_pid, :reloaded) end)
+
+      assert File.read!(ctx.path) == good, "an inconclusive VM read must not rewrite the file"
+      refute_received :reloaded, "and must not reload the gateway"
+    end
+
+    test "a genuinely empty running set still renders (so `mj domain rm` works)", ctx do
+      assert {:ok, [_]} = render(ctx.path, ctx.entries, ["vm-1"])
+      assert {:ok, []} = render(ctx.path, ctx.entries, [])
+      refute File.read!(ctx.path) =~ "startupcentral.build"
+    end
+
+    test "a render that removes a live route logs it loudly", ctx do
+      assert {:ok, [_]} = render(ctx.path, ctx.entries, ["vm-1"])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # The VM is mid-resume, so it is absent from the running set.
+          assert {:ok, []} = render(ctx.path, ctx.entries, [])
+        end)
+
+      assert log =~ "REMOVES"
+      assert log =~ "startupcentral.build"
+    end
+
+    test "an unchanged render logs no removal", ctx do
+      assert {:ok, [_]} = render(ctx.path, ctx.entries, ["vm-1"])
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, [_]} = render(ctx.path, ctx.entries, ["vm-1"])
+        end)
+
+      refute log =~ "REMOVES"
+    end
+  end
 end

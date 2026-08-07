@@ -20,6 +20,21 @@ defmodule Mjolnir.Gateway.RouteReconciler do
 
   @debounce_ms 500
 
+  # Re-render at these delays after boot (mjolnir-do5).
+  #
+  # The boot render fires long before service VMs finish resuming, so it sees
+  # them as not-running and emits NO route for their custom domains — and
+  # nothing re-triggers afterwards, because `@trigger_events` only fire if some
+  # OTHER VM happens to change state. On 2026-08-07 the boot render beat the
+  # service VM's resume by two seconds and left startupcentral.build 400ing
+  # until an operator noticed.
+  #
+  # Resume is not something we can wait on synchronously (VMs boot
+  # independently, and a wedged one may never arrive), so sweep a few times as
+  # startup settles. Renders are idempotent — an unchanged route set rewrites
+  # identical bytes — so extra passes are free.
+  @settle_delays_ms [15_000, 60_000, 180_000]
+
   # EventBus events that change the set of running+local VMs, hence the routes.
   @trigger_events [:vm_spawned, :vm_started, :vm_restored, :vm_stopped, :vm_dormant]
 
@@ -27,6 +42,17 @@ defmodule Mjolnir.Gateway.RouteReconciler do
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
+
+  @doc """
+  The default post-boot settle delays.
+
+  Exposed so a test can assert the sweep is actually ENABLED by default —
+  tests that pass `:settle_delays_ms` explicitly prove the mechanism works but
+  would happily pass with the default emptied, which is exactly the regression
+  mjolnir-do5 is about.
+  """
+  @spec default_settle_delays_ms() :: [pos_integer()]
+  def default_settle_delays_ms, do: @settle_delays_ms
 
   @doc """
   Request a debounced re-render. Safe no-op if the reconciler is not running
@@ -50,6 +76,13 @@ defmodule Mjolnir.Gateway.RouteReconciler do
       timer: nil
     }
 
+    # Sweep again as startup settles, so routes for VMs that were still resuming
+    # during the boot render get emitted (mjolnir-do5). Sent as a distinct
+    # message so these never cancel — or get cancelled by — the debounce timer.
+    for delay <- Keyword.get(opts, :settle_delays_ms, @settle_delays_ms) do
+      Process.send_after(self(), :settle_render, delay)
+    end
+
     # Reconcile once on boot (debounced, so it coalesces with any early events).
     {:ok, schedule(state)}
   end
@@ -68,6 +101,14 @@ defmodule Mjolnir.Gateway.RouteReconciler do
   def handle_info(:render, state) do
     render(state)
     {:noreply, %{state | timer: nil}}
+  end
+
+  # Post-boot settle sweep. Deliberately does not touch `timer`: it is an
+  # independent pass, not part of the debounce chain.
+  def handle_info(:settle_render, state) do
+    Logger.debug("Gateway.RouteReconciler: settle re-render")
+    render(state)
+    {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}

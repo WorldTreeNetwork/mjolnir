@@ -193,18 +193,82 @@ defmodule Mjolnir.Gateway.Routes do
     path = Keyword.get(opts, :path, configured_path())
     reload = Keyword.get(opts, :reload, &default_reload/0)
 
-    routes = build_routes(registry_entries, extra_domains, running_vm_ids, apexes, ip_resolver)
-    toml = render_toml(routes)
+    if running_vm_ids == :unknown do
+      # Keep whatever is on disk: publishing a route-less file because we could
+      # not read VM state is strictly worse than serving slightly stale routes
+      # (mjolnir-do5).
+      Logger.warning(
+        "Gateway.Routes: running-VM set is unknown; keeping existing #{path} rather than " <>
+          "rendering a possible wipe"
+      )
 
-    case write_atomic(path, toml) do
-      :ok ->
-        reload.()
-        Logger.info("Gateway.Routes: wrote #{length(routes)} route(s) to #{path}")
-        {:ok, routes}
+      {:error, :running_vms_unknown}
+    else
+      routes = build_routes(registry_entries, extra_domains, running_vm_ids, apexes, ip_resolver)
+      toml = render_toml(routes)
+      warn_on_removed_routes(path, routes)
 
-      {:error, reason} = err ->
-        Logger.error("Gateway.Routes: failed to write #{path}: #{inspect(reason)}")
-        err
+      case write_atomic(path, toml) do
+        :ok ->
+          reload.()
+          Logger.info("Gateway.Routes: wrote #{length(routes)} route(s) to #{path}")
+          {:ok, routes}
+
+        {:error, reason} = err ->
+          Logger.error("Gateway.Routes: failed to write #{path}: #{inspect(reason)}")
+          err
+      end
+    end
+  end
+
+  # A render that DROPS a route is the failure mode behind both of 2026-08-07's
+  # outages, and in each case the only trace was a single line buried among
+  # normal startup chatter. Name it explicitly, with the fqdns lost, so it is
+  # greppable and alertable.
+  defp warn_on_removed_routes(path, new_routes) do
+    previous = existing_route_keys(path)
+    current = MapSet.new(new_routes, &route_key/1)
+    removed = MapSet.difference(previous, current)
+
+    unless Enum.empty?(removed) do
+      Logger.warning(
+        "Gateway.Routes: this render REMOVES #{MapSet.size(removed)} existing route(s): " <>
+          "#{Enum.join(Enum.sort(removed), ", ")} — customer traffic to those hosts will 400 " <>
+          "until they come back"
+      )
+    end
+  end
+
+  defp route_key(%Route{apex: apex, subdomain: sub}) do
+    if sub in [nil, ""], do: apex, else: "#{sub}.#{apex}"
+  end
+
+  # Recover the fqdns from the file we last wrote. Cheap line scan rather than a
+  # TOML parse: this file's shape is ours and stable, and a parse failure here
+  # must never block a render.
+  defp existing_route_keys(path) do
+    case File.read(path) do
+      {:ok, body} ->
+        body
+        |> String.split("[[route]]")
+        |> Enum.drop(1)
+        |> Enum.map(fn block ->
+          apex = capture_toml_value(block, "apex")
+          sub = capture_toml_value(block, "subdomain")
+          if sub in [nil, ""], do: apex, else: "#{sub}.#{apex}"
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+
+      {:error, _} ->
+        MapSet.new()
+    end
+  end
+
+  defp capture_toml_value(block, key) do
+    case Regex.run(~r/^\s*#{key}\s*=\s*"([^"]*)"/m, block) do
+      [_, value] -> value
+      _ -> nil
     end
   end
 
@@ -321,14 +385,26 @@ defmodule Mjolnir.Gateway.Routes do
     :exit, _ -> []
   end
 
+  # Returns the running VM ids, or `:unknown` if the set could not be determined.
+  #
+  # Returning `[]` on failure — as this used to — is exactly backwards
+  # (mjolnir-do5). VM.list/0 polls every VM GenServer, so a SINGLE wedged VM
+  # (mjolnir-8ie / mjolnir-75d) can make the whole call exit; an empty set then
+  # renders a file with no routes at all and takes every customer domain down.
+  # An inconclusive read must leave the existing routes alone, not publish a
+  # wipe. `[]` still means a genuine "nothing is running".
   defp default_running_vm_ids do
     Mjolnir.VM.list()
     |> Enum.filter(&(Map.get(&1, :state) == :running))
     |> Enum.map(& &1.id)
   rescue
-    _ -> []
+    e ->
+      Logger.warning("Gateway.Routes: could not list VMs (#{Exception.message(e)})")
+      :unknown
   catch
-    :exit, _ -> []
+    :exit, reason ->
+      Logger.warning("Gateway.Routes: VM.list exited (#{inspect(reason)})")
+      :unknown
   end
 
   defp configured_apexes,
