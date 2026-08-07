@@ -1173,10 +1173,15 @@ defmodule Mjolnir.VM do
     end
   end
 
+  # This runs INLINE, so `timeout` bounds how long the mailbox is held, not just
+  # how long the caller waits (mjolnir-8ie). It used to be discarded (`_ =
+  # timeout`), silently falling back to vsock_request's 10s default — so
+  # Health.IrohConnection's careful `iroh_status(vm.id, 3_000)` actually blocked
+  # every other caller for up to 10s against a severed vsock.
   def handle_call({:probe_iroh_status, timeout}, _from, state) do
     reply =
       if state.vsock_path do
-        case query_iroh_status(state.vsock_path) do
+        case query_iroh_status(state.vsock_path, timeout) do
           {:ok, _} = ok -> ok
           {:error, _} = err -> err
         end
@@ -1184,7 +1189,6 @@ defmodule Mjolnir.VM do
         {:error, :no_vsock_path}
       end
 
-    _ = timeout
     {:reply, reply, state}
   end
 
@@ -2016,10 +2020,10 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp query_iroh_status(vsock_path) do
+  defp query_iroh_status(vsock_path, timeout \\ 5_000) do
     request = Mjolnir.Vsock.Protocol.get_iroh_status_request()
 
-    case vsock_request(vsock_path, request, 5000) do
+    case vsock_request(vsock_path, request, timeout) do
       {:ok, response} -> parse_iroh_status_response(response)
       {:error, reason} -> {:error, reason}
     end
