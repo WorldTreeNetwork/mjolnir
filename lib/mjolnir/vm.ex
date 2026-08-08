@@ -57,6 +57,15 @@ defmodule Mjolnir.VM do
     # window where a created VM exists unlabelled — a crash in that window would
     # strand a VM its creator can no longer recognise as its own.
     metadata: %{},
+    # Monitor refs of exec Tasks currently running against this VM.
+    #
+    # A guest busy with a long command is the HEALTHIEST possible state, but it
+    # answers health probes slowly (a `cp -a` of 139MB plus a bundler saturates
+    # 2 vCPUs), so Health.Monitor used to declare it unreachable and "heal" it —
+    # and the L1 heal stops the very Vsock.Connection the in-flight exec is
+    # blocked on, killing the operation it was trying to rescue. Health reads
+    # this to distinguish BUSY from DEAD (mjolnir-1s9).
+    exec_inflight: %{},
     # Lifetime policy (mjolnir-yhr). :always (default) lets Mjolnir.Reconcile
     # rehydrate this VM if it is found stranded — right when the HOST lost it.
     # :never means a stranded record is finalized to :stopped instead, rootfs
@@ -1116,11 +1125,12 @@ defmodule Mjolnir.VM do
         {:reply, {:error, :no_vsock_connection}, state}
 
       conn ->
-        # Task.start/1, not spawn/1: this module defines its own spawn/1 (the VM
-        # lifecycle API), and Task.start is unlinked so a failure here cannot take
-        # the VM down.
-        {:ok, _pid} =
-          Task.start(fn ->
+        # spawn_monitor, not Task.start: the monitor ref is how we learn the exec
+        # finished (or died), which is what keeps exec_inflight honest. Unlinked
+        # either way, so a failure here cannot take the VM down. Note this module
+        # defines its own spawn/1 (the VM lifecycle API), hence the qualified call.
+        {_pid, ref} =
+          :erlang.spawn_monitor(fn ->
             result =
               try do
                 Mjolnir.Vsock.Connection.exec(conn, command, timeout)
@@ -1133,7 +1143,7 @@ defmodule Mjolnir.VM do
             GenServer.reply(from, result)
           end)
 
-        {:noreply, state}
+        {:noreply, %{state | exec_inflight: Map.put(state.exec_inflight, ref, command)}}
     end
   end
 
@@ -1412,6 +1422,13 @@ defmodule Mjolnir.VM do
       nil ->
         {:noreply, state}
     end
+  end
+
+  # An exec Task finished (or crashed). Either way it is no longer in flight, so
+  # the VM stops being "busy" and Health may judge it normally again.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{exec_inflight: inflight} = state)
+      when is_map_key(inflight, ref) do
+    {:noreply, %{state | exec_inflight: Map.delete(inflight, ref)}}
   end
 
   def handle_info(msg, state) do

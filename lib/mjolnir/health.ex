@@ -31,7 +31,7 @@ defmodule Mjolnir.Health do
 
   @type vm_report :: %{
           vm_id: String.t(),
-          overall: :ok | :degraded | :dead | :agent_unreachable,
+          overall: :ok | :busy | :degraded | :dead | :agent_unreachable,
           checks: [report_entry()]
         }
 
@@ -84,53 +84,67 @@ defmodule Mjolnir.Health do
     max_level = Keyword.get(opts, :max_level, 2)
 
     case Mjolnir.VM.get(vm_id) do
+      # Belt and braces alongside the Monitor's :busy branch: heal/2 is public
+      # and reachable from the API and an operator's `mj doctor --fix`. The L1
+      # heal stops the VM's Vsock.Connection, so running it while an exec is in
+      # flight kills that exec — the caller is asking us to break the thing they
+      # are presumably waiting on (mjolnir-1s9).
       {:ok, vm} ->
-        heal_results =
-          @default_vm_checks
-          |> Enum.filter(fn mod -> mod.level() <= max_level end)
-          |> Enum.map(fn mod ->
-            status = safe_probe(mod, vm)
-
-            case status do
-              :ok ->
-                %{level: mod.level(), name: mod.name(), status: :ok, action: :skipped}
-
-              {_degraded_or_dead, _} ->
-                Logger.warning(
-                  "Health.heal #{vm_id}: #{mod.name()} = #{inspect(status)}, attempting heal"
-                )
-
-                case safe_heal(mod, vm) do
-                  :ok ->
-                    %{
-                      level: mod.level(),
-                      name: mod.name(),
-                      status: status,
-                      action: :healed
-                    }
-
-                  {:error, reason} ->
-                    %{
-                      level: mod.level(),
-                      name: mod.name(),
-                      status: status,
-                      action: {:heal_failed, reason}
-                    }
-                end
-            end
-          end)
-
-        {:ok,
-         %{
-           vm_id: vm_id,
-           overall: roll_up(heal_results),
-           checks: heal_results
-         }}
+        if busy?(vm) do
+          Logger.info("Health.heal #{vm_id}: exec in flight, refusing to heal a busy VM")
+          {:ok, %{vm_id: vm_id, overall: :busy, checks: [], healed: []}}
+        else
+          do_heal(vm_id, vm, max_level)
+        end
 
       # Passes through :not_found and :unreachable (mjolnir-8ie) unchanged.
       {:error, _} = err ->
         err
     end
+  end
+
+  defp do_heal(vm_id, vm, max_level) do
+    heal_results =
+      @default_vm_checks
+      |> Enum.filter(fn mod -> mod.level() <= max_level end)
+      |> Enum.map(fn mod ->
+        status = safe_probe(mod, vm)
+
+        case status do
+          :ok ->
+            %{level: mod.level(), name: mod.name(), status: :ok, action: :skipped}
+
+          {_degraded_or_dead, _} ->
+            Logger.warning(
+              "Health.heal #{vm_id}: #{mod.name()} = #{inspect(status)}, attempting heal"
+            )
+
+            case safe_heal(mod, vm) do
+              :ok ->
+                %{
+                  level: mod.level(),
+                  name: mod.name(),
+                  status: status,
+                  action: :healed
+                }
+
+              {:error, reason} ->
+                %{
+                  level: mod.level(),
+                  name: mod.name(),
+                  status: status,
+                  action: {:heal_failed, reason}
+                }
+            end
+        end
+      end)
+
+    {:ok,
+     %{
+       vm_id: vm_id,
+       overall: roll_up(heal_results),
+       checks: heal_results
+     }}
   end
 
   @doc """
@@ -305,19 +319,53 @@ defmodule Mjolnir.Health do
 
   @doc false
   def corroborated_overall(:dead, checks, %Mjolnir.VM{} = vm, opts) do
-    if agent_channel_ok?(checks) do
-      :degraded
-    else
-      liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
+    cond do
+      # 0. Are we the reason it is slow? An exec we ourselves dispatched is
+      #    running RIGHT NOW, which is stronger proof of life than any probe:
+      #    the guest accepted a command and has not yet returned. It answers
+      #    slowly because it is working (a `cp -a` of 139MB plus a bundler
+      #    saturates 2 vCPUs), not because it is wedged. Reporting :dead here
+      #    made Health.Monitor heal the VM, and the L1 heal stops the very
+      #    Vsock.Connection the exec is blocked on — killing the operation it
+      #    was trying to rescue, every time, ~100% reproducibly on deploy
+      #    builds (mjolnir-1s9).
+      busy?(vm) ->
+        :busy
 
-      case liveness.(vm, opts) do
-        :alive -> :agent_unreachable
-        _unreachable_or_unknown -> :dead
-      end
+      agent_channel_ok?(checks) ->
+        :degraded
+
+      true ->
+        liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
+
+        case liveness.(vm, opts) do
+          :alive -> :agent_unreachable
+          _unreachable_or_unknown -> :dead
+        end
     end
   end
 
+  # A :degraded verdict is likewise not actionable while we are the load: the
+  # failing probes are ours to explain. Healing on it does the same damage.
+  def corroborated_overall(:degraded, _checks, %Mjolnir.VM{} = vm, _opts) do
+    if busy?(vm), do: :busy, else: :degraded
+  end
+
   def corroborated_overall(other, _checks, _vm, _opts), do: other
+
+  @doc """
+  Is an exec we dispatched still running on this VM?
+
+  Tolerates VM structs from older records or hand-built test fixtures where the
+  field is absent — a missing field means "we know of no exec", not "busy".
+  """
+  @spec busy?(Mjolnir.VM.t()) :: boolean()
+  def busy?(%Mjolnir.VM{} = vm) do
+    case Map.get(vm, :exec_inflight) do
+      m when is_map(m) -> map_size(m) > 0
+      _ -> false
+    end
+  end
 
   # True only when every agent-channel check ran AND passed. An absent check is
   # not evidence of health, so the empty list is `false` — that keeps the

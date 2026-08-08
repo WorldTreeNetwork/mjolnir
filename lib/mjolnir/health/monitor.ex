@@ -96,6 +96,13 @@ defmodule Mjolnir.Health.Monitor do
         Mjolnir.EventBus.publish(vm_id, :vm_unhealthy, report)
         _ = Mjolnir.Health.heal(vm_id, max_level: 1)
 
+      {:ok, %{overall: :busy}} ->
+        # An exec we dispatched is still running. The probes fail because the
+        # guest is busy doing what we asked, and healing would stop the very
+        # vsock connection that exec is blocked on (mjolnir-1s9). Say nothing at
+        # warning level: this is a normal state during any long build.
+        Logger.debug("Health.Monitor: VM #{vm_id} busy with an in-flight exec; not healing")
+
       {:ok, %{overall: :agent_unreachable} = report} ->
         # The guest agent is unreachable over vsock, but an independent TCP probe
         # confirmed the VM is alive and serving. This is NOT death — it's a
