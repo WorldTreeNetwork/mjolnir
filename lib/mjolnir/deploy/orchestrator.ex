@@ -149,9 +149,50 @@ defmodule Mjolnir.Deploy.Orchestrator do
     else
       {stage, {:error, reason}} ->
         Logger.error("Deploy.Orchestrator: '#{app_name}' failed at #{stage}: #{inspect(reason)}")
-        emit(progress, to_string(stage), "error: #{inspect(reason)}")
+        for line <- failure_lines(reason), do: emit(progress, to_string(stage), line)
         {:error, %{stage: to_string(stage), reason: reason}}
     end
+  end
+
+  # Turn a failure into lines a human can act on.
+  #
+  # `inspect(reason)` on a step failure is a ~1KB tuple containing the whole
+  # shell command twice, and it buries the one thing that matters: what the
+  # guest kernel said before it died. Lead with the cause, then the guest's own
+  # words, then where the full serial log lives.
+  defp failure_lines({:step_failed, command, reason, _built, diag}) do
+    highlights = Map.get(diag, :highlights, [])
+    dir = Map.get(diag, :diagnostics_dir)
+
+    ["error: build step failed: #{truncate(command, 120)}", "cause: #{describe(reason)}"] ++
+      Enum.map(highlights, &"guest: #{truncate(&1, 200)}") ++
+      cond do
+        dir && highlights == [] ->
+          ["note: the guest logged no kernel-level cause; full serial log at #{dir}"]
+
+        dir ->
+          ["note: full serial log at #{dir}"]
+
+        true ->
+          []
+      end
+  end
+
+  defp failure_lines(reason), do: ["error: #{inspect(reason)}"]
+
+  # The shapes worth naming. Everything else falls back to inspect/1.
+  defp describe({:vsock_unavailable, _}),
+    do: "the build VM's guest agent stopped responding mid-step (VM died or was killed)"
+
+  defp describe({:exit_code, code, out}),
+    do: "command exited #{code}: #{truncate(String.trim(to_string(out)), 300)}"
+
+  defp describe(:timeout), do: "the step exceeded its timeout"
+  defp describe(other), do: inspect(other)
+
+  defp truncate(s, max) do
+    s = to_string(s)
+    if String.length(s) > max, do: String.slice(s, 0, max) <> "…", else: s
   end
 
   # --- step translation ------------------------------------------------------

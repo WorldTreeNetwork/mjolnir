@@ -178,13 +178,39 @@ defmodule Mjolnir.Deploy.Builder do
       else
         {:error, reason} ->
           Logger.error("Deploy.Builder: step #{inspect(step.command)} failed: #{inspect(reason)}")
-          {:halt, {:error, {:step_failed, step.command, reason, Enum.reverse(built)}}}
+
+          # Capture the guest's side of the story BEFORE run_build's `after`
+          # clause discards the VM. The serial console is the only place the
+          # guest KERNEL speaks, and without it an OOM-killed build and a
+          # genuinely broken command are indistinguishable — both arrive as
+          # {:vsock_unavailable, ...}. See Mjolnir.Deploy.Diagnostics.
+          diag = capture_diagnostics(ops, vm_id, step.command, reason)
+
+          {:halt, {:error, {:step_failed, step.command, reason, Enum.reverse(built), diag}}}
       end
     end)
     |> case do
       {:ok, built} -> {:ok, Enum.reverse(built)}
       other -> other
     end
+  end
+
+  # Never lets a diagnostics problem mask the build failure that triggered it:
+  # a missing serial log, a full disk, an unwritable state dir — all of those
+  # must still leave the caller with the original {:step_failed, ...}.
+  defp capture_diagnostics(ops, vm_id, command, reason) do
+    case ops.diagnostics.(vm_id, command: command, reason: reason) do
+      {:ok, capture} ->
+        Logger.error("Deploy.Builder: #{Mjolnir.Deploy.Diagnostics.summarize(capture)}")
+        %{diagnostics_dir: capture.dir, highlights: capture.highlights}
+
+      {:error, _} ->
+        %{diagnostics_dir: nil, highlights: []}
+    end
+  rescue
+    e ->
+      Logger.warning("Deploy.Builder: diagnostics capture raised: #{Exception.message(e)}")
+      %{diagnostics_dir: nil, highlights: []}
   end
 
   defp discard_vm(ops, vm_id) do
@@ -264,7 +290,8 @@ defmodule Mjolnir.Deploy.Builder do
       spawn: &Mjolnir.VM.spawn/1,
       exec: &Mjolnir.VM.exec/3,
       snapshot: &Mjolnir.VM.snapshot/3,
-      stop: &Mjolnir.VM.stop/1
+      stop: &Mjolnir.VM.stop/1,
+      diagnostics: &Mjolnir.Deploy.Diagnostics.capture/2
     }
   end
 end

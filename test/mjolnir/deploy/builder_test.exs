@@ -57,6 +57,12 @@ defmodule Mjolnir.Deploy.BuilderTest do
       stop: fn vm_id ->
         Agent.update(agent, &[{:stop, vm_id} | &1])
         :ok
+      end,
+      diagnostics: fn vm_id, ctx ->
+        Agent.update(agent, &[{:diagnostics, vm_id, ctx} | &1])
+
+        {:ok,
+         %{dir: "/tmp/fake-capture", highlights: ["Out of memory: Killed process 412 (bun)"]}}
       end
     }
   end
@@ -150,8 +156,12 @@ defmodule Mjolnir.Deploy.BuilderTest do
     test "aborts on a failed step but still tears the VM down", %{agent: agent} do
       ops = recording_ops(agent, existing: [], exec_fail_on: "npm ci")
 
-      assert {:error, {:step_failed, "npm ci", {:exit_code, 1, "boom"}, built}} =
+      assert {:error, {:step_failed, "npm ci", {:exit_code, 1, "boom"}, built, diag}} =
                Builder.build(@base, steps(), ops: ops)
+
+      # A failed step must carry diagnostics: without them a dead build VM is
+      # indistinguishable from a bad command (mjolnir-7jb).
+      assert is_map(diag)
 
       # The first layer built before the failure is reported.
       [l1 | _] = chain_keys(@base, steps())
@@ -238,6 +248,64 @@ defmodule Mjolnir.Deploy.BuilderTest do
         |> Enum.map(fn {:snapshot, _name, opts} -> opts end)
 
       assert [[skip_verify: true]] = snapshot_opts
+    end
+  end
+
+  describe "failure diagnostics (mjolnir-7jb)" do
+    test "captures diagnostics BEFORE the VM is torn down", %{agent: agent} do
+      ops = recording_ops(agent, existing: [], exec_fail_on: "npm ci")
+
+      assert {:error, {:step_failed, "npm ci", _, _, diag}} =
+               Builder.build(@base, steps(), ops: ops)
+
+      assert diag.diagnostics_dir == "/tmp/fake-capture"
+      assert diag.highlights == ["Out of memory: Killed process 412 (bun)"]
+
+      ev = events(agent)
+      capture_at = Enum.find_index(ev, &match?({:diagnostics, _, _}, &1))
+      stop_at = Enum.find_index(ev, &match?({:stop, _}, &1))
+
+      assert capture_at, "diagnostics were never captured"
+      assert stop_at, "the build VM was never torn down"
+
+      # The whole point: the serial console dies with the VM, so the capture is
+      # worthless if it runs after teardown.
+      assert capture_at < stop_at,
+             "diagnostics must be captured before the VM is discarded"
+    end
+
+    test "passes the failing command and reason to the capture", %{agent: agent} do
+      ops = recording_ops(agent, existing: [], exec_fail_on: "npm ci")
+      Builder.build(@base, steps(), ops: ops)
+
+      {:diagnostics, _vm, ctx} = Enum.find(events(agent), &match?({:diagnostics, _, _}, &1))
+      assert ctx[:command] == "npm ci"
+      assert ctx[:reason] == {:exit_code, 1, "boom"}
+    end
+
+    test "a failing capture does not mask the build failure", %{agent: agent} do
+      ops =
+        agent
+        |> recording_ops(existing: [], exec_fail_on: "npm ci")
+        |> Map.put(:diagnostics, fn _vm, _ctx -> {:error, :enoent} end)
+
+      assert {:error, {:step_failed, "npm ci", {:exit_code, 1, "boom"}, _built, diag}} =
+               Builder.build(@base, steps(), ops: ops)
+
+      assert diag.diagnostics_dir == nil
+      assert diag.highlights == []
+    end
+
+    test "a RAISING capture does not mask the build failure either", %{agent: agent} do
+      ops =
+        agent
+        |> recording_ops(existing: [], exec_fail_on: "npm ci")
+        |> Map.put(:diagnostics, fn _vm, _ctx -> raise "disk on fire" end)
+
+      assert {:error, {:step_failed, "npm ci", {:exit_code, 1, "boom"}, _built, diag}} =
+               Builder.build(@base, steps(), ops: ops)
+
+      assert diag.diagnostics_dir == nil
     end
   end
 end
