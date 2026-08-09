@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use iroh::endpoint::Endpoint;
 use iroh::{EndpointAddr, PublicKey, RelayUrl};
 use mjolnir_protocol::{
-    read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, TCP_FWD_ALPN,
+    read_frame, write_frame, Frame, PROTOCOL_VERSION, SHELL_ALPN, SHELL_ALPN_V2, TCP_FWD_ALPN,
 };
 #[cfg(unix)]
 use nix::sys::termios;
@@ -152,10 +152,35 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
         .context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
-    let conn = endpoint
-        .connect(addr, SHELL_ALPN)
-        .await
-        .context("Failed to connect to VM")?;
+    // ALPN is the version handshake. A `--session` request needs an agent that can decode
+    // a Hello carrying a session name, so we ask for SHELL_ALPN_V2 and let QUIC tell us
+    // whether the far end speaks it — a v1 agent refuses the unknown ALPN during the TLS
+    // handshake, before we have written a byte. Falling back to v1 (and to typing the
+    // tmux command into the shell) degrades to the old behaviour instead of erroring.
+    // Without a session there is nothing to negotiate, so we keep the single-round-trip
+    // v1 path untouched.
+    let (conn, negotiated_v2) = if session.is_some() {
+        match endpoint.clone().connect(addr.clone(), SHELL_ALPN_V2).await {
+            Ok(conn) => (conn, true),
+            Err(e) => {
+                // Could be an old agent (ALPN refused) or a genuinely unreachable VM.
+                // Retrying on v1 distinguishes the two: if the VM is really unreachable
+                // the second attempt fails too, and that error is the one we surface.
+                eprintln!("Agent does not support shared sessions natively ({e}); falling back.");
+                let conn = endpoint
+                    .connect(addr, SHELL_ALPN)
+                    .await
+                    .context("Failed to connect to VM")?;
+                (conn, false)
+            }
+        }
+    } else {
+        let conn = endpoint
+            .connect(addr, SHELL_ALPN)
+            .await
+            .context("Failed to connect to VM")?;
+        (conn, false)
+    };
     eprintln!("Connected. Opening shell...");
 
     let (mut send, mut recv) = conn.open_bi().await.context("Failed to open QUIC stream")?;
@@ -167,17 +192,24 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
             rows,
             cols,
             version: PROTOCOL_VERSION,
+            // Only ever send a session name over v2 — a v1 agent rejects the longer
+            // Hello payload outright rather than ignoring the trailing bytes.
+            session: if negotiated_v2 { session.clone() } else { None },
         },
     )
     .await
     .context("Failed to send Hello frame")?;
 
-    // Inject tmux session command if requested
-    if let Some(ref name) = session {
-        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
-        write_frame(&mut send, &Frame::Data(cmd.into_bytes()))
-            .await
-            .context("Failed to send tmux session command")?;
+    // On a v1 agent the session name could not ride on Hello, so fall back to typing the
+    // attach command into the shell. It races shell startup and shows up in scrollback,
+    // which is exactly why v2 exists — but it beats dropping the user in the wrong shell.
+    if !negotiated_v2 {
+        if let Some(ref name) = session {
+            let cmd = format!("tmux new-session -A -s {}\n", name);
+            write_frame(&mut send, &Frame::Data(cmd.into_bytes()))
+                .await
+                .context("Failed to send tmux session command")?;
+        }
     }
 
     let original_termios = set_raw_mode().context("Failed to set raw mode")?;

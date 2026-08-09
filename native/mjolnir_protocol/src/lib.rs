@@ -10,11 +10,21 @@
 //! - `0x02` Resize: rows(u16 BE) + cols(u16 BE)
 //! - `0x03` Exit: exit code(i32 BE)
 //! - `0x04` Hello: rows(u16 BE) + cols(u16 BE) + protocol version(u16 BE)
+//!   + optional UTF-8 tmux session name (all remaining bytes)
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// ALPN protocol identifier for Mjolnir shell connections.
 pub const SHELL_ALPN: &[u8] = b"mjolnir-shell/1";
+
+/// ALPN identifier for shell connections that may carry a tmux session name in Hello.
+///
+/// This is the version handshake. QUIC negotiates the ALPN before a single frame is
+/// written, and a v1 agent rejects an unknown ALPN at the TLS layer — so a client that
+/// connects with this string *knows* the far end can decode a long Hello before it
+/// sends one. Without it, an extended Hello reaching a v1 agent would trip the strict
+/// six-byte length check in `read_frame` and kill the connection instead of degrading.
+pub const SHELL_ALPN_V2: &[u8] = b"mjolnir-shell/2";
 
 /// ALPN protocol identifier for Mjolnir TCP port forwarding.
 pub const TCP_FWD_ALPN: &[u8] = b"mjolnir-tcp-fwd/1";
@@ -23,7 +33,13 @@ pub const TCP_FWD_ALPN: &[u8] = b"mjolnir-tcp-fwd/1";
 pub const SECRET_INJECT_ALPN: &[u8] = b"mjolnir-secret-inject/1";
 
 /// Current protocol version.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
+
+/// Maximum length of a tmux session name on the wire.
+///
+/// The guest agent validates the name properly (`tmux::validate_session_name`, 64 chars);
+/// this only stops a malformed peer from making us allocate a 16 MB "session name".
+const MAX_SESSION_LEN: usize = 256;
 
 /// Header size: 1 byte type + 4 bytes length.
 const HEADER_SIZE: usize = 5;
@@ -47,7 +63,18 @@ pub enum Frame {
     /// Shell process exited with the given code.
     Exit { code: i32 },
     /// Client hello with initial terminal size and protocol version.
-    Hello { rows: u16, cols: u16, version: u16 },
+    ///
+    /// `session` asks the agent to attach this PTY to a named tmux session rather than
+    /// spawn a private shell, which is how several clients converge on one terminal.
+    /// It encodes to zero extra bytes when `None`, so a v1 Hello and a sessionless v2
+    /// Hello are the same six bytes on the wire. Only ever send `Some` over
+    /// [`SHELL_ALPN_V2`] — a v1 agent rejects the longer payload outright.
+    Hello {
+        rows: u16,
+        cols: u16,
+        version: u16,
+        session: Option<String>,
+    },
 }
 
 impl Frame {
@@ -77,13 +104,21 @@ impl Frame {
                 buf.extend_from_slice(&code.to_be_bytes());
                 buf
             }
-            Frame::Hello { rows, cols, version } => {
-                let mut buf = Vec::with_capacity(HEADER_SIZE + 6);
+            Frame::Hello {
+                rows,
+                cols,
+                version,
+                session,
+            } => {
+                let session_bytes = session.as_deref().map(str::as_bytes).unwrap_or(&[]);
+                let len = (6 + session_bytes.len()) as u32;
+                let mut buf = Vec::with_capacity(HEADER_SIZE + len as usize);
                 buf.push(TYPE_HELLO);
-                buf.extend_from_slice(&6u32.to_be_bytes());
+                buf.extend_from_slice(&len.to_be_bytes());
                 buf.extend_from_slice(&rows.to_be_bytes());
                 buf.extend_from_slice(&cols.to_be_bytes());
                 buf.extend_from_slice(&version.to_be_bytes());
+                buf.extend_from_slice(session_bytes);
                 buf
             }
         }
@@ -144,16 +179,42 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result
             Ok(Some(Frame::Exit { code }))
         }
         TYPE_HELLO => {
-            if payload.len() != 6 {
+            if payload.len() < 6 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "Hello payload must be 6 bytes",
+                    "Hello payload must be at least 6 bytes",
                 ));
             }
             let rows = u16::from_be_bytes([payload[0], payload[1]]);
             let cols = u16::from_be_bytes([payload[2], payload[3]]);
             let version = u16::from_be_bytes([payload[4], payload[5]]);
-            Ok(Some(Frame::Hello { rows, cols, version }))
+            let session = if payload.len() == 6 {
+                None
+            } else {
+                let raw = &payload[6..];
+                if raw.len() > MAX_SESSION_LEN {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Hello session name too long: {} bytes", raw.len()),
+                    ));
+                }
+                Some(
+                    std::str::from_utf8(raw)
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Hello session name must be valid UTF-8",
+                            )
+                        })?
+                        .to_string(),
+                )
+            };
+            Ok(Some(Frame::Hello {
+                rows,
+                cols,
+                version,
+                session,
+            }))
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -209,11 +270,86 @@ mod tests {
             rows: 24,
             cols: 80,
             version: PROTOCOL_VERSION,
+            session: None,
         };
         let encoded = frame.encode();
         let mut cursor = Cursor::new(encoded);
         let decoded = read_frame(&mut cursor).await.unwrap().unwrap();
         assert_eq!(frame, decoded);
+    }
+
+    #[tokio::test]
+    async fn test_hello_with_session_roundtrip() {
+        let frame = Frame::Hello {
+            rows: 24,
+            cols: 80,
+            version: PROTOCOL_VERSION,
+            session: Some("shared-term".to_string()),
+        };
+        let encoded = frame.encode();
+        let mut cursor = Cursor::new(encoded);
+        let decoded = read_frame(&mut cursor).await.unwrap().unwrap();
+        assert_eq!(frame, decoded);
+    }
+
+    /// A sessionless Hello must stay byte-identical to the v1 encoding.
+    ///
+    /// This is the load-bearing compatibility claim: `mj connect` without `--session`
+    /// still speaks SHELL_ALPN (v1) to agents in the field, so if this drifts, every
+    /// deployed agent starts rejecting Hello on the strict six-byte check.
+    #[tokio::test]
+    async fn test_sessionless_hello_is_wire_identical_to_v1() {
+        let encoded = Frame::Hello {
+            rows: 24,
+            cols: 80,
+            version: 1,
+            session: None,
+        }
+        .encode();
+
+        let mut expected = vec![TYPE_HELLO];
+        expected.extend_from_slice(&6u32.to_be_bytes());
+        expected.extend_from_slice(&24u16.to_be_bytes());
+        expected.extend_from_slice(&80u16.to_be_bytes());
+        expected.extend_from_slice(&1u16.to_be_bytes());
+
+        assert_eq!(encoded, expected);
+    }
+
+    #[tokio::test]
+    async fn test_hello_short_payload_errors() {
+        let mut buf = vec![TYPE_HELLO];
+        buf.extend_from_slice(&4u32.to_be_bytes());
+        buf.extend_from_slice(&24u16.to_be_bytes());
+        buf.extend_from_slice(&80u16.to_be_bytes());
+        let mut cursor = Cursor::new(buf);
+        assert!(read_frame(&mut cursor).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_hello_session_too_long_errors() {
+        let name = "a".repeat(MAX_SESSION_LEN + 1);
+        let encoded = Frame::Hello {
+            rows: 24,
+            cols: 80,
+            version: PROTOCOL_VERSION,
+            session: Some(name),
+        }
+        .encode();
+        let mut cursor = Cursor::new(encoded);
+        assert!(read_frame(&mut cursor).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_hello_session_invalid_utf8_errors() {
+        let mut buf = vec![TYPE_HELLO];
+        buf.extend_from_slice(&8u32.to_be_bytes());
+        buf.extend_from_slice(&24u16.to_be_bytes());
+        buf.extend_from_slice(&80u16.to_be_bytes());
+        buf.extend_from_slice(&2u16.to_be_bytes());
+        buf.extend_from_slice(&[0xff, 0xfe]);
+        let mut cursor = Cursor::new(buf);
+        assert!(read_frame(&mut cursor).await.is_err());
     }
 
     #[tokio::test]
@@ -230,6 +366,7 @@ mod tests {
                 rows: 24,
                 cols: 80,
                 version: 1,
+                session: None,
             },
             Frame::Data(b"ls\n".to_vec()),
             Frame::Resize { rows: 50, cols: 120 },

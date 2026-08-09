@@ -6,7 +6,8 @@ use crate::pty::PtySession;
 use iroh::endpoint::{Endpoint, Incoming};
 use iroh::SecretKey;
 use mjolnir_protocol::{
-    read_frame, write_frame, Frame, PROTOCOL_VERSION, SECRET_INJECT_ALPN, SHELL_ALPN, TCP_FWD_ALPN,
+    read_frame, write_frame, Frame, PROTOCOL_VERSION, SECRET_INJECT_ALPN, SHELL_ALPN,
+    SHELL_ALPN_V2, TCP_FWD_ALPN,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -54,7 +55,12 @@ pub async fn run_iroh_server(
     // Build endpoint
     let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
         .secret_key(secret_key)
-        .alpns(vec![SHELL_ALPN.to_vec(), TCP_FWD_ALPN.to_vec(), SECRET_INJECT_ALPN.to_vec()])
+        .alpns(vec![
+            SHELL_ALPN.to_vec(),
+            SHELL_ALPN_V2.to_vec(),
+            TCP_FWD_ALPN.to_vec(),
+            SECRET_INJECT_ALPN.to_vec(),
+        ])
         .bind()
         .await?;
 
@@ -130,7 +136,7 @@ async fn handle_incoming(incoming: Incoming) {
     let remote_id = conn.remote_id();
     let alpn = conn.alpn();
 
-    if alpn == SHELL_ALPN {
+    if alpn == SHELL_ALPN || alpn == SHELL_ALPN_V2 {
         info!("Shell connection from {:?}", remote_id);
         if let Err(e) = handle_shell_connection(conn).await {
             error!("Shell session error: {}", e);
@@ -167,20 +173,24 @@ async fn handle_shell_connection(
     info!("Shell stream opened, waiting for Hello");
 
     // Read Hello frame from client to get terminal size
-    let (rows, cols) = match read_frame(&mut recv).await? {
+    let (rows, cols, session) = match read_frame(&mut recv).await? {
         Some(Frame::Hello {
             rows,
             cols,
             version,
+            session,
         }) => {
-            info!("Client hello: {}x{}, protocol v{}", cols, rows, version);
+            info!(
+                "Client hello: {}x{}, protocol v{}, session={:?}",
+                cols, rows, version, session
+            );
             if version != PROTOCOL_VERSION {
                 warn!(
                     "Protocol version mismatch: client v{}, server v{}",
                     version, PROTOCOL_VERSION
                 );
             }
-            (rows, cols)
+            (rows, cols, session)
         }
         Some(other) => {
             warn!("Expected Hello frame, got {:?}", other);
@@ -192,9 +202,32 @@ async fn handle_shell_connection(
         }
     };
 
+    // A named session attaches this PTY to a shared tmux session, exactly as the vsock
+    // PtyOpen path does, so `mj connect --session x` and the gateway's WebSocket PTY on
+    // the same name land in ONE terminal. No name keeps the historical private bash.
+    // An invalid name is rejected rather than silently downgraded — the caller asked for
+    // a specific shared terminal, and quietly handing back a private one would be worse
+    // than an error (this mirrors the PtyOpen rejection in `vsock.rs`).
+    // The `tmux` module only exists under the `full` feature, which is independent of
+    // `iroh` — the boot agent can be built with one and not the other.
+    let argv: Vec<String> = match session.as_deref() {
+        #[cfg(feature = "full")]
+        Some(name) => crate::tmux::attach_argv(name).map_err(|e| {
+            warn!("Shell connection rejected: invalid session name: {}", e);
+            format!("invalid pty session name: {}", e)
+        })?,
+        #[cfg(not(feature = "full"))]
+        Some(_) => {
+            warn!("Shell connection rejected: named sessions require the full agent");
+            return Err("named tmux sessions require the full agent, not the boot agent".into());
+        }
+        None => vec![DEFAULT_SHELL.to_string()],
+    };
+    let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
+
     // Spawn PTY with client-specified terminal size
-    let mut pty = PtySession::spawn(DEFAULT_SHELL, cols, rows)?;
-    info!("PTY spawned ({}x{})", cols, rows);
+    let mut pty = PtySession::spawn_argv(&argv_ref, cols, rows)?;
+    info!("PTY spawned ({}x{}) running {:?}", cols, rows, argv);
 
     // Bidirectional copy with binary framing
     let mut pty_buf = vec![0u8; 4096];
