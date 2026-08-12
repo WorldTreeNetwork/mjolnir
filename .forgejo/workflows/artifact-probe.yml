@@ -43,3 +43,10 @@ jobs:
           name: probe-v4
           path: /tmp/probe/hello.txt
           if-no-files-found: error
+          # Quoted strings, not YAML booleans. The action declares these with
+          # boolean defaults, and act hands the action an empty value rather
+          # than "false", which @actions/core.getBooleanInput rejects with
+          #   Input does not meet YAML 1.2 "Core Schema" specification
+          # Passing them explicitly keeps act out of the stringifying business.
+          include-hidden-files: 'false'
+          overwrite: 'true'
