@@ -180,11 +180,29 @@ defmodule Mjolnir.Network do
 
   @doc """
   Generate TAP device name from VM ID.
-  Format: mj-{first 8 chars of vm_id}
+
+  Format: `<prefix>{first 8 chars of vm_id}`, prefix from `:tap_prefix`
+  (default `"mj-"`).
+
+  The prefix is configurable because TAP devices are host-global while
+  everything else Cleanup reaps is namespaced by `socket_dir` / `btrfs_root`.
+  A second BEAM on the same host — the test one — must be able to tell its
+  own interfaces from another BEAM's, or its startup sweep will delete a
+  running VM's TAP and cut its networking (mjolnir-0ut). Interface names are
+  capped at 15 chars by the kernel: 3 + 8 leaves room, but a long prefix
+  would silently truncate and collide.
   """
   @spec tap_name(String.t()) :: String.t()
   def tap_name(vm_id) do
-    "mj-#{short_id(vm_id)}"
+    "#{tap_prefix()}#{short_id(vm_id)}"
+  end
+
+  @doc """
+  Prefix identifying TAP devices this BEAM owns. See `tap_name/1`.
+  """
+  @spec tap_prefix() :: String.t()
+  def tap_prefix do
+    Application.get_env(:mjolnir, :tap_prefix, "mj-")
   end
 
   @doc """

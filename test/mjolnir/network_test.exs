@@ -69,14 +69,37 @@ defmodule Mjolnir.NetworkTest do
   end
 
   describe "tap_name/1" do
-    test "generates tap name with mj- prefix" do
+    test "generates tap name with the configured prefix" do
       name = Network.tap_name("abc12345-6789-abcd-ef01")
-      assert name == "mj-abc12345"
+      assert name == "#{Network.tap_prefix()}abc12345"
     end
 
     test "truncates to 8 chars of VM ID" do
       name = Network.tap_name("12345678901234567890")
-      assert name == "mj-12345678"
+      assert name == "#{Network.tap_prefix()}12345678"
+    end
+
+    test "test-env interfaces are unmistakable for production ones, and vice versa" do
+      # Not cosmetic. TAP devices are host-global, and Cleanup deletes any DOWN
+      # interface matching its own prefix by SUBSTRING. If either prefix were a
+      # substring of the other, a test BEAM sharing a host with production
+      # would delete a live VM's TAP and cut its networking (mjolnir-0ut).
+      # "mjt-" does not contain "mj-" — there is no consecutive "j-" — so the
+      # two sweeps are blind to each other. This test exists so that a future
+      # rename to, say, "mj-test-" fails here instead of in production.
+      test_prefix = Network.tap_prefix()
+      prod_prefix = "mj-"
+
+      assert test_prefix != prod_prefix,
+             "test config must not share production's TAP prefix (#{prod_prefix})"
+
+      refute String.contains?(Network.tap_name("abc12345"), prod_prefix),
+             "a test TAP name must not contain the production prefix, or production's " <>
+               "Cleanup sweep would reap it"
+
+      refute String.contains?("#{prod_prefix}abc12345", test_prefix),
+             "a production TAP name must not contain the test prefix, or a test BEAM's " <>
+               "Cleanup sweep would reap a live production VM's interface"
     end
   end
 

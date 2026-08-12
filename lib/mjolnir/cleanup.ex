@@ -109,17 +109,28 @@ defmodule Mjolnir.Cleanup do
     end
   end
 
+  # Delete our own DOWN TAP interfaces.
+  #
+  # TAP devices are host-global — unlike hypervisor processes, sockets and
+  # rootfs subvolumes, which this module reaps through socket_dir/btrfs_root
+  # and so can never reach another BEAM's. This swept every `mj-*` interface
+  # regardless of owner, so a MIX_ENV=test BEAM starting on the same host
+  # would delete a PRODUCTION VM's TAP whenever that TAP was momentarily DOWN
+  # (mid-boot, or wedged) and cut its networking. Scoping to :tap_prefix means
+  # each BEAM only reaps interfaces it could have created (mjolnir-0ut).
   defp clean_orphan_taps do
-    # Find any mj-* TAP interfaces with state DOWN and delete them
+    prefix = Mjolnir.Network.tap_prefix()
+    pattern = Regex.compile!("(#{Regex.escape(prefix)}[a-f0-9]+)")
+
     case System.cmd("ip", ["-o", "link", "show"], stderr_to_stdout: true) do
       {output, 0} ->
         output
         |> String.split("\n", trim: true)
         |> Enum.filter(fn line ->
-          String.contains?(line, "mj-") and String.contains?(line, "state DOWN")
+          String.contains?(line, prefix) and String.contains?(line, "state DOWN")
         end)
         |> Enum.each(fn line ->
-          case Regex.run(~r/(mj-[a-f0-9]+)/, line) do
+          case Regex.run(pattern, line) do
             [_, tap_name] ->
               Logger.info("Removing orphan TAP interface: #{tap_name}")
               System.cmd("sudo", ["-n", "ip", "link", "del", tap_name], stderr_to_stdout: true)
