@@ -1,8 +1,11 @@
 name: Build mj client
 
-# Builds the `mj` binary in a Mjolnir microVM — Mjolnir building its own client.
+# Builds the `mj` binary in a Mjolnir microVM — Mjolnir building its own client
+# — and publishes it as a downloadable artifact.
+#
 # The runner label `ubuntu-24.04` maps to `mjolnir:ci-ubuntu-24.04`, our base
-# image, which carries rust + zig via mise (see scripts/lib/mise.sh).
+# image, which carries rust + zig via mise (see scripts/lib/mise.sh). Because
+# nothing caches between VMs yet (mjolnir-5xn), expect ~10 minutes cold.
 
 on:
   push:
@@ -25,35 +28,40 @@ jobs:
       # otherwise surfaces ten minutes later as an inscrutable cargo error.
       - name: Toolchain provenance
         run: |
-          pwd
           cargo --version
           rustc --version
           echo "mise: $(mise --version)"
-
-      # DIAGNOSTIC (mjolnir-7c4): the Mjolnir VM executor ignored
-      # `working-directory` on run 1 — cargo ran in the repo root instead of
-      # native/. Every step below therefore cds explicitly. This step reports
-      # whether the key is honoured; when it prints a path ending in /native,
-      # the explicit cds can go.
-      - name: Does working-directory work yet?
-        working-directory: native
-        continue-on-error: true
-        # No ": " in a plain YAML scalar — it parses as a nested mapping and
-        # Forgejo then skips the whole file with only a line in gitea.log.
-        run: echo "working-directory landed in $(pwd)"
 
       # Scoped to the client on purpose: the workspace also holds
       # mjolnir_guest_agent, whose tokio-vsock dependency and musl target
       # belong to the deploy path, not here.
       - name: Test protocol + client
-        run: cd native && cargo test -p mjolnir-protocol -p mjolnir-client
+        working-directory: native
+        run: cargo test -p mjolnir-protocol -p mjolnir-client
 
       - name: Build release
-        run: cd native && cargo build --release -p mjolnir-client
+        working-directory: native
+        run: cargo build --release -p mjolnir-client
 
       - name: Verify the binary runs
+        working-directory: native
         run: |
-          cd native
           ./target/release/mjolnir --version
           ./target/release/mjolnir --help > /dev/null
           sha256sum target/release/mjolnir
+
+      # forgejo/, not actions/. The upstream action bundles @actions/artifact
+      # v2, which refuses to talk to any host that is not github.com — Forgejo
+      # reads as GHES and it fails with GHESNotSupportedError before making a
+      # request. That check is client-side, so no server-side fix reaches it.
+      - name: Publish mj
+        uses: forgejo/upload-artifact@v4
+        with:
+          name: mj-x86_64-linux
+          path: native/target/release/mjolnir
+          if-no-files-found: error
+          # Quoted strings, not YAML booleans, and passed explicitly rather
+          # than relying on the action's defaults. Both habits are cheap
+          # insurance around act's input handling.
+          include-hidden-files: 'false'
+          overwrite: 'true'
