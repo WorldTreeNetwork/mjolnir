@@ -65,6 +65,14 @@ pub async fn cmd_spawn(
     eprintln!("Spawning VM...");
     let resp = spawn_vm(&client, base, &opts).await?;
 
+    // Print the VM id prominently and early: every follow-up verb (exec, kill,
+    // info, snapshot) takes this id, not the ticket. Without it printed here,
+    // the only way to find it again is `mj list`, and picking the wrong entry
+    // out of that list is exactly how the wrong VM gets killed (mjolnir-aip).
+    // Emitted on stderr so stdout keeps carrying only the ticket, unchanged,
+    // for anything scripting off `mj spawn` output.
+    eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+
     // If shell not ready yet, await it.
     let ticket = if resp.shell_ready == Some(true) {
         resp.ticket.clone()
@@ -76,7 +84,10 @@ pub async fn cmd_spawn(
     if let Some(ref t) = ticket {
         println!("{}", t);
     } else {
-        eprintln!("VM {} (no ticket yet)", resp.id);
+        eprintln!(
+            "(no ticket yet — use `mj ticket get {}` once ready)",
+            resp.id
+        );
     }
 
     // Show persist interval so users know their worst-case backup window
@@ -299,7 +310,7 @@ pub async fn cmd_info(
     if let Some(boot_time) = resp.boot_time {
         println!("\nTiming");
         println!("───────────────────────────────────────────────────────");
-        println!("Boot Time:    {} (unix timestamp)", boot_time);
+        println!("Boot Time:    {} (unix ms)", boot_time);
     }
 
     Ok(())
@@ -440,6 +451,12 @@ pub async fn cmd_kill(
 
     let id = resolve_vm_id(&client, base, id_or_ticket).await?;
 
+    // Echo exactly what is about to be destroyed, BEFORE destroying it — no
+    // confirmation prompt (that would break scripted/`--all` use), just
+    // visibility. Best-effort: a VM that's already gone or unreachable still
+    // gets killed, it just prints with fewer details (mjolnir-aip).
+    describe_kill_target(&client, base, &id).await;
+
     client
         .delete(format!("{}/api/vms/{}", base, &id))
         .send()
@@ -450,6 +467,44 @@ pub async fn cmd_kill(
 
     eprintln!("Killed {}", id);
     Ok(())
+}
+
+/// Print what a kill is about to destroy: id, base_image/snapshot, and boot
+/// time, pulled from the same `GET /api/vms/{id}` info endpoint `mj info`
+/// uses. Failure to fetch info is non-fatal — the kill proceeds regardless,
+/// just with a bare id line instead of full detail.
+async fn describe_kill_target(client: &reqwest::Client, base: &str, id: &str) {
+    match fetch_info(client, base, id).await {
+        Ok(info) => {
+            for line in kill_target_lines(&info) {
+                eprintln!("{}", line);
+            }
+        }
+        Err(_) => {
+            eprintln!("Killing {} (could not fetch details)", id);
+        }
+    }
+}
+
+/// Pure formatting seam for [`describe_kill_target`]: turns a fetched
+/// `VmInfo` into the lines to print before destroying it. Split out from the
+/// network call so the formatting is unit-testable without a mock server.
+fn kill_target_lines(info: &VmInfo) -> Vec<String> {
+    let mut lines = vec![format!("Killing {}", info.id)];
+    if let Some(cfg) = &info.config {
+        match &cfg.snapshot {
+            Some(snap) => lines.push(format!("  from snapshot:   {}", snap)),
+            None => lines.push(format!("  from base image: {}", cfg.base_image)),
+        }
+    }
+    if let Some(boot_time) = info.boot_time {
+        // Milliseconds, not seconds: the server sets this with
+        // System.system_time(:millisecond) (vm.ex:1033). Calling it a "unix
+        // timestamp" unqualified invites someone to read it as seconds and
+        // conclude the VM booted in 1970.
+        lines.push(format!("  booted at:       {} (unix ms)", boot_time));
+    }
+    lines
 }
 
 /// Retire a stranded VM record to `:failed` so Reconcile stops trying to resume
@@ -1038,6 +1093,7 @@ pub async fn cmd_ticket_get(
 #[cfg(test)]
 mod tests {
     use super::metadata_query;
+    use super::{VmConfig, VmInfo};
 
     #[test]
     fn builds_prefixed_pairs_in_order() {
@@ -1102,5 +1158,72 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("mutually exclusive"));
+    }
+
+    fn sample_vm_info(config: Option<VmConfig>, boot_time: Option<i64>) -> VmInfo {
+        VmInfo {
+            id: "3f9e2b1c-0000-0000-0000-000000000001".to_string(),
+            state: "running".to_string(),
+            ticket: None,
+            guest_ip: None,
+            shell_ready: None,
+            web_url: None,
+            iroh_node_id: None,
+            config,
+            boot_time,
+            rootfs_bytes: None,
+        }
+    }
+
+    #[test]
+    fn kill_target_lines_shows_snapshot_when_spawned_from_one() {
+        let info = sample_vm_info(
+            Some(VmConfig {
+                vcpu_count: 2,
+                mem_size_mib: 512,
+                base_image: "arch".to_string(),
+                snapshot: Some("nightly-2026-08-11".to_string()),
+                rootfs_size_mb: None,
+            }),
+            Some(1_755_000_000),
+        );
+        let lines = super::kill_target_lines(&info);
+        assert_eq!(lines[0], "Killing 3f9e2b1c-0000-0000-0000-000000000001");
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("from snapshot:") && l.contains("nightly-2026-08-11")));
+        assert!(!lines.iter().any(|l| l.contains("from base image:")));
+        assert!(lines.iter().any(|l| l.contains("booted at:")));
+    }
+
+    #[test]
+    fn kill_target_lines_shows_base_image_when_no_snapshot() {
+        let info = sample_vm_info(
+            Some(VmConfig {
+                vcpu_count: 2,
+                mem_size_mib: 512,
+                base_image: "ubuntu-24.04".to_string(),
+                snapshot: None,
+                rootfs_size_mb: None,
+            }),
+            None,
+        );
+        let lines = super::kill_target_lines(&info);
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("from base image:") && l.contains("ubuntu-24.04")));
+        assert!(!lines.iter().any(|l| l.contains("from snapshot:")));
+        assert!(!lines.iter().any(|l| l.contains("boot time:")));
+    }
+
+    #[test]
+    fn kill_target_lines_degrades_to_bare_id_when_config_unknown() {
+        // fetch_info can succeed but return a VM record with no config (e.g.
+        // mid-boot); the id line must still be present and nothing panics on
+        // the missing fields.
+        let info = sample_vm_info(None, None);
+        let lines = super::kill_target_lines(&info);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "Killing 3f9e2b1c-0000-0000-0000-000000000001");
     }
 }
