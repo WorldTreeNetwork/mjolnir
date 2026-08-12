@@ -1,0 +1,48 @@
+name: Build mj client
+
+# Builds the `mj` binary in a Mjolnir microVM — Mjolnir building its own client.
+# The runner label `ubuntu-24.04` maps to `mjolnir:ci-ubuntu-24.04`, our base
+# image, which carries rust + zig via mise (see scripts/lib/mise.sh).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.forgejo/workflows/build-client.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly and early if the image regressed. A missing toolchain
+      # otherwise surfaces 10 minutes later as an inscrutable cargo error.
+      - name: Toolchain provenance
+        run: |
+          cargo --version
+          rustc --version
+          echo "mise: $(mise --version)"
+
+      # Scoped to the client on purpose: the workspace also holds
+      # mjolnir_guest_agent, which depends on tokio-vsock and is built for
+      # x86_64-unknown-linux-musl by the deploy path, not here.
+      - name: Test protocol + client
+        working-directory: native
+        run: cargo test -p mjolnir-protocol -p mjolnir-client
+
+      - name: Build release
+        working-directory: native
+        run: cargo build --release -p mjolnir-client
+
+      - name: Verify the binary runs
+        working-directory: native
+        run: |
+          ./target/release/mjolnir --version
+          ./target/release/mjolnir --help > /dev/null
+          sha256sum target/release/mjolnir
