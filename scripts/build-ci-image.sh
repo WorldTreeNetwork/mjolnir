@@ -150,6 +150,7 @@ chroot "$R" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     python3-pip \
     python3-venv \
     jq \
+    tmux \
     unzip \
     zip \
     xz-utils \

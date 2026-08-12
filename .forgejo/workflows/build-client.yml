@@ -50,6 +50,26 @@ jobs:
           ./target/release/mjolnir --help > /dev/null
           sha256sum target/release/mjolnir
 
+      # The guest agent cannot build on macOS (tokio-vsock is Linux-only), so
+      # its tests never run on a developer laptop — CI is the only place they
+      # run at all. It builds for the host target here; the musl cross-compile
+      # belongs to the deploy path, not to testing.
+      #
+      # tmux is required: the send_and_read tests drive a real tmux server.
+      # It is in the image as of the recipe change alongside this, but install
+      # it if absent so CI works before the image is next rebuilt. Once the
+      # image carries it this is a no-op.
+      - name: Test guest agent (Linux-only)
+        working-directory: native
+        run: |
+          command -v tmux >/dev/null 2>&1 || {
+            echo "tmux missing from image — installing (see scripts/build-ci-image.sh)"
+            DEBIAN_FRONTEND=noninteractive apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tmux
+          }
+          tmux -V
+          cargo test -p mjolnir-guest-agent --bin mjolnir-agent --features full
+
       # forgejo/, not actions/. The upstream action bundles @actions/artifact
       # v2, which refuses to talk to any host that is not github.com — Forgejo
       # reads as GHES and it fails with GHESNotSupportedError before making a
