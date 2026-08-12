@@ -343,6 +343,26 @@ async fn run_shell_loop(
 
 // --- WebSocket PTY connection ---
 
+/// Percent-encode a query-parameter value.
+///
+/// The API is the authority on what a session name may contain
+/// (`Mjolnir.API.Validation.validate_session_name/2`), so this deliberately does not
+/// duplicate that policy — it only guarantees that whatever the user typed reaches the
+/// server as one intact parameter, to be accepted or rejected there. Re-implementing the
+/// charset rule in a third place would just give it somewhere new to drift.
+fn percent_encode_query(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    out
+}
+
 /// Connect to a VM PTY via WebSocket.
 ///
 /// This is the renamed version of `cmd_pty` from main.rs, accepting the API flag
@@ -363,7 +383,20 @@ pub async fn cmd_connect(
     } else {
         base.replacen("http", "ws", 1)
     };
-    let url = format!("{}/api/vms/{}/pty", ws_url, vm_id);
+    // The PTY endpoint takes the tmux session name as a query parameter and threads it
+    // all the way to the guest agent's PtyOpen, which attaches the PTY to that session
+    // directly. Passing it here rather than typing `tmux new-session` into the shell
+    // means there is no outer shell left behind to fall back into on detach, nothing
+    // lands in scrollback, and the attach cannot race shell startup.
+    let url = match session.as_deref() {
+        Some(name) => format!(
+            "{}/api/vms/{}/pty?session={}",
+            ws_url,
+            vm_id,
+            percent_encode_query(name)
+        ),
+        None => format!("{}/api/vms/{}/pty", ws_url, vm_id),
+    };
 
     // Build request with auth header
     let effective_token = crate::auth::resolve_token(token).await;
@@ -396,7 +429,9 @@ pub async fn cmd_connect(
         restore_terminal(&orig_for_guard);
     });
 
-    let result = run_pty_loop(ws_stream, session).await;
+    // No session argument: the server already opened the PTY attached to the right tmux
+    // session, so this loop is a plain byte pump in both cases.
+    let result = run_pty_loop(ws_stream).await;
 
     restore_terminal(&original_termios);
 
@@ -410,7 +445,7 @@ pub async fn cmd_connect(
 }
 
 #[cfg(unix)]
-async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
 where
     S: futures_util::Stream<
             Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
@@ -428,15 +463,6 @@ where
         .send(Message::Text(resize_msg.to_string()))
         .await
         .context("Failed to send initial resize")?;
-
-    // Inject tmux session command if requested
-    if let Some(ref name) = session {
-        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
-        ws_write
-            .send(Message::Binary(cmd.into_bytes()))
-            .await
-            .context("Failed to send tmux session command")?;
-    }
 
     // Set up SIGWINCH handler
     let mut sigwinch =
@@ -476,7 +502,7 @@ where
 }
 
 #[cfg(windows)]
-async fn run_pty_loop<S>(ws_stream: S, session: Option<String>) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
 where
     S: futures_util::Stream<
             Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
@@ -498,15 +524,6 @@ where
         .send(Message::Text(resize_msg.to_string()))
         .await
         .context("Failed to send initial resize")?;
-
-    // Inject tmux session command if requested
-    if let Some(ref name) = session {
-        let cmd = format!("tmux attach -t {} || tmux new-session -s {}\n", name, name);
-        ws_write
-            .send(Message::Binary(cmd.into_bytes()))
-            .await
-            .context("Failed to send tmux session command")?;
-    }
 
     loop {
         tokio::select! {
@@ -749,4 +766,34 @@ pub async fn cmd_proxy_target(
 ) -> Result<()> {
     let ticket = target_to_ticket(profile, api_flag, token, target).await?;
     cmd_proxy(&ticket, port, relay, ips).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_encode_query_leaves_valid_session_names_untouched() {
+        // Every name the API will actually accept is unreserved, so the common case must
+        // not mangle anything — a name that round-trips differently would silently open a
+        // *different* tmux session than the one the user asked for.
+        assert_eq!(percent_encode_query("shared-term"), "shared-term");
+        assert_eq!(percent_encode_query("dev_1-a"), "dev_1-a");
+        assert_eq!(percent_encode_query("9"), "9");
+    }
+
+    #[test]
+    fn percent_encode_query_escapes_query_structure() {
+        // These are rejected by the API, but they must arrive as one parameter for it to
+        // reject them — not smuggle a second query parameter into the request.
+        assert_eq!(percent_encode_query("a&b=c"), "a%26b%3Dc");
+        assert_eq!(percent_encode_query("a b"), "a%20b");
+        assert_eq!(percent_encode_query("a#f"), "a%23f");
+        assert_eq!(percent_encode_query("foo:0.0"), "foo%3A0.0");
+    }
+
+    #[test]
+    fn percent_encode_query_escapes_non_ascii_bytewise() {
+        assert_eq!(percent_encode_query("café"), "caf%C3%A9");
+    }
 }
