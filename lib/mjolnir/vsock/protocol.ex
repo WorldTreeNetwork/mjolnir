@@ -16,6 +16,8 @@ defmodule Mjolnir.Vsock.Protocol do
   - spawn_sub_agent/snapshot_self/emit_event: Agent protocol
   """
 
+  require Logger
+
   @doc """
   Encode a message for transmission with channel multiplexing.
 
@@ -58,6 +60,83 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   def decode_frame(buffer), do: {:incomplete, buffer}
+
+  # Bytes kept when logging the offending frame of a skipped/unparseable
+  # control message — enough to identify it, small enough to never flood logs.
+  @log_prefix_bytes 200
+
+  @doc """
+  Read a single channel-0 (JSON control) response from a raw, unframed-buffer
+  vsock socket, skipping anything that is not a decodable control message
+  instead of failing.
+
+  Intended for the short-lived, single-shot vsock connections used during VM
+  boot (ping polling, configure_* requests) — as opposed to the persistent
+  `Mjolnir.Vsock.Connection`, which already demultiplexes channels itself.
+  Those short-lived connections read "the next frame" off the wire and used
+  to assume it was always their own channel-0 reply.
+
+  It isn't always. Every fresh vsock connection makes the guest agent spawn a
+  brand-new syslog forwarder (native/mjolnir_guest_agent/src/vsock.rs,
+  `handle_vsock_connection`) that immediately starts draining `/dev/log`. On
+  a freshly-booted guest that backlog can include boot noise (dbus/systemd
+  activation lines) framed on channel 2, and it can win the race against the
+  guest formatting and enqueueing the actual channel-0 response — landing on
+  the wire first. Reading "whatever arrives next" and handing it straight to
+  `Jason.decode` then fails on raw syslog text (mjolnir-pry).
+
+  This loops — bounded by `timeout` in total — logging a warning (with a
+  bounded byte prefix) and skipping any non-channel-0 frame, and any
+  channel-0 frame that doesn't decode as JSON, until it finds one that does
+  or time runs out.
+  """
+  @spec read_json_response(:gen_tcp.socket(), timeout()) :: {:ok, map()} | {:error, term()}
+  def read_json_response(sock, timeout) when is_integer(timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_read_json_response(sock, deadline)
+  end
+
+  defp do_read_json_response(sock, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, :timeout}
+    else
+      with {:ok, <<channel::8, length::big-32>>} <- :gen_tcp.recv(sock, 5, remaining),
+           body_timeout = max(deadline - System.monotonic_time(:millisecond), 0),
+           {:ok, body} <- :gen_tcp.recv(sock, length, body_timeout) do
+        handle_response_frame(sock, deadline, channel, body)
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp handle_response_frame(sock, deadline, channel, body) when channel != 0 do
+    Logger.warning(
+      "Skipping non-control vsock frame while awaiting response " <>
+        "(channel #{channel}, #{byte_size(body)} bytes): #{inspect(log_prefix(body))}"
+    )
+
+    do_read_json_response(sock, deadline)
+  end
+
+  defp handle_response_frame(sock, deadline, 0, body) do
+    case Jason.decode(body) do
+      {:ok, parsed} ->
+        {:ok, parsed}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Skipping non-JSON control-channel frame: #{inspect(reason)}, prefix: " <>
+            inspect(log_prefix(body))
+        )
+
+        do_read_json_response(sock, deadline)
+    end
+  end
+
+  defp log_prefix(body), do: binary_part(body, 0, min(byte_size(body), @log_prefix_bytes))
 
   @doc """
   Build an exec request message.

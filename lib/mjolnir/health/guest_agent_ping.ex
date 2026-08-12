@@ -26,14 +26,26 @@ defmodule Mjolnir.Health.GuestAgentPing do
 
     opts = [:binary, active: false, packet: :raw]
 
-    with {:ok, sock} <- :gen_tcp.connect({:local, path}, 0, opts, timeout),
-         :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
+    case :gen_tcp.connect({:local, path}, 0, opts, timeout) do
+      {:ok, sock} ->
+        result = do_probe(sock, ping, timeout)
+        :gen_tcp.close(sock)
+        result
+
+      {:error, reason} ->
+        {:dead, reason}
+    end
+  end
+
+  # Uses Protocol.read_json_response (mjolnir-pry) rather than reading "the
+  # next frame" directly: a fresh vsock connection makes the guest agent
+  # spawn a new syslog forwarder, whose backlog can win the race against
+  # the pong and land on channel 2 first. read_json_response skips it.
+  defp do_probe(sock, ping, timeout) do
+    with :ok <- :gen_tcp.send(sock, "CONNECT 5000\n"),
          {:ok, "OK" <> _} <- :gen_tcp.recv(sock, 0, timeout),
          :ok <- :gen_tcp.send(sock, Protocol.encode(ping)),
-         {:ok, <<_ch::8, len::big-32>>} <- :gen_tcp.recv(sock, 5, timeout),
-         {:ok, body} <- :gen_tcp.recv(sock, len, timeout),
-         :ok <- :gen_tcp.close(sock),
-         {:ok, %{"type" => "pong"}} <- Jason.decode(body) do
+         {:ok, %{"type" => "pong"}} <- Protocol.read_json_response(sock, timeout) do
       :ok
     else
       {:error, :timeout} -> {:dead, :timeout}

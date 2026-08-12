@@ -333,6 +333,96 @@ defmodule Mjolnir.Vsock.ProtocolTest do
     end
   end
 
+  describe "read_json_response/2 (mjolnir-pry)" do
+    # A raw listen/accept pair stands in for the guest side of the vsock UDS:
+    # the test writes frames onto the accepted socket in whatever order it
+    # likes, and calls Protocol.read_json_response/2 on the client socket —
+    # exactly the pattern vm.ex's vsock_request/try_ping_agent use.
+    setup do
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, packet: :raw, ip: {127, 0, 0, 1}])
+
+      {:ok, port} = :inet.port(listen)
+
+      # gen_tcp sockets are owned by the process that opens them and close
+      # when that process exits — so both ends must be connected/accepted
+      # from a process that outlives the setup (here: hand ownership back to
+      # the test process before the connecting Task exits).
+      test_pid = self()
+
+      task =
+        Task.async(fn ->
+          {:ok, sock} =
+            :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw])
+
+          :ok = :gen_tcp.controlling_process(sock, test_pid)
+          sock
+        end)
+
+      {:ok, server} = :gen_tcp.accept(listen)
+      client = Task.await(task)
+
+      on_exit(fn ->
+        :gen_tcp.close(client)
+        :gen_tcp.close(server)
+        :gen_tcp.close(listen)
+      end)
+
+      {:ok, client: client, server: server}
+    end
+
+    test "returns the channel-0 JSON response when it arrives cleanly", %{
+      client: client,
+      server: server
+    } do
+      :ok = :gen_tcp.send(server, Protocol.encode(%{"type" => "pong"}, 0))
+
+      assert {:ok, %{"type" => "pong"}} = Protocol.read_json_response(client, 1_000)
+    end
+
+    test "skips a real RFC 3164 syslog line on channel 2 and finds the pong behind it",
+         %{client: client, server: server} do
+      # Exact payload from mjolnir-pry (CI run 14, 2026-08-12 16:57): a guest
+      # syslog line racing a freshly-opened connection's pong response. This
+      # is the literal reproduction of the bug, not a synthetic stand-in.
+      syslog_line =
+        "<30>Aug 12 16:57:15 dbus-daemon[776]: [system] Successfully activated service 'org.freedesktop.systemd1'\n"
+
+      :ok = :gen_tcp.send(server, Protocol.encode(syslog_line, 2))
+      :ok = :gen_tcp.send(server, Protocol.encode(%{"type" => "pong"}, 0))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{"type" => "pong"}} = Protocol.read_json_response(client, 1_000)
+        end)
+
+      assert log =~ "Skipping non-control vsock frame"
+      assert log =~ "channel 2"
+      assert log =~ "dbus-daemon"
+    end
+
+    test "skips a channel-0 frame that isn't valid JSON instead of failing", %{
+      client: client,
+      server: server
+    } do
+      :ok = :gen_tcp.send(server, Protocol.encode("not json at all", 0))
+      :ok = :gen_tcp.send(server, Protocol.encode(%{"type" => "pong"}, 0))
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{"type" => "pong"}} = Protocol.read_json_response(client, 1_000)
+        end)
+
+      assert log =~ "Skipping non-JSON control-channel frame"
+    end
+
+    test "times out rather than hanging forever when no response ever arrives", %{
+      client: client
+    } do
+      assert {:error, :timeout} = Protocol.read_json_response(client, 100)
+    end
+  end
+
   describe "inject_secrets_request/2 (managed secrets)" do
     test "builds a minimal request with just a passphrase" do
       msg = Protocol.inject_secrets_request("s3cret")
