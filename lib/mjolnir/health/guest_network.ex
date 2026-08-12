@@ -1,11 +1,18 @@
 defmodule Mjolnir.Health.GuestNetwork do
   @moduledoc """
-  L2 check: can the guest exec a ping, and does it come back?
+  L2 check: does the guest have a default route, and can it reach the network?
 
-  Runs `ping -c1 -W2 <gateway>` inside the guest via vsock exec. The
-  gateway is the host-side IP associated with the guest's TAP. A failure
-  here usually means the TAP is down, routing is wiped, or NAT is broken
-  — any of which are fixable by re-running `configure_network`.
+  Runs a small shell probe inside the guest via vsock exec: it requires a
+  default route, then attempts egress with whichever of curl/wget/ping the
+  image actually ships. A failure here usually means the TAP is down,
+  routing is wiped, or NAT is broken — any of which are fixable by
+  re-running `configure_network`.
+
+  It deliberately does NOT hard-code `ping`: that binary is absent from the
+  ubuntu-24.04 base image, and the old probe read its "not found" exit as
+  dead egress (mjolnir-58w). When no probe tool exists at all the result is
+  `:degraded`, not `:dead` — we learned nothing, which is not the same as
+  bad news.
   """
 
   @behaviour Mjolnir.Health.Check
