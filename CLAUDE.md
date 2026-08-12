@@ -267,11 +267,33 @@ Forgejo Actions workflows execute inside Mjolnir microVMs instead of Docker cont
 - **Go executor**: `native/forgejo-runner/pkg/mjolnir/executor.go` — implements act's `container.Container` interface
 - **Elixir supervisor**: `lib/mjolnir/runner/{server,config,supervisor}.ex` — Port lifecycle, feature-flagged via `:runner_enabled`
 - **Deploy**: `just deploy-runner` (clones upstream, patches, builds, installs systemd service)
-- **Labels**: `ubuntu-24.04:mjolnir:ubuntu-24.04` — `runs-on: ubuntu-24.04` routes to VM backend
+- **Labels**: `ubuntu-24.04:mjolnir:ci-ubuntu-24.04` and `docker:mjolnir:ci-ubuntu-24.04` — both `runs-on:` values route to the VM backend on the `@base/ci-ubuntu-24.04` image. Authoritative copy is `/var/lib/mjolnir/runner/.runner`.
 - **Server paths**: binary at `/usr/local/bin/forgejo-runner-mjolnir`, state at `/var/lib/mjolnir/runner/`
-- **Logs**: `journalctl -u forgejo-runner`
+- **Logs**: `journalctl -u forgejo-runner`; per-job logs are zstd at `/var/lib/forgejo/data/actions_log/<owner>/<repo>/<n>/<task>.log.zst` (`zstd -dc … | grep -vE '::debug::|\[command\]'` — the raw log is mostly checkout noise)
 
 Multi-VirtioFS support (`lib/mjolnir/virtiofs.ex`) allows mounting additional host directories (e.g., repo) read-only into CI VMs via `extra_mounts` API parameter. Paths validated against `allowed_mount_prefixes` config.
+
+#### Mjolnir's own CI
+
+`.forgejo/workflows/build-client.yml` builds the `mj` client inside a Mjolnir VM. The repo lives on **two remotes**, and this matters:
+
+```bash
+git push origin main    # github.com/identikey/mjolnir — builds nothing
+git push forgejo main   # mimir.worldtree.network — this is what triggers CI
+```
+
+Two things that will cost you a run:
+
+1. **Forgejo silently skips an unparseable workflow.** No run, no red X — just `[W] ignore invalid workflow` in `/var/lib/forgejo/log/gitea.log`. An empty dashboard is ambiguous between "nothing changed" and "your YAML is broken". Validate before pushing: `ruby -ryaml -e 'YAML.safe_load(File.read(".forgejo/workflows/build-client.yml"))'`.
+2. **The VM executor ignores `working-directory`** and runs in the repo root instead, without erroring (mjolnir-7c4). Steps must `cd native &&` themselves.
+
+To spawn a CI VM by hand, note that `@base/` and `@snapshots/` are separate namespaces and `mj` has no `--base` flag (mjolnir-97c), so `mj spawn --snapshot ci-ubuntu-24.04` fails with `:snapshot_not_found`. Go through the API:
+
+```bash
+ssh root@45.76.77.97 "curl -s -X POST localhost:4000/api/vms \
+  -H 'Content-Type: application/json' \
+  -d '{\"base_image\":\"ci-ubuntu-24.04\",\"memory_mb\":4096}'"
+```
 
 ### Syslog Infrastructure (`lib/mjolnir/syslog/`)
 
