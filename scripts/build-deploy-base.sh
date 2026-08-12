@@ -72,6 +72,9 @@ OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/deploy-node-bun}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI_ASSETS="$SCRIPT_DIR/ci-image"
 
+# shellcheck source=lib/guest-agent.sh
+source "$SCRIPT_DIR/lib/guest-agent.sh"
+
 # Toolchain versions baked into the image. Keep in sync with
 # lib/mjolnir/deploy/detector.ex's @runtime ("node@20").
 NODE_VERSION="20"
@@ -371,32 +374,13 @@ chroot "$R" systemctl enable mount-workspace.service
 # so Mjolnir.VM.spawn/1 fails with :boot_timeout after 30s and the image is
 # unusable — which is exactly how the first build of this image failed.
 #
-# The binary itself is NOT baked in: Mjolnir injects the current build into each
-# VM's rootfs clone at boot (inject_guest_agent/1 -> usr/local/bin/mjolnir-agent),
-# so the image only needs the unit that starts it. basic.target, matching
-# @base/ubuntu-24.04 and @base/ci-ubuntu-24.04, so the agent is up before
-# multi-user services that might want the network the agent configures.
-#
-# NOTE: build-ci-image.sh does not install this either — @base/ci-ubuntu-24.04
-# has it only because someone added it out of band. See mjolnir-gge.1.10.
-cat > "$R/etc/systemd/system/mjolnir-agent.service" << 'EOF'
-[Unit]
-Description=Mjolnir Guest Agent
-After=sysinit.target
-Wants=sysinit.target
+# This block used to install only the unit, on the reasoning that Mjolnir injects
+# the binary into each clone at boot via inject_guest_agent/1. That reasoning was
+# wrong: injection is conditional on :guest_agent_bin being configured AND the file
+# existing, and on the prod host that path does not exist, so it is a silent no-op
+# and the clone gets no binary at all. The image has to carry both (mjolnir-0e8).
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/mjolnir-agent
-Restart=on-failure
-RestartSec=2
-StartLimitBurst=3
-StartLimitIntervalSec=30
-
-[Install]
-WantedBy=basic.target
-EOF
-chroot "$R" systemctl enable mjolnir-agent.service
+install_guest_agent "$R"
 
 # ── Network setup script ──────────────────────────────────────────────────────
 #

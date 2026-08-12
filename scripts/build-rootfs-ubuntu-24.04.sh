@@ -10,6 +10,10 @@ set -euo pipefail
 OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/ubuntu-24.04}"
 AGENT_BIN="${AGENT_BIN:-}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/guest-agent.sh
+source "$SCRIPT_DIR/lib/guest-agent.sh"
+
 # Find agent binary
 if [[ -z "$AGENT_BIN" ]]; then
     for path in \
@@ -88,37 +92,10 @@ chroot "$MOUNT_DIR" systemctl enable serial-getty@ttyS0.service
 # Lock root password (serial console uses autologin, SSH uses key auth)
 chroot "$MOUNT_DIR" passwd -l root
 
-# Guest agent
-if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
-    echo "Installing guest agent..."
-    cp "$AGENT_BIN" "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
-    chmod +x "$MOUNT_DIR/usr/local/bin/mjolnir-agent"
-
-    mkdir -p "$MOUNT_DIR/etc/mjolnir"
-    chmod 700 "$MOUNT_DIR/etc/mjolnir"
-
-    cat > "$MOUNT_DIR/etc/systemd/system/mjolnir-agent.service" << 'EOF'
-[Unit]
-Description=Mjolnir Guest Agent
-After=sysinit.target
-Wants=sysinit.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/mjolnir-agent
-Restart=on-failure
-RestartSec=2
-StartLimitBurst=3
-StartLimitIntervalSec=30
-
-[Install]
-WantedBy=basic.target
-EOF
-    mkdir -p "$MOUNT_DIR/etc/systemd/system/basic.target.wants"
-    chroot "$MOUNT_DIR" ln -sf /etc/systemd/system/mjolnir-agent.service /etc/systemd/system/basic.target.wants/mjolnir-agent.service
-else
-    echo "WARNING: No guest agent - vsock commands won't work"
-fi
+# Guest agent. This used to warn and carry on when AGENT_BIN was unset, which
+# emitted an image that boots but fails every spawn on :boot_timeout. The helper
+# fails instead; set ALLOW_NO_AGENT=1 to deliberately build one without.
+install_guest_agent "$MOUNT_DIR"
 
 # Network setup script (called by guest agent)
 echo "Installing network setup script..."

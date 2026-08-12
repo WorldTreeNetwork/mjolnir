@@ -23,6 +23,9 @@ OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI_ASSETS="$SCRIPT_DIR/ci-image"
 
+# shellcheck source=lib/guest-agent.sh
+source "$SCRIPT_DIR/lib/guest-agent.sh"
+
 echo "=== Building CI Ubuntu 24.04 Rootfs (BTRFS subvolume) ==="
 echo "Output:     $OUTPUT"
 echo "Assets dir: $CI_ASSETS"
@@ -191,7 +194,10 @@ echo "--- Creating workspace directories ---"
 mkdir -p "$R/workspace/repo"
 mkdir -p "$R/workspace/cache"
 mkdir -p "$R/workspace/src"
-chown -R runner:runner "$R/workspace"
+# Inside the chroot: `runner` exists in the image's /etc/passwd, not the host's,
+# so a host-side `chown runner:runner` fails with "invalid user" and set -e kills
+# the build. (build-buzz-agent-image.sh sidesteps this by chowning numeric IDs.)
+chroot "$R" chown -R runner:runner /workspace
 
 # ── mount-extra-fs.sh ─────────────────────────────────────────────────────────
 #
@@ -232,6 +238,15 @@ echo "--- Installing systemd services ---"
 # mount-workspace: mount virtio-fs shares at boot
 cp "$CI_ASSETS/mount-workspace.service" "$R/etc/systemd/system/mount-workspace.service"
 chroot "$R" systemctl enable mount-workspace.service
+
+# ── Guest agent ───────────────────────────────────────────────────────────────
+#
+# This script previously installed neither the binary nor the unit. The live
+# @base/ci-ubuntu-24.04 boots only because both were added by hand months after
+# it was built, so re-running this script used to emit an unbootable image
+# (mjolnir-0e8). The helper installs both and verifies them.
+
+install_guest_agent "$R"
 
 # ── Network setup script ──────────────────────────────────────────────────────
 #

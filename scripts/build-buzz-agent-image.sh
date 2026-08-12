@@ -107,6 +107,9 @@ OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/buzz-agent}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI_ASSETS="$SCRIPT_DIR/ci-image"
 
+# shellcheck source=lib/guest-agent.sh
+source "$SCRIPT_DIR/lib/guest-agent.sh"
+
 # Pinned sprig image. Tag+digest form: the tag stays human-traceable to its git
 # SHA while the digest does the pinning. Keep in sync with DEFAULT_IMAGE in
 # block/buzz@main:crates/buzz-backend-kubernetes/src/config.rs — that constant
@@ -496,68 +499,7 @@ chown -R "$AGENT_UID:$AGENT_GID" "$R$AGENT_HOME" "$R/var/lib/buzz" "$R/workspace
 # WantedBy=basic.target, not multi-user.target: the agent must be answering
 # before the VM counts as started, well below where ordinary services come up.
 
-echo ""
-echo "--- Installing mjolnir guest agent ---"
-
-# Resolve the agent binary. Prefer a freshly built one (same candidate paths as
-# scripts/build-rootfs-ubuntu-24.04.sh); fall back to the copy in an existing
-# base image so a host without a Rust build tree can still produce a bootable
-# image — noisily, because that copy can be stale.
-if [[ -z "${AGENT_BIN:-}" ]]; then
-    for cand in \
-        "$SCRIPT_DIR/../native/target/x86_64-unknown-linux-musl/release/mjolnir-agent" \
-        "$SCRIPT_DIR/../native/mjolnir_guest_agent/target/x86_64-unknown-linux-musl/release/mjolnir-agent" \
-        "/var/lib/mjolnir/btrfs/@base/ubuntu-24.04/usr/local/bin/mjolnir-agent" \
-        "/var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04/usr/local/bin/mjolnir-agent"
-    do
-        if [[ -f "$cand" ]]; then
-            AGENT_BIN="$cand"
-            break
-        fi
-    done
-fi
-
-if [[ -z "${AGENT_BIN:-}" || ! -f "$AGENT_BIN" ]]; then
-    echo "Error: no mjolnir-agent binary found."
-    echo "  Build it (just deploy / scripts/build-guest-agent.sh) or pass"
-    echo "  AGENT_BIN=/path/to/mjolnir-agent. Without it this image boots but"
-    echo "  never answers a vsock ping, and every spawn fails with :boot_timeout."
-    exit 1
-fi
-
-case "$AGENT_BIN" in
-    /var/lib/mjolnir/btrfs/@base/*)
-        echo "Warning: no freshly-built agent found; copying from $AGENT_BIN."
-        echo "         That binary is as old as the base image it came from."
-        ;;
-esac
-
-echo "Agent binary: $AGENT_BIN"
-install -m 0755 "$AGENT_BIN" "$R/usr/local/bin/mjolnir-agent"
-
-mkdir -p "$R/etc/mjolnir"
-chmod 700 "$R/etc/mjolnir"
-
-cat > "$R/etc/systemd/system/mjolnir-agent.service" << 'EOF'
-[Unit]
-Description=Mjolnir Guest Agent
-After=sysinit.target
-Wants=sysinit.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/mjolnir-agent
-Restart=on-failure
-RestartSec=2
-StartLimitBurst=3
-StartLimitIntervalSec=30
-
-[Install]
-WantedBy=basic.target
-EOF
-mkdir -p "$R/etc/systemd/system/basic.target.wants"
-chroot "$R" ln -sf /etc/systemd/system/mjolnir-agent.service \
-    /etc/systemd/system/basic.target.wants/mjolnir-agent.service
+install_guest_agent "$R"
 
 # ── Harness entrypoint ───────────────────────────────────────────────────────
 
