@@ -22,27 +22,36 @@ jobs:
       - uses: actions/checkout@v4
 
       # Fail loudly and early if the image regressed. A missing toolchain
-      # otherwise surfaces 10 minutes later as an inscrutable cargo error.
+      # otherwise surfaces ten minutes later as an inscrutable cargo error.
       - name: Toolchain provenance
         run: |
+          pwd
           cargo --version
           rustc --version
           echo "mise: $(mise --version)"
 
-      # Scoped to the client on purpose: the workspace also holds
-      # mjolnir_guest_agent, which depends on tokio-vsock and is built for
-      # x86_64-unknown-linux-musl by the deploy path, not here.
-      - name: Test protocol + client
+      # DIAGNOSTIC (mjolnir-7c4): the Mjolnir VM executor ignored
+      # `working-directory` on run 1 — cargo ran in the repo root instead of
+      # native/. Every step below therefore cds explicitly. This step reports
+      # whether the key is honoured; when it prints a path ending in /native,
+      # the explicit cds can go.
+      - name: Does working-directory work yet?
         working-directory: native
-        run: cargo test -p mjolnir-protocol -p mjolnir-client
+        continue-on-error: true
+        run: echo "working-directory landed in: $(pwd)"
+
+      # Scoped to the client on purpose: the workspace also holds
+      # mjolnir_guest_agent, whose tokio-vsock dependency and musl target
+      # belong to the deploy path, not here.
+      - name: Test protocol + client
+        run: cd native && cargo test -p mjolnir-protocol -p mjolnir-client
 
       - name: Build release
-        working-directory: native
-        run: cargo build --release -p mjolnir-client
+        run: cd native && cargo build --release -p mjolnir-client
 
       - name: Verify the binary runs
-        working-directory: native
         run: |
+          cd native
           ./target/release/mjolnir --version
           ./target/release/mjolnir --help > /dev/null
           sha256sum target/release/mjolnir
