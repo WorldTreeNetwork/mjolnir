@@ -4,8 +4,8 @@
 //! Mjolnir API. Reuses the CLI's config and auth modules.
 //!
 //! Usage:
-//!   mjolnir mcp-serve              # uses default profile
-//!   mjolnir mcp-serve --api http://localhost:4000
+//!   mjolnir mcp-serve              # default profile → api.vm.worldtree.network
+//!   mjolnir mcp-serve --api http://localhost:4000   # override to a local control plane
 
 use std::sync::{Arc, RwLock};
 
@@ -585,7 +585,7 @@ impl MjolnirMcpService {
             .profiles
             .into_iter()
             .map(|(name, p)| {
-                let api = p.api.unwrap_or_else(|| "http://localhost:4000".into());
+                let api = p.api.unwrap_or_else(|| config::DEFAULT_API.into());
                 (name, serde_json::Value::String(api))
             })
             .collect();
@@ -611,9 +611,7 @@ impl MjolnirMcpService {
                 names.join(", ")
             ))
         })?;
-        let new_api = profile
-            .api
-            .unwrap_or_else(|| "http://localhost:4000".into());
+        let new_api = profile.api.unwrap_or_else(|| config::DEFAULT_API.into());
         *self.api_base.write().unwrap() = new_api.clone();
         *self.profile_name.write().unwrap() = p.profile.clone();
         Ok(CallToolResult::success(vec![Content::text(

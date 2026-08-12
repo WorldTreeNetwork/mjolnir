@@ -9,7 +9,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-const DEFAULT_API: &str = "http://localhost:4000";
+/// API base used when neither `--api`, `MJOLNIR_API`, nor the profile names one.
+///
+/// This is deliberately a subdomain rather than an address: `api.vm.worldtree.network`
+/// is a CNAME onto the host, so the fleet can be moved by editing DNS instead of
+/// shipping every client a new binary. Point it somewhere else and every `mj` in the
+/// world follows on its next lookup.
+///
+/// A local control plane is reached by overriding, not by rebuilding:
+///   MJOLNIR_API=http://localhost:4000 mj list
+///   mj config set api http://localhost:4000
+pub const DEFAULT_API: &str = "https://api.vm.worldtree.network";
 
 /// All named profiles, stored as a flat TOML table.
 #[derive(Serialize, Deserialize, Default)]
@@ -293,4 +303,63 @@ pub fn resolve_ssh_key_path_for_profile(profile: &Profile) -> Option<String> {
 pub fn read_ssh_public_key(profile: &Profile) -> Option<String> {
     let path = resolve_ssh_key_path_for_profile(profile)?;
     std::fs::read_to_string(&path).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile_with_api(api: Option<&str>) -> Profile {
+        Profile {
+            api: api.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// The default must stay a remote subdomain. If this ever reverts to localhost,
+    /// every `mj` shipped to a server (xibu, CI) silently talks to nothing.
+    #[test]
+    fn default_api_is_the_remote_subdomain() {
+        assert_eq!(DEFAULT_API, "https://api.vm.worldtree.network");
+    }
+
+    /// All resolve_api cases live in ONE test on purpose: it mutates MJOLNIR_API, and
+    /// Rust runs tests in parallel threads sharing one environment. Split across
+    /// several #[test] fns these would race each other intermittently.
+    #[test]
+    fn resolve_api_precedence() {
+        std::env::remove_var("MJOLNIR_API");
+
+        // default when nothing is set
+        assert_eq!(resolve_api(&None, &profile_with_api(None)), DEFAULT_API);
+
+        // profile beats default — this is how a local control plane is reached
+        assert_eq!(
+            resolve_api(&None, &profile_with_api(Some("http://localhost:4000"))),
+            "http://localhost:4000"
+        );
+
+        // env beats profile
+        std::env::set_var("MJOLNIR_API", "http://env:4000");
+        assert_eq!(
+            resolve_api(&None, &profile_with_api(Some("http://profile:4000"))),
+            "http://env:4000"
+        );
+
+        // an empty env var is ignored rather than resolving to ""
+        std::env::set_var("MJOLNIR_API", "");
+        assert_eq!(resolve_api(&None, &profile_with_api(None)), DEFAULT_API);
+
+        // explicit flag beats everything
+        std::env::set_var("MJOLNIR_API", "http://env:4000");
+        assert_eq!(
+            resolve_api(
+                &Some("http://flag:4000".to_string()),
+                &profile_with_api(Some("http://profile:4000"))
+            ),
+            "http://flag:4000"
+        );
+
+        std::env::remove_var("MJOLNIR_API");
+    }
 }
