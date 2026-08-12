@@ -38,7 +38,9 @@ jobs:
       - name: Does working-directory work yet?
         working-directory: native
         continue-on-error: true
-        run: echo "working-directory landed in: $(pwd)"
+        # No ": " in a plain YAML scalar — it parses as a nested mapping and
+        # Forgejo then skips the whole file with only a line in gitea.log.
+        run: echo "working-directory landed in $(pwd)"
 
       # Scoped to the client on purpose: the workspace also holds
       # mjolnir_guest_agent, whose tokio-vsock dependency and musl target
