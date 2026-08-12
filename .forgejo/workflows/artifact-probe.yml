@@ -1,0 +1,45 @@
+name: Artifact probe
+
+# TEMPORARY (mjolnir-4bk). Proves the artifact upload path end to end in ~1
+# minute, instead of iterating inside build-client.yml where every run pays a
+# 10-minute cold cargo build. Delete once build-client.yml uploads reliably.
+#
+# Unknowns this is here to settle:
+#   1. Does Forgejo's artifact API answer at all? There is no [actions] section
+#      in app.ini, so everything is defaults, and data/actions_artifacts has
+#      never had a file written to it.
+#   2. v4 or v3? The runner injects ACTIONS_RESULTS_URL, which is the v4 signal.
+#   3. Is node 20 required? The image ships node 18 from apt, and upload-artifact
+#      v4 declares `using: node20`. checkout@v4 declares the same and worked, so
+#      node 18 may be tolerated — but artifact upload does far more at runtime.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.forgejo/workflows/artifact-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Environment
+        run: |
+          echo "node $(node --version)"
+          echo "results-url ${ACTIONS_RESULTS_URL:-<unset>}"
+          echo "runtime-url ${ACTIONS_RUNTIME_URL:-<unset>}"
+          echo "token-present ${ACTIONS_RUNTIME_TOKEN:+yes}"
+
+      - name: Make a payload
+        run: |
+          mkdir -p /tmp/probe
+          echo "artifact probe $GITHUB_SHA" > /tmp/probe/hello.txt
+          sha256sum /tmp/probe/hello.txt
+
+      - name: Upload (v4)
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-v4
+          path: /tmp/probe/hello.txt
+          if-no-files-found: error
