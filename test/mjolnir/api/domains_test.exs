@@ -131,5 +131,38 @@ defmodule Mjolnir.API.DomainsTest do
       assert [app] = Domains.list_apps(ops: ops)
       assert app.backend == nil
     end
+
+    test "apex_registered is nil when the app has no custom_domain", %{agent: agent} do
+      ops = fake_ops(agent, [])
+      assert [app] = Domains.list_apps(ops: ops)
+      assert app.custom_domain == nil
+      assert app.apex_registered == nil
+    end
+
+    test "apex_registered is true when custom_domain's apex is configured", %{agent: agent} do
+      Agent.update(agent, &Map.put(&1, "zine", entry(%{custom_domain: "zine.identikey.io"})))
+      ops = fake_ops(agent, [])
+
+      assert [app] = Domains.list_apps(ops: ops)
+      assert app.apex_registered == true
+    end
+
+    test "apex_registered is false when the apex is missing — surfaces the mjolnir-1pk drop via GET /api/apps",
+         %{agent: agent} do
+      # This is exactly the startupcentral.build failure mode: the entry is
+      # registered with a custom_domain (Deploy.Registry reports success), but
+      # its apex fell out of :gateway_apexes, so RouteReconciler drops the
+      # route. Before this fix nothing surfaced that beyond a log line.
+      Agent.update(
+        agent,
+        &Map.put(&1, "zine", entry(%{custom_domain: "startupcentral.build"}))
+      )
+
+      ops = fake_ops(agent, [])
+
+      assert [app] = Domains.list_apps(ops: ops)
+      assert app.custom_domain == "startupcentral.build"
+      assert app.apex_registered == false
+    end
   end
 end

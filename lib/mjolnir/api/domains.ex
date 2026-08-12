@@ -119,14 +119,24 @@ defmodule Mjolnir.API.Domains do
   @doc """
   List all deployed apps joined with their live gateway backend.
 
-  Each entry is `%{app_name, url, custom_domain, service_vm_id, backend, port}`
-  where `backend` is `"<guest_ip>:<port>"` when the app's service VM is currently
-  running/local (and a port is known), else `nil`.
+  Each entry is `%{app_name, url, custom_domain, service_vm_id, backend, port,
+  apex_registered}` where `backend` is `"<guest_ip>:<port>"` when the app's
+  service VM is currently running/local (and a port is known), else `nil`.
+
+  `apex_registered` mirrors the field `set_domain/3` already returns: `true`
+  when `custom_domain`'s apex is currently in `:gateway_apexes` (so the
+  reconciler can emit a route for it), `false` when it is not (the app is
+  silently 400ing — mjolnir-1pk), and `nil` when the app has no
+  `custom_domain` at all. Computed live against the *current* config, so it
+  catches the case that bit us on 2026-08-07: the domain was valid when set,
+  but the apex it needs was later dropped from `:gateway_apexes` (e.g. an
+  unpersisted runtime override reverting on restart).
   """
   @spec list_apps(keyword()) :: [map()]
   def list_apps(opts \\ []) do
     ops = merged_ops(opts)
     running = running_set(ops.running_vm_ids.())
+    apexes = ops.apexes.()
 
     for entry <- ops.registry_list.() do
       %{
@@ -136,6 +146,7 @@ defmodule Mjolnir.API.Domains do
         service_vm_id: entry.service_vm_id,
         port: entry.port,
         backend: live_backend(entry, running, ops),
+        apex_registered: apex_registered?(entry.custom_domain, apexes),
         # Carried for Mjolnir.Policy.App.filter_readable/2 (mjolnir-xuv). The
         # router strips it before rendering so the documented GET /api/apps
         # response shape is unchanged.
@@ -150,6 +161,16 @@ defmodule Mjolnir.API.Domains do
     case Routes.split_fqdn(fqdn, apexes) do
       {:ok, _} = ok -> ok
       {:error, :no_apex} = err -> err
+    end
+  end
+
+  defp apex_registered?(nil, _apexes), do: nil
+  defp apex_registered?("", _apexes), do: nil
+
+  defp apex_registered?(fqdn, apexes) do
+    case Routes.split_fqdn(fqdn, apexes) do
+      {:ok, _} -> true
+      {:error, :no_apex} -> false
     end
   end
 

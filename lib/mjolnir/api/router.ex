@@ -47,8 +47,12 @@ defmodule Mjolnir.API.Router do
   ### `GET /api/apps`
 
     * **Response**: `200` `{"apps": [{"app_name", "url", "custom_domain",
-      "service_vm_id", "backend", "port"}]}` (`backend` is `"<ip>:<port>"` when
-      the service VM is running/local, else `null`).
+      "service_vm_id", "backend", "port", "apex_registered"}]}` (`backend` is
+      `"<ip>:<port>"` when the service VM is running/local, else `null`).
+      `apex_registered` is `true`/`false` when `custom_domain` is set (whether
+      its apex is currently in `:gateway_apexes` — `false` means the gateway
+      route is silently dropped for it, mjolnir-1pk) and `null` when there is
+      no `custom_domain`.
   """
 
   use Plug.Router

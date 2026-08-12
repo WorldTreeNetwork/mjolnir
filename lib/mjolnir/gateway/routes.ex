@@ -65,7 +65,7 @@ defmodule Mjolnir.Gateway.Routes do
   # ==========================================================================
 
   @typedoc "A desired route intent before VM/apex resolution."
-  @type spec :: %{fqdn: String.t(), vm_id: String.t(), port: pos_integer()}
+  @type spec :: %{fqdn: String.t(), vm_id: String.t(), port: pos_integer(), app_name: String.t()}
 
   @doc """
   Build the desired route specs from the union of registry entries (those with a
@@ -73,6 +73,10 @@ defmodule Mjolnir.Gateway.Routes do
 
   Deduplicates by `fqdn` (registry entries take precedence). Pure: `app_name`
   references in `extra_domains` are resolved against the passed `registry_entries`.
+
+  Each spec carries an `:app_name` — best-effort, so a dropped route can name
+  the app it belongs to (mjolnir-1pk) rather than just an fqdn. Falls back to
+  the `vm_id` when no app name can be resolved.
   """
   @spec desired_specs([Mjolnir.Deploy.Registry.Entry.t()], [map()]) :: [spec()]
   def desired_specs(registry_entries, extra_domains) do
@@ -82,7 +86,7 @@ defmodule Mjolnir.Gateway.Routes do
           e.custom_domain != "",
           is_integer(e.port),
           is_binary(e.service_vm_id) do
-        %{fqdn: e.custom_domain, vm_id: e.service_vm_id, port: e.port}
+        %{fqdn: e.custom_domain, vm_id: e.service_vm_id, port: e.port, app_name: e.app_name}
       end
 
     from_extra =
@@ -279,10 +283,18 @@ defmodule Mjolnir.Gateway.Routes do
   defp normalize_extra(m, registry_entries) when is_map(m) do
     fqdn = Map.get(m, :fqdn) || Map.get(m, "fqdn")
     port = Map.get(m, :port) || Map.get(m, "port") || @default_port
-    vm_id = Map.get(m, :vm_id) || Map.get(m, "vm_id") || resolve_app_vm(m, registry_entries)
+    app_name = Map.get(m, :app_name) || Map.get(m, "app_name")
+
+    vm_id =
+      Map.get(m, :vm_id) || Map.get(m, "vm_id") || resolve_app_vm(app_name, registry_entries)
 
     if is_binary(fqdn) and is_binary(vm_id) and is_integer(port) do
-      %{fqdn: fqdn, vm_id: vm_id, port: port}
+      %{
+        fqdn: fqdn,
+        vm_id: vm_id,
+        port: port,
+        app_name: app_name || app_name_for_vm(vm_id, registry_entries) || vm_id
+      }
     else
       Logger.warning("Gateway.Routes: skipping malformed extra_domain entry #{inspect(m)}")
       nil
@@ -291,19 +303,24 @@ defmodule Mjolnir.Gateway.Routes do
 
   defp normalize_extra(_other, _entries), do: nil
 
-  defp resolve_app_vm(m, registry_entries) do
-    case Map.get(m, :app_name) || Map.get(m, "app_name") do
-      name when is_binary(name) ->
-        Enum.find_value(registry_entries, fn e ->
-          if e.app_name == name, do: e.service_vm_id
-        end)
-
-      _ ->
-        nil
-    end
+  defp resolve_app_vm(name, registry_entries) when is_binary(name) do
+    Enum.find_value(registry_entries, fn e ->
+      if e.app_name == name, do: e.service_vm_id
+    end)
   end
 
-  defp spec_to_route(%{fqdn: fqdn, vm_id: vm_id, port: port}, running, apexes, ip_resolver) do
+  defp resolve_app_vm(_name, _entries), do: nil
+
+  defp app_name_for_vm(vm_id, registry_entries) do
+    Enum.find_value(registry_entries, fn e ->
+      if e.service_vm_id == vm_id, do: e.app_name
+    end)
+  end
+
+  defp spec_to_route(spec, running, apexes, ip_resolver) do
+    %{fqdn: fqdn, vm_id: vm_id, port: port} = spec
+    app_name = Map.get(spec, :app_name, vm_id)
+
     cond do
       not MapSet.member?(running, vm_id) ->
         Logger.warning(
@@ -318,12 +335,55 @@ defmodule Mjolnir.Gateway.Routes do
             [%Route{apex: apex, subdomain: subdomain, backend: "#{ip_resolver.(vm_id)}:#{port}"}]
 
           {:error, :no_apex} ->
+            # This is the mjolnir-1pk failure mode: a custom_domain whose apex
+            # fell out of :gateway_apexes (or was never persisted there) is
+            # dropped with NO route and, previously, only a terse one-line
+            # warning easy to miss among normal startup chatter. Name the app,
+            # the domain, the apex it needs, and what is actually configured so
+            # an operator reading logs knows exactly what to fix and where.
+            fix =
+              case needed_apex(fqdn) do
+                {:exact, apex} ->
+                  "Add #{apex} to :gateway_apexes in config/config.exs."
+
+                {:guess, apex} ->
+                  # Hedge, and say so. A confidently-wrong apex is worse than
+                  # an admitted guess when someone is reading this mid-outage:
+                  # the heuristic cannot know where the operator intended the
+                  # subdomain to end, and it is plainly wrong for multi-part
+                  # TLDs — a.b.example.co.uk yields co.uk.
+                  "Add the apex this domain sits under to :gateway_apexes in " <>
+                    "config/config.exs — a last-two-labels guess says #{apex}, " <>
+                    "which may well be wrong; use the apex you actually own."
+              end
+
             Logger.warning(
-              "Gateway.Routes: skipping #{fqdn} — no configured apex matches (apexes: #{inspect(apexes)})"
+              "Gateway.Routes: DROPPING route for app #{app_name} — custom_domain " <>
+                "#{fqdn} has no apex in :gateway_apexes, which is configured as " <>
+                "#{inspect(apexes)}. #{fqdn} will answer 400 (\"Empty subdomain\") " <>
+                "until this is fixed. #{fix} Set it durably — a runtime " <>
+                "Application.put_env or MJOLNIR_GATEWAY_APEXES override is lost on " <>
+                "restart, which is exactly how this broke before."
             )
 
             []
         end
+    end
+  end
+
+  # The apex a dropped fqdn needed, tagged with how much we actually know.
+  #
+  # Two labels or fewer means the fqdn IS the apex — there is no subdomain to
+  # strip, so the answer is exact. That is the bare-apex case that caused
+  # mjolnir-1pk (`startupcentral.build`). Deeper names are a guess: nothing
+  # here knows where the operator intended the subdomain to end, and the
+  # last-two-labels heuristic is simply wrong for multi-part TLDs. The caller
+  # phrases the two cases differently rather than asserting a guess as fact.
+  @spec needed_apex(String.t()) :: {:exact | :guess, String.t()}
+  defp needed_apex(fqdn) do
+    case String.split(fqdn, ".") do
+      labels when length(labels) <= 2 -> {:exact, fqdn}
+      labels -> {:guess, labels |> Enum.take(-2) |> Enum.join(".")}
     end
   end
 

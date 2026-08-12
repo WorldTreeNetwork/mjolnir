@@ -1,6 +1,8 @@
 defmodule Mjolnir.Gateway.RoutesTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Mjolnir.Deploy.Registry.Entry
   alias Mjolnir.Gateway.Routes
   alias Mjolnir.Gateway.Routes.Route
@@ -60,14 +62,18 @@ defmodule Mjolnir.Gateway.RoutesTest do
       ]
 
       specs = Routes.desired_specs(entries, [])
-      assert specs == [%{fqdn: "zine.identikey.io", vm_id: "vm-1", port: 3000}]
+      assert specs == [%{fqdn: "zine.identikey.io", vm_id: "vm-1", port: 3000, app_name: "zine"}]
     end
 
     test "includes extra_domains entries (vm_id form)" do
       specs =
         Routes.desired_specs([], [%{fqdn: "blog.identikey.io", vm_id: "vm-9", port: 4000}])
 
-      assert specs == [%{fqdn: "blog.identikey.io", vm_id: "vm-9", port: 4000}]
+      # No app_name resolvable — falls back to the vm_id (mjolnir-1pk: never nil,
+      # so a dropped-route warning always has something to name).
+      assert specs == [
+               %{fqdn: "blog.identikey.io", vm_id: "vm-9", port: 4000, app_name: "vm-9"}
+             ]
     end
 
     test "extra_domains app_name form resolves vm_id from registry" do
@@ -75,7 +81,9 @@ defmodule Mjolnir.Gateway.RoutesTest do
       specs = Routes.desired_specs(entries, [%{fqdn: "shop.identikey.io", app_name: "shop"}])
 
       # Default port 3000 applied.
-      assert specs == [%{fqdn: "shop.identikey.io", vm_id: "vm-shop", port: 3000}]
+      assert specs == [
+               %{fqdn: "shop.identikey.io", vm_id: "vm-shop", port: 3000, app_name: "shop"}
+             ]
     end
 
     test "registry wins on fqdn collision with extra_domains" do
@@ -90,7 +98,10 @@ defmodule Mjolnir.Gateway.RoutesTest do
 
       extra = [%{fqdn: "zine.identikey.io", vm_id: "vm-extra", port: 9999}]
       specs = Routes.desired_specs(entries, extra)
-      assert specs == [%{fqdn: "zine.identikey.io", vm_id: "vm-reg", port: 3000}]
+
+      assert specs == [
+               %{fqdn: "zine.identikey.io", vm_id: "vm-reg", port: 3000, app_name: "zine"}
+             ]
     end
 
     test "skips malformed extra_domains entries" do
@@ -134,6 +145,83 @@ defmodule Mjolnir.Gateway.RoutesTest do
     test "skips a fqdn whose apex is not configured" do
       extra = [%{fqdn: "app.example.com", vm_id: "vm-1", port: 3000}]
       assert Routes.build_routes([], extra, ["vm-1"], @apexes, resolver()) == []
+    end
+
+    test "a correctly-configured app still produces exactly the route it produces today (mjolnir-1pk)" do
+      # Regression guard: the fix must not perturb the happy path.
+      entries = [
+        entry(
+          app_name: "zine",
+          service_vm_id: "vm-1",
+          custom_domain: "zine.identikey.io",
+          port: 3000
+        )
+      ]
+
+      log =
+        capture_log(fn ->
+          routes = Routes.build_routes(entries, [], ["vm-1"], @apexes, resolver())
+
+          assert routes == [
+                   %Route{apex: "identikey.io", subdomain: "zine", backend: "10.0.0.1:3000"}
+                 ]
+        end)
+
+      refute log =~ "DROPPING"
+    end
+
+    test "an app whose apex is missing produces no route AND a warning naming the app, domain, needed apex, and configured apexes (mjolnir-1pk)" do
+      entries = [
+        entry(
+          app_name: "startupcentral",
+          service_vm_id: "vm-sc",
+          custom_domain: "startupcentral.build",
+          port: 3000
+        )
+      ]
+
+      log =
+        capture_log(fn ->
+          assert Routes.build_routes(entries, [], ["vm-sc"], @apexes, resolver()) == []
+        end)
+
+      # Assert the facts an operator needs mid-outage, not the sentence shape:
+      # which app, which domain, what is actually configured, and the concrete
+      # fix. Coupling to phrasing makes the warning painful to improve.
+      assert log =~ "DROPPING route for app startupcentral"
+      assert log =~ "startupcentral.build"
+      assert log =~ inspect(@apexes)
+      assert log =~ "Add startupcentral.build to :gateway_apexes"
+      assert log =~ "config/config.exs"
+
+      # A bare apex has no subdomain to strip, so the fix is stated outright.
+      # Anything hedging here would mean the exact/guess split broke.
+      refute log =~ "guess"
+    end
+
+    test "a deeper fqdn's apex is offered as a guess, not asserted (mjolnir-1pk)" do
+      # The last-two-labels heuristic cannot know where the operator meant the
+      # subdomain to end, and is plainly wrong for multi-part TLDs. Saying so
+      # beats sending someone to add the wrong apex during an outage.
+      entries = [
+        entry(
+          app_name: "deep",
+          service_vm_id: "vm-d",
+          custom_domain: "a.b.example.co.uk",
+          port: 3000
+        )
+      ]
+
+      log =
+        capture_log(fn ->
+          assert Routes.build_routes(entries, [], ["vm-d"], @apexes, resolver()) == []
+        end)
+
+      assert log =~ "DROPPING route for app deep"
+      # co.uk, NOT example.co.uk — the heuristic really is this wrong, which is
+      # the whole reason the message hedges instead of instructing.
+      assert log =~ "guess says co.uk"
+      assert log =~ "may well be wrong"
     end
 
     test "accepts a MapSet of running ids" do
