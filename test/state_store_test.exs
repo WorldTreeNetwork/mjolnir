@@ -131,6 +131,60 @@ defmodule Mjolnir.StateStoreTest do
     end
   end
 
+  describe "schema version backward compatibility guard" do
+    # This is not testing behavior — it's testing a *promise*. When
+    # @schema_version bumps (v2 -> v3), @readable_schema_versions MUST still
+    # contain the version being replaced, or every existing record already on
+    # disk on the server gets quarantined the moment the new binary deploys
+    # and tries to read it.
+    #
+    # The forward direction (a file from a *newer* binary than the one
+    # reading it) is already handled elsewhere, by construction: unknown
+    # versions are left in place untouched and surfaced via
+    # `StateStore.unreadable/0` / `mj doctor`, never quarantined. This guard
+    # is only about the backward direction: an *older* file being read by a
+    # *newer* binary.
+    #
+    # If this test fails, it means someone bumped @schema_version without
+    # keeping the previous version in @readable_schema_versions. Two options:
+    #
+    #   1. (almost certainly what you want) Add the previous version back to
+    #      @readable_schema_versions in lib/mjolnir/state_store/record.ex, and
+    #      make sure from_json/1 still upgrades it correctly in memory.
+    #   2. (rare, deliberate) You genuinely intend to stop reading the old
+    #      version — e.g. a scheduled migration window has passed. In that
+    #      case update *this test's* expectations to match, as a conscious,
+    #      reviewable decision, not a silent side effect of touching
+    #      @schema_version.
+    test "readable_schema_versions keeps the previous schema version readable" do
+      current = Record.schema_version()
+      previous = current - 1
+
+      readable = Record.readable_schema_versions()
+
+      assert current in readable,
+             "Record.schema_version() (#{current}) is not in " <>
+               "@readable_schema_versions (#{inspect(readable)}). The module can no " <>
+               "longer read the files it itself writes — fix @readable_schema_versions " <>
+               "in lib/mjolnir/state_store/record.ex."
+
+      if previous > 0 do
+        assert previous in readable,
+               "Schema version bumped to #{current} but the previous version " <>
+                 "(#{previous}) was dropped from @readable_schema_versions " <>
+                 "(#{inspect(readable)}) in lib/mjolnir/state_store/record.ex.\n\n" <>
+                 "This means every existing v#{previous} record already on disk on " <>
+                 "the server will be QUARANTINED the moment this binary deploys — " <>
+                 "StateStore treats an unreadable-but-well-formed old version as " <>
+                 "corrupt, not as \"from the future\" (that leniency only applies to " <>
+                 "versions *newer* than schema_version()).\n\n" <>
+                 "Fix: add #{previous} back to @readable_schema_versions unless you " <>
+                 "are deliberately ending backward compatibility with v#{previous} — " <>
+                 "if so, update this test's expectations to say so explicitly."
+      end
+    end
+  end
+
   describe "put/get round-trip" do
     test "put then get returns the same record" do
       r = Record.new("uuid-1", :running, spawn_config: %{"memory_mb" => 1024})

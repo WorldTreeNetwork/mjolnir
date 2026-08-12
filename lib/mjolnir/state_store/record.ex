@@ -55,6 +55,9 @@ defmodule Mjolnir.StateStore.Record do
   @spec schema_version() :: pos_integer()
   def schema_version, do: @schema_version
 
+  @spec readable_schema_versions() :: [pos_integer()]
+  def readable_schema_versions, do: @readable_schema_versions
+
   @doc """
   Build a record.
 
