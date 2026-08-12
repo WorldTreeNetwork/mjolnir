@@ -43,8 +43,13 @@ jobs:
         working-directory: .forgejo
         run: echo "landed in $(pwd)"
 
-      - name: Upload (v4)
-        uses: actions/upload-artifact@v4
+      # forgejo/, not actions/. The upstream action bundles @actions/artifact
+      # v2, which refuses to talk to any host that is not github.com --
+      # Forgejo reads as GHES and it errors out before making a request:
+      #   GHESNotSupportedError: ... not currently supported on GHES
+      # Forgejo's fork exists for exactly this.
+      - name: Upload
+        uses: forgejo/upload-artifact@v4
         with:
           name: probe-v4
           path: /tmp/probe/hello.txt
