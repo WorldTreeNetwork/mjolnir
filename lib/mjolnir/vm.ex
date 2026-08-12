@@ -66,6 +66,21 @@ defmodule Mjolnir.VM do
     # blocked on, killing the operation it was trying to rescue. Health reads
     # this to distinguish BUSY from DEAD (mjolnir-1s9).
     exec_inflight: %{},
+    # `from` tuples waiting on an in-flight `rebuild_vsock_connection` (mjolnir-
+    # 75d). Rebuild MUTATES `vsock_conn`, so unlike the read-only round trips
+    # above it cannot just spawn-and-reply from the worker process — the new
+    # Connection pid has to land in *this* GenServer's state, from *this*
+    # process. A second caller arriving while a rebuild is already in flight
+    # piggybacks here instead of racing a second rebuild.
+    vsock_rebuild_waiters: [],
+    # Monitor ref for the in-flight rebuild worker. Without it, a worker that
+    # dies UNCATCHABLY (Process.exit/2 with :kill — try/catch cannot see it)
+    # would never send its result, leaving waiters queued forever and every
+    # later rebuild piggybacking onto a queue that can never drain. That is a
+    # permanent wedge of the un-wedging path, which is the one thing this
+    # whole change exists to prevent. The DOWN clause uses this to fail the
+    # waiters instead.
+    vsock_rebuild_ref: nil,
     # Lifetime policy (mjolnir-yhr). :always (default) lets Mjolnir.Reconcile
     # rehydrate this VM if it is found stranded — right when the HOST lost it.
     # :never means a stranded record is finalized to :stopped instead, rootfs
@@ -1152,49 +1167,63 @@ defmodule Mjolnir.VM do
     handle_call({:exec, command, @default_exec_timeout}, from, state)
   end
 
-  def handle_call({:authorize_inject_peer, peer_node_id}, _from, state) do
-    if state.vsock_conn do
-      request = Mjolnir.Vsock.Protocol.configure_secrets_auth_request([peer_node_id])
+  # Fires a one-shot vsock request authorizing a secret-injection peer. This
+  # mutates guest-side auth config over the wire, but nothing in this clause
+  # touches the VM GenServer's own `state`, so it is safe to move off-process
+  # exactly like the read-only round trips (mjolnir-75d).
+  def handle_call({:authorize_inject_peer, peer_node_id}, from, state) do
+    conn = state.vsock_conn
 
-      case Mjolnir.Vsock.Connection.send_request(state.vsock_conn, request) do
-        {:ok, _stdout} -> {:reply, :ok, state}
-        {:error, reason} -> {:reply, {:error, reason}, state}
+    reply_off_process(from, fn ->
+      if conn do
+        request = Mjolnir.Vsock.Protocol.configure_secrets_auth_request([peer_node_id])
+
+        case Mjolnir.Vsock.Connection.send_request(conn, request) do
+          {:ok, _stdout} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        {:error, :no_vsock_connection}
       end
-    else
-      {:reply, {:error, :no_vsock_connection}, state}
-    end
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call({:terminal_open, session_name}, _from, state) do
-    result =
-      if state.vsock_conn,
-        do: Mjolnir.Vsock.Connection.terminal_open(state.vsock_conn, session_name),
-        else: {:error, :no_vsock_connection}
+  def handle_call({:terminal_open, session_name}, from, state) do
+    conn = state.vsock_conn
 
-    {:reply, result, state}
+    reply_off_process(from, fn ->
+      if conn,
+        do: Mjolnir.Vsock.Connection.terminal_open(conn, session_name),
+        else: {:error, :no_vsock_connection}
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call({:terminal_read, session_name, scrollback_lines}, _from, state) do
-    result =
-      if state.vsock_conn,
-        do:
-          Mjolnir.Vsock.Connection.terminal_read(
-            state.vsock_conn,
-            session_name,
-            scrollback_lines
-          ),
-        else: {:error, :no_vsock_connection}
+  def handle_call({:terminal_read, session_name, scrollback_lines}, from, state) do
+    conn = state.vsock_conn
 
-    {:reply, result, state}
+    reply_off_process(from, fn ->
+      if conn,
+        do: Mjolnir.Vsock.Connection.terminal_read(conn, session_name, scrollback_lines),
+        else: {:error, :no_vsock_connection}
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call({:terminal_send, session_name, command, keys}, _from, state) do
-    result =
-      if state.vsock_conn,
-        do: Mjolnir.Vsock.Connection.terminal_send(state.vsock_conn, session_name, command, keys),
-        else: {:error, :no_vsock_connection}
+  def handle_call({:terminal_send, session_name, command, keys}, from, state) do
+    conn = state.vsock_conn
 
-    {:reply, result, state}
+    reply_off_process(from, fn ->
+      if conn,
+        do: Mjolnir.Vsock.Connection.terminal_send(conn, session_name, command, keys),
+        else: {:error, :no_vsock_connection}
+    end)
+
+    {:noreply, state}
   end
 
   # IMPORTANT: terminal_send_and_read is handled asynchronously to avoid blocking
@@ -1227,22 +1256,28 @@ defmodule Mjolnir.VM do
     end
   end
 
-  def handle_call(:terminal_list, _from, state) do
-    result =
-      if state.vsock_conn,
-        do: Mjolnir.Vsock.Connection.terminal_list(state.vsock_conn),
-        else: {:error, :no_vsock_connection}
+  def handle_call(:terminal_list, from, state) do
+    conn = state.vsock_conn
 
-    {:reply, result, state}
+    reply_off_process(from, fn ->
+      if conn,
+        do: Mjolnir.Vsock.Connection.terminal_list(conn),
+        else: {:error, :no_vsock_connection}
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call({:terminal_close, session_name}, _from, state) do
-    result =
-      if state.vsock_conn,
-        do: Mjolnir.Vsock.Connection.terminal_close(state.vsock_conn, session_name),
-        else: {:error, :no_vsock_connection}
+  def handle_call({:terminal_close, session_name}, from, state) do
+    conn = state.vsock_conn
 
-    {:reply, result, state}
+    reply_off_process(from, fn ->
+      if conn,
+        do: Mjolnir.Vsock.Connection.terminal_close(conn, session_name),
+        else: {:error, :no_vsock_connection}
+    end)
+
+    {:noreply, state}
   end
 
   def handle_call({:snapshot, name, opts}, _from, state) do
@@ -1252,87 +1287,107 @@ defmodule Mjolnir.VM do
     end
   end
 
-  # This runs INLINE, so `timeout` bounds how long the mailbox is held, not just
-  # how long the caller waits (mjolnir-8ie). It used to be discarded (`_ =
-  # timeout`), silently falling back to vsock_request's 10s default — so
-  # Health.IrohConnection's careful `iroh_status(vm.id, 3_000)` actually blocked
-  # every other caller for up to 10s against a severed vsock.
-  def handle_call({:probe_iroh_status, timeout}, _from, state) do
-    reply =
-      if state.vsock_path do
-        case query_iroh_status(state.vsock_path, timeout) do
-          {:ok, _} = ok -> ok
-          {:error, _} = err -> err
-        end
-      else
-        {:error, :no_vsock_path}
-      end
+  # Runs OFF the GenServer (mjolnir-75d). `timeout` bounds how long the caller
+  # waits, not the mailbox — this used to run inline and additionally
+  # DISCARDED `timeout` (`_ = timeout`), silently falling back to
+  # vsock_request's 10s default, so Health.IrohConnection's careful
+  # `iroh_status(vm.id, 3_000)` blocked every other caller for up to 10s
+  # against a severed vsock. Fixed as part of moving this off-process: nothing
+  # here touches `state`, so it is a read-only round trip like `terminal_*`.
+  def handle_call({:probe_iroh_status, timeout}, from, state) do
+    vsock_path = state.vsock_path
 
-    {:reply, reply, state}
+    reply_off_process(from, fn ->
+      if vsock_path,
+        do: query_iroh_status(vsock_path, timeout),
+        else: {:error, :no_vsock_path}
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call(:reconfigure_iroh, _from, state) do
-    reply =
-      if state.vsock_path do
-        configure_iroh(state.vsock_path, state.enable_iroh)
-      else
-        {:error, :no_vsock_path}
-      end
+  # The bug report grouped `:reconfigure_iroh` with the state-mutating Tier 2
+  # calls, but it does not actually touch `state` — `configure_iroh/2` only
+  # reads `vsock_path`/`enable_iroh` and pushes a request over the wire. It is
+  # safe to move off-process the same way as the read-only round trips above.
+  def handle_call(:reconfigure_iroh, from, state) do
+    vsock_path = state.vsock_path
+    enable_iroh = state.enable_iroh
 
-    {:reply, reply, state}
+    reply_off_process(from, fn ->
+      if vsock_path,
+        do: configure_iroh(vsock_path, enable_iroh),
+        else: {:error, :no_vsock_path}
+    end)
+
+    {:noreply, state}
   end
 
-  def handle_call(:reconfigure_network, _from, state) do
+  # Same situation as `:reconfigure_iroh` above: host-side TAP repair and the
+  # guest-side vsock push both read from `state` but never write it, so this
+  # is safe to move off-process too, despite being grouped with the Tier 2
+  # mutators in the bug report.
+  def handle_call(:reconfigure_network, from, state) do
     # Two-sided repair: host-side (TAP link, proxy_arp, /32 route) then
     # guest-side (addr + default route via vsock). Each is idempotent;
     # order matters because guest-side config is irrelevant while the host
     # TAP is admin-down. The L2 probe pings 1.1.1.1 from inside the guest,
     # which exercises both sides in one shot.
-    reply =
+    vsock_path = state.vsock_path
+    net_config = state.net_config
+
+    reply_off_process(from, fn ->
       cond do
-        state.vsock_path == nil ->
+        vsock_path == nil ->
           {:error, :no_vsock_path}
 
-        state.net_config == nil ->
+        net_config == nil ->
           {:error, :no_net_config}
 
         true ->
-          with :ok <- Mjolnir.Network.repair_tap(state.net_config),
-               :ok <- configure_guest_network(state.vsock_path, state.net_config.guest_ip) do
+          with :ok <- Mjolnir.Network.repair_tap(net_config),
+               :ok <- configure_guest_network(vsock_path, net_config.guest_ip) do
             :ok
           end
       end
+    end)
 
-    {:reply, reply, state}
+    {:noreply, state}
   end
 
-  def handle_call(:rebuild_vsock_connection, _from, state) do
-    # Stop the existing Vsock.Connection GenServer (if alive) and spin up a
-    # fresh one. The underlying UDS path is stable across the rebuild.
-    _ =
-      if state.vsock_conn && Process.alive?(state.vsock_conn) do
-        try do
-          GenServer.stop(state.vsock_conn, :normal, 1_000)
-        catch
-          :exit, _ -> :ok
-        end
-      end
+  # UNLIKE the clauses above, this one genuinely mutates `state` (vsock_conn
+  # is replaced), so it cannot just spawn-and-reply from the worker process —
+  # doing that from outside this GenServer would either race writing `state`
+  # from the wrong process or silently drop the new connection pid. Instead:
+  # stop the old connection and start the new one off-process (both are
+  # bounded I/O), then report back via `handle_info({:vsock_rebuild_result,
+  # _}, ...)` so the state update AND the reply happen from this process.
+  # `vsock_rebuild_waiters` piggybacks any caller that arrives while a rebuild
+  # is already in flight, instead of racing a second rebuild.
+  def handle_call(:rebuild_vsock_connection, from, %{vsock_rebuild_waiters: waiters} = state)
+      when waiters != [] do
+    {:noreply, %{state | vsock_rebuild_waiters: [from | waiters]}}
+  end
 
-    if state.vsock_path do
-      case Mjolnir.Vsock.Connection.start_link(%{
-             vm_id: state.id,
-             socket_path: state.vsock_path
-           }) do
-        {:ok, conn} ->
-          {:reply, :ok, %{state | vsock_conn: conn}}
+  def handle_call(:rebuild_vsock_connection, from, state) do
+    old_conn = state.vsock_conn
+    vsock_path = state.vsock_path
+    vm_id = state.id
+    owner = self()
 
-        {:error, reason} = err ->
-          {:reply, err, %{state | vsock_conn: nil}}
-          |> tap(fn _ -> Logger.error("Rebuild vsock conn failed: #{inspect(reason)}") end)
-      end
-    else
-      {:reply, {:error, :no_vsock_path}, state}
-    end
+    {_pid, ref} =
+      :erlang.spawn_monitor(fn ->
+        result =
+          try do
+            do_rebuild_vsock_connection(vm_id, old_conn, vsock_path)
+          catch
+            kind, reason -> {:error, {:vsock_unavailable, {kind, reason}}}
+          end
+
+        send(owner, {:vsock_rebuild_result, result})
+      end)
+
+    {:noreply, %{state | vsock_rebuild_waiters: [from], vsock_rebuild_ref: ref}}
   end
 
   def handle_call({:await_pty, timeout}, _from, state) do
@@ -1429,6 +1484,52 @@ defmodule Mjolnir.VM do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{exec_inflight: inflight} = state)
       when is_map_key(inflight, ref) do
     {:noreply, %{state | exec_inflight: Map.delete(inflight, ref)}}
+  end
+
+  # The rebuild spawned by `handle_call(:rebuild_vsock_connection, ...)`
+  # reported back. This is the ONLY place `vsock_conn` gets written as a
+  # result of a rebuild — folding it in here (rather than in the spawned
+  # worker) guarantees the mutation happens from this GenServer's own process.
+  # Replies to every caller that piggybacked while the rebuild was in flight.
+  def handle_info({:vsock_rebuild_result, result}, %{vsock_rebuild_waiters: waiters} = state) do
+    state =
+      case result do
+        {:ok, conn} ->
+          %{state | vsock_conn: conn}
+
+        {:error, reason} ->
+          Logger.error("Rebuild vsock conn failed for #{state.id}: #{inspect(reason)}")
+          %{state | vsock_conn: nil}
+      end
+
+    outcome = if match?({:ok, _}, result), do: :ok, else: result
+
+    Enum.each(waiters, &GenServer.reply(&1, outcome))
+
+    {:noreply, %{state | vsock_rebuild_waiters: [], vsock_rebuild_ref: nil}}
+  end
+
+  # The rebuild worker died without reporting. try/catch inside it converts
+  # ordinary failures into an {:error, _} result, so reaching here means it was
+  # killed uncatchably (Process.exit/2 :kill) or the node is coming apart.
+  # Fail the waiters rather than leaving them queued forever: a permanently
+  # non-empty waiter list makes every subsequent rebuild piggyback onto a queue
+  # that can never drain, wedging exactly the recovery path this exists to keep
+  # working. Arrives after the normal result message in the healthy case, where
+  # the ref is already nil and this clause does not match.
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{vsock_rebuild_ref: ref, vsock_rebuild_waiters: waiters} = state
+      )
+      when is_reference(ref) do
+    Logger.error(
+      "VM #{state.id}: vsock rebuild worker died before reporting (#{inspect(reason)}); " <>
+        "failing #{length(waiters)} waiting caller(s)"
+    )
+
+    Enum.each(waiters, &GenServer.reply(&1, {:error, {:rebuild_worker_died, reason}}))
+
+    {:noreply, %{state | vsock_rebuild_waiters: [], vsock_rebuild_ref: nil}}
   end
 
   def handle_info(msg, state) do
@@ -2205,6 +2306,48 @@ defmodule Mjolnir.VM do
     end
   end
 
+  # Runs a READ-ONLY vsock round-trip OFF the GenServer (mjolnir-75d, same
+  # shape as the `:exec` clause from mjolnir-8ie). None of the `handle_call`
+  # clauses using this touch `state`, so there is nothing to fold back in —
+  # only the reply. spawn_monitor (not Task.start) so a crash cannot silently
+  # swallow the reply; catches `:exit` so a dead Connection/guest replies with
+  # an error instead of hanging the caller.
+  defp reply_off_process(from, fun) when is_function(fun, 0) do
+    :erlang.spawn_monitor(fn ->
+      result =
+        try do
+          fun.()
+        catch
+          :exit, reason -> {:error, {:vsock_unavailable, reason}}
+        end
+
+      GenServer.reply(from, result)
+    end)
+
+    :ok
+  end
+
+  # Stops the old Vsock.Connection GenServer (if alive) and starts a fresh one
+  # against the same UDS path. Runs entirely off the VM GenServer (called from
+  # a spawned worker in `handle_call(:rebuild_vsock_connection, ...)`); it
+  # touches no VM `state` itself — the caller folds the result back in from
+  # `handle_info({:vsock_rebuild_result, _}, ...)`.
+  defp do_rebuild_vsock_connection(vm_id, old_conn, vsock_path) do
+    if old_conn && Process.alive?(old_conn) do
+      try do
+        GenServer.stop(old_conn, :normal, 1_000)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    if vsock_path do
+      Mjolnir.Vsock.Connection.start_link(%{vm_id: vm_id, socket_path: vsock_path})
+    else
+      {:error, :no_vsock_path}
+    end
+  end
+
   # secrets_mode: :managed — fetch (or generate+escrow) this VM's LUKS passphrase
   # and inject it over vsock. The guest is authoritative on create-vs-open (it
   # checks whether secrets.luks exists), so the host always sends the same
@@ -2283,15 +2426,17 @@ defmodule Mjolnir.VM do
       message = Mjolnir.Vsock.Protocol.encode(request_map)
       :ok = :gen_tcp.send(sock, message)
 
-      # Read response (1 byte channel + 4 byte length prefix + body)
-      result =
-        with {:ok, <<_channel::8, length::big-32>>} <- :gen_tcp.recv(sock, 5, timeout),
-             {:ok, body} <- :gen_tcp.recv(sock, length, timeout),
-             {:ok, parsed} <- Jason.decode(body) do
-          {:ok, parsed}
-        else
-          {:error, reason} -> {:error, reason}
-        end
+      # Read the control response, skipping anything that is not ours.
+      #
+      # This used to take the next frame off the wire and hand its body
+      # straight to Jason, discarding the channel byte — but every accepted
+      # vsock connection makes the guest agent rebind /dev/log and start
+      # draining it onto CHANNEL 2, and on a fresh boot that backlog (dbus,
+      # systemd activation) can reach the wire before our channel-0 reply.
+      # A syslog line then failed the JSON decode and killed the whole spawn
+      # (mjolnir-pry). read_json_response/2 skips non-control frames and
+      # undecodable ones, warns, and keeps reading within the same deadline.
+      result = Mjolnir.Vsock.Protocol.read_json_response(sock, timeout)
 
       :gen_tcp.close(sock)
       result
@@ -2304,17 +2449,26 @@ defmodule Mjolnir.VM do
     ping = %{"type" => "ping", "id" => ping_id}
     timeout = 2000
 
-    with {:ok, sock} <- vsock_connect(vsock_path, timeout),
-         :ok <- :gen_tcp.send(sock, Protocol.encode(ping)),
-         {:ok, <<_channel::8, length::big-32>>} <- :gen_tcp.recv(sock, 5, timeout),
-         {:ok, body} <- :gen_tcp.recv(sock, length, timeout),
-         :ok <- :gen_tcp.close(sock),
-         {:ok, %{"type" => "pong"} = pong} <- Jason.decode(body) do
-      agent_type = if pong["agent"] == "boot", do: :boot, else: :full
-      {:ok, agent_type}
-    else
-      {:ok, unexpected} ->
-        {:error, {:unexpected_response, unexpected}}
+    # Same channel-blindness as vsock_request/3 above, and this one runs on
+    # EVERY boot poll — the likeliest place to meet the guest's early syslog
+    # backlog, and the observed failure in mjolnir-pry. The socket is closed on
+    # every path, not only success: the old `:ok <- :gen_tcp.close(sock)` inside
+    # the with-chain leaked the socket whenever a read failed.
+    case vsock_connect(vsock_path, timeout) do
+      {:ok, sock} ->
+        try do
+          with :ok <- :gen_tcp.send(sock, Protocol.encode(ping)),
+               {:ok, %{"type" => "pong"} = pong} <-
+                 Protocol.read_json_response(sock, timeout) do
+            agent_type = if pong["agent"] == "boot", do: :boot, else: :full
+            {:ok, agent_type}
+          else
+            {:ok, unexpected} -> {:error, {:unexpected_response, unexpected}}
+            {:error, reason} -> {:error, reason}
+          end
+        after
+          :gen_tcp.close(sock)
+        end
 
       {:error, reason} ->
         {:error, reason}
