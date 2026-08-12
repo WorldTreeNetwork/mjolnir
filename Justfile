@@ -128,7 +128,8 @@ build-buzz-agent-image with_goose="1" with_npm_agents="1": _require-host
 deploy-runner: _require-host
     ./scripts/deploy.sh {{host}} --runner
 
-# Deploy code + rebuild web gateway binary
+# Gateway-only deploy: build+install+restart mjolnir-gateway. Does NOT touch
+# the Elixir release/service, so it never bounces running VMs.
 deploy-gateway: _require-host
     ./scripts/deploy.sh {{host}} --gateway
 

@@ -65,9 +65,18 @@ just deploy           # Code + rebuild guest agent
 just deploy-boot      # Code + agent + initramfs
 just deploy-rootfs    # Rebuild base rootfs (arch or ubuntu-24.04)
 just deploy-runner    # Build + deploy Forgejo runner with VM backend
-just deploy-gateway   # Code + rebuild web gateway
+just deploy-gateway   # Gateway ONLY — never touches the Elixir service (see below)
 just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 ```
+
+`--gateway` is **gateway-only**: it builds, installs, and restarts `mjolnir-gateway` but deliberately does *not* run `mix release` or restart the `mjolnir` service. Restarting Elixir is not cheap — it triggers the Cleanup-kills-VMs → Reconcile-resumes-from-StateStore cycle, a brief downtime for every running VM on the host, which is far too much to pay for a gateway change. Add `--full` when you genuinely want both:
+
+```bash
+./scripts/deploy.sh <host> --gateway          # gateway only, VMs untouched
+./scripts/deploy.sh <host> --gateway --full   # gateway AND the Elixir release + restart
+```
+
+Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still builds and restarts Elixir exactly as before.
 
 **VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface:
 

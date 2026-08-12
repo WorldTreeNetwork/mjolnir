@@ -8,12 +8,19 @@ set -euo pipefail
 #   ./scripts/deploy.sh <host> --agent         # also rebuild guest agent (Iroh P2P on by default)
 #   ./scripts/deploy.sh <host> --agent --no-iroh # rebuild guest agent without Iroh (smaller binary)
 #   ./scripts/deploy.sh <host> --rootfs        # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
+#   ./scripts/deploy.sh <host> --gateway       # GATEWAY-ONLY: build+install+restart mjolnir-gateway.
+#                                               # Does NOT run `mix release` or restart the mjolnir
+#                                               # service (that bounces every running VM), so this is
+#                                               # the safe way to ship a gateway-only change.
+#   ./scripts/deploy.sh <host> --gateway --full # gateway AND the full Elixir release + restart
 #   ./scripts/deploy.sh                       # uses MJOLNIR_HOST or prompts
 #
 # Examples:
 #   ./scripts/deploy.sh root@45.76.77.97
 #   ./scripts/deploy.sh root@45.76.77.97 --agent
 #   ./scripts/deploy.sh root@45.76.77.97 --rootfs
+#   ./scripts/deploy.sh root@45.76.77.97 --gateway
+#   ./scripts/deploy.sh root@45.76.77.97 --gateway --full
 #   MJOLNIR_HOST=root@mybox ./scripts/deploy.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +35,7 @@ BUILD_ROOTFS=false
 BUILD_GATEWAY=false
 BUILD_RUNNER=false
 AGENT_IROH=true
+FULL_DEPLOY=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -36,10 +44,22 @@ for arg in "$@"; do
         --rootfs) BUILD_ROOTFS=true ;;
         --gateway) BUILD_GATEWAY=true ;;
         --runner) BUILD_RUNNER=true ;;
+        --full) FULL_DEPLOY=true ;;
         -*) echo "Unknown flag: $arg"; exit 1 ;;
         *) HOST="$arg" ;;
     esac
 done
+
+# --gateway alone is gateway-only: it must NOT trigger a `mix release` +
+# `systemctl restart mjolnir` (that bounces every running VM via the
+# Cleanup-kills-VMs -> Reconcile-resumes-from-StateStore cycle). Pass --full
+# alongside --gateway to explicitly request both. Without --gateway, the
+# Elixir release/restart always runs (preserves plain `deploy.sh <host>`).
+if $BUILD_GATEWAY && ! $FULL_DEPLOY; then
+    BUILD_ELIXIR=false
+else
+    BUILD_ELIXIR=true
+fi
 
 HOST="${HOST:-${MJOLNIR_HOST:-}}"
 if [[ -z "$HOST" ]]; then
@@ -235,10 +255,15 @@ if $BUILD_RUNNER; then
     ssh "$HOST" "cp $REMOTE_CODE/systemd/forgejo-runner.service /etc/systemd/system/forgejo-runner.service && systemctl daemon-reload"
 fi
 
-# --- Build Elixir release ---
-echo ""
-echo "--- Building Elixir release ---"
-ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod mix deps.get && MIX_ENV=prod mix compile && MIX_ENV=prod mix release mjolnir --overwrite"
+# --- Build Elixir release (skipped in gateway-only mode: --gateway without --full) ---
+if $BUILD_ELIXIR; then
+    echo ""
+    echo "--- Building Elixir release ---"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod mix deps.get && MIX_ENV=prod mix compile && MIX_ENV=prod mix release mjolnir --overwrite"
+else
+    echo ""
+    echo "--- Skipping Elixir release build (gateway-only deploy; pass --full to also rebuild it) ---"
+fi
 
 # --- Update gateway systemd service ---
 ssh "$HOST" "if [ -f $REMOTE_CODE/systemd/mjolnir-gateway.service ]; then cp $REMOTE_CODE/systemd/mjolnir-gateway.service /etc/systemd/system/mjolnir-gateway.service && systemctl daemon-reload; fi"
@@ -248,10 +273,15 @@ if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/nu
     check_gateway_env "$HOST" "$REMOTE_CODE"
 fi
 
-# --- Restart service ---
-echo ""
-echo "--- Restarting mjolnir service ---"
-ssh "$HOST" "systemctl restart mjolnir && sleep 2 && systemctl status mjolnir --no-pager"
+# --- Restart service (skipped in gateway-only mode: --gateway without --full) ---
+if $BUILD_ELIXIR; then
+    echo ""
+    echo "--- Restarting mjolnir service ---"
+    ssh "$HOST" "systemctl restart mjolnir && sleep 2 && systemctl status mjolnir --no-pager"
+else
+    echo ""
+    echo "--- Skipping mjolnir service restart (gateway-only deploy; pass --full to also restart it) ---"
+fi
 
 # --- Restart gateway if installed ---
 if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/null" | grep -q enabled; then
