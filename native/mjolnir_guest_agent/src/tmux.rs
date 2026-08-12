@@ -116,7 +116,11 @@ pub async fn ensure_session(name: &str) -> Result<(String, String)> {
             Ok((name.to_string(), "created".to_string()))
         } else {
             let stderr = String::from_utf8_lossy(&create.stderr);
-            Err(anyhow!("Failed to create tmux session '{}': {}", name, stderr))
+            Err(anyhow!(
+                "Failed to create tmux session '{}': {}",
+                name,
+                stderr
+            ))
         }
     }
 }
@@ -176,17 +180,17 @@ pub async fn kill_session(name: &str) -> Result<()> {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow!("Failed to kill tmux session '{}': {}", name, stderr))
+        Err(anyhow!(
+            "Failed to kill tmux session '{}': {}",
+            name,
+            stderr
+        ))
     }
 }
 
 /// Send keys or a command to a tmux session.
 /// Exactly one of `command` or `keys` must be provided.
-pub async fn send_keys(
-    session: &str,
-    command: Option<&str>,
-    keys: Option<&str>,
-) -> Result<()> {
+pub async fn send_keys(session: &str, command: Option<&str>, keys: Option<&str>) -> Result<()> {
     validate_session_name(session)?;
     if let Some(cmd) = command {
         validate_command(cmd)?;
@@ -240,10 +244,7 @@ fn strip_ansi(input: &str) -> String {
 
 /// Capture pane content and dimensions for a tmux session.
 /// Returns (content, pane_rows, pane_cols, running_command).
-pub async fn capture_pane(
-    session: &str,
-    lines: i32,
-) -> Result<(String, u16, u16, Option<String>)> {
+pub async fn capture_pane(session: &str, lines: i32) -> Result<(String, u16, u16, Option<String>)> {
     validate_session_name(session)?;
     // Capture scrollback content
     let capture = Command::new("tmux")
@@ -322,7 +323,10 @@ pub async fn send_and_read(
     // Send the command with sentinel appended.
     // We use -l (literal) to prevent tmux from interpreting key names in the
     // command string, then send Enter separately. The shell evaluates $?.
-    let full_cmd = format!("{}; echo __MJOLNIR_DONE_{}_{}", command, sentinel_id, "$?__");
+    let full_cmd = format!(
+        "{}; echo __MJOLNIR_DONE_{}_{}",
+        command, sentinel_id, "$?__"
+    );
     let send_result = Command::new("tmux")
         .args(["send-keys", "-t", session, "-l", &full_cmd])
         .output()
@@ -368,19 +372,17 @@ pub async fn send_and_read(
         // The actual output has a resolved exit code: "__MJOLNIR_DONE_{uuid}_0__"
         // We distinguish them by checking that the suffix after the prefix
         // is a number followed by "__", not "$?__".
-        if let Some(sentinel_line) = content
-            .lines()
-            .rfind(|line| {
-                if let Some(rest) = line.find(&*sentinel_prefix).map(|pos| {
-                    &line[pos + sentinel_prefix.len()..]
-                }) {
-                    // Resolved sentinel ends with "<digits>__"; echoed command has "$?__"
-                    rest.starts_with(|c: char| c.is_ascii_digit())
-                } else {
-                    false
-                }
-            })
-        {
+        if let Some(sentinel_line) = content.lines().rfind(|line| {
+            if let Some(rest) = line
+                .find(&*sentinel_prefix)
+                .map(|pos| &line[pos + sentinel_prefix.len()..])
+            {
+                // Resolved sentinel ends with "<digits>__"; echoed command has "$?__"
+                rest.starts_with(|c: char| c.is_ascii_digit())
+            } else {
+                false
+            }
+        }) {
             // Found sentinel — wait briefly for pane to settle
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let (final_content, _, _, _) = capture_pane(session, 1000).await?;
@@ -433,10 +435,7 @@ fn extract_output(content: &str, sent_command: &str, sentinel_prefix: &str) -> S
 
     let end = end_idx.min(lines.len());
     let start = start_idx.min(end);
-    lines[start..end]
-        .join("\n")
-        .trim()
-        .to_string()
+    lines[start..end].join("\n").trim().to_string()
 }
 
 #[cfg(test)]
@@ -495,5 +494,246 @@ mod tests {
         // that passes the host never fails in the guest (or vice versa).
         assert!(attach_argv("café").is_err());
         assert!(attach_argv("Ωmega").is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // send_and_read / capture_pane integration tests.
+    //
+    // These require a real `tmux` binary and are run on the Mjolnir server
+    // (mjolnir-7hf). Every session name is unique per test invocation and
+    // every test cleans up its own session, including on panic — see
+    // `with_test_session` below. Do NOT reuse a plausible real session name
+    // (e.g. "main", "dev") and never touch a session this test suite did not
+    // create.
+    // ------------------------------------------------------------------
+
+    fn unique_session(case: &str) -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        format!("mjtest-{case}-{nanos}")
+    }
+
+    /// Run `body` against a freshly created, uniquely named tmux session,
+    /// guaranteeing the session is killed afterwards even if `body` panics
+    /// (e.g. on a failed assertion). This is the only sanctioned way these
+    /// tests touch tmux state on the shared server.
+    async fn with_test_session<F, Fut>(case: &str, body: F)
+    where
+        F: FnOnce(String) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let session = unique_session(case);
+        ensure_session(&session)
+            .await
+            .expect("failed to create test tmux session");
+        let cleanup = session.clone();
+        let result = tokio::spawn(body(session)).await;
+        let _ = kill_session(&cleanup).await;
+        if let Err(err) = result {
+            std::panic::resume_unwind(err.into_panic());
+        }
+    }
+
+    /// Case: minimum latency. The 250ms poll sleep runs BEFORE the first
+    /// `capture_pane`, so even a command that resolves instantly still costs
+    /// at least one poll interval. Assert the floor so a future "optimize
+    /// the happy path" pass sees the cost is deliberate, not accidental.
+    #[tokio::test]
+    async fn instant_command_still_costs_the_250ms_poll_floor() {
+        with_test_session("latency", |session| async move {
+            let result = send_and_read(&session, "true", 5_000, "sidLatency")
+                .await
+                .expect("send_and_read failed");
+            assert!(!result.timed_out);
+            assert_eq!(result.exit_code, Some(0));
+            assert!(
+                result.duration_ms >= 250,
+                "expected the 250ms poll floor to apply even to an instant command, got {}ms",
+                result.duration_ms
+            );
+        })
+        .await;
+    }
+
+    /// Case: timeout leaves the command running. `send_and_read` must report
+    /// `timed_out: true, exit_code: None` and return — WITHOUT waiting for
+    /// the still-running command. A subsequent call on the same session,
+    /// keyed by a different sentinel id, must resolve on its OWN sentinel
+    /// and not be confused by the first command's sentinel landing later.
+    #[tokio::test]
+    async fn timeout_leaves_command_running_and_next_call_ignores_stale_sentinel() {
+        with_test_session("timeout", |session| async move {
+            // Resolves well after our 500ms timeout.
+            let slow = send_and_read(&session, "sleep 2; echo SLOW_DONE", 500, "sidTimeoutSlow")
+                .await
+                .expect("send_and_read failed");
+            assert!(slow.timed_out, "expected the slow command to time out");
+            assert_eq!(slow.exit_code, None);
+
+            // Issued immediately after, on the same session, while the slow
+            // command above is still running in the background pane. Its own
+            // sentinel must be found without tripping over the stale one.
+            let fast = send_and_read(&session, "echo FAST_DONE", 5_000, "sidTimeoutFast")
+                .await
+                .expect("send_and_read failed");
+            assert!(!fast.timed_out);
+            assert_eq!(fast.exit_code, Some(0));
+            assert!(
+                fast.output.contains("FAST_DONE"),
+                "expected FAST_DONE in output, got: {:?}",
+                fast.output
+            );
+
+            // Let the slow command's now-stale sentinel land before the
+            // session is torn down, so it doesn't leak into another test.
+            tokio::time::sleep(std::time::Duration::from_millis(2_000)).await;
+        })
+        .await;
+    }
+
+    /// Case: two concurrent in-process `send_and_read` calls on the SAME
+    /// session must not interleave sentinels — this is exactly what the
+    /// per-session mutex (SESSION_LOCKS, tmux.rs:85) guarantees. It does NOT
+    /// guarantee anything against a human typing in the same shared pane
+    /// over a PTY concurrently (a different, cross-process actor) — that gap
+    /// is a known, out-of-scope design limitation, not something this test
+    /// exercises or fixes.
+    #[tokio::test]
+    async fn concurrent_send_and_read_on_same_session_do_not_interleave() {
+        with_test_session("concurrent", |session| async move {
+            let s1 = session.clone();
+            let s2 = session.clone();
+            let (r1, r2) = tokio::join!(
+                send_and_read(&s1, "sh -c 'echo AAA; exit 7'", 5_000, "sidConcA"),
+                send_and_read(&s2, "sh -c 'echo BBB; exit 9'", 5_000, "sidConcB"),
+            );
+            let r1 = r1.expect("first concurrent send_and_read failed");
+            let r2 = r2.expect("second concurrent send_and_read failed");
+
+            assert!(!r1.timed_out);
+            assert!(!r2.timed_out);
+            assert_eq!(r1.exit_code, Some(7));
+            assert_eq!(r2.exit_code, Some(9));
+            assert!(
+                r1.output.contains("AAA"),
+                "expected AAA in first output, got: {:?}",
+                r1.output
+            );
+            assert!(
+                r2.output.contains("BBB"),
+                "expected BBB in second output, got: {:?}",
+                r2.output
+            );
+        })
+        .await;
+    }
+
+    /// Case: `capture_pane` is called with a 1000-line scrollback cap. A
+    /// command emitting more than that silently truncates. This does not
+    /// change production behavior — it makes the truncation visible in a
+    /// test rather than undocumented.
+    #[tokio::test]
+    async fn capture_pane_truncates_deep_scrollback_silently() {
+        with_test_session("truncate", |session| async move {
+            // Make sure tmux's own history-limit isn't the bottleneck —
+            // we want to characterize capture_pane's own "-1000" cap.
+            Command::new("tmux")
+                .args(["set-option", "-t", &session, "history-limit", "5000"])
+                .output()
+                .await
+                .expect("failed to raise history-limit");
+
+            let result = send_and_read(&session, "seq 1 1500", 10_000, "sidTrunc")
+                .await
+                .expect("send_and_read failed");
+            assert!(!result.timed_out);
+
+            // capture_pane's "-S -1000" cap is measured in tmux screen rows
+            // from the bottom, which includes prompt/echo chrome in addition
+            // to plain `seq` output lines — so the exact count isn't 1000 on
+            // the nose. What matters is that the cap actually bites: 1500
+            // lines of output must not all survive.
+            let captured_lines = result.output.lines().count();
+            assert!(
+                captured_lines < 1500,
+                "expected capture_pane's 1000-line cap to truncate 1500 lines of output, got {} lines",
+                captured_lines
+            );
+            // No truncation marker exists: the earliest lines of `seq 1 1500`
+            // (starting at "1") are simply gone rather than replaced with a
+            // "N lines truncated" notice. Assert that silently-dropped shape.
+            assert_ne!(
+                result.output.lines().next(),
+                Some("1"),
+                "expected the earliest output lines to have been silently dropped"
+            );
+        })
+        .await;
+    }
+
+    /// Case: sentinel discrimination. A command whose OWN pane text (typed
+    /// echo or literal stdout) contains a string shaped exactly like the
+    /// RESOLVED sentinel (`__MJOLNIR_DONE_<id>_<digits>__`) — using the same
+    /// sentinel id — must not be mistaken for the real sentinel that
+    /// send_and_read appends and that only appears once the whole command
+    /// finishes.
+    ///
+    /// KNOWN BUG (reported, not fixed here — see final report): the
+    /// discrimination in send_and_read (tmux.rs ~371-382) distinguishes
+    /// "echoed" ($?) from "resolved" (digits) shapes, but does nothing to
+    /// distinguish the REAL appended sentinel from a lookalike digit-shaped
+    /// string that happens to appear in the command's own typed/echoed text
+    /// before the command finishes. `rfind` only looks at whatever has been
+    /// captured *so far* on each poll — if the lookalike is the only match
+    /// present at an early poll (before the real sentinel exists), the loop
+    /// returns early with the WRONG exit code.
+    #[tokio::test]
+    #[ignore = "REAL BUG (mjolnir-xrv): send_and_read's sentinel-shape check \
+                cannot distinguish a lookalike '__MJOLNIR_DONE_<id>_<digits>__' \
+                string emitted by the command's own text from the real \
+                sentinel appended by send_and_read itself. This test proves \
+                the loop returns early with a wrong exit code before the real \
+                command finishes. Do not fix in this change — filed for \
+                separate triage. See tmux.rs lines 366-382."]
+    async fn sentinel_discrimination_ignores_lookalike_resolved_shapes_in_own_output() {
+        with_test_session("sentdisc", |session| async move {
+            let sentinel_id = format!(
+                "sd{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let lookalike_prefix = format!("__MJOLNIR_DONE_{}_", sentinel_id);
+
+            // Prints a RESOLVED-shaped lookalike ("...999__") immediately,
+            // then sleeps well past the first 250ms poll, then truly
+            // finishes with exit code 0. If discrimination worked, the
+            // result must reflect the REAL completion (exit 0, duration
+            // >= ~1s), not the early lookalike (exit 999, duration ~250ms).
+            let command = format!("printf '%s999__\\n' '{lookalike_prefix}'; sleep 1; true");
+
+            let result = send_and_read(&session, &command, 5_000, &sentinel_id)
+                .await
+                .expect("send_and_read failed");
+
+            assert!(!result.timed_out);
+            assert_eq!(
+                result.exit_code,
+                Some(0),
+                "sentinel discrimination failed: matched the lookalike '999__' line \
+                 instead of waiting for the real sentinel (duration_ms={})",
+                result.duration_ms
+            );
+            assert!(
+                result.duration_ms >= 900,
+                "expected to wait for the real completion (~1s sleep), got {}ms — \
+                 returned early on the lookalike sentinel",
+                result.duration_ms
+            );
+        })
+        .await;
     }
 }
