@@ -39,6 +39,10 @@ MJOLNIR_CODE="/opt/mjolnir"
 CH_VERSION="50.0"
 # Minimum versions (used for validation)
 MIN_ELIXIR_VERSION="1.15"
+# Populated by install_postgres() with the discovered server bin dir
+# (e.g. /usr/lib/postgresql/16/bin); written into /etc/mjolnir/env by
+# setup_systemd_service().
+PG_BIN_DIR=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -398,6 +402,49 @@ install_cloud_hypervisor() {
     fi
 
     log_success "Cloud Hypervisor installed: $(cloud-hypervisor --version 2>/dev/null || echo "v${CH_VERSION}")"
+}
+
+install_postgres() {
+    log_section "Installing PostgreSQL (server + client)"
+
+    # `postgresql`/`postgresql-client` are metapackages that always pull the
+    # distro's current default major version (16 on Ubuntu 24.04) — deliberately
+    # not pinned to a version number so this keeps working on future LTS releases.
+    apt-get install -y postgresql postgresql-client
+
+    # Ubuntu does NOT symlink `postgres`/`initdb` into /usr/bin (only client tools
+    # like psql/pg_dump are) — server binaries live at /usr/lib/postgresql/<ver>/bin.
+    # Discover the installed version rather than hardcoding it, and pick the
+    # highest one present in case multiple versions are ever installed side by side.
+    local pg_ver pg_bin_dir
+    pg_ver=$(find /usr/lib/postgresql -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -rn | head -1)
+    if [[ -z "$pg_ver" ]]; then
+        log_error "No /usr/lib/postgresql/<version> directory found after installing postgresql package"
+        exit 1
+    fi
+    pg_bin_dir="/usr/lib/postgresql/${pg_ver}/bin"
+    if [[ ! -x "$pg_bin_dir/postgres" ]]; then
+        log_error "postgres binary not found at $pg_bin_dir/postgres"
+        exit 1
+    fi
+    PG_BIN_DIR="$pg_bin_dir"
+    log_success "PostgreSQL $pg_ver installed — server binaries at $PG_BIN_DIR"
+
+    # The Debian/Ubuntu postgresql package's postinst auto-creates a cluster and
+    # starts+enables it (postgresql@<ver>-main.service, plus the generic
+    # postgresql.service target). Mjolnir does NOT use that cluster — it manages
+    # its own postgres instance as an Erlang Port against a separate data dir
+    # (/var/lib/mjolnir/pg, see lib/mjolnir/postgres/server.ex). A second,
+    # distro-managed instance left running would be pure waste at best and an
+    # actively harmful conflicting process at worst, so stop/disable/mask both
+    # units. This is idempotent — safe to re-run against an already-masked unit.
+    log_info "Disabling distro-managed postgresql cluster (Mjolnir manages its own)..."
+    for unit in "postgresql@${pg_ver}-main.service" "postgresql.service"; do
+        systemctl stop "$unit" 2>/dev/null || true
+        systemctl disable "$unit" 2>/dev/null || true
+        systemctl mask "$unit" 2>/dev/null || true
+    done
+    log_success "Distro postgresql unit(s) stopped, disabled, and masked"
 }
 
 # =============================================================================
@@ -854,6 +901,42 @@ setup_directories() {
     log_success "Directories created"
 }
 
+setup_postgres_user_and_dirs() {
+    log_section "Setting Up PostgreSQL Sidecar User & Directories"
+
+    # `postgres`/`initdb` refuse to run as root, but mjolnir.service runs as root
+    # (needed for VM/networking ops), so the OTP-managed postgres sidecar drops
+    # privileges via setpriv to this dedicated user (see
+    # lib/mjolnir/postgres/server.ex and config/prod.exs's pg_run_as).
+    if ! id -u mjolnir_pg &>/dev/null; then
+        useradd --system --no-create-home --shell /sbin/nologin \
+            --comment "Mjolnir postgres sidecar" mjolnir_pg
+        log_info "Created mjolnir_pg system user"
+    else
+        log_info "mjolnir_pg user already exists"
+    fi
+
+    mkdir -p /var/lib/mjolnir/pg
+    chown mjolnir_pg:mjolnir_pg /var/lib/mjolnir/pg
+    chmod 0700 /var/lib/mjolnir/pg
+
+    mkdir -p /var/run/mjolnir
+    chown mjolnir_pg:mjolnir_pg /var/run/mjolnir
+    chmod 0750 /var/run/mjolnir
+
+    mkdir -p /var/log/mjolnir/pg
+    chown mjolnir_pg:mjolnir_pg /var/log/mjolnir/pg
+
+    log_success "mjolnir_pg user and data/socket/log directories ready"
+
+    # NOTE: /var/run is tmpfs, so /var/run/mjolnir does not survive a reboot. That
+    # is fine and needs no tmpfiles.d drop-in: Mjolnir.Postgres.Server.ensure_dirs/1
+    # mkdir_p's the data, socket and log dirs on every start and chowns them to
+    # pg_run_as, so the socket dir is rebuilt with the right ownership before
+    # postgres is spawned. Creating it here just means a correct host before the
+    # service has ever run.
+}
+
 setup_networking() {
     log_section "Setting Up VM Networking"
 
@@ -1020,6 +1103,21 @@ setup_systemd_service() {
         log_info "/etc/mjolnir/env already exists — preserving existing config"
     fi
 
+    # Persist the postgres bin dir discovered by install_postgres(). Unlike Arch,
+    # Ubuntu doesn't symlink postgres/initdb into /usr/bin, so the release's
+    # compiled-in default (see config/config.exs's pg_bin_dir: "/usr/bin") is wrong
+    # here — MJOLNIR_PG_BIN_DIR must be set explicitly. Unlike RELEASE_COOKIE above,
+    # this is safe (and correct) to re-derive and overwrite on every run: it's a
+    # host fact, not a secret, and a postgres major-version upgrade would move it.
+    if [[ -n "$PG_BIN_DIR" ]]; then
+        if grep -q '^MJOLNIR_PG_BIN_DIR=' /etc/mjolnir/env; then
+            sed -i "s#^MJOLNIR_PG_BIN_DIR=.*#MJOLNIR_PG_BIN_DIR=${PG_BIN_DIR}#" /etc/mjolnir/env
+        else
+            echo "MJOLNIR_PG_BIN_DIR=${PG_BIN_DIR}" >> /etc/mjolnir/env
+        fi
+        log_info "Set MJOLNIR_PG_BIN_DIR=${PG_BIN_DIR} in /etc/mjolnir/env"
+    fi
+
     # Reload and enable
     systemctl daemon-reload
     systemctl enable mjolnir.service
@@ -1117,6 +1215,7 @@ main() {
 
     check_system_suitability
     install_base_packages
+    install_postgres
     install_erlang_elixir
     install_rust
 
@@ -1137,6 +1236,7 @@ main() {
     setup_networking
 
     if [[ "${DEV_MODE:-0}" != "1" ]]; then
+        setup_postgres_user_and_dirs
         run_verification
         setup_systemd_service
     fi
