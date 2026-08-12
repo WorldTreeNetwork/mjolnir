@@ -13,6 +13,8 @@ AGENT_BIN="${AGENT_BIN:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/guest-agent.sh
 source "$SCRIPT_DIR/lib/guest-agent.sh"
+# shellcheck source=lib/mise.sh
+source "$SCRIPT_DIR/lib/mise.sh"
 
 # Find agent binary
 if [[ -z "$AGENT_BIN" ]]; then
@@ -175,17 +177,11 @@ chroot "$MOUNT_DIR" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get install
     libbz2-dev libreadline-dev libsqlite3-dev libncurses-dev \
     pkg-config tmux cryptsetup-bin kmod"
 
-# Install mise
-echo "Installing mise version manager..."
-chroot "$MOUNT_DIR" /bin/bash -c "curl -fsSL https://mise.run | sh"
-cat >> "$MOUNT_DIR/root/.bashrc" << 'EOF'
-
-# mise — version manager for dev toolchains
-eval "$(/root/.local/bin/mise activate bash)"
-EOF
-cat > "$MOUNT_DIR/etc/profile.d/mise.sh" << 'EOF'
-export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
-EOF
+# Install mise. This used to wire mise into .bashrc and profile.d only, which
+# makes it reachable from a login shell and invisible to `mj exec` — the guest
+# agent runs commands in a bare non-login shell. The helper also puts a wrapper
+# in /usr/local/bin and verifies mise answers under those conditions.
+install_mise "$MOUNT_DIR"
 
 # Disable IPv6
 echo "Disabling IPv6..."

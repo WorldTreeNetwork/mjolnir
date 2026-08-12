@@ -25,6 +25,14 @@ CI_ASSETS="$SCRIPT_DIR/ci-image"
 
 # shellcheck source=lib/guest-agent.sh
 source "$SCRIPT_DIR/lib/guest-agent.sh"
+# shellcheck source=lib/mise.sh
+source "$SCRIPT_DIR/lib/mise.sh"
+
+# Toolchain baked into the CI image. Everything goes through mise — it is the one
+# tool an image needs in order to grow any other, so a job that wants a version
+# not listed here can `mise use rust@...` at runtime without a new image.
+RUST_VERSION="${RUST_VERSION:-latest}"
+ZIG_VERSION="${ZIG_VERSION:-latest}"
 
 echo "=== Building CI Ubuntu 24.04 Rootfs (BTRFS subvolume) ==="
 echo "Output:     $OUTPUT"
@@ -247,6 +255,31 @@ chroot "$R" systemctl enable mount-workspace.service
 # (mjolnir-0e8). The helper installs both and verifies them.
 
 install_guest_agent "$R"
+
+# ── Toolchain ─────────────────────────────────────────────────────────────────
+#
+# This script previously installed NO toolchain at all. The live
+# @base/ci-ubuntu-24.04 has cargo/rustc/rustup/mise/zig only because they were
+# added out of band, so a rebuild produced an image that booted and could not
+# compile anything (mjolnir-xx5).
+#
+# Rust comes from mise rather than rustup: one installer, one place to look, and
+# a job can add any other toolchain the same way at runtime.
+
+install_mise "$R"
+mise_use "$R" "rust@${RUST_VERSION}" "zig@${ZIG_VERSION}"
+
+# rustup is linked too even though nothing here drives it: mise's rust backend IS
+# rustup underneath, so it is already in the image, and the hand-built live image
+# exposed it. Leaving it out would be a silent regression for any job that adds a
+# target with `rustup target add`.
+for bin in cargo rustc rustfmt clippy-driver cargo-clippy cargo-fmt rustup; do
+    mise_link "$R" "$bin" "$(mise_find_tool "$R" rust "$bin")"
+done
+
+# zig earns its place because this repo cross-compiles musl with `cargo zigbuild`
+# (see the deploy-boot recipe in the Justfile).
+mise_link "$R" zig "$(mise_find_tool "$R" zig zig)"
 
 # ── Network setup script ──────────────────────────────────────────────────────
 #

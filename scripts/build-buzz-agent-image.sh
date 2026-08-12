@@ -109,6 +109,8 @@ CI_ASSETS="$SCRIPT_DIR/ci-image"
 
 # shellcheck source=lib/guest-agent.sh
 source "$SCRIPT_DIR/lib/guest-agent.sh"
+# shellcheck source=lib/mise.sh
+source "$SCRIPT_DIR/lib/mise.sh"
 
 # Pinned sprig image. Tag+digest form: the tag stays human-traceable to its git
 # SHA while the digest does the pinning. Keep in sync with DEFAULT_IMAGE in
@@ -500,6 +502,12 @@ chown -R "$AGENT_UID:$AGENT_GID" "$R$AGENT_HOME" "$R/var/lib/buzz" "$R/workspace
 # before the VM counts as started, well below where ordinary services come up.
 
 install_guest_agent "$R"
+
+# mise goes in every base image: it is how an image grows any toolchain it was
+# not built with, without a rebuild. Note this does NOT replace the node install
+# above — that one deliberately unpacks the official tarball into /usr/local for
+# the reasons documented there, and mise is here for whatever a body needs later.
+install_mise "$R"
 
 # ── Harness entrypoint ───────────────────────────────────────────────────────
 
