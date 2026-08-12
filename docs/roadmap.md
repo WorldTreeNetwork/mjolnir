@@ -93,9 +93,9 @@ These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
   (`Mjolnir.DormantRegistry`). Inter-VM messaging buffered during boot.
 
 ### CI: VM-sandboxed Forgejo runner
-- A patched `forgejo-runner` executes Actions workflows **inside Mjolnir microVMs** instead of
-  Docker containers (`lib/mjolnir/runner/`, `native/forgejo-runner/`). Multi-virtio-fs mounts
-  let CI mount a repo read-only into the VM.
+- A forked `forgejo-runner` executes Actions workflows **inside Mjolnir microVMs** instead of
+  Docker containers (`lib/mjolnir/runner/` here; the runner itself is the `identikey/forgejo-runner`
+  repo, branch `mjolnir`). Multi-virtio-fs mounts let CI mount a repo read-only into the VM.
 
 ### Host config: Forge
 - `Mjolnir.Forge` — a declarative host-configuration reconciler with three-way diff

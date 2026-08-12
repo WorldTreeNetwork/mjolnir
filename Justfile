@@ -86,10 +86,6 @@ clean:
 build-client:
     ./scripts/build-client.sh
 
-# Build the forked Forgejo runner
-build-runner:
-    cd native/forgejo-runner && go build ./...
-
 # ═══════════════════════════════════════════════════════════════════════
 # Deploy
 # ═══════════════════════════════════════════════════════════════════════
