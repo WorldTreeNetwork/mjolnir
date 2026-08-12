@@ -1578,12 +1578,22 @@ defmodule Mjolnir.API.Router do
   # Health response encoders — convert {:degraded, reason} / {:dead, reason}
   # tuples into JSON-friendly maps, and roll up overall status.
 
-  defp encode_health_report(%{vm_id: id, overall: overall, checks: checks}) do
+  defp encode_health_report(%{vm_id: id, overall: overall, checks: checks} = report) do
     %{
       vm_id: id,
       overall: Atom.to_string(overall),
       checks: Enum.map(checks, &encode_health_check/1)
     }
+    |> put_secrets_unlock_failed(Map.get(report, :secrets_unlock_failed))
+  end
+
+  # mjolnir-3v2: informational field, absent entirely when there's nothing to
+  # report (not :managed, or the last unlock succeeded/was skipped) so old
+  # clients see no shape change.
+  defp put_secrets_unlock_failed(map, nil), do: map
+
+  defp put_secrets_unlock_failed(map, %{reason: reason, at: at}) do
+    Map.put(map, :secrets_unlock_failed, %{reason: reason, at: at})
   end
 
   defp encode_health_check(%{level: level, name: name, status: status} = entry) do

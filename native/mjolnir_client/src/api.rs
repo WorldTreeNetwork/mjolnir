@@ -942,6 +942,19 @@ pub async fn cmd_doctor(
         println!("{}", line);
     }
 
+    // mjolnir-3v2: shown regardless of `overall` — a failed managed-secrets
+    // unlock does not fail any check above (deliberately, to avoid driving
+    // auto-heal), so this is the only place an operator running `mj doctor`
+    // sees it.
+    if let Some(f) = &report.secrets_unlock_failed {
+        println!("───────────────────────────────────────────────────────");
+        println!(
+            "  \x1b[33msecrets unlock failed\x1b[0m  reason={}  at={}",
+            f.reason, f.at
+        );
+        println!("  VM is running WITHOUT its managed secrets. Re-unlock deliberately.");
+    }
+
     if report.overall != "ok" {
         std::process::exit(1);
     }

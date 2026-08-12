@@ -25,9 +25,23 @@ defmodule Mjolnir.API.Views do
       config: render_config(vm.config),
       boot_time: vm.boot_time,
       rootfs_bytes: rootfs_bytes(vm),
-      persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250)
+      persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250),
+      secrets_unlock_failed: render_secrets_unlock_failed(vm)
     }
   end
+
+  # mjolnir-3v2: a `secrets_mode: :managed` VM whose LUKS unlock failed still
+  # comes up `state: :running` — the guest boots fine, it just never got its
+  # secrets. `nil` here means either not applicable (not :managed) or the most
+  # recent unlock attempt succeeded/was skipped; a map means it failed, with
+  # enough detail (why, when) to act on without grepping logs.
+  defp render_secrets_unlock_failed(%{secrets_unlock_failure: nil}), do: nil
+
+  defp render_secrets_unlock_failed(%{secrets_unlock_failure: %{reason: reason, at: at}}) do
+    %{reason: reason, at: DateTime.to_iso8601(at)}
+  end
+
+  defp render_secrets_unlock_failed(_), do: nil
 
   # Exclusive (CoW-aware) disk cost of this VM's rootfs. Computed on the detail
   # view only — one btrfs du shell-out — never in the list path.

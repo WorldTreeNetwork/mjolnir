@@ -116,9 +116,22 @@ pub struct HealthCheck {
 }
 
 #[derive(Deserialize)]
+pub struct SecretsUnlockFailure {
+    pub reason: String,
+    pub at: String,
+}
+
+#[derive(Deserialize)]
 pub struct HealthReport {
     pub overall: String,
     pub checks: Vec<HealthCheck>,
+    // mjolnir-3v2: a `secrets_mode: managed` VM whose LUKS unlock failed still
+    // boots and reports `overall: ok` — the guest came up fine, it just never
+    // got its secrets. Deliberately NOT folded into `checks`/`overall` (see
+    // the Elixir-side Mjolnir.Health.check/1 comment): informational so
+    // `mj doctor` surfaces it without driving auto-heal.
+    #[serde(default)]
+    pub secrets_unlock_failed: Option<SecretsUnlockFailure>,
 }
 
 #[derive(Deserialize)]

@@ -70,7 +70,15 @@ defmodule Mjolnir.Health do
          %{
            vm_id: vm_id,
            overall: corroborated_overall(roll_up(checks), checks, vm, opts),
-           checks: checks
+           checks: checks,
+           # mjolnir-3v2: informational only — deliberately NOT folded into
+           # `checks`/`overall`. Doing so would make Health.Monitor's 30s
+           # auto-heal tick attempt to "heal" it on every pass forever, since
+           # nothing here re-attempts the unlock (see Mjolnir.Health.Monitor's
+           # moduledoc + mjolnir-1s9, where auto-healing a VM the heal path
+           # couldn't actually fix was its own bug). An operator reading
+           # `mj doctor` should see this and re-unlock deliberately.
+           secrets_unlock_failed: secrets_unlock_report(vm)
          }}
 
       # Passes through :not_found and :unreachable (mjolnir-8ie) unchanged.
@@ -143,7 +151,8 @@ defmodule Mjolnir.Health do
      %{
        vm_id: vm_id,
        overall: roll_up(heal_results),
-       checks: heal_results
+       checks: heal_results,
+       secrets_unlock_failed: secrets_unlock_report(vm)
      }}
   end
 
@@ -281,6 +290,16 @@ defmodule Mjolnir.Health do
       kind, reason -> {:error, {:heal_threw, kind, reason}}
     end
   end
+
+  @doc false
+  @spec secrets_unlock_report(Mjolnir.VM.t()) :: %{reason: String.t(), at: String.t()} | nil
+  def secrets_unlock_report(%Mjolnir.VM{secrets_unlock_failure: nil}), do: nil
+
+  def secrets_unlock_report(%Mjolnir.VM{secrets_unlock_failure: %{reason: reason, at: at}}) do
+    %{reason: reason, at: DateTime.to_iso8601(at)}
+  end
+
+  def secrets_unlock_report(_), do: nil
 
   defp roll_up(checks) do
     cond do

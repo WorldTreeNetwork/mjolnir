@@ -90,7 +90,19 @@ defmodule Mjolnir.VM do
     # "the guest ended itself" — both look identical from outside — so the
     # creator has to declare it. Required by Buzz invariant I5 (intentional
     # termination is terminal); see Mjolnir.Reconcile's moduledoc.
-    restart_policy: :always
+    restart_policy: :always,
+    # secrets_mode: :managed unlock outcome for the CURRENT boot (mjolnir-3v2).
+    # `nil` when unlock is not applicable (non-:managed) or it succeeded/was
+    # skipped. On failure: `%{reason: inspect(term), at: DateTime.t()}`.
+    #
+    # This is deliberately carried on the struct rather than written straight
+    # into a StateStore record: `build_running_record/1` rebuilds `runtime`
+    # from scratch on every boot AND resume (same reason CILease.stamp_runtime
+    # exists), so anything written elsewhere would be silently wiped on the
+    # very next boot. Set in do_boot/1 right after maybe_unlock_secrets/2
+    # runs, then stamped into `runtime` inside build_running_record/1 — mirrors
+    # how Mjolnir.CILease carries its lease.
+    secrets_unlock_failure: nil
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
@@ -1774,11 +1786,26 @@ defmodule Mjolnir.VM do
         # re-opens the snapshot-carried ciphertext volume. Log-and-continue like
         # the other configure steps so a transient cryptsetup hiccup doesn't wedge
         # the whole boot.
-        case maybe_unlock_secrets(state, vsock_path) do
-          :ok -> :ok
-          :skipped -> :ok
-          {:error, reason} -> Logger.error("Managed secrets unlock failed: #{inspect(reason)}")
-        end
+        #
+        # mjolnir-3v2: log-and-continue used to be the ONLY trace of a failed
+        # unlock — the VM would come up reporting state=running like any
+        # healthy VM while /run/mjolnir never got mounted. Record the outcome
+        # on the struct (see the :secrets_unlock_failure field in defstruct)
+        # so it can be stamped into the StateStore runtime map and surfaced
+        # via the API and `mj doctor`, without changing the "don't wedge the
+        # boot" behavior.
+        secrets_unlock_failure =
+          case maybe_unlock_secrets(state, vsock_path) do
+            :ok ->
+              nil
+
+            :skipped ->
+              nil
+
+            {:error, reason} ->
+              Logger.error("Managed secrets unlock failed: #{inspect(reason)}")
+              %{reason: inspect(reason), at: DateTime.utc_now()}
+          end
 
         # Start persistent vsock connection for command execution
         {:ok, vsock_conn} =
@@ -1804,7 +1831,8 @@ defmodule Mjolnir.VM do
              iroh_node_id: iroh_info[:node_id],
              iroh_json: iroh_info[:ticket],
              ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-             pty_ready: iroh_info != nil
+             pty_ready: iroh_info != nil,
+             secrets_unlock_failure: secrets_unlock_failure
          }}
       else
         error ->
@@ -2705,7 +2733,14 @@ defmodule Mjolnir.VM do
   # Build the durable :running record from live VM state. Shared by
   # persist_running_state/1 and the trash-metadata sidecar so a restored VM
   # carries the same spawn_config Reconcile needs to resume it.
-  defp build_running_record(state) do
+  #
+  # Public (not private) so mjolnir-3v2's "survives a rebuild" guarantee can
+  # be exercised directly against a hand-built %Mjolnir.VM{} struct in tests,
+  # the same way Mjolnir.CILease.stamp_runtime/3 is tested directly rather
+  # than through a full VM boot.
+  @doc false
+  @spec build_running_record(t()) :: Mjolnir.StateStore.Record.t()
+  def build_running_record(state) do
     Mjolnir.StateStore.Record.new(state.id, :running,
       spawn_config: %{
         "vcpus" => state.config.vcpu_count,
@@ -2726,22 +2761,38 @@ defmodule Mjolnir.VM do
         "hostname" => nil,
         "ssh_authorized_keys_hash" => nil
       },
-      # Stamped with a CI lease when this VM is CI-owned. This map is rebuilt
-      # from scratch on every boot and resume, so a lease written by
-      # CILease.renew/2 would otherwise be lost on restart — and a CI VM with
-      # no lease is never reclaimable (mjolnir-urp fails closed on absence),
-      # which is how orphaned CI VMs used to accumulate across restarts.
+      # Stamped with a CI lease when this VM is CI-owned, and with the
+      # mjolnir-3v2 secrets-unlock outcome when the current boot's managed
+      # unlock failed. This map is rebuilt from scratch on every boot and
+      # resume, so a lease written by CILease.renew/2 would otherwise be lost
+      # on restart — and a CI VM with no lease is never reclaimable
+      # (mjolnir-urp fails closed on absence), which is how orphaned CI VMs
+      # used to accumulate across restarts. Same trap applies to the secrets-
+      # unlock flag: it MUST be stamped in here from `state`, not written to
+      # StateStore separately, or the next boot/resume silently erases it.
       runtime:
-        Mjolnir.CILease.stamp_runtime(
-          %{
-            "ch_api_socket" => state.socket_path,
-            "vsock_uds" => state.vsock_path
-          },
-          state.metadata
-        ),
+        %{
+          "ch_api_socket" => state.socket_path,
+          "vsock_uds" => state.vsock_path
+        }
+        |> Mjolnir.CILease.stamp_runtime(state.metadata)
+        |> stamp_secrets_unlock_runtime(state.secrets_unlock_failure),
       metadata: state.metadata,
       last_boot_at: DateTime.utc_now()
     )
+  end
+
+  @doc false
+  @spec stamp_secrets_unlock_runtime(map(), map() | nil) :: map()
+  def stamp_secrets_unlock_runtime(runtime, nil) when is_map(runtime), do: runtime
+
+  def stamp_secrets_unlock_runtime(runtime, %{reason: reason, at: at})
+      when is_map(runtime) do
+    Map.merge(runtime, %{
+      "secrets_unlock_failed" => true,
+      "secrets_unlock_error" => reason,
+      "secrets_unlock_failed_at" => DateTime.to_iso8601(at)
+    })
   end
 
   defp persist_running_state(state) do
