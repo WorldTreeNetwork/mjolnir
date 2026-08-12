@@ -264,9 +264,10 @@ Modules: `lib/mjolnir/postgres/{server,bootstrap,migrator,supervisor,config}.ex`
 
 Forgejo Actions workflows execute inside Mjolnir microVMs instead of Docker containers. Architecture: a patched fork of the Go `forgejo-runner` binary (managed as an Erlang Port by `Runner.Server`) calls the Mjolnir HTTP API to spawn/exec/stop VMs per job.
 
-- **Go executor**: `native/forgejo-runner/pkg/mjolnir/executor.go` — implements act's `container.Container` interface
+- **Go executor**: ⚠️ the code that actually runs is `act/container/mjolnir/vm.go` in a **separate repo** — `identikey/forgejo-runner` on Forgejo, branch `mjolnir`, cloned to `/opt/forgejo-runner-build` on the server. `native/forgejo-runner/pkg/mjolnir/executor.go` in *this* repo is a **stale mirror that is never built**; editing it changes nothing. Reconciling the two is mjolnir-400. To change executor behaviour: edit `/opt/forgejo-runner-build`, `go build -o /usr/local/bin/forgejo-runner-mjolnir .`, `systemctl stop forgejo-runner` (the binary is busy while running) → copy → start, then **commit and push to `identikey/forgejo-runner`** — `deploy-runner` does `git reset --hard origin/mjolnir` and will silently discard anything uncommitted.
 - **Elixir supervisor**: `lib/mjolnir/runner/{server,config,supervisor}.ex` — Port lifecycle, feature-flagged via `:runner_enabled`
 - **Deploy**: `just deploy-runner` (clones upstream, patches, builds, installs systemd service)
+- **Env into the VM**: `POST /api/vms/:id/exec` accepts only `command` and **drops `env` entirely**. The executor works around this by writing `export` lines to `/.forgejo/.env.sh` on the host-side rootfs (visible to the guest through virtio-fs) and sourcing it from each step script, so env persists across exec calls for post-steps. Names bash cannot export — every hyphenated action input, e.g. `INPUT_FETCH-DEPTH` — are passed as an `env 'K=V' …` prefix on the command instead.
 - **Labels**: `ubuntu-24.04:mjolnir:ci-ubuntu-24.04` and `docker:mjolnir:ci-ubuntu-24.04` — both `runs-on:` values route to the VM backend on the `@base/ci-ubuntu-24.04` image. Authoritative copy is `/var/lib/mjolnir/runner/.runner`.
 - **Server paths**: binary at `/usr/local/bin/forgejo-runner-mjolnir`, state at `/var/lib/mjolnir/runner/`
 - **Logs**: `journalctl -u forgejo-runner`; per-job logs are zstd at `/var/lib/forgejo/data/actions_log/<owner>/<repo>/<n>/<task>.log.zst` (`zstd -dc … | grep -vE '::debug::|\[command\]'` — the raw log is mostly checkout noise)
@@ -282,10 +283,13 @@ git push origin main    # github.com/identikey/mjolnir — builds nothing
 git push forgejo main   # mimir.worldtree.network — this is what triggers CI
 ```
 
-Two things that will cost you a run:
+It publishes the binary as artifact `mj-x86_64-linux` (Forgejo stores these under `data/actions_artifacts/`; the run page links them).
 
-1. **Forgejo silently skips an unparseable workflow.** No run, no red X — just `[W] ignore invalid workflow` in `/var/lib/forgejo/log/gitea.log`. An empty dashboard is ambiguous between "nothing changed" and "your YAML is broken". Validate before pushing: `ruby -ryaml -e 'YAML.safe_load(File.read(".forgejo/workflows/build-client.yml"))'`.
-2. **The VM executor ignores `working-directory`** and runs in the repo root instead, without erroring (mjolnir-7c4). Steps must `cd native &&` themselves.
+Things that will cost you a run:
+
+1. **Forgejo silently skips an unparseable workflow.** No run, no red X — just `[W] ignore invalid workflow` in `/var/lib/forgejo/log/gitea.log`. An empty dashboard is ambiguous between "nothing changed" and "your YAML is broken". Validate before pushing: `ruby -ryaml -e 'YAML.safe_load(File.read(".forgejo/workflows/build-client.yml"))'`. (The specific break was `": "` inside a plain scalar — `run: echo "x: $(pwd)"`.)
+2. **Use `forgejo/upload-artifact`, never `actions/upload-artifact`.** Upstream v4 bundles `@actions/artifact` v2, which refuses any host that isn't github.com and fails with `GHESNotSupportedError` before making a request. It's a client-side check, so nothing on our side can fix it.
+3. **Iterate on a cheap workflow, not this one.** Nothing caches between VMs (mjolnir-5xn), so every `build-client` run is a ~10-minute cold cargo build. When debugging CI mechanics rather than the build, use a throwaway workflow that skips cargo — roughly one minute per iteration.
 
 To spawn a CI VM by hand, note that `@base/` and `@snapshots/` are separate namespaces and `mj` has no `--base` flag (mjolnir-97c), so `mj spawn --snapshot ci-ubuntu-24.04` fails with `:snapshot_not_found`. Go through the API:
 
