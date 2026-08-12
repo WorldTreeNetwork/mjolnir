@@ -24,6 +24,11 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     steps:
+      # Needed for the working-directory check below to mean anything: without
+      # a checkout there is no .forgejo/ in the VM, so the cd would fail and
+      # fall back to the workspace root whether or not the fix works.
+      - uses: actions/checkout@v4
+
       - name: Environment
         run: |
           echo "node $(node --version)"
