@@ -37,6 +37,12 @@ jobs:
           echo "artifact probe $GITHUB_SHA" > /tmp/probe/hello.txt
           sha256sum /tmp/probe/hello.txt
 
+      # Also confirms mjolnir-7c4: a relative working-directory is now anchored
+      # to GITHUB_WORKSPACE, so this must print a path ending in /.forgejo.
+      - name: working-directory check
+        working-directory: .forgejo
+        run: echo "landed in $(pwd)"
+
       - name: Upload (v4)
         uses: actions/upload-artifact@v4
         with:
