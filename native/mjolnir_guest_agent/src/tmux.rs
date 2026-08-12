@@ -246,28 +246,15 @@ fn strip_ansi(input: &str) -> String {
 /// Returns (content, pane_rows, pane_cols, running_command).
 pub async fn capture_pane(session: &str, lines: i32) -> Result<(String, u16, u16, Option<String>)> {
     validate_session_name(session)?;
-    // Capture scrollback content
-    let capture = Command::new("tmux")
-        .args([
-            "capture-pane",
-            "-t",
-            session,
-            "-p",
-            "-S",
-            &format!("-{}", lines),
-        ])
-        .output()
-        .await?;
 
-    if !capture.status.success() {
-        let stderr = String::from_utf8_lossy(&capture.stderr);
-        return Err(anyhow!("capture-pane failed: {}", stderr));
-    }
-
-    let raw_content = String::from_utf8_lossy(&capture.stdout).to_string();
-    let content = strip_ansi(&raw_content);
-
-    // Get pane dimensions and current command
+    // ORDER MATTERS. These are two separate tmux invocations, so they are not
+    // atomic, and send_and_read uses running_command to gate whether a
+    // sentinel match is trustworthy. Sampling busy-ness AFTER the content
+    // would open a window: content captured while the command is mid-run (a
+    // lookalike present, the real sentinel not yet written), the command then
+    // finishes, and idleness sampled afterwards would vouch for stale
+    // content. Sampling it FIRST can only err the safe way — "busy" against
+    // content that has since completed just skips one 250ms poll.
     let display = Command::new("tmux")
         .args([
             "display-message",
@@ -287,7 +274,7 @@ pub async fn capture_pane(session: &str, lines: i32) -> Result<(String, u16, u16
             let cols: u16 = parts[0].parse().unwrap_or(200);
             let rows: u16 = parts[1].parse().unwrap_or(50);
             let cmd = parts[2].trim().to_string();
-            let running = if cmd.is_empty() || cmd == "bash" || cmd == "sh" || cmd == "zsh" {
+            let running = if cmd.is_empty() || is_idle_shell(&cmd) {
                 None
             } else {
                 Some(cmd)
@@ -300,7 +287,61 @@ pub async fn capture_pane(session: &str, lines: i32) -> Result<(String, u16, u16
         (200, 50, None)
     };
 
+    // Content second — see the ordering note above.
+    let capture = Command::new("tmux")
+        .args([
+            "capture-pane",
+            "-t",
+            session,
+            "-p",
+            "-S",
+            &format!("-{}", lines),
+        ])
+        .output()
+        .await?;
+
+    if !capture.status.success() {
+        let stderr = String::from_utf8_lossy(&capture.stderr);
+        return Err(anyhow!("capture-pane failed: {}", stderr));
+    }
+
+    let content = strip_ansi(&String::from_utf8_lossy(&capture.stdout));
+
     Ok((content, pane_rows, pane_cols, running_command))
+}
+
+/// Is `cmd` a shell sitting at a prompt, i.e. the pane is idle?
+///
+/// This used to be presentational — "what is this pane running" — where a
+/// missed shell name cost nothing. `send_and_read` now GATES sentinel
+/// matching on it, so an unrecognised shell means the pane never looks idle
+/// and every call waits out its timeout. That is the safe direction (a
+/// timeout is honest; a wrong exit code is not), but it is still a real loss
+/// of function, and shared sessions are exactly where somebody's login shell
+/// is not bash. Hence the wider list.
+///
+/// Still a heuristic: a shell not named here degrades to "busy". If that
+/// bites, the durable fix is to ask tmux for the pane's own shell rather than
+/// pattern-matching names (mjolnir-40c).
+fn is_idle_shell(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "bash"
+            | "sh"
+            | "zsh"
+            | "dash"
+            | "ash"
+            | "busybox"
+            | "fish"
+            | "ksh"
+            | "mksh"
+            | "pdksh"
+            | "tcsh"
+            | "csh"
+            | "elvish"
+            | "nu"
+            | "xonsh"
+    )
 }
 
 /// Send a command and poll until it completes, returning its output.
@@ -365,46 +406,75 @@ pub async fn send_and_read(
 
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
-        let (content, _, _, _) = capture_pane(session, 1000).await?;
+        let (content, _, _, running_command) = capture_pane(session, 1000).await?;
 
-        // Find the actual sentinel OUTPUT line, not the echoed command line.
-        // The echoed command contains literal "$?": "echo __MJOLNIR_DONE_{uuid}_$?__"
-        // The actual output has a resolved exit code: "__MJOLNIR_DONE_{uuid}_0__"
-        // We distinguish them by checking that the suffix after the prefix
-        // is a number followed by "__", not "$?__".
-        if let Some(sentinel_line) = content.lines().rfind(|line| {
-            if let Some(rest) = line
-                .find(&*sentinel_prefix)
-                .map(|pos| &line[pos + sentinel_prefix.len()..])
+        // Find the actual sentinel OUTPUT line, not the echoed command line,
+        // and not a lookalike the command's own output might print.
+        //
+        // Shape alone is NOT enough: the echoed command line contains the
+        // literal, un-resolved "$?" ("echo __MJOLNIR_DONE_{id}_$?__"), which
+        // rules IT out, but a command can deliberately (or accidentally,
+        // e.g. via `set -x`/history expansion) print a line that is shaped
+        // exactly like a RESOLVED sentinel — "__MJOLNIR_DONE_{id}_<digits>__"
+        // — on its own line, before the real command has finished. Verified
+        // against a real pane (tmux 3.4): both the lookalike and the real
+        // sentinel appear as bare whole lines with nothing else sharing the
+        // line, so a whole-line match closes the old substring loophole but
+        // cannot by itself tell the two apart — they are textually
+        // identical in shape.
+        //
+        // What DOES distinguish them: `capture_pane`'s `running_command`
+        // (from tmux's `#{pane_current_command}`). While a lookalike is
+        // printed mid-command (e.g. during `sleep 1` before the shell
+        // returns), the pane is still running a foreground process — verified
+        // empirically: `pane_current_command` reports "sleep" at that point,
+        // and only flips to "bash" once the shell is back at an idle prompt,
+        // which happens strictly after our appended `echo` (the real
+        // sentinel) has run. `capture_pane` already normalizes shell names
+        // (bash/sh/zsh/empty) to `None`. So we only accept a sentinel match
+        // when the pane has returned to an idle shell — a lookalike printed
+        // while the command is still running cannot satisfy that gate.
+        let sentinel_idle_gate = running_command.is_none();
+
+        if sentinel_idle_gate {
+            if let Some(exit_code) = content
+                .lines()
+                .rev()
+                .find_map(|line| parse_sentinel_line(line, &sentinel_prefix))
             {
-                // Resolved sentinel ends with "<digits>__"; echoed command has "$?__"
-                rest.starts_with(|c: char| c.is_ascii_digit())
-            } else {
-                false
+                // Found the real sentinel — wait briefly for pane to settle
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let (final_content, _, _, _) = capture_pane(session, 1000).await?;
+
+                // Extract output: lines between command echo and sentinel
+                let output = extract_output(&final_content, &full_cmd, &sentinel_prefix);
+
+                return Ok(CommandOutput {
+                    output,
+                    exit_code: Some(exit_code),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timed_out: false,
+                });
             }
-        }) {
-            // Found sentinel — wait briefly for pane to settle
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let (final_content, _, _, _) = capture_pane(session, 1000).await?;
-
-            // Parse exit code from sentinel: __MJOLNIR_DONE_{id}_{exit_code}__
-            let exit_code = sentinel_line
-                .trim()
-                .strip_prefix(&sentinel_prefix)
-                .and_then(|s| s.strip_suffix("__"))
-                .and_then(|s| s.parse::<i32>().ok());
-
-            // Extract output: lines between command echo and sentinel
-            let output = extract_output(&final_content, &full_cmd, &sentinel_prefix);
-
-            return Ok(CommandOutput {
-                output,
-                exit_code,
-                duration_ms: start.elapsed().as_millis() as u64,
-                timed_out: false,
-            });
         }
     }
+}
+
+/// Parse a single captured pane line as a RESOLVED sentinel, requiring the
+/// sentinel to be the line's entire (trimmed) content — not a substring at
+/// an arbitrary column. This is the single source of truth for "is this
+/// line the sentinel", shared by the finder and the exit-code parser so
+/// they can no longer disagree (the prior bug: the finder matched a
+/// substring at any column, but the parser only accepted a match at column
+/// 0 via `strip_prefix`, so an off-column match found by the finder yielded
+/// `exit_code: None`).
+fn parse_sentinel_line(line: &str, sentinel_prefix: &str) -> Option<i32> {
+    let trimmed = line.trim();
+    let digits = trimmed.strip_prefix(sentinel_prefix)?.strip_suffix("__")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<i32>().ok()
 }
 
 /// Extract relevant output lines from captured pane content.
@@ -540,6 +610,29 @@ mod tests {
     /// `capture_pane`, so even a command that resolves instantly still costs
     /// at least one poll interval. Assert the floor so a future "optimize
     /// the happy path" pass sees the cost is deliberate, not accidental.
+    #[test]
+    fn idle_shell_detection_covers_more_than_bash() {
+        // send_and_read GATES sentinel matching on this (mjolnir-xrv), so a
+        // shell missing from the list makes its pane look permanently busy and
+        // every call there waits out its timeout. Shared sessions are exactly
+        // where a login shell is not bash, so this pins the breadth rather than
+        // leaving it to be narrowed by someone tidying up.
+        for shell in [
+            "bash", "sh", "zsh", "dash", "ash", "busybox", "fish", "ksh", "nu",
+        ] {
+            assert!(
+                super::is_idle_shell(shell),
+                "{shell} must count as an idle shell, or send_and_read times out in its panes"
+            );
+        }
+
+        // A foreground process must NOT read as idle — that is the whole gate:
+        // a lookalike printed while one of these runs must not end the wait.
+        for busy in ["sleep", "cargo", "vim", "ssh", "python3"] {
+            assert!(!super::is_idle_shell(busy), "{busy} must read as busy");
+        }
+    }
+
     #[tokio::test]
     async fn instant_command_still_costs_the_250ms_poll_floor() {
         with_test_session("latency", |session| async move {
@@ -680,23 +773,15 @@ mod tests {
     /// send_and_read appends and that only appears once the whole command
     /// finishes.
     ///
-    /// KNOWN BUG (reported, not fixed here — see final report): the
-    /// discrimination in send_and_read (tmux.rs ~371-382) distinguishes
-    /// "echoed" ($?) from "resolved" (digits) shapes, but does nothing to
-    /// distinguish the REAL appended sentinel from a lookalike digit-shaped
-    /// string that happens to appear in the command's own typed/echoed text
-    /// before the command finishes. `rfind` only looks at whatever has been
-    /// captured *so far* on each poll — if the lookalike is the only match
-    /// present at an early poll (before the real sentinel exists), the loop
-    /// returns early with the WRONG exit code.
+    /// FIXED (mjolnir-xrv): send_and_read now gates a sentinel match on the
+    /// pane being back at an idle shell prompt (`capture_pane`'s
+    /// `running_command == None`, from `#{pane_current_command}`), not on
+    /// text shape alone. A lookalike printed by the command's own output
+    /// while it is still running (e.g. mid-`sleep`) cannot satisfy that gate
+    /// — `pane_current_command` reports the foreground process (e.g.
+    /// "sleep") until the command truly finishes and the shell returns,
+    /// which is exactly when our appended sentinel echo has also run.
     #[tokio::test]
-    #[ignore = "REAL BUG (mjolnir-xrv): send_and_read's sentinel-shape check \
-                cannot distinguish a lookalike '__MJOLNIR_DONE_<id>_<digits>__' \
-                string emitted by the command's own text from the real \
-                sentinel appended by send_and_read itself. This test proves \
-                the loop returns early with a wrong exit code before the real \
-                command finishes. Do not fix in this change — filed for \
-                separate triage. See tmux.rs lines 366-382."]
     async fn sentinel_discrimination_ignores_lookalike_resolved_shapes_in_own_output() {
         with_test_session("sentdisc", |session| async move {
             let sentinel_id = format!(
