@@ -30,7 +30,12 @@ pub async fn cmd_spawn(
     connect: bool,
     memory_mb: &Option<u32>,
     snapshot: &Option<String>,
+    base_image: &Option<String>,
 ) -> Result<()> {
+    if snapshot.is_some() && base_image.is_some() {
+        anyhow::bail!("--snapshot and --base are mutually exclusive; pass at most one");
+    }
+
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -46,10 +51,14 @@ pub async fn cmd_spawn(
     if let Some(snap) = snapshot {
         eprintln!("Spawning from snapshot: {}", snap);
     }
+    if let Some(img) = base_image {
+        eprintln!("Spawning from base image: {}", img);
+    }
 
     let opts = SpawnOptions {
         memory_mb: *memory_mb,
         snapshot: snapshot.clone(),
+        base_image: base_image.clone(),
         ssh_public_key,
     };
 
@@ -1067,5 +1076,31 @@ mod tests {
         // pipeline from "my VMs" to "every VM". Fail loudly.
         assert!(metadata_query(&["nokey".to_string()]).is_err());
         assert!(metadata_query(&["=value".to_string()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn spawn_rejects_both_snapshot_and_base_before_touching_the_network() {
+        // --snapshot and --base name disjoint namespaces (@snapshots/ vs @base/);
+        // silently preferring one would spawn from the wrong image. This must
+        // fail fast, before any client/API resolution — no server needed to
+        // exercise it. clap's `conflicts_with` also catches this at parse time,
+        // but cmd_spawn is a public fn other callers (tests, MCP, etc.) can
+        // invoke directly, so it needs to guard itself too.
+        let profile = crate::config::Profile::default();
+        let result = super::cmd_spawn(
+            &profile,
+            &None,
+            &None,
+            false,
+            &None,
+            &Some("my-snapshot".to_string()),
+            &Some("my-base-image".to_string()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
     }
 }

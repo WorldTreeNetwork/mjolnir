@@ -57,9 +57,12 @@ enum Command {
         /// Memory allocation in MB (default: 512)
         #[arg(long)]
         memory: Option<u32>,
-        /// Spawn from a snapshot instead of base image
-        #[arg(long)]
+        /// Spawn from a snapshot instead of base image (mutually exclusive with --base)
+        #[arg(long, conflicts_with = "base")]
         snapshot: Option<String>,
+        /// Spawn from a named base image under @base/ (mutually exclusive with --snapshot)
+        #[arg(long, conflicts_with = "snapshot")]
+        base: Option<String>,
     },
     /// List running VMs
     List {
@@ -750,7 +753,8 @@ async fn main() {
             token,
             memory,
             snapshot,
-        } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot).await,
+            base,
+        } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot, &base).await,
         Command::List {
             dormant,
             filter,

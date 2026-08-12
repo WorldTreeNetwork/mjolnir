@@ -368,12 +368,20 @@ pub async fn await_pty(
 pub struct SpawnOptions {
     pub memory_mb: Option<u32>,
     pub snapshot: Option<String>,
+    pub base_image: Option<String>,
     pub ssh_public_key: Option<String>,
 }
 
 /// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
 /// VM may not have a ticket yet (`shell_ready == Some(false)`); call
 /// [`await_pty`] with the returned `id` to obtain one.
+///
+/// `opts.snapshot` and `opts.base_image` are mutually exclusive — callers
+/// (the CLI) are responsible for rejecting both before calling this. If both
+/// are set anyway, BOTH are sent and the host decides: `clone_rootfs/3`
+/// tries `config.snapshot` first and only falls through to `base_image`, so
+/// the snapshot wins. Do not rely on that — it is host precedence, not a
+/// guarantee of this function.
 pub async fn spawn_vm(
     client: &reqwest::Client,
     base: &str,
@@ -388,6 +396,9 @@ pub async fn spawn_vm(
     }
     if let Some(snap) = &opts.snapshot {
         body["snapshot"] = serde_json::Value::String(snap.clone());
+    }
+    if let Some(base_image) = &opts.base_image {
+        body["base_image"] = serde_json::Value::String(base_image.clone());
     }
 
     client
