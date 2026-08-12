@@ -459,6 +459,7 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :read, fn vm ->
+        _ = Mjolnir.CILease.renew(id)
         json(conn, 200, Views.render_vm(vm))
       end)
     else
@@ -472,6 +473,8 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :read, fn _vm ->
+        _ = Mjolnir.CILease.renew(id)
+
         case Mjolnir.Health.check(id) do
           {:ok, report} -> json(conn, 200, encode_health_report(report))
           {:error, :not_found} -> json(conn, 404, %{error: "not_found"})
@@ -655,6 +658,12 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       authorize_vm(conn, id, :exec, fn _vm ->
+        # Renew this VM's CI lease (mjolnir-urp) — a no-op for anything not
+        # tagged metadata["purpose"]="ci". exec is the mandatory renewal
+        # point: it's the only traffic guaranteed during a long-running job
+        # (a cold cargo build is one exec with no other API calls in between).
+        _ = Mjolnir.CILease.renew(id)
+
         with {:ok, command} <- Validation.validate_command(conn.body_params["command"]) do
           case Mjolnir.VM.exec(id, command, timeout: :infinity) do
             {:ok, output} ->

@@ -41,6 +41,24 @@ defmodule Mjolnir.Health.Monitor do
       # entry. Reconcile.run is idempotent — skips healthy VMs silently.
       Mjolnir.Reconcile.run()
 
+      # Reclaim CI VMs whose server-side lease expired (mjolnir-urp).
+      #
+      # Ordered after Reconcile so that either shape of orphan has a live
+      # GenServer to stop through the normal teardown path. Both occur: when
+      # the runner was SIGKILLed mid-job (mjolnir-24r, reproduced 2026-08-12)
+      # the VM stayed fully alive and answering execs — only its OWNER died —
+      # while a record stranded across a Mjolnir restart has no GenServer
+      # until Reconcile rehydrates it. Reclaiming is the same operation
+      # either way; this ordering just guarantees something is there to stop.
+      #
+      # Isolated in its own rescue so a bug here can never blind this tick to
+      # probes or trash reaping.
+      try do
+        Mjolnir.CILease.sweep()
+      rescue
+        e -> Logger.error("Health.Monitor: CI lease sweep raised: #{inspect(e)}")
+      end
+
       # Per-VM L0–L2 probes + auto-heal on :degraded.
       probe_all_vms()
 

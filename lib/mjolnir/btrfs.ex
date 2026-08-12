@@ -337,18 +337,29 @@ defmodule Mjolnir.BTRFS do
   @doc """
   Hard-delete trashed subvolumes older than the retention window.
 
-  Retention comes from `:trash_retention_seconds` (default 7 days). Returns
-  `{:ok, reaped_count}`. Entries that fail to parse a timestamp are kept
-  (fail-safe) so a malformed name never triggers premature deletion.
+  Retention is per-class (mjolnir-urp): entries whose sidecar metadata
+  records `metadata.purpose == "ci"` use `:ci_retention_seconds`
+  (`:ci_trash_retention_seconds`, default 24h) — CI output is disposable and
+  nobody restores it days later. Everything else uses `:retention_seconds`
+  (`:trash_retention_seconds`, default 7 days). Returns `{:ok, reaped_count}`.
+  Entries that fail to parse a timestamp are kept (fail-safe) so a malformed
+  name never triggers premature deletion.
   """
   def reap_trash(opts \\ []) do
     trash_dir = Keyword.get(opts, :trash_root, trash_root())
 
-    retention =
+    default_retention =
       Keyword.get(
         opts,
         :retention_seconds,
         Application.get_env(:mjolnir, :trash_retention_seconds, 7 * 24 * 60 * 60)
+      )
+
+    ci_retention =
+      Keyword.get(
+        opts,
+        :ci_retention_seconds,
+        Application.get_env(:mjolnir, :ci_trash_retention_seconds, 24 * 60 * 60)
       )
 
     now = System.os_time(:second)
@@ -359,7 +370,10 @@ defmodule Mjolnir.BTRFS do
           entries
           # Skip sidecar metadata files; they're reaped alongside their dir.
           |> Enum.reject(&String.ends_with?(&1, ".meta.json"))
-          |> Enum.filter(fn entry -> reapable?(entry, now, retention) end)
+          |> Enum.filter(fn entry ->
+            retention = retention_for(trash_dir, entry, default_retention, ci_retention)
+            reapable?(entry, now, retention)
+          end)
           |> Enum.reduce(0, fn entry, acc ->
             path = Path.join(trash_dir, entry)
             _ = File.rm(meta_sidecar_path(path))
@@ -555,6 +569,22 @@ defmodule Mjolnir.BTRFS do
     case Integer.parse(s) do
       {n, _} -> n
       _ -> 0
+    end
+  end
+
+  # Which retention window applies to this trash entry. Reads the sidecar
+  # written by trash_subvolume/2 (the full StateStore record, when one was
+  # available) and checks its top-level metadata.purpose — no new plumbing,
+  # this sidecar already exists for every VM rootfs trashed via VM.terminate.
+  # Missing/unreadable sidecar, or any purpose other than exactly "ci", falls
+  # back to the default (longer) retention — fail-safe in the "keep it
+  # longer" direction, never the "delete it sooner" one.
+  defp retention_for(trash_dir, entry, default_retention, ci_retention) do
+    path = Path.join(trash_dir, entry)
+
+    case read_trash_metadata(path) do
+      %{"metadata" => %{"purpose" => "ci"}} -> ci_retention
+      _ -> default_retention
     end
   end
 

@@ -142,6 +142,42 @@ defmodule Mjolnir.BTRFSTest do
       refute File.exists?(entry <> ".meta.json")
     end
 
+    test "reap_trash reaps CI-tagged entries at the CI retention while non-CI entries at the same age survive (mjolnir-urp)",
+         %{trash: trash} do
+      File.mkdir_p!(trash)
+      now = System.os_time(:second)
+      # Both entries are the same age: older than the (short) CI retention,
+      # but younger than the (long) default retention.
+      age = 2 * 60 * 60
+
+      ci_entry = Path.join(trash, "ci-vm__#{now - age}__aa")
+      other_entry = Path.join(trash, "other-vm__#{now - age}__bb")
+      File.mkdir_p!(ci_entry)
+      File.mkdir_p!(other_entry)
+
+      File.write!(
+        ci_entry <> ".meta.json",
+        Jason.encode!(%{"metadata" => %{"purpose" => "ci"}})
+      )
+
+      File.write!(
+        other_entry <> ".meta.json",
+        Jason.encode!(%{"metadata" => %{"purpose" => "interactive"}})
+      )
+
+      assert {:ok, 1} =
+               Mjolnir.BTRFS.reap_trash(
+                 trash_root: trash,
+                 retention_seconds: 24 * 60 * 60,
+                 ci_retention_seconds: 60 * 60
+               )
+
+      refute File.exists?(ci_entry)
+      refute File.exists?(ci_entry <> ".meta.json")
+      assert File.exists?(other_entry)
+      assert File.exists?(other_entry <> ".meta.json")
+    end
+
     test "list_trash skips sidecar files and unparseable names", %{trash: trash} do
       File.mkdir_p!(trash)
       now = System.os_time(:second)

@@ -36,6 +36,19 @@ config :mjolnir,
   # this window (default 7 days), so a deletion is recoverable in the interim.
   trash_retention_seconds: 7 * 24 * 60 * 60,
 
+  # CI VM lease (mjolnir-urp): a VM tagged metadata["purpose"]="ci" must have
+  # its server-side lease renewed by API activity or Health.Monitor reclaims
+  # it via the normal Mjolnir.VM.stop teardown path. 1h matches the forgejo-
+  # runner's own `timeout: 1h` and exceeds the longest single exec observed
+  # (a cold cargo build — one ~6m14s exec with no API traffic in between).
+  ci_lease_seconds: 60 * 60,
+
+  # CI trash is reaped sooner than user trash (default 7d): a reclaimed CI VM
+  # is disposable job output, not a workspace someone will want to restore
+  # days later. Read from the trash sidecar's metadata.purpose — no new
+  # plumbing needed (see Mjolnir.BTRFS.reap_trash/1).
+  ci_trash_retention_seconds: 24 * 60 * 60,
+
   # Durability: Reconcile retirement policy (mjolnir-5fu). A :running record
   # that fails to resume this many consecutive times, OR whose failure streak
   # is older than the TTL, is retired to intent=:failed so it stops being

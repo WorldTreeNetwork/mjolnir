@@ -2572,10 +2572,19 @@ defmodule Mjolnir.VM do
         "hostname" => nil,
         "ssh_authorized_keys_hash" => nil
       },
-      runtime: %{
-        "ch_api_socket" => state.socket_path,
-        "vsock_uds" => state.vsock_path
-      },
+      # Stamped with a CI lease when this VM is CI-owned. This map is rebuilt
+      # from scratch on every boot and resume, so a lease written by
+      # CILease.renew/2 would otherwise be lost on restart — and a CI VM with
+      # no lease is never reclaimable (mjolnir-urp fails closed on absence),
+      # which is how orphaned CI VMs used to accumulate across restarts.
+      runtime:
+        Mjolnir.CILease.stamp_runtime(
+          %{
+            "ch_api_socket" => state.socket_path,
+            "vsock_uds" => state.vsock_path
+          },
+          state.metadata
+        ),
       metadata: state.metadata,
       last_boot_at: DateTime.utc_now()
     )
