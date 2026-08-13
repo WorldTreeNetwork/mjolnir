@@ -121,6 +121,16 @@ defmodule Mjolnir.Health.Monitor do
         # warning level: this is a normal state during any long build.
         Logger.debug("Health.Monitor: VM #{vm_id} busy with an in-flight exec; not healing")
 
+      {:ok, %{overall: :booting}} ->
+        # The VM has not finished coming up. Since mjolnir-y32 this is a real
+        # answer from a live process rather than the call timeout it used to
+        # be — the managed-secrets unlock moved off the VM process, so the
+        # mailbox stays open through a window that previously produced a
+        # spurious "GenServer unreachable" on every deploy. Nothing to heal:
+        # the probes fail because boot is still in progress, and the L1 heal
+        # would stop the vsock connection the unlock is using.
+        Logger.debug("Health.Monitor: VM #{vm_id} still booting; not healing")
+
       {:ok, %{overall: :agent_unreachable} = report} ->
         # The guest agent is unreachable over vsock, but an independent TCP probe
         # confirmed the VM is alive and serving. This is NOT death — it's a

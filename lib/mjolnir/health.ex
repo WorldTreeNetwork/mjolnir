@@ -31,7 +31,7 @@ defmodule Mjolnir.Health do
 
   @type vm_report :: %{
           vm_id: String.t(),
-          overall: :ok | :busy | :degraded | :dead | :agent_unreachable,
+          overall: :ok | :busy | :booting | :degraded | :dead | :agent_unreachable,
           checks: [report_entry()]
         }
 
@@ -98,11 +98,19 @@ defmodule Mjolnir.Health do
       # flight kills that exec — the caller is asking us to break the thing they
       # are presumably waiting on (mjolnir-1s9).
       {:ok, vm} ->
-        if busy?(vm) do
-          Logger.info("Health.heal #{vm_id}: exec in flight, refusing to heal a busy VM")
-          {:ok, %{vm_id: vm_id, overall: :busy, checks: [], healed: []}}
-        else
-          do_heal(vm_id, vm, max_level)
+        cond do
+          busy?(vm) ->
+            Logger.info("Health.heal #{vm_id}: exec in flight, refusing to heal a busy VM")
+            {:ok, %{vm_id: vm_id, overall: :busy, checks: [], healed: []}}
+
+          # The L1 heal stops the Vsock.Connection — during boot that can be
+          # the connection the managed-secrets unlock is using (mjolnir-y32).
+          booting?(vm) ->
+            Logger.info("Health.heal #{vm_id}: still booting, refusing to heal")
+            {:ok, %{vm_id: vm_id, overall: :booting, checks: [], healed: []}}
+
+          true ->
+            do_heal(vm_id, vm, max_level)
         end
 
       # Passes through :not_found and :unreachable (mjolnir-8ie) unchanged.
@@ -351,6 +359,10 @@ defmodule Mjolnir.Health do
       busy?(vm) ->
         :busy
 
+      # 0b. Same argument, different cause: it has not finished booting.
+      booting?(vm) ->
+        :booting
+
       agent_channel_ok?(checks) ->
         :degraded
 
@@ -367,7 +379,11 @@ defmodule Mjolnir.Health do
   # A :degraded verdict is likewise not actionable while we are the load: the
   # failing probes are ours to explain. Healing on it does the same damage.
   def corroborated_overall(:degraded, _checks, %Mjolnir.VM{} = vm, _opts) do
-    if busy?(vm), do: :busy, else: :degraded
+    cond do
+      busy?(vm) -> :busy
+      booting?(vm) -> :booting
+      true -> :degraded
+    end
   end
 
   def corroborated_overall(other, _checks, _vm, _opts), do: other
@@ -385,6 +401,21 @@ defmodule Mjolnir.Health do
       _ -> false
     end
   end
+
+  @doc """
+  Is this VM still coming up?
+
+  Same shape of argument as `busy?/1`: the probes may legitimately fail because
+  the VM has not finished booting, not because anything is wrong. Reachable
+  since mjolnir-y32 moved the managed-secrets unlock off the VM process — the
+  mailbox now answers during a window where it previously could not, so the
+  monitor sees a real `:booting` instead of a call timeout it reported as
+  `unreachable`. Healing here would tear down the vsock connection the unlock
+  is using.
+  """
+  @spec booting?(Mjolnir.VM.t()) :: boolean()
+  def booting?(%Mjolnir.VM{state: :booting}), do: true
+  def booting?(%Mjolnir.VM{}), do: false
 
   # True only when every agent-channel check ran AND passed. An absent check is
   # not evidence of health, so the empty list is `false` — that keeps the

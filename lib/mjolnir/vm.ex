@@ -99,10 +99,29 @@ defmodule Mjolnir.VM do
     # into a StateStore record: `build_running_record/1` rebuilds `runtime`
     # from scratch on every boot AND resume (same reason CILease.stamp_runtime
     # exists), so anything written elsewhere would be silently wiped on the
-    # very next boot. Set in do_boot/1 right after maybe_unlock_secrets/2
-    # runs, then stamped into `runtime` inside build_running_record/1 — mirrors
-    # how Mjolnir.CILease carries its lease.
-    secrets_unlock_failure: nil
+    # very next boot. Set by finish_boot/2 from the unlock task's result, then
+    # stamped into `runtime` inside build_running_record/1 — mirrors how
+    # Mjolnir.CILease carries its lease.
+    secrets_unlock_failure: nil,
+    # The managed-secrets unlock runs OFF this process (mjolnir-y32). do_boot
+    # used to perform it inline, and its 60s vsock bound held the mailbox shut
+    # for the whole window — long enough for Health.Monitor's probe to time out
+    # and render a perfectly healthy VM as `unreachable` on every deploy.
+    #
+    # While these are set the VM is still `:booting`: it answers calls, but has
+    # not yet transitioned to `:running`. That ordering is load-bearing —
+    # `:running` must keep meaning "the secrets volume is mounted", because
+    # Mjolnir.Deploy.Orchestrator spawns a :managed VM and then starts an app
+    # that sources /run/mjolnir/secrets.env.
+    secrets_unlock_ref: nil,
+    secrets_unlock_pid: nil,
+    secrets_unlock_timer: nil,
+    # Caller of `await_boot` parked while state is :booting, replied by
+    # finish_boot/2. Was previously Map.put/3'd onto the struct and never
+    # answered — dead code only because the inline boot never opened the
+    # mailbox. Deferring the unlock makes that path live, so it is a real
+    # field now and spawn/1 depends on the reply.
+    boot_waiter: nil
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
@@ -1049,21 +1068,11 @@ defmodule Mjolnir.VM do
   def handle_continue(:boot, state) do
     case do_boot(state) do
       {:ok, new_state} ->
-        # Drain any messages queued during boot
-        for {from_vm_id, payload} <- new_state.message_queue do
-          Mjolnir.Vsock.Connection.deliver_message(new_state.vsock_conn, from_vm_id, payload)
-        end
-
-        running_state = %{
-          new_state
-          | state: :running,
-            boot_time: System.system_time(:millisecond),
-            message_queue: []
-        }
-
-        persist_running_state(running_state)
-
-        {:noreply, running_state}
+        # Boot is NOT necessarily over here. For a :managed VM the LUKS unlock
+        # still has to happen, and it must happen before the VM calls itself
+        # :running — but it must NOT happen on this process, or the mailbox
+        # stays shut for its whole 60s bound (mjolnir-y32).
+        start_secrets_unlock(new_state)
 
       {:error, reason} ->
         Logger.error("VM #{state.id} failed to boot: #{inspect(reason)}")
@@ -1544,6 +1553,44 @@ defmodule Mjolnir.VM do
     {:noreply, %{state | vsock_rebuild_waiters: [], vsock_rebuild_ref: nil}}
   end
 
+  # --- managed-secrets unlock, off-process (mjolnir-y32) ---------------------
+  #
+  # Three ways the unlock ends, and all three must land on finish_boot/2 — a VM
+  # left in :booting forever is worse than one that boots with a recorded
+  # failure, because nothing else in the system retries or reaps that state.
+
+  def handle_info(
+        {:secrets_unlock_result, pid, result},
+        %{secrets_unlock_pid: pid} = state
+      )
+      when is_pid(pid) do
+    Process.demonitor(state.secrets_unlock_ref, [:flush])
+    finish_boot(state, unlock_failure(state.id, result))
+  end
+
+  # The unlock worker died without reporting. Its own try/catch turns ordinary
+  # failures into {:error, _}, so arriving here means it was killed uncatchably
+  # — including by our own watchdog below.
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{secrets_unlock_ref: ref} = state
+      )
+      when is_reference(ref) do
+    finish_boot(state, unlock_failure(state.id, {:error, {:unlock_worker_died, reason}}))
+  end
+
+  # Watchdog. vsock_request/3 already carries its own bound, so this only fires
+  # if the worker is stuck somewhere that bound does not cover (a blocked
+  # connect, an escrow read on a wedged filesystem). Without it, such a worker
+  # would pin the VM in :booting indefinitely and strand the await_boot caller.
+  def handle_info({:secrets_unlock_timeout, ref}, %{secrets_unlock_ref: ref} = state)
+      when is_reference(ref) do
+    if is_pid(state.secrets_unlock_pid), do: Process.exit(state.secrets_unlock_pid, :kill)
+    # The :DOWN that kill produces arrives next and calls finish_boot/2 — do not
+    # finish here as well, or the VM transitions twice.
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -1781,31 +1828,10 @@ defmodule Mjolnir.VM do
             nil
           end
 
-        # secrets_mode: :managed — host re-injects the escrowed LUKS passphrase
-        # over vsock. On first boot this creates the volume; on dormancy wake it
-        # re-opens the snapshot-carried ciphertext volume. Log-and-continue like
-        # the other configure steps so a transient cryptsetup hiccup doesn't wedge
-        # the whole boot.
-        #
-        # mjolnir-3v2: log-and-continue used to be the ONLY trace of a failed
-        # unlock — the VM would come up reporting state=running like any
-        # healthy VM while /run/mjolnir never got mounted. Record the outcome
-        # on the struct (see the :secrets_unlock_failure field in defstruct)
-        # so it can be stamped into the StateStore runtime map and surfaced
-        # via the API and `mj doctor`, without changing the "don't wedge the
-        # boot" behavior.
-        secrets_unlock_failure =
-          case maybe_unlock_secrets(state, vsock_path) do
-            :ok ->
-              nil
-
-            :skipped ->
-              nil
-
-            {:error, reason} ->
-              Logger.error("Managed secrets unlock failed: #{inspect(reason)}")
-              %{reason: inspect(reason), at: DateTime.utc_now()}
-          end
+        # The secrets_mode: :managed unlock USED to run here, inline. It now
+        # runs off-process after do_boot returns — see start_secrets_unlock/1
+        # and mjolnir-y32. do_boot's job ends at "the guest is reachable";
+        # deciding when the VM becomes :running is handle_continue's.
 
         # Start persistent vsock connection for command execution
         {:ok, vsock_conn} =
@@ -1831,8 +1857,7 @@ defmodule Mjolnir.VM do
              iroh_node_id: iroh_info[:node_id],
              iroh_json: iroh_info[:ticket],
              ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-             pty_ready: iroh_info != nil,
-             secrets_unlock_failure: secrets_unlock_failure
+             pty_ready: iroh_info != nil
          }}
       else
         error ->
@@ -2427,6 +2452,93 @@ defmodule Mjolnir.VM do
   end
 
   defp maybe_unlock_secrets(_state, _vsock_path), do: :skipped
+
+  # Watchdog slack over the 60s vsock bound inside maybe_unlock_secrets/2. Only
+  # reached when the worker is stuck somewhere that bound does not cover.
+  @secrets_unlock_watchdog_ms 90_000
+
+  # Hand the managed-secrets unlock to a monitored worker and stay :booting
+  # until it reports. The VM answers calls throughout — that is the entire
+  # point (mjolnir-y32) — but it is NOT :running yet, because :running has to
+  # keep meaning "the secrets volume is mounted" for
+  # Mjolnir.Deploy.Orchestrator, which starts an app that sources
+  # /run/mjolnir/secrets.env immediately after spawn returns.
+  #
+  # Non-:managed VMs have nothing to wait for and finish inline as before.
+  defp start_secrets_unlock(%__MODULE__{secrets_mode: :managed} = state) do
+    parent = self()
+    vsock_path = state.vsock_path
+    unlock_state = state
+
+    # The result is correlated by the worker's pid, not the monitor ref: the
+    # ref only exists once spawn_monitor returns, so the worker cannot name it
+    # without a handshake. :DOWN and the watchdog still key on the ref.
+    {pid, ref} =
+      spawn_monitor(fn ->
+        result =
+          try do
+            maybe_unlock_secrets(unlock_state, vsock_path)
+          catch
+            kind, reason -> {:error, {:unlock_crashed, kind, reason}}
+          end
+
+        send(parent, {:secrets_unlock_result, self(), result})
+      end)
+
+    timer =
+      Process.send_after(self(), {:secrets_unlock_timeout, ref}, @secrets_unlock_watchdog_ms)
+
+    {:noreply,
+     %{state | secrets_unlock_ref: ref, secrets_unlock_pid: pid, secrets_unlock_timer: timer}}
+  end
+
+  defp start_secrets_unlock(state), do: finish_boot(state, nil)
+
+  # Translate an unlock outcome into the struct field build_running_record/1
+  # stamps. Log-and-continue is deliberate: a transient cryptsetup hiccup must
+  # not wedge the boot. Before mjolnir-3v2 the log was the ONLY trace, and the
+  # VM reported :running like any healthy one while /run/mjolnir never mounted.
+  defp unlock_failure(_vm_id, :ok), do: nil
+  defp unlock_failure(_vm_id, :skipped), do: nil
+
+  defp unlock_failure(vm_id, {:error, reason}) do
+    Logger.error("Managed secrets unlock failed for VM #{vm_id}: #{inspect(reason)}")
+    %{reason: inspect(reason), at: DateTime.utc_now()}
+  end
+
+  # The single place a VM becomes :running. Reached directly for VMs with
+  # nothing to unlock, and from each of the three unlock terminations.
+  defp finish_boot(state, secrets_unlock_failure) do
+    if is_reference(state.secrets_unlock_timer),
+      do: Process.cancel_timer(state.secrets_unlock_timer)
+
+    # Drain any messages queued during boot
+    for {from_vm_id, payload} <- state.message_queue do
+      Mjolnir.Vsock.Connection.deliver_message(state.vsock_conn, from_vm_id, payload)
+    end
+
+    running_state = %{
+      state
+      | state: :running,
+        boot_time: System.system_time(:millisecond),
+        message_queue: [],
+        secrets_unlock_failure: secrets_unlock_failure,
+        secrets_unlock_ref: nil,
+        secrets_unlock_pid: nil,
+        secrets_unlock_timer: nil,
+        boot_waiter: nil
+    }
+
+    persist_running_state(running_state)
+
+    # spawn/1 blocks on await_boot. While the unlock ran, the mailbox was open,
+    # so that call now lands on the :booting clause and parks here instead of
+    # being answered by the :running clause after handle_continue returns.
+    # Forgetting this reply would hang every managed spawn until its timeout.
+    if state.boot_waiter, do: GenServer.reply(state.boot_waiter, {:ok, running_state})
+
+    {:noreply, running_state}
+  end
 
   # ============================================================================
   # Vsock Helpers - Synchronous request/response pattern

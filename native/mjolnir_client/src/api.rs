@@ -872,6 +872,10 @@ pub async fn cmd_exec(
 fn paint_state(state: &str) -> &'static str {
     match state {
         "ok" => "\x1b[32mok\x1b[0m",
+        // Neither of these is a fault: the VM is doing something we asked, or
+        // is still coming up. Rendering them as a bare "?" read as broken.
+        "busy" => "\x1b[36mbusy\x1b[0m",
+        "booting" => "\x1b[36mbooting\x1b[0m",
         "degraded" => "\x1b[33mdegraded\x1b[0m",
         "dead" => "\x1b[31mdead\x1b[0m",
         _ => "\x1b[90m?\x1b[0m",

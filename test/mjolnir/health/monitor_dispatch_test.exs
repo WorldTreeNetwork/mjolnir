@@ -38,6 +38,19 @@ defmodule Mjolnir.Health.MonitorDispatchTest do
     assert log =~ @vm_id
   end
 
+  test ":booting does not heal and does not warn" do
+    # mjolnir-y32: before the unlock moved off the VM process, a booting
+    # :managed VM could not answer at all and the monitor logged
+    # "GenServer unreachable" on every deploy — the loudest possible line for
+    # a VM that was fine. Now it answers :booting, and the right response is
+    # to say nothing at warning level and heal nothing.
+    log = capture_log(fn -> Monitor.handle_check_result(@vm_id, {:ok, %{overall: :booting}}) end)
+
+    refute log =~ "unreachable"
+    refute log =~ "[warning]"
+    refute log =~ "unexpected check result"
+  end
+
   test "an unanticipated result shape is logged, not raised" do
     # The regression guard: whatever future shape appears, the tick survives.
     log =
