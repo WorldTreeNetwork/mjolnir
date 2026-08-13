@@ -49,8 +49,18 @@ defmodule Mjolnir.BTRFS do
   Clone a named snapshot to create a new VM rootfs.
 
   Uses `btrfs subvolume snapshot` from @snapshots/{name}/ → @vms/{vm_id}/.
+
+  ## Options
+
+    - `:verify_generation` — when `true`, refuse to clone unless the snapshot
+      subvolume still sits at the generation recorded when it was taken
+      (`verify_generation/1`). Off by default: a cold boot off a snapshotted
+      disk is merely *stale* if the snapshot moved, which is survivable. It is
+      mandatory for memory restore, where a guest's cached pages describe a
+      specific on-disk state and a mismatch is silent corruption rather than a
+      crash.
   """
-  def clone_from_snapshot(name, vm_id) do
+  def clone_from_snapshot(name, vm_id, opts \\ []) do
     validate_path_component!(name, "snapshot name")
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     vm_subdir = Application.get_env(:mjolnir, :vm_storage_subdir, "@vms")
@@ -58,7 +68,8 @@ defmodule Mjolnir.BTRFS do
     dest = Path.join([btrfs_root, vm_subdir, vm_id])
 
     if File.dir?(source) do
-      with :ok <- ensure_dir(Path.join([btrfs_root, vm_subdir])),
+      with :ok <- maybe_verify_generation(name, Keyword.get(opts, :verify_generation, false)),
+           :ok <- ensure_dir(Path.join([btrfs_root, vm_subdir])),
            :ok <- snapshot_subvolume(source, dest) do
         {:ok, dest}
       end
@@ -67,15 +78,30 @@ defmodule Mjolnir.BTRFS do
     end
   end
 
+  defp maybe_verify_generation(_name, false), do: :ok
+  defp maybe_verify_generation(name, true), do: verify_generation(name)
+
   @doc """
   Create a named snapshot of a VM's rootfs.
 
   Uses `btrfs subvolume snapshot` from @vms/{vm_id}/ → @snapshots/{name}/
   and writes a JSON metadata sidecar file.
 
+  The sidecar always records the snapshot subvolume's BTRFS **generation**.
+  That number is what lets a later restore prove the filesystem it is about to
+  hand a guest is byte-identical to the one that guest's RAM was captured
+  against — see `verify_generation/1` and `Mjolnir.MemorySnapshot`.
+
   ## Options
     - `:source_vm_id` — recorded in metadata (defaults to vm_id)
     - `:owner_id` — owner identity for multi-tenancy
+    - `:readonly` — create the snapshot with `btrfs subvolume snapshot -r`
+      (default `false`). Required for memory snapshots: a writable snapshot can
+      drift out from under a captured guest RAM image, and `-r` is what makes
+      the "restore always sees the same bytes" guarantee structural rather than
+      a matter of nobody having touched it. Left off by default because the
+      existing cold-boot snapshot flows (deploy layers, `mj snapshot create`)
+      clone *from* these and some callers mutate the snapshot in place.
   """
   def create_snapshot(vm_id, name, opts \\ []) do
     validate_path_component!(name, "snapshot name")
@@ -85,16 +111,26 @@ defmodule Mjolnir.BTRFS do
     snapshot_dir = Path.join([btrfs_root, "@snapshots"])
     dest = Path.join(snapshot_dir, name)
     meta_path = Path.join(snapshot_dir, "#{name}.json")
+    readonly = Keyword.get(opts, :readonly, false)
 
     if File.dir?(dest) do
       {:error, {:snapshot_exists, name}}
     else
       with :ok <- ensure_dir(snapshot_dir),
-           :ok <- snapshot_subvolume(source, dest) do
+           :ok <- snapshot_subvolume(source, dest, readonly: readonly) do
         size_bytes =
           case System.cmd("du", ["-sb", dest], stderr_to_stdout: true) do
             {output, 0} -> output |> String.split("\t") |> List.first() |> String.to_integer()
             _ -> 0
+          end
+
+        # Read the generation back from the subvolume we just created rather
+        # than the source: it is the destination that a restore will clone, and
+        # only the destination's number can be re-checked later.
+        generation =
+          case subvolume_generation(dest) do
+            {:ok, gen} -> gen
+            {:error, _} -> nil
           end
 
         metadata = %{
@@ -102,12 +138,78 @@ defmodule Mjolnir.BTRFS do
           source_vm_id: opts[:source_vm_id] || vm_id,
           owner_id: opts[:owner_id],
           created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-          size_bytes: size_bytes
+          size_bytes: size_bytes,
+          generation: generation,
+          readonly: readonly
         }
 
         File.write!(meta_path, Jason.encode!(metadata, pretty: true))
-        Logger.info("Created snapshot '#{name}' from VM #{vm_id}")
+        Logger.info("Created snapshot '#{name}' from VM #{vm_id} (generation #{generation})")
         {:ok, metadata}
+      end
+    end
+  end
+
+  @doc """
+  Read a subvolume's current BTRFS generation.
+
+  The generation is a monotonically increasing transaction id. A read-only
+  snapshot's generation never advances; a writable one's does on every commit.
+  So "the generation still matches what we recorded" is a cheap, exact answer
+  to "has this filesystem changed since we captured a guest's RAM against it?".
+  """
+  @spec subvolume_generation(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def subvolume_generation(path) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "show", path], stderr_to_stdout: true) do
+      {output, 0} -> parse_generation(output)
+      {output, code} -> {:error, {:btrfs_subvolume_show_failed, code, String.trim(output)}}
+    end
+  end
+
+  @doc """
+  Parse the `Generation:` field out of `btrfs subvolume show` output.
+
+  Split out from `subvolume_generation/1` so the parsing is testable off a
+  BTRFS host. Note `btrfs` prints both `Generation` and `Gen at creation`; the
+  regex is anchored to a line start so it cannot match the latter.
+  """
+  @spec parse_generation(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def parse_generation(output) when is_binary(output) do
+    case Regex.run(~r/^\s*Generation:\s+(\d+)\s*$/m, output) do
+      [_, gen] -> {:ok, String.to_integer(gen)}
+      _ -> {:error, :generation_not_found}
+    end
+  end
+
+  @doc """
+  Verify a named snapshot's subvolume still sits at its recorded generation.
+
+  Returns `:ok`, or `{:error, {:snapshot_drifted, name, expected, actual}}` if
+  the subvolume has been written since the snapshot was taken.
+
+  `{:error, {:snapshot_generation_unknown, name}}` means the sidecar predates
+  generation recording — an honest "cannot prove it", which callers that need
+  the guarantee (memory restore) must treat as a refusal, and callers that do
+  not (a plain cold-boot clone) may ignore.
+  """
+  @spec verify_generation(String.t()) :: :ok | {:error, term()}
+  def verify_generation(name) do
+    with {:ok, %{metadata: metadata, path: path}} <- get_snapshot(name) do
+      case metadata[:generation] do
+        nil ->
+          {:error, {:snapshot_generation_unknown, name}}
+
+        expected when is_integer(expected) ->
+          case subvolume_generation(path) do
+            {:ok, ^expected} ->
+              :ok
+
+            {:ok, actual} ->
+              {:error, {:snapshot_drifted, name, expected, actual}}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
       end
     end
   end
@@ -636,7 +738,11 @@ defmodule Mjolnir.BTRFS do
   # Private helpers
 
   # Known metadata keys — safe to atomize since we control the schema
-  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes)
+  # `generation` and `readonly` must round-trip as atoms or verify_generation/1
+  # reads `metadata[:generation]` as nil on every snapshot loaded from disk and
+  # silently degrades to "cannot prove it" — which for memory restore is a
+  # refusal, so the failure would be loud but wrong.
+  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation readonly)
 
   defp atomize_metadata(metadata) when is_map(metadata) do
     Map.new(metadata, fn
@@ -645,8 +751,10 @@ defmodule Mjolnir.BTRFS do
     end)
   end
 
-  defp snapshot_subvolume(source, dest) do
-    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot", source, dest],
+  defp snapshot_subvolume(source, dest, opts \\ []) do
+    flags = if Keyword.get(opts, :readonly, false), do: ["-r"], else: []
+
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "snapshot"] ++ flags ++ [source, dest],
            stderr_to_stdout: true
          ) do
       {_, 0} ->
