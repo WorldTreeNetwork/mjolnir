@@ -27,6 +27,13 @@ pub const SECRETS_ENV_PATH: &str = "/run/mjolnir/secrets.env";
 pub const SECRETS_PROFILE_PATH: &str = "/etc/profile.d/mjolnir-secrets.sh";
 pub const DEFAULT_SECRETS_SIZE_MB: u32 = 32;
 
+/// systemd target that gates every unit needing the secrets volume. Started by
+/// [`activate_secrets_target`] once the volume is mounted and the env rendered —
+/// never at boot, because at boot the passphrase has not arrived yet.
+pub const SECRETS_TARGET: &str = "mjolnir-secrets.target";
+const SECRETS_TARGET_PATH: &str = "/etc/systemd/system/mjolnir-secrets.target";
+const SECRETS_TARGET_UNIT: &str = "[Unit]\nDescription=Mjolnir managed secrets are mounted\n";
+
 /// One-shot guard: once secrets have been injected, reject further inject attempts.
 static SECRETS_INJECTED: AtomicBool = AtomicBool::new(false);
 
@@ -80,8 +87,20 @@ pub fn inject(passphrase: &str, init_size_mb: Option<u32>) -> Result<(bool, bool
 
     match result {
         Ok((created, mounted)) => {
-            if let Err(e) = load_env_vars() {
-                warn!("Failed to load env vars after inject: {}", e);
+            match load_env_vars() {
+                Ok(_) => activate_secrets_target(),
+                Err(e) => {
+                    // Deliberately do NOT release the gate. The volume is
+                    // mounted but the env was not rendered, so any unit we
+                    // started would come up without its configuration —
+                    // the exact silent misconfiguration the gate exists to
+                    // prevent. Down and explicable beats up and wrong.
+                    warn!(
+                        "Failed to load env vars after inject ({}); \
+                         leaving secrets-gated units stopped",
+                        e
+                    );
+                }
             }
             Ok((created, mounted))
         }
@@ -90,6 +109,93 @@ pub fn inject(passphrase: &str, init_size_mb: Option<u32>) -> Result<(bool, bool
             Err(e)
         }
     }
+}
+
+/// Start [`SECRETS_TARGET`], releasing every unit gated on the secrets volume.
+///
+/// # Why this exists
+///
+/// A deployed app unit is ordered into `mjolnir-secrets.target` rather than
+/// `multi-user.target`, because the host does not deliver the passphrase until
+/// well after the guest has finished booting: systemd reaches
+/// `multi-user.target` long before vsock carries `inject_secrets`. A unit wanted
+/// by `multi-user.target` and gated on `ConditionPathIsMountPoint=/secrets`
+/// would therefore be *skipped at every boot* and never reconsidered — systemd
+/// evaluates conditions once, when the job runs, and nothing re-queues it.
+///
+/// So the boot-time job never exists. The unit waits in the target's `.wants/`
+/// until this function runs it, which happens only once the volume is genuinely
+/// mounted and the env genuinely rendered.
+///
+/// # Best-effort by design
+///
+/// Every failure here is logged and swallowed. This runs inside the unlock path,
+/// and a guest with no systemd (the initramfs boot agent, a minimal image) must
+/// still get its secrets — it simply has no units to release.
+pub fn activate_secrets_target() {
+    if !systemd_running() {
+        info!(
+            "No systemd in this guest; nothing to release for {}",
+            SECRETS_TARGET
+        );
+        return;
+    }
+
+    // Re-check rather than trusting the caller. This function's whole purpose is
+    // to lift a safety gate, so it asks the same question the gate asks, at the
+    // moment it lifts it.
+    if !is_mounted() {
+        warn!(
+            "Refusing to start {} — {} is not a mount point",
+            SECRETS_TARGET, SECRETS_MOUNT
+        );
+        return;
+    }
+
+    if !ensure_secrets_target_unit() {
+        return;
+    }
+
+    match run_cmd("systemctl", &["start", SECRETS_TARGET]) {
+        Ok(_) => info!("Started {} — secrets-gated units released", SECRETS_TARGET),
+        Err(e) => warn!("Failed to start {}: {}", SECRETS_TARGET, e),
+    }
+}
+
+/// Is this guest running systemd? The canonical `sd_booted()` test.
+fn systemd_running() -> bool {
+    Path::new("/run/systemd/system").is_dir()
+}
+
+/// Materialize the target unit if missing or stale. Returns false on failure.
+///
+/// Written here as well as by the host at deploy time so that neither side
+/// depends on the other's vintage: a VM whose agent predates this code still
+/// gets a working target from the deploy, and a VM that has never been deployed
+/// to still has one for an operator to hang units on. The unit body is two
+/// lines precisely so the duplication cannot drift — keep it in step with
+/// `Mjolnir.Deploy.Runtime.secrets_target_unit/0`.
+fn ensure_secrets_target_unit() -> bool {
+    let current = std::fs::read_to_string(SECRETS_TARGET_PATH).ok();
+    if current.as_deref() == Some(SECRETS_TARGET_UNIT) {
+        return true;
+    }
+
+    if let Err(e) = std::fs::write(SECRETS_TARGET_PATH, SECRETS_TARGET_UNIT) {
+        warn!("Failed to write {}: {}", SECRETS_TARGET_PATH, e);
+        return false;
+    }
+
+    if let Err(e) = run_cmd("systemctl", &["daemon-reload"]) {
+        warn!(
+            "systemctl daemon-reload failed after writing {}: {}",
+            SECRETS_TARGET_PATH, e
+        );
+        return false;
+    }
+
+    info!("Wrote {}", SECRETS_TARGET_PATH);
+    true
 }
 
 /// Is the decrypted volume actually mounted at [`SECRETS_MOUNT`]?

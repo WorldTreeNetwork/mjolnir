@@ -36,6 +36,9 @@ defmodule Mjolnir.Deploy.Runtime do
 
   require Logger
 
+  @secrets_target "mjolnir-secrets.target"
+  @secrets_target_path "/etc/systemd/system/mjolnir-secrets.target"
+
   @default_gateway_domain "vm.worldtree.network"
   @default_workdir "/app"
   @ticket_poll_interval 500
@@ -97,10 +100,8 @@ defmodule Mjolnir.Deploy.Runtime do
     start_command = fetch!(plan, :start_command)
     boot = Map.merge(%{snapshot: release_snapshot, enable_iroh: true}, Map.new(spawn_opts))
 
-    unit =
-      systemd_unit(app_name, start_command, port, workdir,
-        secrets_mode: Map.get(boot, :secrets_mode)
-      )
+    secrets_mode = Map.get(boot, :secrets_mode)
+    unit = systemd_unit(app_name, start_command, port, workdir, secrets_mode: secrets_mode)
 
     Logger.info("Deploy.Runtime: starting service '#{app_name}' from #{release_snapshot}")
 
@@ -121,7 +122,8 @@ defmodule Mjolnir.Deploy.Runtime do
               domain,
               ticket_timeout,
               custom_domain_opt,
-              owner_id_opt
+              owner_id_opt,
+              secrets_mode
             )
 
           {:error, reason} ->
@@ -182,10 +184,11 @@ defmodule Mjolnir.Deploy.Runtime do
          domain,
          ticket_timeout,
          custom_domain_opt,
-         owner_id_opt
+         owner_id_opt,
+         secrets_mode
        ) do
     with {:ok, ticket} <- await_ticket(ops, vm_id, ticket_timeout),
-         :ok <- install_unit(ops, vm_id, app_name, unit, workdir) do
+         :ok <- install_unit(ops, vm_id, app_name, unit, workdir, secrets_mode) do
       url = gateway_url(ticket, port, domain)
 
       # Preserve the app's custom_domain across the redeploy. Registry.put builds
@@ -302,13 +305,14 @@ defmodule Mjolnir.Deploy.Runtime do
 
   # --- systemd unit installation --------------------------------------------
 
-  defp install_unit(ops, vm_id, app_name, unit, workdir) do
+  defp install_unit(ops, vm_id, app_name, unit, workdir, secrets_mode) do
     unit_path = "/etc/systemd/system/#{unit_name(app_name)}"
     # Materialize the WorkingDirectory first: a missing dir is a hard
     # pre-ExecStart CHDIR failure (status=200), not a warning. A quoted heredoc
     # then writes the unit verbatim (no shell expansion of $PORT etc.).
     write_cmd =
-      "mkdir -p #{workdir} && cat > #{unit_path} <<'MJOLNIR_UNIT'\n#{unit}\nMJOLNIR_UNIT"
+      target_prelude(secrets_mode) <>
+        "mkdir -p #{workdir} && cat > #{unit_path} <<'MJOLNIR_UNIT'\n#{unit}\nMJOLNIR_UNIT"
 
     activate_cmd = "systemctl daemon-reload && systemctl enable --now #{unit_name(app_name)}"
 
@@ -319,6 +323,17 @@ defmodule Mjolnir.Deploy.Runtime do
       {:error, reason} -> {:error, {:unit_install_failed, reason}}
     end
   end
+
+  # `systemctl enable` needs the target to exist before it will link a unit into
+  # it, and the guest agent only writes the target during an unlock — so a VM
+  # running an agent that predates that code would fail the enable. Write it
+  # here too and the deploy stops depending on agent vintage. Idempotent: the
+  # body is fixed, so re-writing it is a no-op.
+  defp target_prelude(:managed) do
+    "cat > #{@secrets_target_path} <<'MJOLNIR_TARGET'\n#{secrets_target_unit()}MJOLNIR_TARGET\n"
+  end
+
+  defp target_prelude(_), do: ""
 
   defp teardown(ops, vm_id) do
     case ops.stop.(vm_id) do
@@ -348,7 +363,7 @@ defmodule Mjolnir.Deploy.Runtime do
     Description=Mjolnir deploy: #{app_name}
     After=network-online.target
     Wants=network-online.target
-    #{secrets_condition(opts[:secrets_mode])}
+    #{secrets_unit_lines(opts[:secrets_mode])}
     [Service]
     Type=simple
     WorkingDirectory=#{workdir}
@@ -359,8 +374,54 @@ defmodule Mjolnir.Deploy.Runtime do
     RestartSec=2
 
     [Install]
-    WantedBy=multi-user.target
+    WantedBy=#{wanted_by(opts[:secrets_mode])}
     """
+  end
+
+  @doc """
+  The systemd target a service is installed into.
+
+  A `:managed` service is wanted by `#{@secrets_target}` rather than
+  `multi-user.target`. That is the whole restart fix: the host does not deliver
+  the LUKS passphrase until well after the guest has booted, so systemd reaches
+  `multi-user.target` long before `/secrets` exists. A unit wanted by
+  `multi-user.target` and gated on the mount would be evaluated once, at boot,
+  skipped, and never reconsidered — conditions are checked when the job runs,
+  and nothing re-queues a skipped job.
+
+  Wanted by `#{@secrets_target}` instead, the unit simply has no boot-time job.
+  It waits until the guest agent starts that target, which it does only after
+  the volume is mounted and the env rendered.
+  """
+  @spec wanted_by(atom() | nil) :: String.t()
+  def wanted_by(:managed), do: @secrets_target
+  def wanted_by(_), do: "multi-user.target"
+
+  # `[Unit]` lines that exist only for a :managed service. `After=` orders the
+  # app behind the target; the condition is defense in depth for the path the
+  # ordering does not cover — an operator running `systemctl start app` by hand
+  # while the volume is closed.
+  defp secrets_unit_lines(:managed) do
+    "After=#{@secrets_target}\n" <> secrets_condition(:managed)
+  end
+
+  defp secrets_unit_lines(_), do: ""
+
+  @doc """
+  Body of the `#{@secrets_target}` unit.
+
+  Deliberately inert: no `[Install]` section, so nothing pulls it in at boot. It
+  exists purely as something for gated units to hang off and for the guest agent
+  to start once secrets are up.
+
+  Also written by the guest agent (`secrets.rs`, `ensure_secrets_target_unit`)
+  so neither side depends on the other's vintage — a VM whose agent predates
+  this still gets a target from the deploy. Two lines, so the duplication cannot
+  meaningfully drift; keep them in step.
+  """
+  @spec secrets_target_unit() :: String.t()
+  def secrets_target_unit do
+    "[Unit]\nDescription=Mjolnir managed secrets are mounted\n"
   end
 
   # Refuse to run the service unless /secrets is a REAL mount.

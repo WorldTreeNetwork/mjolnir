@@ -350,4 +350,103 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       assert Enum.any?(execs, &(&1 =~ "ConditionPathIsMountPoint=/secrets"))
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # mjolnir-c6s — the unit has to come back after a restart, not just stay safe
+  # ---------------------------------------------------------------------------
+
+  describe "secrets target ordering" do
+    # The condition alone made a restarted app fail CLOSED but also fail
+    # PERMANENTLY: systemd evaluates conditions when the job runs, and at boot
+    # the passphrase has not arrived, so the unit was skipped and never
+    # reconsidered. Being wanted by mjolnir-secrets.target instead means there
+    # is no boot-time job at all — the agent starts the target once /secrets is
+    # genuinely mounted.
+    test "a :managed service is wanted by the secrets target, not multi-user" do
+      unit = Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: :managed)
+
+      assert unit =~ "WantedBy=mjolnir-secrets.target"
+      refute unit =~ "WantedBy=multi-user.target"
+    end
+
+    test "a plain service is still wanted by multi-user.target" do
+      assert Runtime.systemd_unit("my-app", "cmd", 3000, "/app") =~ "WantedBy=multi-user.target"
+
+      for mode <- [:none, :ephemeral, :persistent] do
+        unit = Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: mode)
+        assert unit =~ "WantedBy=multi-user.target"
+        refute unit =~ "mjolnir-secrets.target"
+      end
+    end
+
+    test "a :managed service is ordered after the target" do
+      unit = Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: :managed)
+
+      [unit_section, _] = String.split(unit, "[Service]", parts: 2)
+      assert unit_section =~ "After=mjolnir-secrets.target"
+    end
+
+    test "the condition survives alongside the target ordering" do
+      # Ordering handles boot; the condition handles a hand-run
+      # `systemctl start app` while the volume is closed. Losing either one
+      # reopens a path to plaintext on the rootfs.
+      unit = Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: :managed)
+
+      assert unit =~ "ConditionPathIsMountPoint=/secrets"
+      assert unit =~ "WantedBy=mjolnir-secrets.target"
+    end
+
+    test "the unit still parses as INI with both additions" do
+      unit = Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: :managed)
+
+      sections = unit |> String.split("\n") |> Enum.filter(&String.starts_with?(&1, "["))
+      assert sections == ["[Unit]", "[Service]", "[Install]"]
+      refute unit =~ "\n\n\n"
+    end
+
+    test "the target unit itself is inert — nothing pulls it in at boot" do
+      # An [Install] section here would defeat the entire mechanism: the target
+      # would start at boot, before the passphrase, releasing the app early.
+      body = Runtime.secrets_target_unit()
+
+      assert body =~ "[Unit]"
+      refute body =~ "[Install]"
+      refute body =~ "WantedBy"
+    end
+
+    test "a :managed deploy writes the target into the guest before enabling", %{agent: agent} do
+      # `systemctl enable` will not link a unit into a target that does not
+      # exist, and the guest agent only writes it during an unlock — so a VM on
+      # an older agent would fail the enable. The deploy writes it too.
+      ops = recording_ops(agent, spawn_result: {:ok, %{id: "svc-vm-1"}})
+
+      assert {:ok, _} =
+               Runtime.start("my-app", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 spawn_opts: %{secrets_mode: :managed}
+               )
+
+      execs = for {:exec, _vm, cmd} <- events(agent), do: cmd
+
+      write_idx =
+        Enum.find_index(execs, &(&1 =~ "/etc/systemd/system/mjolnir-secrets.target"))
+
+      enable_idx = Enum.find_index(execs, &(&1 =~ "systemctl enable"))
+
+      assert write_idx, "the target unit was never written into the guest"
+      assert enable_idx, "the app unit was never enabled"
+      assert write_idx <= enable_idx, "the target must exist before the enable runs"
+    end
+
+    test "a plain deploy writes no target", %{agent: agent} do
+      ops = recording_ops(agent, spawn_result: {:ok, %{id: "svc-vm-1"}})
+
+      assert {:ok, _} =
+               Runtime.start("my-app", @release, @plan, ops: ops, gateway_domain: @domain)
+
+      execs = for {:exec, _vm, cmd} <- events(agent), do: cmd
+      refute Enum.any?(execs, &(&1 =~ "mjolnir-secrets.target"))
+    end
+  end
 end
