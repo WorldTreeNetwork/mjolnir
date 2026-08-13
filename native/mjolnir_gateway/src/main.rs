@@ -15,6 +15,7 @@
 //! for any unmatched subdomain.
 
 use arc_swap::ArcSwap;
+use clap::{Parser, Subcommand};
 use dashmap::DashMap;
 use iroh::endpoint::{Connection, Endpoint};
 use iroh::{EndpointAddr, PublicKey};
@@ -28,7 +29,6 @@ use mjolnir_gateway::tls::{
     build_certified_key, load_server_config_with_sni, CertEntryRuntime, SniCertResolver, TlsError,
 };
 use mjolnir_protocol::TCP_FWD_ALPN;
-use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -162,7 +162,10 @@ impl TlsState {
     }
 
     fn current_not_after(&self) -> SystemTime {
-        self.not_after.read().map(|g| *g).unwrap_or(SystemTime::UNIX_EPOCH)
+        self.not_after
+            .read()
+            .map(|g| *g)
+            .unwrap_or(SystemTime::UNIX_EPOCH)
     }
 
     fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
@@ -256,7 +259,10 @@ async fn renewal_loop(state: Arc<TlsState>, acme: Arc<AcmeState>) {
                     ) {
                         error!("acme.swap_failed: {}", e);
                     } else {
-                        info!("acme.renewed: new fingerprint {}", new_cert.fingerprint_sha256);
+                        info!(
+                            "acme.renewed: new fingerprint {}",
+                            new_cert.fingerprint_sha256
+                        );
                     }
                 }
                 Err(e) => error!("acme.renewal_failed: {}", e),
@@ -393,7 +399,10 @@ impl std::fmt::Display for ProxyError {
             ProxyError::ConnectError(e) => write!(f, "Could not reach VM: {}", e),
             ProxyError::StreamError(e) => write!(f, "VM connection failed: {}", e),
             ProxyError::ResponseTimeout => write!(f, "VM did not respond in time"),
-            ProxyError::PoolStale => write!(f, "Pooled VM connection was silently dead; retrying with fresh"),
+            ProxyError::PoolStale => write!(
+                f,
+                "Pooled VM connection was silently dead; retrying with fresh"
+            ),
             ProxyError::LocalBackendUnreachable(_) => write!(f, "Bad Gateway"),
         }
     }
@@ -499,9 +508,9 @@ fn parse_subdomain(host: &str, domain_suffix: &str) -> Result<SubdomainInfo, Pro
 fn resolve_ticket(z32_str: &str) -> Result<EndpointAddr, ProxyError> {
     let bytes = z32::decode(z32_str.as_bytes())
         .map_err(|e| ProxyError::InvalidTicket(format!("z32 decode: {}", e)))?;
-    let key_bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|v: Vec<u8>| ProxyError::InvalidTicket(format!("expected 32 bytes, got {}", v.len())))?;
+    let key_bytes: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
+        ProxyError::InvalidTicket(format!("expected 32 bytes, got {}", v.len()))
+    })?;
     let pubkey = PublicKey::from_bytes(&key_bytes)
         .map_err(|e| ProxyError::InvalidTicket(format!("{}", e)))?;
     Ok(EndpointAddr::new(pubkey))
@@ -519,7 +528,10 @@ where
 
     let result = tokio::time::timeout(timeout, async {
         loop {
-            let n = stream.read(&mut tmp).await.map_err(|_| ProxyError::MissingHost)?;
+            let n = stream
+                .read(&mut tmp)
+                .await
+                .map_err(|_| ProxyError::MissingHost)?;
             if n == 0 {
                 return Err(ProxyError::MissingHost);
             }
@@ -667,19 +679,21 @@ async fn setup_iroh_proxy(
             (cached, true)
         } else {
             debug!("Pool miss for {}, connecting...", info.node_id_z32);
-            let new_conn = tokio::time::timeout(cfg.connect_timeout, ep.connect(addr.clone(), TCP_FWD_ALPN))
-                .await
-                .map_err(|_| ProxyError::ConnectTimeout)?
-                .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+            let new_conn =
+                tokio::time::timeout(cfg.connect_timeout, ep.connect(addr.clone(), TCP_FWD_ALPN))
+                    .await
+                    .map_err(|_| ProxyError::ConnectTimeout)?
+                    .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
             pool.insert(pubkey, new_conn.clone());
             (new_conn, false)
         }
     } else {
         debug!("Forced fresh connect for {}", info.node_id_z32);
-        let new_conn = tokio::time::timeout(cfg.connect_timeout, ep.connect(addr.clone(), TCP_FWD_ALPN))
-            .await
-            .map_err(|_| ProxyError::ConnectTimeout)?
-            .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+        let new_conn =
+            tokio::time::timeout(cfg.connect_timeout, ep.connect(addr.clone(), TCP_FWD_ALPN))
+                .await
+                .map_err(|_| ProxyError::ConnectTimeout)?
+                .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
         pool.insert(pubkey, new_conn.clone());
         (new_conn, false)
     };
@@ -688,12 +702,16 @@ async fn setup_iroh_proxy(
         Ok(streams) => streams,
         Err(e) => {
             pool.evict(&pubkey);
-            debug!("Stale connection for {}, reconnecting: {}", info.node_id_z32, e);
+            debug!(
+                "Stale connection for {}, reconnecting: {}",
+                info.node_id_z32, e
+            );
             let addr = resolve_ticket(&info.node_id_z32)?;
-            let new_conn = tokio::time::timeout(cfg.connect_timeout, ep.connect(addr, TCP_FWD_ALPN))
-                .await
-                .map_err(|_| ProxyError::ConnectTimeout)?
-                .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
+            let new_conn =
+                tokio::time::timeout(cfg.connect_timeout, ep.connect(addr, TCP_FWD_ALPN))
+                    .await
+                    .map_err(|_| ProxyError::ConnectTimeout)?
+                    .map_err(|e| ProxyError::ConnectError(e.to_string()))?;
             pool.insert(pubkey, new_conn.clone());
             new_conn
                 .open_bi()
@@ -792,10 +810,15 @@ async fn run_proxy<S>(
 /// Dial the configured local backend. Returns the connected `TcpStream` or a
 /// `ProxyError::LocalBackendUnreachable`. Split out so the caller retains
 /// ownership of the client stream and can write a 502 if the dial fails.
-async fn dial_local(backend: SocketAddr, connect_timeout: Duration) -> Result<tokio::net::TcpStream, ProxyError> {
+async fn dial_local(
+    backend: SocketAddr,
+    connect_timeout: Duration,
+) -> Result<tokio::net::TcpStream, ProxyError> {
     tokio::time::timeout(connect_timeout, tokio::net::TcpStream::connect(backend))
         .await
-        .map_err(|_| ProxyError::LocalBackendUnreachable(format!("connect timeout to {}", backend)))?
+        .map_err(|_| {
+            ProxyError::LocalBackendUnreachable(format!("connect timeout to {}", backend))
+        })?
         .map_err(|e| ProxyError::LocalBackendUnreachable(format!("{} → {}", backend, e)))
 }
 
@@ -853,8 +876,12 @@ struct AppCtx {
 
 /// Handle a single incoming connection (plain TCP or TLS). `sni_hostname`, when
 /// set, forces SNI=Host enforcement (Decision 4).
-async fn handle_connection<S>(mut stream: S, peer: SocketAddr, ctx: Arc<AppCtx>, sni_hostname: Option<String>)
-where
+async fn handle_connection<S>(
+    mut stream: S,
+    peer: SocketAddr,
+    ctx: Arc<AppCtx>,
+    sni_hostname: Option<String>,
+) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     // Snapshot the route table — in-flight connections keep this view even
@@ -945,9 +972,8 @@ where
             handle_iroh_connection(stream, peer, ctx.clone(), subdomain, header_buf).await;
         }
         Disposition::Reject(
-            ref e @ (ProxyError::DomainMismatch
-            | ProxyError::EmptySubdomain
-            | ProxyError::NotFound),
+            ref
+            e @ (ProxyError::DomainMismatch | ProxyError::EmptySubdomain | ProxyError::NotFound),
         ) => {
             // Nothing in the loaded config serves this Host. Three distinct ways
             // to get here, and a Sites alias can legitimately cover all of them:
@@ -1070,7 +1096,16 @@ async fn handle_iroh_connection<S>(
     for attempt in 0u32..2 {
         let force_fresh = attempt > 0;
         let hdrs = cached_headers.take().unwrap_or_default();
-        match setup_iroh_proxy(&subdomain, hdrs, &ctx.ep, &ctx.pool, &ctx.iroh_cfg, force_fresh).await {
+        match setup_iroh_proxy(
+            &subdomain,
+            hdrs,
+            &ctx.ep,
+            &ctx.pool,
+            &ctx.iroh_cfg,
+            force_fresh,
+        )
+        .await
+        {
             Ok((header_buf, mut quic_send, mut quic_recv, pool_hit, pubkey)) => {
                 info!(
                     "{}: proxying{}",
@@ -1090,7 +1125,14 @@ async fn handle_iroh_connection<S>(
                     response_timeout
                 };
 
-                match forward_headers_and_probe(&header_buf, &mut quic_send, &mut quic_recv, probe, pool_hit).await
+                match forward_headers_and_probe(
+                    &header_buf,
+                    &mut quic_send,
+                    &mut quic_recv,
+                    probe,
+                    pool_hit,
+                )
+                .await
                 {
                     Ok(first_byte) => {
                         run_proxy(stream, first_byte, quic_send, quic_recv).await;
@@ -1252,7 +1294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // With no subcommand, fall through to the server path (unchanged).
     let cli = Cli::parse();
     if let Some(Commands::Cert {
-        command: CertCommands::Issue { manual, domains, email, out, staging },
+        command:
+            CertCommands::Issue {
+                manual,
+                domains,
+                email,
+                out,
+                staging,
+            },
     }) = cli.command
     {
         return run_cert_issue(manual, domains, email, out, staging).await;
@@ -1299,7 +1348,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── State dir (ACME) ──────────────────────────────────────────────────────
     let state_dir = {
-        let base = std::env::var("STATE_DIRECTORY").unwrap_or_else(|_| "/var/lib/mjolnir-gateway".to_owned());
+        let base = std::env::var("STATE_DIRECTORY")
+            .unwrap_or_else(|_| "/var/lib/mjolnir-gateway".to_owned());
         let dir = PathBuf::from(base).join("acme");
         std::fs::create_dir_all(&dir)?;
         dir
@@ -1411,7 +1461,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Iroh endpoint + pool ──────────────────────────────────────────────────
     info!("Starting Iroh endpoint...");
-    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
     endpoint.online().await;
     info!("Iroh endpoint ready");
 
@@ -1545,7 +1597,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 // Step 2: warn on listener-address drift (not applied).
-                if new_loaded.listen != initial_listen || new_loaded.listen_tls != initial_listen_tls {
+                if new_loaded.listen != initial_listen
+                    || new_loaded.listen_tls != initial_listen_tls
+                {
                     warn!(
                         "SIGHUP: listen/listen_tls changed — ignored (listener change requires restart)"
                     );
@@ -1558,9 +1612,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 route_table.store(Arc::new(new_table));
                 info!(
                     event = "config.reloaded",
-                    apex_count,
-                    route_count,
-                    "route table swapped"
+                    apex_count, route_count, "route table swapped"
                 );
 
                 // Step 3b: rebuild + hot-swap the bring-your-own (SNI) cert map.
@@ -1599,7 +1651,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // and only hit Let's Encrypt when the cert is missing, near
                             // expiry, or the SAN set changed. Prevents duplicate-cert
                             // rate-limit churn from repeated SIGHUP reloads.
-                            match mjolnir_gateway::acme::load_or_issue(&snapshot, &acme_clone.cf).await {
+                            match mjolnir_gateway::acme::load_or_issue(&snapshot, &acme_clone.cf)
+                                .await
+                            {
                                 Ok(cert) => {
                                     if let Err(e) = tls_clone.swap_from_pem(
                                         cert.chain_pem.as_bytes(),
@@ -1608,7 +1662,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ) {
                                         error!("SIGHUP acme.swap_failed: {}", e);
                                     } else {
-                                        info!("SIGHUP acme.renewed: fingerprint {}", cert.fingerprint_sha256);
+                                        info!(
+                                            "SIGHUP acme.renewed: fingerprint {}",
+                                            cert.fingerprint_sha256
+                                        );
                                     }
                                 }
                                 Err(e) => error!("SIGHUP acme.issue_failed: {}", e),
@@ -1927,9 +1984,13 @@ mod tests {
         std::fs::write(&cert_path, &cert_pem).unwrap();
         std::fs::write(&key_path, &key_pem).unwrap();
 
-        let tls_state =
-            TlsState::load(cert_path.clone(), key_path.clone(), 128, Duration::from_secs(86400))
-                .expect("initial TlsState::load must succeed");
+        let tls_state = TlsState::load(
+            cert_path.clone(),
+            key_path.clone(),
+            128,
+            Duration::from_secs(86400),
+        )
+        .expect("initial TlsState::load must succeed");
 
         let config_before = Arc::as_ptr(&tls_state.config.load_full());
 
@@ -1954,8 +2015,8 @@ mod tests {
         std::fs::write(&cert_path, &cert_pem).unwrap();
         std::fs::write(&key_path, &key_pem).unwrap();
 
-        let state =
-            TlsState::load(cert_path, key_path, 128, Duration::from_secs(60)).expect("TlsState::load");
+        let state = TlsState::load(cert_path, key_path, 128, Duration::from_secs(60))
+            .expect("TlsState::load");
 
         let expiring_soon = SystemTime::now() + Duration::from_secs(3600);
         *state.not_after.write().unwrap() = expiring_soon;
@@ -1974,8 +2035,8 @@ mod tests {
         std::fs::write(&cert_path, &cert_pem).unwrap();
         std::fs::write(&key_path, &key_pem).unwrap();
 
-        let state =
-            TlsState::load(cert_path, key_path, 128, Duration::from_secs(60)).expect("TlsState::load");
+        let state = TlsState::load(cert_path, key_path, 128, Duration::from_secs(60))
+            .expect("TlsState::load");
 
         let fresh = SystemTime::now() + Duration::from_secs(365 * 24 * 3600);
         *state.not_after.write().unwrap() = fresh;
@@ -2004,7 +2065,13 @@ mod tests {
     }
 
     /// Like `route` but with a retained Iroh fallback (a shadowed alias).
-    fn route_with_fallback(apex: &str, sub: &str, backend: &str, node: &str, port: Option<u16>) -> Route {
+    fn route_with_fallback(
+        apex: &str,
+        sub: &str,
+        backend: &str,
+        node: &str,
+        port: Option<u16>,
+    ) -> Route {
         Route {
             apex: apex.to_owned(),
             subdomain: sub.to_owned(),
@@ -2216,7 +2283,9 @@ mod tests {
                     received_clone.lock().await.extend_from_slice(&buf[..n]);
                 }
                 // Echo back a trivial 200 so the proxy can close cleanly.
-                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+                let _ = s
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
                 let _ = s.shutdown().await;
             }
         });
@@ -2263,7 +2332,11 @@ mod tests {
         let got = received.lock().await.clone();
         let got_str = String::from_utf8(got).expect("utf-8");
 
-        assert!(got_str.contains("Host: git.worldtree.network"), "original Host must reach backend, got: {:?}", got_str);
+        assert!(
+            got_str.contains("Host: git.worldtree.network"),
+            "original Host must reach backend, got: {:?}",
+            got_str
+        );
         assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-for"));
         assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-proto"));
         assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-host"));
@@ -2282,7 +2355,8 @@ mod tests {
         let d = classify(&table, "unknown.worldtree.network");
         match d {
             Disposition::Reject(ProxyError::NotFound) => {}
-            other => panic!("expected Reject(NotFound), got variant that is not: {:?}",
+            other => panic!(
+                "expected Reject(NotFound), got variant that is not: {:?}",
                 match other {
                     Disposition::Local(_, _, _, _) => "Local",
                     Disposition::Iroh(_, _) => "Iroh",
@@ -2297,7 +2371,10 @@ mod tests {
     /// disposition; actual z32 decode is exercised by `test_z32_roundtrip`.
     #[test]
     fn fallthrough_iroh_attempts_z32_decode_when_no_route() {
-        let cfg = loaded_with(vec![apex("vm.worldtree.network", Fallthrough::Iroh)], vec![]);
+        let cfg = loaded_with(
+            vec![apex("vm.worldtree.network", Fallthrough::Iroh)],
+            vec![],
+        );
         let table = RouteTable::from_config(&cfg);
         let d = classify(&table, "somesub.vm.worldtree.network");
         match d {
@@ -2565,7 +2642,10 @@ mod tests {
         .await;
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
         assert!(resp.contains("<h1>from-disk</h1>"), "got: {resp}");
-        assert!(resp.contains("public, max-age=0, must-revalidate"), "got: {resp}");
+        assert!(
+            resp.contains("public, max-age=0, must-revalidate"),
+            "got: {resp}"
+        );
     }
 
     /// No materialized directory → the pre-existing behavior is preserved: the
@@ -2611,7 +2691,10 @@ mod tests {
             b"GET / HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
         )
         .await;
-        assert!(resp.contains("FROM-BACKEND"), "expected backend fallback, got: {resp}");
+        assert!(
+            resp.contains("FROM-BACKEND"),
+            "expected backend fallback, got: {resp}"
+        );
     }
 
     /// Reproduces the production `worldtree.network` config exactly: the apex is
@@ -2670,7 +2753,10 @@ mod tests {
         // Alias lookup that would answer if (wrongly) consulted.
         let mut api = mockito::Server::new_async().await;
         let _m = api
-            .mock("GET", "/api/sites/aliases/lookup?host=mimir.worldtree.network")
+            .mock(
+                "GET",
+                "/api/sites/aliases/lookup?host=mimir.worldtree.network",
+            )
             .with_status(200)
             .with_body(r#"{"identikey_fp":"fp1","site_name":"wtnf"}"#)
             .expect(0)
@@ -2711,7 +2797,10 @@ mod tests {
             b"GET / HTTP/1.1\r\nHost: mimir.worldtree.network\r\nConnection: close\r\n\r\n",
         )
         .await;
-        assert!(resp.contains("FORGEJO"), "declared route must still win: {resp}");
+        assert!(
+            resp.contains("FORGEJO"),
+            "declared route must still win: {resp}"
+        );
         assert!(!resp.contains("WRONG-sites-content"), "got: {resp}");
         _m.assert_async().await; // resolver never consulted
     }

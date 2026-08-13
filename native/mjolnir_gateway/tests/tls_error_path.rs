@@ -7,13 +7,13 @@
 //! Task 1c.iii acceptance: client reads bytes starting with
 //! "HTTP/1.1 504 Gateway Timeout" from a TLS connection.
 
+use rustls::pki_types::ServerName;
+use rustls::sign::CertifiedKey;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use rustls::pki_types::ServerName;
-use rustls::sign::CertifiedKey;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -38,19 +38,14 @@ fn generate_self_signed() -> (Vec<u8>, Vec<u8>) {
 struct SingleCertResolver(Arc<CertifiedKey>);
 
 impl rustls::server::ResolvesServerCert for SingleCertResolver {
-    fn resolve(
-        &self,
-        _: rustls::server::ClientHello<'_>,
-    ) -> Option<Arc<CertifiedKey>> {
+    fn resolve(&self, _: rustls::server::ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
         Some(Arc::clone(&self.0))
     }
 }
 
 /// Build a `ClientConfig` that accepts any server certificate (test-only).
 fn danger_accept_any_client_config() -> rustls::ClientConfig {
-    use rustls::client::danger::{
-        HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-    };
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, UnixTime};
     use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 
@@ -128,8 +123,8 @@ async fn tls_write_half_delivers_504_error_response() {
     // Build a CertifiedKey from DER bytes.
     let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der)];
     let private_key = rustls::pki_types::PrivateKeyDer::Pkcs8(key_der.into());
-    let signing_key = rustls::crypto::ring::sign::any_supported_type(&private_key)
-        .expect("signing key");
+    let signing_key =
+        rustls::crypto::ring::sign::any_supported_type(&private_key).expect("signing key");
     let certified_key = Arc::new(CertifiedKey::new(cert_chain, signing_key));
 
     // Build ServerConfig via a single-cert resolver.

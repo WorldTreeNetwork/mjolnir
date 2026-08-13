@@ -3,9 +3,9 @@
 #[cfg(feature = "iroh")]
 use crate::protocol::IrohReady;
 use crate::protocol::{VsockRequest, VsockResponse};
+use crate::pty::{PtySession, PtyWriter};
 #[cfg(feature = "full")]
 use crate::tmux;
-use crate::pty::{PtySession, PtyWriter};
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -708,7 +708,12 @@ async fn handle_request(
             // Note: must use `test -f` guard because `.` is a POSIX special builtin —
             // in dash (Ubuntu's /bin/sh), `. /nonexistent` exits the shell immediately.
             #[cfg(feature = "full")]
-            let wrapped = format!("[ -f {} ] && . {}; {}", crate::secrets::SECRETS_ENV_PATH, crate::secrets::SECRETS_ENV_PATH, command);
+            let wrapped = format!(
+                "[ -f {} ] && . {}; {}",
+                crate::secrets::SECRETS_ENV_PATH,
+                crate::secrets::SECRETS_ENV_PATH,
+                command
+            );
             #[cfg(not(feature = "full"))]
             let wrapped = command.clone();
             let output = Command::new("sh").arg("-c").arg(&wrapped).output();
@@ -1037,36 +1042,68 @@ async fn handle_request(
         VsockRequest::TerminalOpen { id, session_name } => {
             info!("TerminalOpen: {}", session_name);
             match tmux::ensure_session(&session_name).await {
-                Ok((name, status)) => VsockResponse::TerminalOpened { id, session_name: name, status },
-                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+                Ok((name, status)) => VsockResponse::TerminalOpened {
+                    id,
+                    session_name: name,
+                    status,
+                },
+                Err(e) => VsockResponse::TerminalError {
+                    id,
+                    error: e.to_string(),
+                },
             }
         }
         #[cfg(feature = "full")]
-        VsockRequest::TerminalRead { id, session_name, scrollback_lines } => {
+        VsockRequest::TerminalRead {
+            id,
+            session_name,
+            scrollback_lines,
+        } => {
             let lines = scrollback_lines.unwrap_or(100);
             match tmux::capture_pane(&session_name, lines).await {
                 Ok((content, pane_rows, pane_cols, running_command)) => {
-                    VsockResponse::TerminalOutput { id, content, pane_rows, pane_cols, running_command }
+                    VsockResponse::TerminalOutput {
+                        id,
+                        content,
+                        pane_rows,
+                        pane_cols,
+                        running_command,
+                    }
                 }
-                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+                Err(e) => VsockResponse::TerminalError {
+                    id,
+                    error: e.to_string(),
+                },
             }
         }
         #[cfg(feature = "full")]
-        VsockRequest::TerminalSend { id, session_name, command, keys } => {
-            match tmux::send_keys(&session_name, command.as_deref(), keys.as_deref()).await {
-                Ok(()) => VsockResponse::TerminalSent { id, sent: true },
-                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
-            }
-        }
+        VsockRequest::TerminalSend {
+            id,
+            session_name,
+            command,
+            keys,
+        } => match tmux::send_keys(&session_name, command.as_deref(), keys.as_deref()).await {
+            Ok(()) => VsockResponse::TerminalSent { id, sent: true },
+            Err(e) => VsockResponse::TerminalError {
+                id,
+                error: e.to_string(),
+            },
+        },
         #[cfg(feature = "full")]
-        VsockRequest::TerminalSendAndRead { id, session_name, command, timeout_ms } => {
+        VsockRequest::TerminalSendAndRead {
+            id,
+            session_name,
+            command,
+            timeout_ms,
+        } => {
             let timeout = timeout_ms.unwrap_or(30_000);
             let sentinel_id = uuid::Uuid::new_v4().to_string();
             let write_tx = write_tx.clone();
             let id_for_ack = id.clone();
 
             tokio::spawn(async move {
-                let result = tmux::send_and_read(&session_name, &command, timeout, &sentinel_id).await;
+                let result =
+                    tmux::send_and_read(&session_name, &command, timeout, &sentinel_id).await;
                 let response = match result {
                     Ok(output) => VsockResponse::TerminalCommandOutput {
                         id,
@@ -1076,9 +1113,15 @@ async fn handle_request(
                         timed_out: output.timed_out,
                     },
                     Err(e) => {
-                        warn!("TerminalSendAndRead error for session {}: {}", session_name, e);
-                        VsockResponse::TerminalError { id, error: e.to_string() }
-                    },
+                        warn!(
+                            "TerminalSendAndRead error for session {}: {}",
+                            session_name, e
+                        );
+                        VsockResponse::TerminalError {
+                            id,
+                            error: e.to_string(),
+                        }
+                    }
                 };
                 let frame = frame_message(0, &response);
                 if let Err(e) = write_tx.send(frame).await {
@@ -1086,24 +1129,34 @@ async fn handle_request(
                 }
             });
 
-            VsockResponse::TerminalCommandAck { id: id_for_ack, status: "polling".to_string() }
-        }
-        #[cfg(feature = "full")]
-        VsockRequest::TerminalList { id } => {
-            match tmux::list_sessions().await {
-                Ok(sessions) => VsockResponse::TerminalSessions { id, sessions },
-                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+            VsockResponse::TerminalCommandAck {
+                id: id_for_ack,
+                status: "polling".to_string(),
             }
         }
+        #[cfg(feature = "full")]
+        VsockRequest::TerminalList { id } => match tmux::list_sessions().await {
+            Ok(sessions) => VsockResponse::TerminalSessions { id, sessions },
+            Err(e) => VsockResponse::TerminalError {
+                id,
+                error: e.to_string(),
+            },
+        },
         #[cfg(feature = "full")]
         VsockRequest::TerminalClose { id, session_name } => {
             match tmux::kill_session(&session_name).await {
                 Ok(()) => VsockResponse::TerminalClosed { id, session_name },
-                Err(e) => VsockResponse::TerminalError { id, error: e.to_string() },
+                Err(e) => VsockResponse::TerminalError {
+                    id,
+                    error: e.to_string(),
+                },
             }
         }
         #[cfg(feature = "full")]
-        VsockRequest::ConfigureSecretsAuth { id, authorized_peers } => {
+        VsockRequest::ConfigureSecretsAuth {
+            id,
+            authorized_peers,
+        } => {
             info!("ConfigureSecretsAuth: {} peers", authorized_peers.len());
             #[cfg(feature = "iroh")]
             {
@@ -1119,8 +1172,16 @@ async fn handle_request(
             }
         }
         #[cfg(feature = "full")]
-        VsockRequest::InjectSecrets { id, passphrase, init_size_mb, entries } => {
-            info!("InjectSecrets (host-escrowed): init_size_mb={:?}", init_size_mb);
+        VsockRequest::InjectSecrets {
+            id,
+            passphrase,
+            init_size_mb,
+            entries,
+        } => {
+            info!(
+                "InjectSecrets (host-escrowed): init_size_mb={:?}",
+                init_size_mb
+            );
             match crate::secrets::inject(&passphrase, init_size_mb) {
                 Ok((created, _mounted)) => {
                     // Merge any host-pushed secret material, then re-render the
@@ -1132,7 +1193,12 @@ async fn handle_request(
                             }
                         }
                     }
-                    VsockResponse::InjectSecretsResponse { id, ok: true, created, error: None }
+                    VsockResponse::InjectSecretsResponse {
+                        id,
+                        ok: true,
+                        created,
+                        error: None,
+                    }
                 }
                 Err(e) => {
                     warn!("InjectSecrets failed: {}", e);

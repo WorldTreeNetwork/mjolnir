@@ -45,7 +45,9 @@ pub fn is_injected() -> bool {
 /// Atomically try to claim the injection slot. Returns true if successful.
 /// This replaces the separate is_injected()/mark_injected() pattern to prevent TOCTOU races.
 pub fn try_claim_injection() -> bool {
-    SECRETS_INJECTED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    SECRETS_INJECTED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
 }
 
 /// Release the injection claim (used when LUKS init/open fails after claiming).
@@ -221,7 +223,10 @@ pub fn is_mounted() -> bool {
         }),
         // Fail CLOSED: if we cannot prove it is mounted, callers must not write.
         Err(e) => {
-            warn!("Cannot read /proc/mounts ({}); treating secrets as NOT mounted", e);
+            warn!(
+                "Cannot read /proc/mounts ({}); treating secrets as NOT mounted",
+                e
+            );
             false
         }
     }
@@ -256,12 +261,15 @@ pub fn init_secrets_volume(size_mb: u32, passphrase: &str) -> Result<InitResult,
     }
 
     // Create the backing file
-    run_cmd("dd", &[
-        "if=/dev/zero",
-        &format!("of={}", SECRETS_LUKS_PATH),
-        "bs=1M",
-        &format!("count={}", size_mb),
-    ])?;
+    run_cmd(
+        "dd",
+        &[
+            "if=/dev/zero",
+            &format!("of={}", SECRETS_LUKS_PATH),
+            "bs=1M",
+            &format!("count={}", size_mb),
+        ],
+    )?;
 
     // Set up loop device
     let loop_dev = setup_loop_device(SECRETS_LUKS_PATH)?;
@@ -276,16 +284,22 @@ pub fn init_secrets_volume(size_mb: u32, passphrase: &str) -> Result<InitResult,
         info!("LUKS opened");
 
         // Format ext4
-        run_cmd("mkfs.ext4", &["-q", &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME)])?;
+        run_cmd(
+            "mkfs.ext4",
+            &["-q", &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME)],
+        )?;
         info!("ext4 formatted");
 
         // Mount
         std::fs::create_dir_all(SECRETS_MOUNT)
             .map_err(|e| format!("Failed to create mount point: {}", e))?;
-        run_cmd("mount", &[
-            &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
-            SECRETS_MOUNT,
-        ])?;
+        run_cmd(
+            "mount",
+            &[
+                &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
+                SECRETS_MOUNT,
+            ],
+        )?;
         info!("Mounted at {}", SECRETS_MOUNT);
 
         // Create directory structure
@@ -302,7 +316,10 @@ pub fn init_secrets_volume(size_mb: u32, passphrase: &str) -> Result<InitResult,
         return Err(e.clone());
     }
 
-    Ok(InitResult { created: true, mounted: true })
+    Ok(InitResult {
+        created: true,
+        mounted: true,
+    })
 }
 
 /// Open and mount an existing LUKS secrets volume.
@@ -332,10 +349,13 @@ pub fn open_secrets_volume(passphrase: &str) -> Result<(), String> {
     let result = (|| -> Result<(), String> {
         std::fs::create_dir_all(SECRETS_MOUNT)
             .map_err(|e| format!("Failed to create mount point: {}", e))?;
-        run_cmd("mount", &[
-            &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
-            SECRETS_MOUNT,
-        ])?;
+        run_cmd(
+            "mount",
+            &[
+                &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
+                SECRETS_MOUNT,
+            ],
+        )?;
         Ok(())
     })();
 
@@ -442,13 +462,10 @@ pub fn set_env_vars(entries: &HashMap<String, String>) -> Result<(), String> {
     }
 
     // Write back to .env
-    let mut lines: Vec<String> = vars.iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let mut lines: Vec<String> = vars.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     lines.sort();
     let content = lines.join("\n") + "\n";
-    std::fs::write(&env_file, content)
-        .map_err(|e| format!("Failed to write .env: {}", e))?;
+    std::fs::write(&env_file, content).map_err(|e| format!("Failed to write .env: {}", e))?;
 
     // Reload
     load_env_vars()?;
@@ -462,8 +479,7 @@ pub fn push_env_content(content: &str) -> Result<(), String> {
     }
 
     let env_file = Path::new(SECRETS_MOUNT).join(".env");
-    std::fs::write(&env_file, content)
-        .map_err(|e| format!("Failed to write .env: {}", e))?;
+    std::fs::write(&env_file, content).map_err(|e| format!("Failed to write .env: {}", e))?;
 
     load_env_vars()?;
     Ok(())
@@ -569,15 +585,22 @@ fn luks_format_args(loop_dev: &str) -> Vec<&str> {
     vec![
         "luksFormat",
         "--batch-mode",
-        "--type", "luks2",
-        "--cipher", "aes-xts-plain64",
-        "--key-size", "512",
-        "--hash", "sha256",
+        "--type",
+        "luks2",
+        "--cipher",
+        "aes-xts-plain64",
+        "--key-size",
+        "512",
+        "--hash",
+        "sha256",
         // Low-cost KDF: random 256-bit passphrase makes memory-hardening
         // redundant (see doc comment above).
-        "--pbkdf", "pbkdf2",
-        "--pbkdf-force-iterations", "1000",
-        "--key-file", "/tmp/.mjolnir-keyfile",
+        "--pbkdf",
+        "pbkdf2",
+        "--pbkdf-force-iterations",
+        "1000",
+        "--key-file",
+        "/tmp/.mjolnir-keyfile",
         loop_dev,
     ]
 }
@@ -598,12 +621,16 @@ fn luks_open(loop_dev: &str, passphrase: &str) -> Result<(), String> {
     write_keyfile(&passphrase_copy)?;
     passphrase_copy.zeroize();
 
-    let result = run_cmd("cryptsetup", &[
-        "luksOpen",
-        "--key-file", "/tmp/.mjolnir-keyfile",
-        loop_dev,
-        SECRETS_MAPPER_NAME,
-    ]);
+    let result = run_cmd(
+        "cryptsetup",
+        &[
+            "luksOpen",
+            "--key-file",
+            "/tmp/.mjolnir-keyfile",
+            loop_dev,
+            SECRETS_MAPPER_NAME,
+        ],
+    );
 
     secure_delete_keyfile();
     result.map(|_| ())
@@ -622,8 +649,7 @@ fn create_secrets_dirs() -> Result<(), String> {
         format!("{}/files", SECRETS_MOUNT),
     ];
     for dir in &dirs {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("Failed to create {}: {}", dir, e))?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {}", dir, e))?;
     }
 
     // Create empty .env file
@@ -651,7 +677,10 @@ fn create_secrets_dirs() -> Result<(), String> {
 /// Must match [A-Za-z_][A-Za-z0-9_]*
 fn is_valid_env_key(key: &str) -> bool {
     !key.is_empty()
-        && key.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+        && key
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
         && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 

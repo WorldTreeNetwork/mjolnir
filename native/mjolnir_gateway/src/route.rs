@@ -140,7 +140,11 @@ mod tests {
     }
 
     /// Like `table` but also seeds the alias list.
-    fn table_with_aliases(apexes: Vec<Apex>, routes: Vec<Route>, aliases: Vec<Alias>) -> RouteTable {
+    fn table_with_aliases(
+        apexes: Vec<Apex>,
+        routes: Vec<Route>,
+        aliases: Vec<Alias>,
+    ) -> RouteTable {
         let mut apexes = apexes;
         apexes.sort_by(|a, b| b.suffix.len().cmp(&a.suffix.len()));
         RouteTable {
@@ -195,7 +199,10 @@ mod tests {
     #[test]
     fn apex_match_requires_dot_boundary() {
         // `evm.worldtree.network` must not match apex `vm.worldtree.network`.
-        let t = table(vec![apex("vm.worldtree.network", Fallthrough::Iroh)], vec![]);
+        let t = table(
+            vec![apex("vm.worldtree.network", Fallthrough::Iroh)],
+            vec![],
+        );
         assert!(t.match_host("evm.worldtree.network").is_none());
     }
 
@@ -254,9 +261,14 @@ mod tests {
         // `git.internal.worldtree.network` under apex `worldtree.network` must
         // yield subdomain `git.internal` — the internal dot is preserved verbatim.
         let t = table(vec![apex("worldtree.network", Fallthrough::None)], vec![]);
-        let (a, sub) = t.match_host("git.internal.worldtree.network").expect("match");
+        let (a, sub) = t
+            .match_host("git.internal.worldtree.network")
+            .expect("match");
         assert_eq!(a.suffix, "worldtree.network");
-        assert_eq!(sub, "git.internal", "dots inside subdomain must be preserved");
+        assert_eq!(
+            sub, "git.internal",
+            "dots inside subdomain must be preserved"
+        );
     }
 
     #[test]
@@ -325,7 +337,10 @@ mod tests {
             vec![alias("identikey.io", "zine", None)],
         );
         let (a, sub) = t.match_host("ZINE.identikey.io").expect("match");
-        assert!(t.lookup_alias(a, &sub).is_some(), "matching is case-insensitive");
+        assert!(
+            t.lookup_alias(a, &sub).is_some(),
+            "matching is case-insensitive"
+        );
         // A different subdomain under the same apex misses.
         let (a2, sub2) = t.match_host("other.identikey.io").expect("match");
         assert!(t.lookup_alias(a2, &sub2).is_none());

@@ -21,7 +21,10 @@ struct OidcConfig {
 }
 
 async fn discover(issuer: &str) -> Result<OidcConfig> {
-    let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
+    let url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    );
     let config: OidcConfig = reqwest::get(&url).await?.json().await?;
     Ok(config)
 }
@@ -128,10 +131,7 @@ pub async fn load_token() -> Option<String> {
     None
 }
 
-async fn refresh_token(
-    issuer: &str,
-    refresh: &str,
-) -> Result<TokenResponse> {
+async fn refresh_token(issuer: &str, refresh: &str) -> Result<TokenResponse> {
     let config = discover(issuer).await?;
     let client = reqwest::Client::new();
     let resp = client
@@ -332,8 +332,7 @@ pub fn status() -> Result<()> {
 
 /// Base64url-encode without padding (RFC 7636 Appendix B).
 fn base64url_encode_raw(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;

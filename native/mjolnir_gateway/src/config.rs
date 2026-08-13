@@ -220,10 +220,12 @@ impl Route {
     /// fallback, ready to feed into the same Iroh proxy path an alias uses.
     /// `None` when this route has no fallback node.
     pub fn fallback_target_subdomain(&self) -> Option<String> {
-        self.fallback_node.as_ref().map(|node| match self.fallback_port {
-            Some(p) => format!("{}-{}", node, p),
-            None => node.clone(),
-        })
+        self.fallback_node
+            .as_ref()
+            .map(|node| match self.fallback_port {
+                Some(p) => format!("{}-{}", node, p),
+                None => node.clone(),
+            })
     }
 }
 
@@ -471,8 +473,9 @@ pub fn derive_san_list(apexes: &[Apex], routes: &[Route], aliases: &[Alias]) -> 
 pub fn load(path: &Path) -> Result<LoadedConfig, ConfigError> {
     if path.exists() {
         let bytes = std::fs::read(path)?;
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|e| ConfigError::TomlParse(format!("invalid UTF-8 in {}: {}", path.display(), e)))?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| {
+            ConfigError::TomlParse(format!("invalid UTF-8 in {}: {}", path.display(), e))
+        })?;
         let mut file: FileConfig =
             toml::from_str(text).map_err(|e| ConfigError::TomlParse(e.to_string()))?;
         merge_dropins(&mut file, &config_d_dir(path));
@@ -563,7 +566,8 @@ fn merge_dropins(base: &mut FileConfig, dir: &Path) {
 /// Parse and validate a TOML document string. Surfaces Decision-6 warnings via
 /// the `tracing` crate.
 pub fn load_from_toml_str(text: &str) -> Result<LoadedConfig, ConfigError> {
-    let file: FileConfig = toml::from_str(text).map_err(|e| ConfigError::TomlParse(e.to_string()))?;
+    let file: FileConfig =
+        toml::from_str(text).map_err(|e| ConfigError::TomlParse(e.to_string()))?;
     validate_and_normalize(file, ConfigSource::Toml)
 }
 
@@ -674,7 +678,10 @@ pub fn load_from_env() -> Result<LoadedConfig, ConfigError> {
 
 // ── TOML validation ───────────────────────────────────────────────────────────
 
-fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<LoadedConfig, ConfigError> {
+fn validate_and_normalize(
+    file: FileConfig,
+    source: ConfigSource,
+) -> Result<LoadedConfig, ConfigError> {
     // ── Apexes ────────────────────────────────────────────────────────────────
     if file.domains.is_empty() {
         return Err(ConfigError::Invalid(
@@ -965,12 +972,13 @@ fn validate_and_normalize(file: FileConfig, source: ConfigSource) -> Result<Load
     let sites_resolver = match file.sites {
         Some(s) => match (s.mjolnir_api, s.mjolnir_backend) {
             (Some(api_url), Some(backend_str)) => {
-                let backend = backend_str.parse::<SocketAddr>().map_err(|e| {
-                    ConfigError::InvalidAddr {
-                        addr: backend_str.clone(),
-                        source: e,
-                    }
-                })?;
+                let backend =
+                    backend_str
+                        .parse::<SocketAddr>()
+                        .map_err(|e| ConfigError::InvalidAddr {
+                            addr: backend_str.clone(),
+                            source: e,
+                        })?;
                 let sites_root = s
                     .sites_root
                     .unwrap_or_else(|| PathBuf::from(DEFAULT_SITES_ROOT));
@@ -1077,9 +1085,7 @@ pub fn load_cloudflare_token(cfg: &LoadedConfig) -> Result<String, ConfigError> 
     })?;
     let token = token.trim().to_owned();
     if token.is_empty() {
-        return Err(ConfigError::Invalid(
-            "CLOUDFLARE_API_TOKEN is empty".into(),
-        ));
+        return Err(ConfigError::Invalid("CLOUDFLARE_API_TOKEN is empty".into()));
     }
     Ok(token)
 }
@@ -1223,7 +1229,11 @@ mod tests {
             backend = "127.0.0.1:3000"
         "#;
         let cfg = load_from_toml_str(text).expect("parse");
-        assert_eq!(cfg.routes.len(), 1, "empty-subdomain apex route must be kept");
+        assert_eq!(
+            cfg.routes.len(),
+            1,
+            "empty-subdomain apex route must be kept"
+        );
         assert_eq!(cfg.routes[0].subdomain, "");
         assert_eq!(cfg.routes[0].apex, "startupcentral.build");
         assert_eq!(cfg.routes[0].backend.port(), 3000);
@@ -1243,7 +1253,10 @@ mod tests {
             backend = "127.0.0.1:3000"
         "#;
         let cfg = load_from_toml_str(text).expect("parse");
-        assert!(cfg.routes.is_empty(), "invalid non-empty label must be skipped");
+        assert!(
+            cfg.routes.is_empty(),
+            "invalid non-empty label must be skipped"
+        );
     }
 
     #[test]
@@ -1255,7 +1268,11 @@ mod tests {
         let result = load_from_toml_str(text);
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("wildcard"), "error message should mention wildcard, got: {}", msg);
+        assert!(
+            msg.contains("wildcard"),
+            "error message should mention wildcard, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1349,7 +1366,11 @@ mod tests {
         let cfg = load_from_toml_str(text).expect("parse");
         assert_eq!(cfg.routes.len(), 1);
         let backend = cfg.routes[0].backend;
-        assert!(backend.is_ipv6(), "expected IPv6 backend, got {:?}", backend);
+        assert!(
+            backend.is_ipv6(),
+            "expected IPv6 backend, got {:?}",
+            backend
+        );
         assert_eq!(backend.port(), 3000);
     }
 
@@ -1479,7 +1500,10 @@ mod tests {
             "#
         );
         let cfg = load_from_toml_str(&toml).expect("loads");
-        assert!(cfg.aliases.is_empty(), "alias under undeclared apex is dropped");
+        assert!(
+            cfg.aliases.is_empty(),
+            "alias under undeclared apex is dropped"
+        );
     }
 
     #[test]
@@ -1627,8 +1651,15 @@ mod tests {
             key  = "/b/privkey.pem"
         "#;
         let cfg = load_from_toml_str(text).expect("parse");
-        assert_eq!(cfg.extra_certs.len(), 1, "dupe host (case-insensitive) skipped");
-        assert_eq!(cfg.extra_certs[0].cert_path, PathBuf::from("/a/fullchain.pem"));
+        assert_eq!(
+            cfg.extra_certs.len(),
+            1,
+            "dupe host (case-insensitive) skipped"
+        );
+        assert_eq!(
+            cfg.extra_certs[0].cert_path,
+            PathBuf::from("/a/fullchain.pem")
+        );
     }
 
     #[test]
@@ -1692,7 +1723,10 @@ mod tests {
 
     /// Write `gateway.toml` plus the named drop-in files under `gateway.d/` in a
     /// fresh temp dir, then `load()` the base path so the drop-in merge runs.
-    fn load_with_dropins(base: &str, dropins: &[(&str, &str)]) -> (tempfile::TempDir, LoadedConfig) {
+    fn load_with_dropins(
+        base: &str,
+        dropins: &[(&str, &str)],
+    ) -> (tempfile::TempDir, LoadedConfig) {
         let dir = tempfile::tempdir().expect("tempdir");
         let base_path = dir.path().join("gateway.toml");
         std::fs::write(&base_path, base).expect("write base");
@@ -1885,8 +1919,10 @@ mod tests {
             backend = "10.0.0.1:80"
         "#;
         // A non-.toml sibling must be skipped entirely.
-        let (_dir, cfg) =
-            load_with_dropins(BASE_TOML, &[("README.md", "not toml"), ("10-x.toml", dropin)]);
+        let (_dir, cfg) = load_with_dropins(
+            BASE_TOML,
+            &[("README.md", "not toml"), ("10-x.toml", dropin)],
+        );
         assert!(cfg.routes.iter().any(|r| r.subdomain == "yes"));
     }
 

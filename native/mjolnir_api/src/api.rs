@@ -340,7 +340,11 @@ pub async fn fetch_info(client: &reqwest::Client, base: &str, id: &str) -> Resul
 /// block until the shell endpoint is online.
 pub async fn fetch_ticket(client: &reqwest::Client, base: &str, id: &str) -> Result<String> {
     let tr: TicketResponse = client
-        .get(format!("{}/api/vms/{}/ticket", base.trim_end_matches('/'), id))
+        .get(format!(
+            "{}/api/vms/{}/ticket",
+            base.trim_end_matches('/'),
+            id
+        ))
         .send()
         .await
         .context("failed to fetch ticket")?
@@ -362,7 +366,11 @@ pub async fn await_pty(
     timeout_ms: u64,
 ) -> Result<String> {
     let resp: AwaitShellResponse = client
-        .post(format!("{}/api/vms/{}/await-pty", base.trim_end_matches('/'), id))
+        .post(format!(
+            "{}/api/vms/{}/await-pty",
+            base.trim_end_matches('/'),
+            id
+        ))
         .json(&serde_json::json!({ "timeout": timeout_ms }))
         .send()
         .await

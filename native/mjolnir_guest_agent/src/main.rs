@@ -6,10 +6,10 @@
 //! - Sends iroh_ready notification to host when shell is available
 //! - Provides agent SDK HTTP server for in-VM agent applications
 
-#[cfg(feature = "iroh")]
-mod iroh;
 #[cfg(feature = "full")]
 mod agent;
+#[cfg(feature = "iroh")]
+mod iroh;
 mod protocol;
 mod pty;
 #[cfg(feature = "full")]

@@ -248,7 +248,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_resize_roundtrip() {
-        let frame = Frame::Resize { rows: 50, cols: 120 };
+        let frame = Frame::Resize {
+            rows: 50,
+            cols: 120,
+        };
         let encoded = frame.encode();
         let mut cursor = Cursor::new(encoded);
         let decoded = read_frame(&mut cursor).await.unwrap().unwrap();
@@ -369,7 +372,10 @@ mod tests {
                 session: None,
             },
             Frame::Data(b"ls\n".to_vec()),
-            Frame::Resize { rows: 50, cols: 120 },
+            Frame::Resize {
+                rows: 50,
+                cols: 120,
+            },
             Frame::Exit { code: 0 },
         ];
 

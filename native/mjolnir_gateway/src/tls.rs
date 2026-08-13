@@ -162,7 +162,11 @@ pub struct ExpiryAwareResolver {
 }
 
 impl ExpiryAwareResolver {
-    pub(crate) fn new(key: Arc<CertifiedKey>, fail_within: Duration, not_after: SystemTime) -> Self {
+    pub(crate) fn new(
+        key: Arc<CertifiedKey>,
+        fail_within: Duration,
+        not_after: SystemTime,
+    ) -> Self {
         Self {
             certified_key: ArcSwap::from(key),
             fail_within,
@@ -172,7 +176,10 @@ impl ExpiryAwareResolver {
 
     /// Read the expiry time of the currently-loaded certificate.
     pub fn current_not_after(&self) -> SystemTime {
-        self.not_after.read().map(|g| *g).unwrap_or(SystemTime::UNIX_EPOCH)
+        self.not_after
+            .read()
+            .map(|g| *g)
+            .unwrap_or(SystemTime::UNIX_EPOCH)
     }
 
     /// Atomically replace the active certificate. Called by the SIGHUP handler.
@@ -185,10 +192,7 @@ impl ExpiryAwareResolver {
 }
 
 impl ResolvesServerCert for ExpiryAwareResolver {
-    fn resolve(
-        &self,
-        _client_hello: rustls::server::ClientHello<'_>,
-    ) -> Option<Arc<CertifiedKey>> {
+    fn resolve(&self, _client_hello: rustls::server::ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
         let not_after = *self.not_after.read().ok()?;
         if should_refuse_handshake(not_after, self.fail_within, SystemTime::now()) {
             return None;
@@ -671,7 +675,10 @@ mod tests {
             Duration::from_secs(24 * 3600),
             now,
         );
-        assert!(got.is_some(), "exact SNI match should return the extra cert");
+        assert!(
+            got.is_some(),
+            "exact SNI match should return the extra cert"
+        );
     }
 
     #[test]
@@ -723,7 +730,10 @@ mod tests {
         // Expires in 1h, but fail_within is 24h → refuse, fall back to primary.
         let expiring = now + Duration::from_secs(3600);
         let mut extra = HashMap::new();
-        extra.insert("zine.identikey.io".to_string(), extra_entry("zine", expiring));
+        extra.insert(
+            "zine.identikey.io".to_string(),
+            extra_entry("zine", expiring),
+        );
 
         let got = select_extra(
             &extra,

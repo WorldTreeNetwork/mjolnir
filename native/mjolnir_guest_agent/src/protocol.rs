@@ -120,7 +120,10 @@ pub enum VsockRequest {
     TerminalClose { id: String, session_name: String },
     #[cfg(feature = "full")]
     #[serde(rename = "configure_secrets_auth")]
-    ConfigureSecretsAuth { id: String, authorized_peers: Vec<String> },
+    ConfigureSecretsAuth {
+        id: String,
+        authorized_peers: Vec<String>,
+    },
     /// Host-escrowed secret injection over vsock (`secrets_mode: :managed`).
     /// Unlike the Iroh ALPN, the host supplies the passphrase directly — used to
     /// create the LUKS volume on first boot and re-open it on dormancy wake.
@@ -154,11 +157,7 @@ pub enum VsockResponse {
     /// match for a rejected request, so it surfaces as a rejection rather
     /// than as an unexpected response.
     #[serde(rename = "error")]
-    Error {
-        id: String,
-        ok: bool,
-        error: String,
-    },
+    Error { id: String, ok: bool, error: String },
     #[serde(rename = "exec_response")]
     ExecResponse {
         id: String,

@@ -109,10 +109,7 @@ impl CloudflareClient {
     }
 
     /// Check a CF response for API-level errors and unwrap the result.
-    fn unwrap_cf<T>(
-        resp: CfResponse<T>,
-        status: u16,
-    ) -> Result<T, CloudflareError> {
+    fn unwrap_cf<T>(resp: CfResponse<T>, status: u16) -> Result<T, CloudflareError> {
         if !resp.success {
             let errors: Vec<String> = resp.errors.into_iter().map(|e| e.message).collect();
             return Err(CloudflareError::Api { status, errors });
@@ -186,7 +183,11 @@ impl CloudflareClient {
     }
 
     /// Delete a previously-created DNS record. 404 is treated as success (idempotent).
-    pub async fn delete_txt(&self, zone: &ZoneId, record: &RecordId) -> Result<(), CloudflareError> {
+    pub async fn delete_txt(
+        &self,
+        zone: &ZoneId,
+        record: &RecordId,
+    ) -> Result<(), CloudflareError> {
         let url = format!("{}/zones/{}/dns_records/{}", self.base(), zone.0, record.0);
         let resp = self
             .http
@@ -227,9 +228,7 @@ mod tests {
     }
 
     fn record_resp(id: &str) -> String {
-        format!(
-            r#"{{"success":true,"errors":[],"messages":[],"result":{{"id":"{id}"}}}}"#
-        )
+        format!(r#"{{"success":true,"errors":[],"messages":[],"result":{{"id":"{id}"}}}}"#)
     }
 
     fn error_resp(msg: &str) -> String {

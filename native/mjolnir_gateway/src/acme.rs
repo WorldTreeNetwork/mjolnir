@@ -378,7 +378,11 @@ pub async fn issue(cfg: &AcmeConfig, cf: &CloudflareClient) -> Result<IssuedCert
 /// `metadata.json` to `cfg.state_dir`, emit the `acme.cert_issued` event, and
 /// return the resulting [`IssuedCert`]. Shared by both [`issue`] and
 /// [`issue_manual`].
-fn finalize_issued_cert(cfg: &AcmeConfig, chain_pem: String, key_pem: String) -> Result<IssuedCert, AcmeError> {
+fn finalize_issued_cert(
+    cfg: &AcmeConfig,
+    chain_pem: String,
+    key_pem: String,
+) -> Result<IssuedCert, AcmeError> {
     // Parse metadata from first cert in chain.
     let certs = crate::tls::parse_cert_chain(chain_pem.as_bytes())
         .map_err(|e| AcmeError::Parse(e.to_string()))?;
@@ -580,10 +584,7 @@ pub async fn issue_manual(
 }
 
 /// Fire-and-forget cleanup of DNS TXT records; logs on failure.
-async fn cleanup_records(
-    cf: &CloudflareClient,
-    records: &[(ZoneId, crate::cloudflare::RecordId)],
-) {
+async fn cleanup_records(cf: &CloudflareClient, records: &[(ZoneId, crate::cloudflare::RecordId)]) {
     for (zone_id, record_id) in records {
         if let Err(e) = cf.delete_txt(zone_id, record_id).await {
             warn!(
@@ -609,7 +610,10 @@ mod tests {
         AcmeConfig {
             directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
             email: "test@example.com".into(),
-            domains: vec!["*.vm.worldtree.network".into(), "vm.worldtree.network".into()],
+            domains: vec![
+                "*.vm.worldtree.network".into(),
+                "vm.worldtree.network".into(),
+            ],
             state_dir: state_dir.to_owned(),
             renew_before: Duration::from_secs(30 * 24 * 3600),
         }
@@ -626,7 +630,12 @@ mod tests {
         (cert.pem(), kp.serialize_pem())
     }
 
-    fn write_metadata(dir: &std::path::Path, not_after: SystemTime, not_before: SystemTime, fp: &str) {
+    fn write_metadata(
+        dir: &std::path::Path,
+        not_after: SystemTime,
+        not_before: SystemTime,
+        fp: &str,
+    ) {
         let meta = CertMetadataFile {
             not_after_unix: system_time_to_unix(not_after),
             not_before_unix: system_time_to_unix(not_before),
@@ -728,7 +737,12 @@ mod tests {
 
         fs::write(dir.path().join("fullchain.pem"), &chain_pem).unwrap();
         fs::write(dir.path().join("privkey.pem"), &key_pem).unwrap();
-        write_metadata(dir.path(), not_after, meta.not_before, &meta.fingerprint_sha256);
+        write_metadata(
+            dir.path(),
+            not_after,
+            meta.not_before,
+            &meta.fingerprint_sha256,
+        );
 
         let cached = load_cached(&cfg).expect("load_cached").expect("Some");
         let remaining = cached
@@ -790,7 +804,10 @@ mod tests {
         let now = SystemTime::now();
         // Expires in 1h — well within the 30-day renew window.
         let expiring = now + Duration::from_secs(3600);
-        let cached = make_issued(&["*.vm.worldtree.network", "vm.worldtree.network"], expiring);
+        let cached = make_issued(
+            &["*.vm.worldtree.network", "vm.worldtree.network"],
+            expiring,
+        );
         assert!(
             should_issue(Some(&cached), &cfg, now),
             "cert within renew_before must trigger issuance"
@@ -822,22 +839,37 @@ mod tests {
     // E) cert_covers_domains is case-insensitive and treats a superset as covering.
     #[test]
     fn cert_covers_domains_superset_and_case_insensitive() {
-        let (chain_pem, _key) =
-            gen_self_signed(&["*.vm.worldtree.network", "vm.worldtree.network", "extra.example.com"]);
+        let (chain_pem, _key) = gen_self_signed(&[
+            "*.vm.worldtree.network",
+            "vm.worldtree.network",
+            "extra.example.com",
+        ]);
         // Requested set is a subset (differently cased) → covered.
         assert!(cert_covers_domains(
             &chain_pem,
-            &["VM.WorldTree.Network".into(), "*.vm.worldtree.network".into()]
+            &[
+                "VM.WorldTree.Network".into(),
+                "*.vm.worldtree.network".into()
+            ]
         ));
         // Requested domain absent from SANs → not covered.
-        assert!(!cert_covers_domains(&chain_pem, &["missing.example.org".into()]));
+        assert!(!cert_covers_domains(
+            &chain_pem,
+            &["missing.example.org".into()]
+        ));
     }
 
     // 5. strip_wildcard_gives_base_fqdn
     #[test]
     fn strip_wildcard_gives_base_fqdn() {
-        assert_eq!(strip_wildcard("*.vm.worldtree.network"), "vm.worldtree.network");
-        assert_eq!(strip_wildcard("vm.worldtree.network"), "vm.worldtree.network");
+        assert_eq!(
+            strip_wildcard("*.vm.worldtree.network"),
+            "vm.worldtree.network"
+        );
+        assert_eq!(
+            strip_wildcard("vm.worldtree.network"),
+            "vm.worldtree.network"
+        );
         assert_eq!(strip_wildcard("*.example.com"), "example.com");
         assert_eq!(strip_wildcard("example.com"), "example.com");
     }
@@ -874,9 +906,6 @@ mod tests {
             challenge_fqdn("vm.worldtree.network"),
             "_acme-challenge.vm.worldtree.network"
         );
-        assert_eq!(
-            challenge_fqdn("example.com"),
-            "_acme-challenge.example.com"
-        );
+        assert_eq!(challenge_fqdn("example.com"), "_acme-challenge.example.com");
     }
 }

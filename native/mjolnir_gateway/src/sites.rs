@@ -93,7 +93,9 @@ pub async fn lookup(resolver: &SitesResolver, host: &str) -> LookupResult {
     };
 
     match client.get(&url).send().await {
-        Ok(resp) if resp.status() == reqwest::StatusCode::OK => match resp.json::<LookupBody>().await
+        Ok(resp) if resp.status() == reqwest::StatusCode::OK => match resp
+            .json::<LookupBody>()
+            .await
         {
             Ok(body) => {
                 if !validate_component(&body.identikey_fp) || !validate_component(&body.site_name) {
@@ -128,13 +130,9 @@ fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'.'
-            | b'_'
-            | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
             other => {
                 use std::fmt::Write as _;
                 let _ = write!(out, "%{:02X}", other);

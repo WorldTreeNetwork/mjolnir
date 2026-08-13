@@ -37,6 +37,14 @@ format:
 format-check:
     mix format --check-formatted
 
+# Rust formatting across every workspace crate. Runs on macOS — rustfmt parses
+# but never compiles, so the Linux-only guest agent formats fine here.
+format-rust:
+    cd native && cargo fmt --all
+
+format-rust-check:
+    cd native && cargo fmt --all --check
+
 test:
     mix test
 
