@@ -102,8 +102,13 @@ defmodule Mjolnir.Gateway.Routes do
   Resolve desired specs into concrete `Route` structs.
 
   Skips (with a `Logger.warning`) any spec whose VM is not in `running_vm_ids`
-  (not running/local) or whose fqdn matches no configured apex. `running_vm_ids`
-  may be a list or a `MapSet`. `ip_resolver` maps a `vm_id` to its guest IP.
+  or whose fqdn matches no configured apex. `running_vm_ids` may be a list or a
+  `MapSet`. `ip_resolver` maps a `vm_id` to its guest IP.
+
+  Despite the name, `running_vm_ids` is the set of VMs that *should be
+  reachable*, not those running this instant — it includes VMs that are booting
+  or resuming. Treating "not running right now" as "should not have a route"
+  removed a live customer route on every deploy (mjolnir-ird).
   Result is sorted by `(apex, subdomain)` for deterministic output.
   """
   @spec build_routes(
@@ -323,8 +328,14 @@ defmodule Mjolnir.Gateway.Routes do
 
     cond do
       not MapSet.member?(running, vm_id) ->
+        # Reaching here now means the VM is GONE, not merely mid-boot: the
+        # reachable set includes :booting VMs and StateStore records of intent
+        # :running precisely so a resuming VM does not land here (mjolnir-ird).
+        # Word it as such — the old "not running/local" read as routine
+        # startup chatter, which is why a real route removal went unnoticed.
         Logger.warning(
-          "Gateway.Routes: skipping #{fqdn} — VM #{vm_id} is not running/local; no route emitted"
+          "Gateway.Routes: skipping #{fqdn} — VM #{vm_id} is neither live nor recorded as " <>
+            "intended-running; no route emitted"
         )
 
         []
@@ -453,10 +464,55 @@ defmodule Mjolnir.Gateway.Routes do
   # renders a file with no routes at all and takes every customer domain down.
   # An inconclusive read must leave the existing routes alone, not publish a
   # wipe. `[]` still means a genuine "nothing is running".
+  # mjolnir-ird: "not running *right now*" is not the same question as "should
+  # not have a route", and conflating them dropped a live customer route on
+  # every single deploy.
+  #
+  # A restart tears down and resumes every VM (Cleanup kills, Reconcile
+  # resumes). The route render runs while that is still in flight, so a VM that
+  # is coming back is either :booting or — more often, since Reconcile has not
+  # reached it yet — has no GenServer at all and is absent from VM.list/0
+  # entirely. Either way `state == :running` said no and the route was removed.
+  #
+  # So the set is widened to "VMs that should be reachable", which is the
+  # question the routes file is actually asking:
+  #
+  #   * live VMs that are :running or :booting, plus
+  #   * VMs with a durable StateStore record of intent :running, whose
+  #     GenServer has not been rebuilt yet
+  #
+  # A route is dropped when the VM is *gone* — no record, or intent :failed /
+  # :stopped / :dormant — not when it is between states.
+  #
+  # The cost of being wrong in this direction is a 502 from a backend that is
+  # still booting, which is transient and self-correcting. The cost of the old
+  # behaviour was a 400: the domain reads as not existing at all, and it lasts
+  # as long as the resume does — a VM that takes a minute to come back was a
+  # minute of 400s.
   defp default_running_vm_ids do
-    Mjolnir.VM.list()
-    |> Enum.filter(&(Map.get(&1, :state) == :running))
-    |> Enum.map(& &1.id)
+    live =
+      Mjolnir.VM.list()
+      |> Enum.filter(&(Map.get(&1, :state) in [:running, :booting]))
+      |> Enum.map(& &1.id)
+
+    # Deliberately NOT inside the rescue/catch below in spirit: if VM.list/0 is
+    # the thing that failed we return :unknown and never get here, and if the
+    # StateStore read fails we would rather keep the live-only set than lose
+    # the render entirely.
+    intended =
+      try do
+        Mjolnir.StateStore.list_by_intent(:running) |> Enum.map(& &1.uuid)
+      rescue
+        e ->
+          Logger.warning(
+            "Gateway.Routes: could not read StateStore intents " <>
+              "(#{Exception.message(e)}); using live VMs only"
+          )
+
+          []
+      end
+
+    Enum.uniq(live ++ intended)
   rescue
     e ->
       Logger.warning("Gateway.Routes: could not list VMs (#{Exception.message(e)})")
