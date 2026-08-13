@@ -92,9 +92,33 @@ pub fn inject(passphrase: &str, init_size_mb: Option<u32>) -> Result<(bool, bool
     }
 }
 
-/// Check if the secrets volume is currently mounted.
+/// Is the decrypted volume actually mounted at [`SECRETS_MOUNT`]?
+///
+/// Every write path in this module gates on this, so it has to mean what it
+/// says. It used to test only whether `/dev/mapper/mjolnir-secrets` EXISTED,
+/// which answers a different question: "did luksOpen succeed?" Those diverge in
+/// exactly the case that matters — luksOpen succeeds, `mount` then fails, and
+/// the mapper node is left behind. `is_mounted()` would report true while
+/// [`SECRETS_MOUNT`] was a plain directory on the ROOTFS, so `set_env_vars`
+/// would happily write plaintext secrets to it. The rootfs is snapshotted into
+/// @snapshots, deploy release layers and @trash, so that plaintext persists
+/// well beyond the VM.
+///
+/// Reading /proc/mounts answers the real question. Our paths contain no
+/// whitespace, so no unescaping is needed.
 pub fn is_mounted() -> bool {
-    Path::new("/dev/mapper").join(SECRETS_MAPPER_NAME).exists()
+    let dev = format!("/dev/mapper/{}", SECRETS_MAPPER_NAME);
+    match std::fs::read_to_string("/proc/mounts") {
+        Ok(mounts) => mounts.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some(dev.as_str()) && fields.next() == Some(SECRETS_MOUNT)
+        }),
+        // Fail CLOSED: if we cannot prove it is mounted, callers must not write.
+        Err(e) => {
+            warn!("Cannot read /proc/mounts ({}); treating secrets as NOT mounted", e);
+            false
+        }
+    }
 }
 
 /// Check if cryptsetup is available in the guest.
@@ -195,12 +219,26 @@ pub fn open_secrets_volume(passphrase: &str) -> Result<(), String> {
     luks_open(&loop_dev, passphrase)?;
     info!("LUKS opened");
 
-    std::fs::create_dir_all(SECRETS_MOUNT)
-        .map_err(|e| format!("Failed to create mount point: {}", e))?;
-    run_cmd("mount", &[
-        &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
-        SECRETS_MOUNT,
-    ])?;
+    // Everything past luksOpen unwinds together. Bailing out with `?` here used
+    // to leave the mapper node open and the loop device attached — a half-open
+    // state that no later call cleans up, and that the old existence-based
+    // is_mounted() reported as "mounted". Mirrors init_secrets_volume.
+    let result = (|| -> Result<(), String> {
+        std::fs::create_dir_all(SECRETS_MOUNT)
+            .map_err(|e| format!("Failed to create mount point: {}", e))?;
+        run_cmd("mount", &[
+            &format!("/dev/mapper/{}", SECRETS_MAPPER_NAME),
+            SECRETS_MOUNT,
+        ])?;
+        Ok(())
+    })();
+
+    if let Err(e) = &result {
+        error!("Open failed after luksOpen, cleaning up: {}", e);
+        let _ = cleanup_luks(&loop_dev);
+        return Err(e.clone());
+    }
+
     info!("Mounted at {}", SECRETS_MOUNT);
 
     Ok(())
@@ -208,7 +246,12 @@ pub fn open_secrets_volume(passphrase: &str) -> Result<(), String> {
 
 /// Close the LUKS secrets volume: unmount, close LUKS, detach loop.
 pub fn close_secrets_volume() -> Result<(), String> {
-    if !is_mounted() {
+    // Not `!is_mounted()`: now that is_mounted() means "mounted at SECRETS_MOUNT"
+    // rather than "the mapper node exists", a half-open volume (luksOpen
+    // succeeded, mount did not) would slip past that check with nothing to
+    // close it. Close whenever EITHER is true.
+    let mapper_open = Path::new("/dev/mapper").join(SECRETS_MAPPER_NAME).exists();
+    if !is_mounted() && !mapper_open {
         return Ok(());
     }
 

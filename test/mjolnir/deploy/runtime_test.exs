@@ -219,4 +219,65 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       assert unit =~ "ExecStart=/bin/sh -lc 'sh -c '\\''echo hi'\\'''"
     end
   end
+
+  describe "start/4 — managed secrets gate" do
+    # A :managed deploy hands the VM secrets expecting a LUKS volume at
+    # /secrets. If the unlock failed, /secrets is an ordinary directory on the
+    # ROOTFS — which is captured by @snapshots, by every deploy release layer,
+    # and by @trash on delete. Starting the app there risks writing plaintext
+    # secrets into all of them. Refuse, and take the VM down with us.
+    test "refuses to start the service when the managed unlock failed", %{agent: agent} do
+      ops =
+        recording_ops(agent,
+          spawn_result: {:ok, %{id: "svc-vm-1", secrets_unlock_failure: %{reason: ":timeout"}}}
+        )
+
+      assert {:error, {:secrets_unlock_failed, ":timeout"}} =
+               Runtime.start("my-app", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 spawn_opts: %{secrets_mode: :managed}
+               )
+
+      ev = events(agent)
+
+      # Nothing was executed in the guest, and nothing was registered — no URL
+      # is handed back for a service that is broken or leaking.
+      refute Enum.any?(ev, &match?({:exec, _, _}, &1))
+      refute Enum.any?(ev, &match?({:registry_put, _, _}, &1))
+
+      # The VM is stopped: it must not be left one `systemctl start` away from
+      # writing plaintext where an encrypted volume was supposed to be.
+      assert Enum.any?(ev, &match?({:stop, "svc-vm-1"}, &1))
+    end
+
+    test "a successful managed unlock proceeds normally", %{agent: agent} do
+      ops =
+        recording_ops(agent, spawn_result: {:ok, %{id: "svc-vm-1", secrets_unlock_failure: nil}})
+
+      assert {:ok, r} =
+               Runtime.start("my-app", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 spawn_opts: %{secrets_mode: :managed}
+               )
+
+      assert r.service_vm_id == "svc-vm-1"
+      refute Enum.any?(events(agent), &match?({:stop, "svc-vm-1"}, &1))
+    end
+
+    test "a NON-managed deploy is unaffected even if the field is set" do
+      # The gate is scoped to deploys that actually asked for secrets. A VM with
+      # none has nothing to protect, and must not be blocked by a stale field.
+      {:ok, agent} = Agent.start_link(fn -> [] end)
+
+      ops =
+        recording_ops(agent,
+          spawn_result: {:ok, %{id: "svc-vm-1", secrets_unlock_failure: %{reason: ":timeout"}}}
+        )
+
+      assert {:ok, _} =
+               Runtime.start("my-app", @release, @plan, ops: ops, gateway_domain: @domain)
+    end
+  end
 end

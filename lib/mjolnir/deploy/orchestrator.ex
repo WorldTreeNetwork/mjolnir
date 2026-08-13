@@ -178,6 +178,17 @@ defmodule Mjolnir.Deploy.Orchestrator do
       end
   end
 
+  # Worth naming rather than inspecting: this one is a deliberate refusal, and
+  # the operator needs to know it was a refusal and not a crash.
+  defp failure_lines({:secrets_unlock_failed, reason}) do
+    [
+      "error: managed secrets never mounted (#{reason})",
+      "note: the service was NOT started — /secrets would have been plain rootfs, " <>
+        "and the rootfs is captured by snapshots, release layers and @trash",
+      "note: fix the unlock (mj doctor <id> shows the failure) and redeploy"
+    ]
+  end
+
   defp failure_lines(reason), do: ["error: #{inspect(reason)}"]
 
   # The shapes worth naming. Everything else falls back to inspect/1.

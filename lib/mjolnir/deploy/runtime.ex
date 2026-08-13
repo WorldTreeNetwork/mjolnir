@@ -105,7 +105,9 @@ defmodule Mjolnir.Deploy.Runtime do
       {:ok, vm} ->
         vm_id = Map.fetch!(vm, :id)
 
-        finish(
+        case secrets_gate(boot, vm) do
+          :ok ->
+            finish(
           ops,
           app_name,
           release_snapshot,
@@ -114,13 +116,55 @@ defmodule Mjolnir.Deploy.Runtime do
           workdir,
           port,
           domain,
-          ticket_timeout,
-          custom_domain_opt,
-          owner_id_opt
-        )
+              ticket_timeout,
+              custom_domain_opt,
+              owner_id_opt
+            )
+
+          {:error, reason} ->
+            # Do not leave a VM running that is one `systemctl start` away from
+            # writing plaintext where an encrypted volume was supposed to be.
+            _ = ops.stop.(vm_id)
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, {:spawn_failed, reason}}
+    end
+  end
+
+  # Refuse to start an app whose managed secrets never mounted.
+  #
+  # A :managed deploy hands the VM its secrets expecting them to land in a LUKS
+  # volume mounted at /secrets, rendered to tmpfs at /run/mjolnir/secrets.env.
+  # If the unlock failed, /secrets is an ORDINARY DIRECTORY ON THE ROOTFS — and
+  # the rootfs is snapshotted into @snapshots, into every deploy release layer,
+  # and into @trash on delete. Starting the app anyway risks writing plaintext
+  # secrets into all of them, and the app would in any case run without the
+  # configuration it was given.
+  #
+  # So: fail the deploy loudly at the one moment someone is watching, rather
+  # than hand back a URL for a service that is either broken or leaking. The VM
+  # is stopped; the operator fixes the unlock and redeploys.
+  #
+  # Only applies when this deploy actually asked for :managed secrets. A VM with
+  # no secrets has nothing to protect and is unaffected.
+  defp secrets_gate(boot, vm) do
+    if Map.get(boot, :secrets_mode) == :managed do
+      case Map.get(vm, :secrets_unlock_failure) do
+        nil ->
+          :ok
+
+        %{reason: reason} ->
+          Logger.error(
+            "Deploy.Runtime: refusing to start service — managed secrets never mounted " <>
+              "(#{reason}). /secrets would be plain rootfs; not writing secrets there."
+          )
+
+          {:error, {:secrets_unlock_failed, reason}}
+      end
+    else
+      :ok
     end
   end
 
