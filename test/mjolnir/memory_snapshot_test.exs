@@ -52,6 +52,37 @@ defmodule Mjolnir.MemorySnapshotTest do
     test "tolerates leading whitespace variation" do
       assert {:ok, 12} = BTRFS.parse_generation("   Generation:   12   \n")
     end
+
+    test "reads verbatim output from the production host" do
+      # Captured from `btrfs subvolume show /var/lib/mjolnir/btrfs/@base/ubuntu-24.04`
+      # on 45.76.77.97 (btrfs-progs, Ubuntu noble). Kept byte-for-byte — note the
+      # trailing space after each label before the tabs, and the multi-line
+      # Snapshot(s) block, both of which a hand-written sample would omit.
+      #
+      # This subvolume is writable and long-lived, so Generation (207340) has
+      # advanced far past Gen at creation (111925). That gap is the point: it is
+      # exactly the shape a tampered read-only snapshot takes, and a parser that
+      # matched the wrong line would return the stale value and wave it through.
+      real = """
+      @base/ubuntu-24.04
+      \tName: \t\t\tubuntu-24.04
+      \tUUID: \t\t\t164f0170-a148-2f41-9b97-bb29ee1d5b5c
+      \tParent UUID: \t\t-
+      \tReceived UUID: \t\t-
+      \tCreation time: \t\t2026-06-23 11:09:39 +0000
+      \tSubvolume ID: \t\t411
+      \tGeneration: \t\t207340
+      \tGen at creation: \t111925
+      \tParent ID: \t\t5
+      \tTop level ID: \t\t5
+      \tFlags: \t\t\t-
+      \tSnapshot(s):
+      \t\t\t\t@vms/076adf62-b3e1-4696-8427-1b20faf3fd9c
+      \t\t\t\t@trash/f740656e-5c6f-4cd4-b6fa-d415d867d257__1786124791__6B0E
+      """
+
+      assert {:ok, 207_340} = BTRFS.parse_generation(real)
+    end
   end
 
   describe "memory_dir/1" do

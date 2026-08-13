@@ -49,12 +49,15 @@ defmodule Mjolnir.MemorySnapshot do
   1. Verify the snapshot generation, then clone it to a fresh subvolume
   2. Start virtiofsd on that clone, on the socket path the snapshot recorded
   3. Start a fresh `cloud-hypervisor` with `--api-socket` and *no* `--vm-config`
-  4. `vm.restore`
-  5. Reseed guest entropy (`Mjolnir.Entropy`) — before anything can reach it
-  6. `vm.resume`
+  4. `vm.restore` — the VM comes back **paused**
+  5. `vm.resume`
+  6. Reseed guest entropy (`Mjolnir.Entropy`), then publish reachability
 
-  Step 5 sits before the resume deliberately; see `Mjolnir.Entropy` for why a
-  thawed VM that has not been reseeded must not be reachable.
+  Note the ordering of 5 and 6. The reseed cannot precede the resume: it is
+  serviced by the guest agent, which is a userspace process that cannot run
+  while vCPUs are stopped. The gate is therefore on **reachability**, not on
+  execution — no PTY, no ticket, no gateway route until the guest confirms.
+  See `Mjolnir.Entropy` for what that does and does not buy.
 
   ## Cost
 
