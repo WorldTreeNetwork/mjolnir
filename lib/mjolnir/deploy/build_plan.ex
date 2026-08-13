@@ -14,13 +14,15 @@ defmodule Mjolnir.Deploy.BuildPlan do
 
     - `runtime` — mise-managed runtime spec, e.g. `"node@20"`.
     - `package_manager` — detected from lockfile; drives install/build commands.
+      `nil` for manifest-declared apps (`Mjolnir.Deploy.Manifest`), which state
+      their build steps outright and so need no Node package-manager inference.
     - `steps` — ordered shell commands that build the app. Run sequentially;
       each step is a candidate snapshot boundary.
     - `start_command` — command the service VM executes to start the app.
     - `port` — port the app binds on inside the VM.
     """
     field(:runtime, String.t())
-    field(:package_manager, :npm | :bun | :pnpm | :yarn)
+    field(:package_manager, :npm | :bun | :pnpm | :yarn | nil)
     field(:steps, [String.t()])
     field(:start_command, String.t())
     field(:port, pos_integer())

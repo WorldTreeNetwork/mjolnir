@@ -48,6 +48,10 @@ defmodule Mjolnir.MixProject do
       {:plug, "~> 1.16"},
       {:postgrex, "~> 0.19"},
       {:req, "~> 0.4"},
+      # Parses `mjolnir.toml`, the explicit deploy manifest (Deploy.Manifest).
+      # Already present transitively; declared here because we depend on it
+      # directly and a transitive dep can vanish when its parent changes.
+      {:toml, "~> 0.7"},
       {:typed_struct, "~> 0.3"},
       {:uuid, "~> 1.1"},
       {:websock_adapter, "~> 0.5"},

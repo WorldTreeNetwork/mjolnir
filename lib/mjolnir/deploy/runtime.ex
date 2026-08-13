@@ -111,14 +111,14 @@ defmodule Mjolnir.Deploy.Runtime do
         case secrets_gate(boot, vm) do
           :ok ->
             finish(
-          ops,
-          app_name,
-          release_snapshot,
-          vm_id,
-          unit,
-          workdir,
-          port,
-          domain,
+              ops,
+              app_name,
+              release_snapshot,
+              vm_id,
+              unit,
+              workdir,
+              port,
+              domain,
               ticket_timeout,
               custom_domain_opt,
               owner_id_opt

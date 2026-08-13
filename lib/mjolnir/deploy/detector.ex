@@ -2,14 +2,24 @@ defmodule Mjolnir.Deploy.Detector do
   @moduledoc """
   Inspects an application directory and produces a `Mjolnir.Deploy.BuildPlan`.
 
-  ## P0 scope
+  ## Two doors: declared, then inferred
 
-  Only SvelteKit/adapter-node is supported. Detection requires both
-  `package.json` and `svelte.config.js` to be present in `app_dir`. If either
-  is missing the function returns `{:error, :unsupported_app}`.
+  `detect/1` first looks for `mjolnir.toml` (`Mjolnir.Deploy.Manifest`). If the
+  app declares itself, that declaration is used verbatim and no inference runs
+  — an explicit statement always outranks a guess, even about a stack we would
+  have recognised.
 
-  Generalisation to other frameworks (generic Node, Python, Procfile) is a P1
-  task.
+  Only if there is no manifest does framework inference run, and it recognises
+  exactly one framework: SvelteKit/adapter-node, requiring both `package.json`
+  and `svelte.config.js`. Anything else returns `{:error, :unsupported_app}`,
+  whose remedy is a manifest rather than a new detector — we will never infer
+  every stack, and an app that describes itself does not need us to.
+
+  A manifest that exists but is malformed is an **error**, never a silent
+  fallback to inference; see `Mjolnir.Deploy.Manifest`.
+
+  Teaching inference more frameworks (generic Node, Python, Procfile) remains
+  worthwhile as a convenience, but is no longer a prerequisite for deploying.
 
   ## Package manager detection
 
@@ -28,20 +38,33 @@ defmodule Mjolnir.Deploy.Detector do
   higher-priority lockfile wins.
   """
 
-  alias Mjolnir.Deploy.BuildPlan
+  alias Mjolnir.Deploy.{BuildPlan, Manifest}
 
   @runtime "node@20"
   @start_command "node build/index.js"
   @port 3000
 
   @doc """
-  Inspects `app_dir` and returns a build plan for the detected framework.
+  Inspects `app_dir` and returns its build plan.
 
-  Returns `{:ok, %BuildPlan{}}` for a recognised SvelteKit/adapter-node app, or
+  A `mjolnir.toml` manifest is honoured first and wins outright. Failing that,
+  returns `{:ok, %BuildPlan{}}` for a recognised SvelteKit/adapter-node app, or
   `{:error, :unsupported_app}` if the required marker files are absent.
+
+  A malformed manifest returns `{:error, {:invalid_manifest, message}}` — it
+  does not degrade to inference.
   """
   @spec detect(app_dir :: String.t()) :: {:ok, BuildPlan.t()} | {:error, term()}
   def detect(app_dir) do
+    case Manifest.load(app_dir) do
+      {:ok, plan} -> {:ok, plan}
+      {:error, _} = err -> err
+      :none -> infer(app_dir)
+    end
+  end
+
+  # Framework inference — reached only when the app did not declare itself.
+  defp infer(app_dir) do
     with :ok <- require_file(app_dir, "package.json"),
          :ok <- require_file(app_dir, "svelte.config.js") do
       pm = detect_package_manager(app_dir)

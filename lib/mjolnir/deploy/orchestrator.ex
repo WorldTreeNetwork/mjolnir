@@ -45,7 +45,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   require Logger
 
-  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Runtime}
+  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Manifest, Runtime}
 
   @default_base_image "deploy-node-bun"
   @workdir "/app"
@@ -115,8 +115,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
     Logger.info("Deploy.Orchestrator: deploying '#{app_name}' from #{src_dir}")
 
     with {:detect, {:ok, plan}} <- {:detect, ops.detect.(src_dir)},
-         :ok <-
-           emit(progress, "detect", "detected #{plan.package_manager} app (#{plan.runtime})"),
+         :ok <- emit(progress, "detect", detect_summary(plan)),
          {:translate, {:ok, steps}} <- {:translate, plan_to_steps(plan, src_dir, ops)},
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
          {:build, {:ok, build}} <-
@@ -207,6 +206,22 @@ defmodule Mjolnir.Deploy.Orchestrator do
   end
 
   # --- step translation ------------------------------------------------------
+
+  # The one operator-facing line describing what we decided to build. A manifest
+  # app has no package_manager (nil) and may declare no runtime, so the inferred
+  # phrasing "detected  app ()" would be both ugly and wrong: nothing was
+  # detected, the app said so itself. Say which.
+  @doc false
+  @spec detect_summary(map()) :: String.t()
+  def detect_summary(plan) do
+    runtime = Map.get(plan, :runtime, "")
+
+    case Map.get(plan, :package_manager) do
+      nil when runtime == "" -> "declared app (#{Manifest.filename()})"
+      nil -> "declared app (#{Manifest.filename()}, #{runtime})"
+      pm -> "detected #{pm} app (#{runtime})"
+    end
+  end
 
   @doc """
   Translate a `BuildPlan` into `Mjolnir.Deploy.Builder` step-inputs.
