@@ -10,6 +10,7 @@
 mod agent;
 #[cfg(feature = "iroh")]
 mod iroh;
+mod entropy;
 mod protocol;
 mod pty;
 #[cfg(feature = "full")]

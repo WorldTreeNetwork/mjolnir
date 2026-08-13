@@ -255,6 +255,29 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                     Ok(VsockRequest::Ping { id }) => {
                                         VsockResponse::Pong { id, agent: Some("boot".to_string()) }
                                     }
+                                    // Supported here as well as in the full agent: the
+                                    // host refuses to expose a thawed VM until a reseed
+                                    // is confirmed, so a boot agent that rejected this
+                                    // would leave such a VM permanently unreachable.
+                                    Ok(VsockRequest::ReseedEntropy { id, seed_hex }) => {
+                                        match decode_hex(&seed_hex) {
+                                            Ok(seed) => {
+                                                let outcome = crate::entropy::reseed(&seed);
+                                                VsockResponse::ReseedEntropyResponse {
+                                                    id,
+                                                    ok: outcome.ok,
+                                                    bytes: outcome.bytes,
+                                                    error: outcome.error,
+                                                }
+                                            }
+                                            Err(e) => VsockResponse::ReseedEntropyResponse {
+                                                id,
+                                                ok: false,
+                                                bytes: 0,
+                                                error: Some(e),
+                                            },
+                                        }
+                                    }
                                     // `session` is ignored here on purpose: the boot agent
                                     // runs in the initramfs, which has no tmux. A named
                                     // session only becomes meaningful after the pivot to
@@ -735,6 +758,31 @@ async fn handle_request(
         VsockRequest::Ping { id } => {
             info!("Ping");
             VsockResponse::Pong { id, agent: None }
+        }
+        VsockRequest::ReseedEntropy { id, seed_hex } => {
+            info!("Reseed entropy ({} hex chars)", seed_hex.len());
+            match decode_hex(&seed_hex) {
+                Ok(seed) => {
+                    let outcome = crate::entropy::reseed(&seed);
+                    if outcome.ok {
+                        info!("CRNG reseeded with {} bytes", outcome.bytes);
+                    } else {
+                        error!("CRNG reseed failed: {:?}", outcome.error);
+                    }
+                    VsockResponse::ReseedEntropyResponse {
+                        id,
+                        ok: outcome.ok,
+                        bytes: outcome.bytes,
+                        error: outcome.error,
+                    }
+                }
+                Err(e) => VsockResponse::ReseedEntropyResponse {
+                    id,
+                    ok: false,
+                    bytes: 0,
+                    error: Some(e),
+                },
+            }
         }
         VsockRequest::ConfigureNetwork { id, ip } => {
             info!("Configure network: {}", ip);
@@ -1233,5 +1281,45 @@ async fn handle_request(
                 stderr: String::new(),
             }
         }
+    }
+}
+
+/// Decode a lowercase-or-uppercase hex string into bytes.
+///
+/// Hand-rolled rather than pulling in the `hex` crate: the guest agent is
+/// cross-compiled to a static musl binary that is injected into every rootfs,
+/// so a dependency here is paid for on every VM.
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err(format!("hex string has odd length {}", s.len()));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&s[i..i + 2], 16)
+                .map_err(|_| format!("invalid hex at byte {}", i / 2))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod decode_hex_tests {
+    use super::decode_hex;
+
+    #[test]
+    fn round_trips_lower_and_upper_case() {
+        assert_eq!(decode_hex("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
+        assert_eq!(decode_hex("00FF10").unwrap(), vec![0x00, 0xff, 0x10]);
+    }
+
+    #[test]
+    fn empty_is_empty_not_an_error() {
+        assert_eq!(decode_hex("").unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn rejects_odd_length_and_non_hex() {
+        assert!(decode_hex("abc").is_err());
+        assert!(decode_hex("zz").is_err());
     }
 }

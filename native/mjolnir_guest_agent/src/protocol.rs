@@ -20,6 +20,17 @@ pub enum VsockRequest {
     Exec { id: String, command: String },
     #[serde(rename = "ping")]
     Ping { id: String },
+    /// Mix host-supplied entropy into the guest CRNG and credit it.
+    ///
+    /// Sent on every memory-snapshot restore, including the first: two VMs
+    /// thawed from one image otherwise share CRNG state and emit identical
+    /// session keys and nonces. `seed_hex` is hex so the payload stays inside
+    /// the JSON control channel without a base64 dependency.
+    ///
+    /// NOT `cfg(feature = "full")`: the boot agent serves thawed VMs too, and
+    /// an agent that cannot answer this leaves the host's gate to fail closed.
+    #[serde(rename = "reseed_entropy")]
+    ReseedEntropy { id: String, seed_hex: String },
     #[serde(rename = "configure_network")]
     ConfigureNetwork { id: String, ip: String },
     #[cfg(feature = "iroh")]
@@ -170,6 +181,18 @@ pub enum VsockResponse {
         id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent: Option<String>,
+    },
+    /// Result of a `reseed_entropy` request. The host will not expose a thawed
+    /// VM until it sees `ok: true`, so this must always be sent — a silent
+    /// failure keeps the VM unreachable rather than making it insecure, which
+    /// is the correct direction to fail but a terrible one to diagnose.
+    #[serde(rename = "reseed_entropy_response")]
+    ReseedEntropyResponse {
+        id: String,
+        ok: bool,
+        bytes: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     #[serde(rename = "boot_status")]
     BootStatus { stage: String, detail: String },

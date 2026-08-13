@@ -63,6 +63,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
       "memory" => memory_config(config),
       "fs" => fs_config(config),
       "vsock" => vsock_config(config, vsock_path),
+      "rng" => rng_config(config),
       "serial" => %{"mode" => "File", "file" => serial_log},
       "console" => %{"mode" => "Off"}
     }
@@ -141,6 +142,28 @@ defmodule Mjolnir.CloudHypervisor.Config do
       end)
 
     [primary | extra]
+  end
+
+  @doc """
+  Generates the virtio-rng configuration.
+
+  Until mjolnir-3y6.12 every VM booted with **no RNG device at all**, leaving
+  the guest kernel's CRNG dependent entirely on what it could scrape from its
+  own (virtualised, low-entropy) environment. The guest kernel has the
+  `virtio_rng` driver; nothing was giving it a device to bind.
+
+  This is a prerequisite for, not a solution to, the snapshot-cloning problem
+  (mjolnir-3y6.5). A virtio-rng device gives the guest a *source* of host
+  entropy but does not force a reseed at any particular moment, so two VMs
+  thawed from one memory image still wake with identical CRNG state and can
+  emit identical session keys and nonces before the driver is next polled.
+  `Mjolnir.Entropy` handles the forcing; this handles the supply.
+  """
+  def rng_config(%__MODULE__{}) do
+    # /dev/urandom, not /dev/random: this is the *host* side, where urandom is
+    # already cryptographically seeded and never blocks. Using /dev/random here
+    # would stall VM boot on a freshly-booted host for no security gain.
+    %{"src" => "/dev/urandom"}
   end
 
   @doc """
