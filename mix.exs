@@ -41,9 +41,22 @@ defmodule Mjolnir.MixProject do
       {:brotli, "~> 0.3.3"},
       {:ecto, "~> 3.12"},
       {:ecto_sql, "~> 3.12"},
-      {:hackney, "~> 1.20"},
+      # NOTE: `:hackney` was a direct dep until mjolnir-ctv. Nothing called it —
+      # it is an *optional* Tesla adapter, and no `config :tesla, :adapter` was
+      # ever written, so Tesla (via joken_jwks) has always used its httpc
+      # default. Meanwhile hackney 1.25 carried 4 open CVEs and the fixed line
+      # is 4.x, which joken_jwks 1.7's optional `~> 1.18` constraint forbids.
+      # Dropping the unused dep resolves all four rather than pinning to a
+      # vulnerable version. Re-add as `~> 4.x` only alongside an explicit
+      # Tesla adapter config and a joken_jwks that permits it.
       {:jason, "~> 1.4"},
       {:joken, "~> 2.6"},
+      # Direct because Mjolnir.Auth.KeycloakStrategy names Tesla.Adapter.Mint
+      # as the JWKS http_adapter (see that module). Both arrive transitively
+      # under Req today, but the JWKS path breaks at boot — not at compile —
+      # if they ever stop doing so, and castore is what makes Mint verify certs.
+      {:castore, "~> 1.0"},
+      {:mint, "~> 1.9"},
       {:joken_jwks, "~> 1.7"},
       {:plug, "~> 1.16"},
       {:postgrex, "~> 0.19"},
@@ -55,7 +68,13 @@ defmodule Mjolnir.MixProject do
       {:typed_struct, "~> 0.3"},
       {:uuid, "~> 1.1"},
       {:websock_adapter, "~> 0.5"},
-      {:ex_mcp, "~> 0.7"}
+      # Held at 0.7.x deliberately (mjolnir-ctv): `~> 0.7` let the CVE sweep
+      # drag in 0.12.0 — five minor versions of a young library, none of it
+      # required, since ex_mcp carries no advisories. Widen this as its own
+      # change with the MCP tests actually exercised, not as a side effect of
+      # a security bump. (Note both 0.7.4 and 0.12.0 declare `elixir: "~> 1.17"`
+      # while we build on 1.16; that warning is pre-existing either way.)
+      {:ex_mcp, "~> 0.7.4"}
       # Blake3 NIF (`:blake3`) was tried but its rustler 0.30 binding doesn't
       # compile on current Rust, and the 0.37+ binding has a cargo
       # disambiguation bug. `Mjolnir.Sites.Crypto.blake3_hash/1` currently uses
