@@ -280,4 +280,74 @@ defmodule Mjolnir.Deploy.RuntimeTest do
                Runtime.start("my-app", @release, @plan, ops: ops, gateway_domain: @domain)
     end
   end
+
+  describe "systemd_unit/5 — secrets mount condition" do
+    # Runtime.start/4 refuses the DEPLOY when the unlock fails, but that only
+    # covers the deploy. This covers every restart afterwards — reboot, resume,
+    # a manual `systemctl start`. Without it the first restart after a failed
+    # unlock runs the app with /secrets as a plain directory on the rootfs,
+    # which snapshots, release layers and @trash all capture.
+    test "a :managed service is gated on /secrets being a real mount" do
+      unit =
+        Runtime.systemd_unit("my-app", "node build/index.js", 3000, "/app",
+          secrets_mode: :managed
+        )
+
+      assert unit =~ "ConditionPathIsMountPoint=/secrets"
+
+      # It belongs to [Unit], not [Service] — systemd only honours conditions there.
+      [unit_section, service_section] = String.split(unit, "[Service]", parts: 2)
+      assert unit_section =~ "ConditionPathIsMountPoint"
+      refute service_section =~ "ConditionPathIsMountPoint"
+
+      # A CONDITION, never a dependency: nothing creates a .mount unit for
+      # /secrets (the guest agent mounts it directly), so RequiresMountsFor
+      # would order against a unit that never appears and hang the boot.
+      refute unit =~ "RequiresMountsFor"
+    end
+
+    test "a service with no managed secrets is not gated" do
+      unit = Runtime.systemd_unit("my-app", "node build/index.js", 3000, "/app")
+      refute unit =~ "ConditionPathIsMountPoint"
+
+      for mode <- [:none, :ephemeral, :persistent] do
+        refute Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: mode) =~
+                 "ConditionPathIsMountPoint"
+      end
+    end
+
+    test "the rendered unit still parses as INI with the condition present" do
+      # A stray blank line or a condition landing mid-section would be silently
+      # ignored by systemd — the gate would look present and do nothing.
+      unit =
+        Runtime.systemd_unit("my-app", "cmd", 3000, "/app", secrets_mode: :managed)
+
+      sections =
+        unit
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "["))
+
+      assert sections == ["[Unit]", "[Service]", "[Install]"]
+
+      refute unit =~ "\n\n\n"
+    end
+
+    test "start/4 propagates the spawn's secrets_mode into the unit", %{agent: agent} do
+      ops = recording_ops(agent, spawn_result: {:ok, %{id: "svc-vm-1"}})
+
+      assert {:ok, r} =
+               Runtime.start("my-app", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 spawn_opts: %{secrets_mode: :managed}
+               )
+
+      assert r.unit =~ "ConditionPathIsMountPoint=/secrets"
+
+      # And the unit that was actually written into the guest carries it too —
+      # r.unit agreeing with itself proves nothing.
+      execs = for {:exec, _vm, cmd} <- events(agent), do: cmd
+      assert Enum.any?(execs, &(&1 =~ "ConditionPathIsMountPoint=/secrets"))
+    end
+  end
 end

@@ -95,9 +95,12 @@ defmodule Mjolnir.Deploy.Runtime do
 
     port = fetch!(plan, :port)
     start_command = fetch!(plan, :start_command)
-    unit = systemd_unit(app_name, start_command, port, workdir)
-
     boot = Map.merge(%{snapshot: release_snapshot, enable_iroh: true}, Map.new(spawn_opts))
+
+    unit =
+      systemd_unit(app_name, start_command, port, workdir,
+        secrets_mode: Map.get(boot, :secrets_mode)
+      )
 
     Logger.info("Deploy.Runtime: starting service '#{app_name}' from #{release_snapshot}")
 
@@ -334,15 +337,18 @@ defmodule Mjolnir.Deploy.Runtime do
 
   `ExecStart` runs the app's `start_command` through `/bin/sh -lc` so a login
   shell resolves the mise-managed runtime baked into the layer.
+
+  Pass `secrets_mode: :managed` to gate the unit on the secrets volume actually
+  being mounted — see `secrets_condition/1`.
   """
-  @spec systemd_unit(String.t(), String.t(), pos_integer(), String.t()) :: String.t()
-  def systemd_unit(app_name, start_command, port, workdir \\ @default_workdir) do
+  @spec systemd_unit(String.t(), String.t(), pos_integer(), String.t(), keyword()) :: String.t()
+  def systemd_unit(app_name, start_command, port, workdir \\ @default_workdir, opts \\ []) do
     """
     [Unit]
     Description=Mjolnir deploy: #{app_name}
     After=network-online.target
     Wants=network-online.target
-
+    #{secrets_condition(opts[:secrets_mode])}
     [Service]
     Type=simple
     WorkingDirectory=#{workdir}
@@ -356,6 +362,29 @@ defmodule Mjolnir.Deploy.Runtime do
     WantedBy=multi-user.target
     """
   end
+
+  # Refuse to run the service unless /secrets is a REAL mount.
+  #
+  # `Deploy.Runtime.start/4` already refuses to deploy when the unlock fails at
+  # spawn time, but that only covers the deploy. This covers every restart
+  # afterwards — a reboot, a resume, `systemctl start`, an operator poking at
+  # it. Without it, the first restart after a failed unlock starts the app with
+  # /secrets as a plain directory on the rootfs, and the rootfs is captured by
+  # @snapshots, by release layers and by @trash.
+  #
+  # A CONDITION, not a dependency. `RequiresMountsFor=` would be the wrong tool:
+  # nothing here creates a systemd .mount unit for /secrets (the guest agent
+  # mounts it directly), so systemd would order against a unit that never
+  # appears and hang. A failed condition is not a failure either — systemd skips
+  # the unit, says so in the journal, and `Restart=on-failure` does not loop.
+  #
+  # The trade is deliberate: after a failed unlock the service stays down until
+  # someone fixes the volume and starts it. Down and explicable beats up and
+  # writing plaintext into every future snapshot.
+  @doc false
+  @spec secrets_condition(atom() | nil) :: String.t()
+  def secrets_condition(:managed), do: "ConditionPathIsMountPoint=/secrets\n"
+  def secrets_condition(_), do: ""
 
   @doc """
   Builds the gateway URL `https://<ticket>-<port>.<domain>`.
