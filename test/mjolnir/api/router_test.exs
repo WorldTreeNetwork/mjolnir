@@ -43,11 +43,15 @@ defmodule Mjolnir.API.RouterTest do
   end
 
   describe "GET /api/vms" do
-    test "returns 200 with empty VM list" do
+    test "returns 200 with a vms list" do
       conn = request(:get, "/api/vms")
       assert conn.status == 200
       body = Jason.decode!(conn.resp_body)
-      assert body["vms"] == []
+      # Deliberately a shape assertion, not `== []`. No VM is spawned here, so
+      # emptiness was only ever asserting that nothing else in the run (or, as
+      # it turned out, in any PREVIOUS run — mjolnir-7qh) had written to the
+      # process-global StateStore. That is not this endpoint's contract.
+      assert is_list(body["vms"])
     end
   end
 

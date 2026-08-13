@@ -164,7 +164,10 @@ defmodule Mjolnir.MCP.ServerTest do
 
       assert conn.status == 200
       body = Jason.decode!(conn.resp_body)
-      assert body["vms"] == []
+      # The subject here is "mounting MCP did not break the VM routes", not the
+      # contents of a process-global StateStore. Asserting == [] made this test
+      # fail whenever any other test left a record behind (mjolnir-7qh).
+      assert is_list(body["vms"])
     end
 
     test "unknown route still returns 404" do
