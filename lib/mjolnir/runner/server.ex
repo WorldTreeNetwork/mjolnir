@@ -231,7 +231,7 @@ defmodule Mjolnir.Runner.Server do
           :use_stdio,
           :stderr_to_stdout,
           args: ["daemon", "--config", config.config_path],
-          env: [{'GITEA_INSTANCE_URL', String.to_charlist(config.forgejo_url)}]
+          env: [{~c"GITEA_INSTANCE_URL", String.to_charlist(config.forgejo_url)}]
         ]
       )
 

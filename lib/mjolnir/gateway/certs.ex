@@ -670,7 +670,8 @@ defmodule Mjolnir.Gateway.Certs do
   # openssl-backed cert inspection. Never exercised by the test suite (fakes are
   # injected); runs on the real Linux gateway host.
   defp default_validate_pair(cert_pem, key_pem) do
-    with {:ok, cert_pub} <- with_tmp(cert_pem, &openssl(["x509", "-in", &1, "-noout", "-pubkey"])),
+    with {:ok, cert_pub} <-
+           with_tmp(cert_pem, &openssl(["x509", "-in", &1, "-noout", "-pubkey"])),
          {:ok, key_pub} <- with_tmp(key_pem, &openssl(["pkey", "-in", &1, "-pubout"])) do
       if String.trim(cert_pub) == String.trim(key_pub),
         do: :ok,
@@ -687,7 +688,8 @@ defmodule Mjolnir.Gateway.Certs do
   end
 
   defp default_cert_info(cert_pem) do
-    with {:ok, enddate} <- with_tmp(cert_pem, &openssl(["x509", "-in", &1, "-noout", "-enddate"])),
+    with {:ok, enddate} <-
+           with_tmp(cert_pem, &openssl(["x509", "-in", &1, "-noout", "-enddate"])),
          {:ok, issuer} <- with_tmp(cert_pem, &openssl(["x509", "-in", &1, "-noout", "-issuer"])),
          {:ok, sans} <- cert_sans(cert_pem) do
       {:ok,

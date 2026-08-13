@@ -125,7 +125,10 @@ pub async fn cmd_deploy(
         Some(f) if f.ok => {
             let url = f.url.unwrap_or_default();
             eprintln!();
-            eprintln!("\x1b[32m✔ Deployed {}\x1b[0m", f.app_name.unwrap_or(app_name));
+            eprintln!(
+                "\x1b[32m✔ Deployed {}\x1b[0m",
+                f.app_name.unwrap_or(app_name)
+            );
             if let Some(snap) = f.release_snapshot {
                 eprintln!("  release snapshot: {}", snap);
             }
@@ -223,9 +226,7 @@ fn build_tarball(dir: &Path) -> Result<Vec<u8>> {
         if path == dir {
             continue;
         }
-        let rel = path
-            .strip_prefix(dir)
-            .context("path outside source tree")?;
+        let rel = path.strip_prefix(dir).context("path outside source tree")?;
 
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
