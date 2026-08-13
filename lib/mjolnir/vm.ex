@@ -2070,7 +2070,19 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp maybe_inject_guest_agent(%__MODULE__{resume_mode: true}, _rootfs_path), do: :ok
+  # Resume USED to skip this, and that quietly froze every long-lived VM at the
+  # agent version its rootfs was born with. VM 2da0e442 was still running a
+  # 2026-06-23 agent on 2026-08-13 — one that predates the `inject_secrets`
+  # action entirely — so its managed-secrets unlock could never succeed. It
+  # failed as a 60s :timeout rather than an error, because the old agent could
+  # not deserialize the request and answered nothing (mjolnir-azm; the guest
+  # now replies with an error, but only agents new enough to have that fix
+  # will, which is exactly the bootstrapping problem this line creates).
+  #
+  # Injecting on resume is safe: the VM is not running yet — this is the boot
+  # path, the rootfs subvolume is quiescent, and the write lands before the
+  # hypervisor starts. Skipping it bought nothing and cost every VM its
+  # upgrade path.
   defp maybe_inject_guest_agent(_state, rootfs_path), do: inject_guest_agent(rootfs_path)
 
   # --- Resume identity probe (option c) ---

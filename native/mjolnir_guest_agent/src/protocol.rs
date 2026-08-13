@@ -142,6 +142,23 @@ pub enum VsockRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum VsockResponse {
+    /// A request this agent could not parse — unknown action, or a known
+    /// action whose shape it predates.
+    ///
+    /// Sending NOTHING was the old behaviour, and it turned "your guest agent
+    /// is too old to understand this" into a host-side timeout: the least
+    /// diagnosable failure there is, because a timeout reads as a hung or
+    /// wedged guest. That cost a full 60s per call and pointed the
+    /// investigation at cryptsetup instead of at the agent version
+    /// (mjolnir-azm). `ok: false` puts this in the same shape callers already
+    /// match for a rejected request, so it surfaces as a rejection rather
+    /// than as an unexpected response.
+    #[serde(rename = "error")]
+    Error {
+        id: String,
+        ok: bool,
+        error: String,
+    },
     #[serde(rename = "exec_response")]
     ExecResponse {
         id: String,

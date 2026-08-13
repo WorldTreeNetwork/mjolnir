@@ -595,6 +595,15 @@ async fn handle_vsock_connection(
                                     }
                                 }
 
+                                // Keep the request id before serde consumes the value:
+                                // an unparseable request still has to be answered, and
+                                // the host correlates on nothing else.
+                                let request_id = json_value
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+
                                 // Not a pending response — handle as normal VsockRequest
                                 match serde_json::from_value::<VsockRequest>(json_value) {
                                     Ok(request) => {
@@ -615,7 +624,19 @@ async fn handle_vsock_connection(
                                         }
                                     }
                                     Err(e) => {
+                                        // ANSWER IT. Staying silent leaves the host
+                                        // blocked until its own timeout, which reports
+                                        // a version mismatch as a hang (mjolnir-azm).
                                         warn!("Failed to parse request: {}", e);
+                                        let response = VsockResponse::Error {
+                                            id: request_id,
+                                            ok: false,
+                                            error: format!("unsupported or malformed request: {}", e),
+                                        };
+                                        let frame = frame_message(0, &response);
+                                        if write_tx.send(frame).await.is_err() {
+                                            break 'conn;
+                                        }
                                     }
                                 }
                             } else {
