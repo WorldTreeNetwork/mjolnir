@@ -108,6 +108,21 @@ deploy-boot: _require-host
         cp /opt/mjolnir/boot-image/initramfs.img /var/lib/mjolnir/boot/initramfs.img && \
         chmod 644 /var/lib/mjolnir/boot/initramfs.img"
 
+# Type-check BOTH guest-agent binaries on the server, each with its own feature set.
+#
+# There is no single cargo invocation that covers this crate: `mjolnir-agent`
+# needs `full`, `mjolnir-boot-agent` needs `full` OFF, and a bare `cargo check`
+# silently covers only one of them. Use this rather than trusting a lone check
+# (mjolnir-ufj). Must run on Linux — tokio-vsock does not build on macOS.
+check-agent: _require-host
+    ssh {{host}} "cd /opt/mjolnir/native/mjolnir_guest_agent && \
+        export PATH=\"/root/.cargo/bin:\$PATH\" && \
+        echo '--- mjolnir-agent (full)' && \
+        cargo check --bin mjolnir-agent --target x86_64-unknown-linux-musl && \
+        echo '--- mjolnir-boot-agent (boot)' && \
+        cargo check --bin mjolnir-boot-agent --no-default-features --features boot \
+            --target x86_64-unknown-linux-musl"
+
 # Rebuild base rootfs image on server (distro: ubuntu-24.04, arch)
 deploy-rootfs distro="ubuntu-24.04": _require-host
     ssh {{host}} "cd /opt/mjolnir && \

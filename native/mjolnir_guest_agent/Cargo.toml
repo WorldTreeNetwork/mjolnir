@@ -46,3 +46,12 @@ required-features = ["full"]
 [[bin]]
 name = "mjolnir-boot-agent"
 path = "src/boot_main.rs"
+# Boot means the ABSENCE of `full`, which Cargo cannot express — so state the
+# half it can. Without this the bin had no required-features at all, so a plain
+# `cargo check` (default = full) compiled boot_main.rs with the full feature on.
+# The `#[cfg(feature = "full")]` regions of the shared vsock.rs then activated
+# and reached for tmux/syslog/secrets, which boot_main.rs deliberately does not
+# declare — five E0433s that looked like the crate was broken. It was not; the
+# invocation was. boot_main.rs carries a compile_error! for the other half
+# (mjolnir-ufj).
+required-features = ["boot"]
