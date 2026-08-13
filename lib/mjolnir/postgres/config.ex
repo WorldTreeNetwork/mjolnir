@@ -46,9 +46,69 @@ defmodule Mjolnir.Postgres.Config do
     :socket_path
   ]
 
+  @doc """
+  Locate the Postgres **server** binaries.
+
+  The old compiled-in default was `/usr/bin`, which cannot work on the distro
+  Mjolnir actually runs on in production. Debian and Ubuntu put `postgres` and
+  `initdb` in `/usr/lib/postgresql/<version>/bin` and symlink only the *client*
+  tools (`psql`, `pg_dump`) into `/usr/bin` — so the failure was a
+  missing-binary error naming a path that was never plausible. It was correct
+  on Arch, where pacman links everything into `/usr/bin`, which is why it
+  survived local development.
+
+  Production was unaffected because `/etc/mjolnir/env` sets
+  `MJOLNIR_PG_BIN_DIR` (and since ae20e69 the host bootstrap writes it
+  automatically). The default remained a trap for anyone running the release
+  without a bootstrapped host: a manual install, a container, or a dev box.
+
+  Resolution order:
+
+  1. the highest-numbered `/usr/lib/postgresql/*/bin` that actually contains a
+     `postgres` binary (Debian/Ubuntu)
+  2. `/usr/bin` (Arch, Homebrew-linked, and anything that puts the server on
+     PATH)
+
+  Versions are compared numerically, so 9 sorts below 10 — a string sort picks
+  `9` over `16` on a host carrying both, which is precisely the host where
+  getting it wrong matters.
+
+  An explicit `:pg_bin_dir` (or `MJOLNIR_PG_BIN_DIR`) always wins; this only
+  fills in when nothing was configured.
+  """
+  @spec detect_bin_dir() :: String.t()
+  def detect_bin_dir do
+    case newest_versioned_bin_dir() do
+      nil -> "/usr/bin"
+      dir -> dir
+    end
+  end
+
+  defp newest_versioned_bin_dir do
+    "/usr/lib/postgresql/*/bin"
+    |> Path.wildcard()
+    # Require the server binary specifically. A version directory can exist
+    # carrying only client tools (postgresql-client-16 installs one), and
+    # picking it would reintroduce the same confusing missing-binary error at a
+    # different path.
+    |> Enum.filter(&File.exists?(Path.join(&1, "postgres")))
+    |> Enum.max_by(&version_rank/1, fn -> nil end)
+  end
+
+  defp version_rank(path) do
+    path
+    |> Path.split()
+    |> Enum.at(-2, "")
+    |> Integer.parse()
+    |> case do
+      {n, _} -> n
+      :error -> -1
+    end
+  end
+
   @spec resolve() :: t()
   def resolve do
-    bin_dir = get(:pg_bin_dir, "/usr/bin")
+    bin_dir = get(:pg_bin_dir, nil) || detect_bin_dir()
     data_dir = get(:pg_data_dir, "/var/lib/mjolnir/pg")
     socket_dir = get(:pg_socket_dir, "/var/run/mjolnir")
     log_dir = get(:pg_log_dir, "/var/log/mjolnir/pg")
