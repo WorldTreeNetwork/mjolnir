@@ -52,9 +52,9 @@ defmodule Mjolnir.BTRFS do
 
   ## Options
 
-    - `:verify_generation` — when `true`, refuse to clone unless the snapshot
-      subvolume still sits at the generation recorded when it was taken
-      (`verify_generation/1`). Off by default: a cold boot off a snapshotted
+    - `:verify_pin` — when `true`, refuse to clone unless the snapshot is still
+      the same read-only subvolume it was when captured (`verify_pin/1`). Off
+      by default: a cold boot off a snapshotted
       disk is merely *stale* if the snapshot moved, which is survivable. It is
       mandatory for memory restore, where a guest's cached pages describe a
       specific on-disk state and a mismatch is silent corruption rather than a
@@ -68,7 +68,7 @@ defmodule Mjolnir.BTRFS do
     dest = Path.join([btrfs_root, vm_subdir, vm_id])
 
     if File.dir?(source) do
-      with :ok <- maybe_verify_generation(name, Keyword.get(opts, :verify_generation, false)),
+      with :ok <- maybe_verify_pin(name, Keyword.get(opts, :verify_pin, false)),
            :ok <- ensure_dir(Path.join([btrfs_root, vm_subdir])),
            :ok <- snapshot_subvolume(source, dest) do
         {:ok, dest}
@@ -78,8 +78,8 @@ defmodule Mjolnir.BTRFS do
     end
   end
 
-  defp maybe_verify_generation(_name, false), do: :ok
-  defp maybe_verify_generation(name, true), do: verify_generation(name)
+  defp maybe_verify_pin(_name, false), do: :ok
+  defp maybe_verify_pin(name, true), do: verify_pin(name)
 
   @doc """
   Create a named snapshot of a VM's rootfs.
@@ -87,10 +87,10 @@ defmodule Mjolnir.BTRFS do
   Uses `btrfs subvolume snapshot` from @vms/{vm_id}/ → @snapshots/{name}/
   and writes a JSON metadata sidecar file.
 
-  The sidecar always records the snapshot subvolume's BTRFS **generation**.
-  That number is what lets a later restore prove the filesystem it is about to
-  hand a guest is byte-identical to the one that guest's RAM was captured
-  against — see `verify_generation/1` and `Mjolnir.MemorySnapshot`.
+  The sidecar records the subvolume's `gen_at_creation` and `readonly` flag —
+  the two facts that let a later restore prove the filesystem it is about to
+  hand a guest is the same one that guest's RAM was captured against. See
+  `verify_pin/1` for why the mutable `Generation` cannot serve that purpose.
 
   ## Options
     - `:source_vm_id` — recorded in metadata (defaults to vm_id)
@@ -124,13 +124,13 @@ defmodule Mjolnir.BTRFS do
             _ -> 0
           end
 
-        # Read the generation back from the subvolume we just created rather
-        # than the source: it is the destination that a restore will clone, and
-        # only the destination's number can be re-checked later.
-        generation =
-          case subvolume_generation(dest) do
-            {:ok, gen} -> gen
-            {:error, _} -> nil
+        # Read the facts back from the subvolume just created, not the source:
+        # it is the destination a restore will clone, and only its identity can
+        # be re-checked later.
+        info =
+          case subvolume_info(dest) do
+            {:ok, i} -> i
+            {:error, _} -> %{generation: nil, gen_at_creation: nil, readonly: readonly}
           end
 
         metadata = %{
@@ -139,39 +139,89 @@ defmodule Mjolnir.BTRFS do
           owner_id: opts[:owner_id],
           created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
           size_bytes: size_bytes,
-          generation: generation,
-          readonly: readonly
+          # Advisory. Moves whenever anything clones FROM this snapshot, so it
+          # cannot be the pin — see verify_pin/1.
+          generation: info.generation,
+          # The pin: immutable subvolume identity, plus proof it cannot be written.
+          gen_at_creation: info.gen_at_creation,
+          readonly: info.readonly
         }
 
         File.write!(meta_path, Jason.encode!(metadata, pretty: true))
-        Logger.info("Created snapshot '#{name}' from VM #{vm_id} (generation #{generation})")
+
+        Logger.info(
+          "Created snapshot '#{name}' from VM #{vm_id} " <>
+            "(gen_at_creation #{info.gen_at_creation}, readonly #{info.readonly})"
+        )
+
         {:ok, metadata}
       end
     end
   end
 
   @doc """
+  Read the identity and mutability facts about a subvolume.
+
+  Returns `%{generation:, gen_at_creation:, readonly:}`.
+
+  Only two of these can pin a snapshot; see `verify_pin/1` for why
+  `:generation` is not one of them.
+  """
+  @spec subvolume_info(String.t()) :: {:ok, map()} | {:error, term()}
+  def subvolume_info(path) do
+    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "show", path], stderr_to_stdout: true) do
+      {output, 0} -> parse_subvolume_info(output)
+      {output, code} -> {:error, {:btrfs_subvolume_show_failed, code, String.trim(output)}}
+    end
+  end
+
+  @doc """
   Read a subvolume's current BTRFS generation.
 
-  The generation is a monotonically increasing transaction id. A read-only
-  snapshot's generation never advances; a writable one's does on every commit.
-  So "the generation still matches what we recorded" is a cheap, exact answer
-  to "has this filesystem changed since we captured a guest's RAM against it?".
+  Advisory only — it moves for reasons that are not drift. Kept because it is
+  useful in logs when diagnosing a refused restore.
   """
   @spec subvolume_generation(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def subvolume_generation(path) do
-    case System.cmd("sudo", ["-n", "btrfs", "subvolume", "show", path], stderr_to_stdout: true) do
-      {output, 0} -> parse_generation(output)
-      {output, code} -> {:error, {:btrfs_subvolume_show_failed, code, String.trim(output)}}
+    with {:ok, %{generation: gen}} <- subvolume_info(path), do: {:ok, gen}
+  end
+
+  @doc """
+  Parse `btrfs subvolume show` output into identity + mutability facts.
+
+  Split out so it is testable off a BTRFS host. The `Generation` regex is
+  anchored to a line start so it cannot match `Gen at creation`; the two differ
+  precisely when something has touched the subvolume, so matching the wrong one
+  would silently read the stale value.
+  """
+  @spec parse_subvolume_info(String.t()) :: {:ok, map()} | {:error, term()}
+  def parse_subvolume_info(output) when is_binary(output) do
+    with {:ok, generation} <- parse_generation(output) do
+      {:ok,
+       %{
+         generation: generation,
+         gen_at_creation: parse_int_field(output, "Gen at creation"),
+         # `Flags` is "readonly" on a read-only subvolume and "-" otherwise.
+         readonly:
+           case Regex.run(~r/^\s*Flags:\s+(.+?)\s*$/m, output) do
+             [_, flags] -> String.contains?(flags, "readonly")
+             _ -> false
+           end
+       }}
+    end
+  end
+
+  defp parse_int_field(output, label) do
+    case Regex.run(~r/^\s*#{Regex.escape(label)}:\s+(\d+)\s*$/m, output) do
+      [_, n] -> String.to_integer(n)
+      _ -> nil
     end
   end
 
   @doc """
   Parse the `Generation:` field out of `btrfs subvolume show` output.
 
-  Split out from `subvolume_generation/1` so the parsing is testable off a
-  BTRFS host. Note `btrfs` prints both `Generation` and `Gen at creation`; the
-  regex is anchored to a line start so it cannot match the latter.
+  Anchored to a line start so it cannot match `Gen at creation`.
   """
   @spec parse_generation(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def parse_generation(output) when is_binary(output) do
@@ -182,30 +232,64 @@ defmodule Mjolnir.BTRFS do
   end
 
   @doc """
-  Verify a named snapshot's subvolume still sits at its recorded generation.
+  Verify a named snapshot is still the exact filesystem it was when frozen.
 
-  Returns `:ok`, or `{:error, {:snapshot_drifted, name, expected, actual}}` if
-  the subvolume has been written since the snapshot was taken.
+  ## Why this is not a `Generation` check
 
-  `{:error, {:snapshot_generation_unknown, name}}` means the sidecar predates
-  generation recording — an honest "cannot prove it", which callers that need
-  the guarantee (memory restore) must treat as a refusal, and callers that do
-  not (a plain cold-boot clone) may ignore.
+  The obvious pin — record `Generation` at capture, require it to match at
+  restore — does not work, and fails in the worst way: on the *first legitimate
+  use*. Creating a clone **from** a read-only snapshot updates that snapshot's
+  root item (it now lists the clone under `Snapshot(s)`), which advances its
+  `Generation`. Measured on the host: a snapshot pinned at 208309 read 208311
+  after one successful thaw, so the second thaw refused with
+  `:snapshot_drifted` on a filesystem nobody had touched.
+
+  A pin that cries tampering when nothing was tampered with is worse than no
+  pin, because it teaches people to route around it.
+
+  ## What is actually invariant
+
+  1. **`Gen at creation`** — fixed for the life of the subvolume. It identifies
+     *this* subvolume instance, so a snapshot deleted and recreated under the
+     same name is caught even though the name and path are identical.
+  2. **`readonly`** — a read-only subvolume cannot be written. This is the part
+     that makes accidental drift structurally impossible rather than merely
+     unobserved: a stray write to it fails with `EROFS`, it does not silently
+     succeed.
+
+  Together these answer "is this the same filesystem, and could it have
+  changed?" — which is the question a memory restore needs.
+
+  ## The residual gap, stated plainly
+
+  A privileged operator can `btrfs property set ro false`, modify the
+  subvolume, and set it back. That is not detected. Closing it needs content
+  hashing, which is not free on a multi-GiB rootfs, and the hazard this guards
+  is a *code path* accidentally writing to a snapshot — which `readonly`
+  already makes impossible. `Generation` is still recorded, and a value that
+  has moved beyond what clone counts explain is a useful diagnostic.
   """
-  @spec verify_generation(String.t()) :: :ok | {:error, term()}
-  def verify_generation(name) do
+  @spec verify_pin(String.t()) :: :ok | {:error, term()}
+  def verify_pin(name) do
     with {:ok, %{metadata: metadata, path: path}} <- get_snapshot(name) do
-      case metadata[:generation] do
+      case metadata[:gen_at_creation] do
         nil ->
-          {:error, {:snapshot_generation_unknown, name}}
+          {:error, {:snapshot_pin_unknown, name}}
 
         expected when is_integer(expected) ->
-          case subvolume_generation(path) do
-            {:ok, ^expected} ->
+          case subvolume_info(path) do
+            {:ok, %{gen_at_creation: ^expected, readonly: true}} ->
               :ok
 
-            {:ok, actual} ->
-              {:error, {:snapshot_drifted, name, expected, actual}}
+            {:ok, %{gen_at_creation: ^expected, readonly: false}} ->
+              # Same subvolume, but it is writable right now. Whether or not it
+              # has been modified yet, it is no longer a pinned artifact.
+              {:error, {:snapshot_not_readonly, name}}
+
+            {:ok, %{gen_at_creation: actual}} ->
+              # Different subvolume wearing the same name — deleted and
+              # recreated. Its contents have no relationship to the RAM image.
+              {:error, {:snapshot_replaced, name, expected, actual}}
 
             {:error, reason} ->
               {:error, reason}
@@ -738,11 +822,11 @@ defmodule Mjolnir.BTRFS do
   # Private helpers
 
   # Known metadata keys — safe to atomize since we control the schema
-  # `generation` and `readonly` must round-trip as atoms or verify_generation/1
-  # reads `metadata[:generation]` as nil on every snapshot loaded from disk and
-  # silently degrades to "cannot prove it" — which for memory restore is a
-  # refusal, so the failure would be loud but wrong.
-  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation readonly)
+  # The pin fields must round-trip as atoms or verify_pin/1 reads
+  # `metadata[:gen_at_creation]` as nil on every snapshot loaded from disk and
+  # degrades to "cannot prove it" — which for memory restore is a refusal, so
+  # the failure would be loud but wrong.
+  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation gen_at_creation readonly)
 
   defp atomize_metadata(metadata) when is_map(metadata) do
     Map.new(metadata, fn

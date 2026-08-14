@@ -18,7 +18,7 @@ defmodule Mjolnir.MemorySnapshotTest do
   alias Mjolnir.BTRFS
   alias Mjolnir.MemorySnapshot
 
-  describe "parse_generation/1" do
+  describe "parse_subvolume_info/1 — the pin" do
     @show_output """
     @snapshots/frozen-1
     \tName: \t\t\tfrozen-1
@@ -37,11 +37,38 @@ defmodule Mjolnir.MemorySnapshotTest do
     end
 
     test "does not match 'Gen at creation'" do
-      # The two fields differ precisely when a read-only snapshot has been
-      # flipped writable and modified — the case this whole mechanism exists to
-      # catch. Matching the wrong line would make drift undetectable.
+      # The two fields diverge as soon as anything clones from the snapshot, so
+      # a regex that matched the wrong line would silently read a stale value.
       drifted = String.replace(@show_output, "Generation: \t\t4471", "Generation: \t\t4600")
       assert {:ok, 4600} = BTRFS.parse_generation(drifted)
+    end
+
+    test "reads gen_at_creation and the readonly flag" do
+      assert {:ok, info} = BTRFS.parse_subvolume_info(@show_output)
+      assert info.generation == 4471
+      assert info.gen_at_creation == 4471
+      assert info.readonly == true
+    end
+
+    test "a writable subvolume reports readonly: false" do
+      # `Flags: -` is what btrfs prints for a writable subvolume. A snapshot
+      # that is writable cannot pin anything, however unchanged it looks.
+      writable = String.replace(@show_output, "Flags: \t\t\treadonly", "Flags: \t\t\t-")
+      assert {:ok, %{readonly: false}} = BTRFS.parse_subvolume_info(writable)
+    end
+
+    test "gen_at_creation stays put while Generation moves" do
+      # This is the whole reason the pin is gen_at_creation. Measured on the
+      # host: a snapshot pinned at 208309 read Generation 208311 after ONE
+      # successful thaw, because cloning FROM a read-only snapshot updates its
+      # root item to list the clone. A Generation-based pin therefore breaks on
+      # its own first legitimate use.
+      after_clone =
+        @show_output
+        |> String.replace("Generation: \t\t4471", "Generation: \t\t4473")
+
+      assert {:ok, %{generation: 4473, gen_at_creation: 4471, readonly: true}} =
+               BTRFS.parse_subvolume_info(after_clone)
     end
 
     test "reports a missing field rather than guessing" do
@@ -159,7 +186,7 @@ defmodule Mjolnir.MemorySnapshotTest do
                MemorySnapshot.prepare_thaw("fs-only", "new-vm-id")
     end
 
-    test "refuses a snapshot whose sidecar records no generation", ctx do
+    test "refuses a snapshot whose sidecar records no pin", ctx do
       # Pre-pinning snapshots cannot prove their filesystem is unchanged. For a
       # cold boot that is merely stale; for a memory restore it is potential
       # silent corruption, so an unprovable pin is treated as a failed pin.
@@ -173,7 +200,7 @@ defmodule Mjolnir.MemorySnapshotTest do
         Jason.encode!(%{name: "legacy", created_at: "2026-01-01T00:00:00Z"})
       )
 
-      assert {:error, {:snapshot_generation_unknown, "legacy"}} =
+      assert {:error, {:snapshot_pin_unknown, "legacy"}} =
                MemorySnapshot.prepare_thaw("legacy", "new-vm-id")
     end
   end

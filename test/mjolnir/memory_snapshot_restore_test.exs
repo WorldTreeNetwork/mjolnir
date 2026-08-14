@@ -125,7 +125,7 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
     end
   end
 
-  describe "socket_live?/1 and preflight/1" do
+  describe "socket checks must never connect" do
     setup do
       dir = Path.join(System.tmp_dir!(), "sockprobe-#{System.unique_integer([:positive])}")
       File.mkdir_p!(dir)
@@ -133,44 +133,89 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
       {:ok, dir: dir}
     end
 
-    test "a path that does not exist is not live", ctx do
-      refute MemorySnapshot.socket_live?(Path.join(ctx.dir, "nope.sock"))
+    test "probing a live vhost-user socket does NOT disturb its listener", ctx do
+      # THE regression test for this module. virtiofsd serves exactly one
+      # vhost-user client and EXITS when that client disconnects. A
+      # connect-and-close liveness probe becomes the client, so closing it
+      # shuts the daemon down.
+      #
+      # This actually happened: the probe reported the socket ready, virtiofsd
+      # exited, and vm.restore failed two minutes later with
+      # "vhost-user: can't connect to peer". In preflight/1 the same probe
+      # would have been aimed at a RUNNING PRODUCTION VM's socket and killed
+      # its filesystem daemon — a liveness check causing the outage it checks
+      # for.
+      path = Path.join(ctx.dir, "live.sock")
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, path}])
+      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      # Stand-in for virtiofsd: accept one client, then shut down like it does.
+      owner =
+        spawn(fn ->
+          case :gen_tcp.accept(listener, 2_000) do
+            {:ok, _sock} -> send(:erlang.whereis(:probe_watcher), :was_connected)
+            _ -> :ok
+          end
+        end)
+
+      Process.register(self(), :probe_watcher)
+      on_exit(fn -> :ok end)
+
+      _ = MemorySnapshot.socket_present?(path)
+      _ = MemorySnapshot.socket_live?(path)
+      _ = MemorySnapshot.preflight(%{fs_socket: path, extra_fs_sockets: []})
+
+      refute_receive :was_connected, 300
+      Process.exit(owner, :kill)
+      Process.unregister(:probe_watcher)
     end
 
-    test "a stale socket FILE with no listener is not live", ctx do
-      # The normal aftermath of a killed VMM. Treating the inode's existence as
-      # a collision would refuse every thaw after an unclean shutdown.
+    test "socket_present? is false for a missing path and true for a socket", ctx do
+      refute MemorySnapshot.socket_present?(Path.join(ctx.dir, "nope.sock"))
+
+      path = Path.join(ctx.dir, "real.sock")
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, path}])
+      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      assert MemorySnapshot.socket_present?(path)
+    end
+
+    test "socket_present? is false for a plain file at that path", ctx do
+      # Readiness means "virtiofsd created its socket", not "something exists
+      # here". A regular file is the shape a half-written artifact takes.
+      plain = Path.join(ctx.dir, "plain.sock")
+      File.write!(plain, "")
+      refute MemorySnapshot.socket_present?(plain)
+    end
+
+    test "a stale socket inode with no owning process is not live", ctx do
+      # The normal aftermath of a killed VMM. Refusing on the inode alone would
+      # block every thaw after an unclean shutdown.
       stale = Path.join(ctx.dir, "stale.sock")
       File.write!(stale, "")
       refute MemorySnapshot.socket_live?(stale)
       assert :ok = MemorySnapshot.preflight(%{fs_socket: stale, extra_fs_sockets: []})
     end
 
-    test "a socket with a real listener is live and refuses the thaw", ctx do
-      # Two thaws of one snapshot want the SAME socket path, because it is
-      # baked into config.json. Without this the second silently attaches to
-      # the first VM's virtiofsd — one daemon, two guests, each believing it
-      # owns the filesystem.
-      path = Path.join(ctx.dir, "live.sock")
-      {:ok, listener} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, path}])
-      on_exit(fn -> :gen_tcp.close(listener) end)
+    test "ownership is decided from the process table, by --socket-path", ctx do
+      # Non-destructive and exact: virtiofsd is always launched with
+      # --socket-path=<path>, so a matching process means a live daemon.
+      path = Path.join(ctx.dir, "owned.sock")
 
+      task =
+        Task.async(fn ->
+          System.cmd("sh", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
+            stderr_to_stdout: true
+          )
+        end)
+
+      Process.sleep(300)
       assert MemorySnapshot.socket_live?(path)
 
       assert {:error, {:virtiofsd_socket_in_use, ^path}} =
                MemorySnapshot.preflight(%{fs_socket: path, extra_fs_sockets: []})
-    end
 
-    test "an extra mount's socket collision is caught too", ctx do
-      path = Path.join(ctx.dir, "extra.sock")
-      {:ok, listener} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, path}])
-      on_exit(fn -> :gen_tcp.close(listener) end)
-
-      assert {:error, {:virtiofsd_socket_in_use, ^path}} =
-               MemorySnapshot.preflight(%{
-                 fs_socket: Path.join(ctx.dir, "free.sock"),
-                 extra_fs_sockets: [path]
-               })
+      Task.shutdown(task, :brutal_kill)
     end
   end
 
@@ -367,8 +412,15 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
       # Ordering matters: starting a daemon and then discovering the collision
       # would leave a second virtiofsd attached to a socket the first owns.
       path = Path.join(ctx.dir, "busy.sock")
-      {:ok, listener} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, path}])
-      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      task =
+        Task.async(fn ->
+          System.cmd("sh", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
+            stderr_to_stdout: true
+          )
+        end)
+
+      Process.sleep(300)
       test_pid = self()
 
       assert {:error, {:virtiofsd_socket_in_use, ^path}} =
@@ -382,6 +434,9 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
                )
 
       refute_receive :started_anyway, 50
+      # Shut the fake down from the OWNING process — on_exit runs elsewhere and
+      # Task.shutdown/2 refuses a foreign caller.
+      Task.shutdown(task, :brutal_kill)
     end
   end
 end

@@ -211,9 +211,9 @@ defmodule Mjolnir.MemorySnapshot do
     mem_dir = memory_dir(name)
 
     with :ok <- ensure_memory_artifacts(name, mem_dir),
-         :ok <- BTRFS.verify_generation(name),
+         :ok <- BTRFS.verify_pin(name),
          {:ok, %{metadata: metadata}} <- BTRFS.get_snapshot(name),
-         {:ok, rootfs_path} <- BTRFS.clone_from_snapshot(name, new_vm_id, verify_generation: true) do
+         {:ok, rootfs_path} <- BTRFS.clone_from_snapshot(name, new_vm_id, verify_pin: true) do
       Logger.info(
         "Thaw prepared for '#{name}' → VM #{new_vm_id} at generation #{metadata[:generation]}"
       )
@@ -333,26 +333,50 @@ defmodule Mjolnir.MemorySnapshot do
   end
 
   @doc """
-  Whether a Unix socket path has a live listener.
+  Whether a virtiofsd is currently serving `path`.
 
-  Distinguishes "a VM is using this" from "a previous VMM died and left the
-  inode behind". Connect-and-close is the only reliable test: `File.exists?/1`
-  says yes for both, and acting on it would refuse every thaw after an unclean
-  shutdown.
+  ## Never connect to a vhost-user socket to test it
+
+  The obvious implementation — connect, then close — is destructive. virtiofsd
+  serves exactly one vhost-user client and **exits when that client
+  disconnects** (`"Client connected, servicing requests"` →
+  `"Client disconnected, shutting down"`). A probe that connects *becomes* the
+  client, so closing it shuts the daemon down.
+
+  That cost a real thaw: the probe reported the socket ready, virtiofsd exited
+  immediately after, and two minutes later `vm.restore` failed with
+  `vhost-user: can't connect to peer`. In `preflight/1` the same probe would
+  have been aimed at a socket belonging to a **running production VM** and
+  killed its filesystem daemon — a liveness check that causes the outage it is
+  checking for.
+
+  So ownership is determined from the process table instead: virtiofsd is
+  launched with `--socket-path=<path>`, which is exact, non-destructive, and
+  distinguishes a live daemon from the stale socket inode a killed VMM leaves
+  behind.
   """
   @spec socket_live?(String.t()) :: boolean()
   def socket_live?(path) do
-    if File.exists?(path) do
-      case :gen_tcp.connect({:local, path}, 0, [:binary, active: false], 500) do
-        {:ok, sock} ->
-          :gen_tcp.close(sock)
-          true
+    case System.cmd("pgrep", ["-f", "--", "--socket-path=#{path}"], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out) != ""
+      _ -> false
+    end
+  end
 
-        {:error, _} ->
-          false
-      end
-    else
-      false
+  @doc """
+  Whether the socket *file* exists yet — a readiness check, not an ownership one.
+
+  virtiofsd creates the socket when it is ready to accept its single client, so
+  this is the correct signal to wait on before starting the VMM. It says
+  nothing about who owns it; see `socket_live?/1` for that, and read its note
+  on why neither of these connects.
+  """
+  @spec socket_present?(String.t()) :: boolean()
+  def socket_present?(path) do
+    case File.stat(path) do
+      # A Unix domain socket is reported as :other by :file.read_file_info/1.
+      {:ok, %File.Stat{type: :other}} -> true
+      _ -> false
     end
   end
 
@@ -480,7 +504,12 @@ defmodule Mjolnir.MemorySnapshot do
     with {:ok, prep} <- prepare_thaw(name, new_vm_id),
          {:ok, config} <- read_snapshot_config(prep.memory_dir),
          {:ok, req} <- required_backends(config),
-         {:ok, backends} <- prepare_backends(prep, req, opts) do
+         # Once the clone exists, EVERY later failure has to remove it or the
+         # retry fails with :btrfs_snapshot_failed on an existing destination —
+         # a confusing second error that hides the first. Found by running a
+         # real thaw: virtiofsd failed to start and the leftover subvolume made
+         # the next attempt fail for an unrelated-looking reason.
+         {:ok, backends} <- discard_clone_on_error(prep, prepare_backends(prep, req, opts)) do
       # Only now is it safe to start a VMM: every vhost-user backend it will
       # reconnect to is listening, and the TAP it expects is up.
       case start_vmm(hypervisor, api_socket) do
@@ -516,6 +545,16 @@ defmodule Mjolnir.MemorySnapshot do
           {:error, {:vmm_start_failed, reason}}
       end
     end
+  end
+
+  # The clone is disposable by construction: the pinned read-only snapshot it
+  # came from is untouched, so discarding it costs nothing and keeps a failed
+  # thaw retryable.
+  defp discard_clone_on_error(_prep, {:ok, _} = ok), do: ok
+
+  defp discard_clone_on_error(prep, {:error, reason}) do
+    _ = BTRFS.delete_subvolume(prep.rootfs_path)
+    {:error, reason}
   end
 
   defp start_vmm(hypervisor, api_socket) do
@@ -574,7 +613,7 @@ defmodule Mjolnir.MemorySnapshot do
 
   defp await_socket(path, deadline, timeout) do
     cond do
-      socket_live?(path) ->
+      socket_present?(path) ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
