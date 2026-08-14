@@ -8,6 +8,15 @@ defmodule Mjolnir.MemorySnapshot do
   guest's memory too, so a thawed VM resumes mid-instruction rather than
   booting.
 
+  ## Freeze is a one-way park, not a checkpoint
+
+  Read `freeze/3` before using this. `vm.snapshot` is **terminal for the source
+  VM**: any VM with a vhost-user device (i.e. every Mjolnir VM, since the
+  rootfs is virtio-fs) wedges on its first filesystem I/O afterwards, even
+  though CH reports it as `Running`. Freeze parks a VM; `thaw/3` brings it back
+  in a fresh VMM. There is no "snapshot it and keep serving" — that is what the
+  filesystem-only `Mjolnir.VM.snapshot/2` is for.
+
   ## The invariant this module exists to hold
 
   Guest RAM contains a page cache that believes in a specific on-disk state.
@@ -104,25 +113,56 @@ defmodule Mjolnir.MemorySnapshot do
   @doc """
   Freeze a running VM: capture filesystem and guest RAM as one artifact.
 
-  `vm` must carry `:id` and `:socket_path` (the CH API socket). The VM is
-  paused for the whole capture and resumed afterwards **even if the capture
-  fails** — a failed snapshot must never leave a customer's VM stopped.
+  `vm` must carry `:id` and `:socket_path` (the CH API socket).
+
+  ## FREEZING IS A ONE-WAY PARK. THE SOURCE VM DOES NOT COME BACK.
+
+  This is the single most surprising property of the whole mechanism, and it is
+  a hypervisor constraint rather than a choice. **`vm.snapshot` is terminal for
+  any VM with a vhost-user device** — which is every Mjolnir VM, because the
+  rootfs is virtio-fs.
+
+  Measured on the host: after `vm.pause` → `vm.snapshot` → `vm.resume`, CH
+  reports `state: Running` and a second `vm.resume` returns 500 ("already
+  running"), yet the guest executes nothing. A 1/second tick in the guest
+  stopped dead and never advanced; `vcpu0` sat in `kvm_vcpu_block` waiting for
+  an interrupt that never came while the `_fs0` thread idled in `ep_poll`. The
+  guest had blocked on its first post-snapshot filesystem I/O and everything
+  else stalled behind it. A plain `pause` → 15s → `resume` on the same VM is
+  completely fine, so it is the snapshot that does it, not the pause.
+
+  Not caused by `--migration-mode=find-paths`, which was the obvious suspect:
+  the same wedge happens with virtiofsd started without it (CH asks the backend
+  to serialize either way).
+
+  So this function does **not** resume the source, and deliberately does not
+  pretend to. An earlier version called `vm.resume` in an `after` block and
+  logged success — which is worse than useless: it returns 204, leaves CH
+  reporting `Running`, and hands back a VM that health checks will call alive
+  while nothing inside it executes. Callers must treat a frozen VM as finished
+  and tear it down; to get it back, `thaw/3` it into a fresh VMM.
+
+  This suits the DormantRegistry use case exactly — park an idle VM to disk,
+  thaw it mid-thought. It does **not** support "checkpoint a running VM and
+  keep serving from it". For a non-disruptive checkpoint use the
+  filesystem-only `Mjolnir.VM.snapshot/2`, which pauses only briefly and does
+  resume cleanly.
 
   ## Options
 
     - `:owner_id` — recorded on the snapshot metadata
-    - `:pause_fun` / `:resume_fun` — 1-arity overrides taking the API socket
-      path, so a caller holding a hypervisor module can route through it
-      instead of `Mjolnir.CloudHypervisor.Client` directly
+    - `:pause_fun` — 1-arity override taking the API socket path, so a caller
+      holding a hypervisor module can route through it instead of
+      `Mjolnir.CloudHypervisor.Client` directly
 
-  Returns `{:ok, metadata}` where metadata is the BTRFS sidecar plus
-  `:memory_dir` and `:memory_bytes`.
+  Returns `{:ok, metadata}` — the BTRFS sidecar plus `:memory_dir`,
+  `:memory_bytes`, and `:source_terminal` (always `true`, so a caller cannot
+  read the result as "still running" by omission).
   """
   @spec freeze(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def freeze(vm, name, opts \\ []) do
     socket = vm.socket_path
     pause = Keyword.get(opts, :pause_fun, &Client.pause_vm/1)
-    resume = Keyword.get(opts, :resume_fun, &Client.resume_vm/1)
     mem_dir = memory_dir(name)
 
     if File.exists?(mem_dir) do
@@ -130,26 +170,38 @@ defmodule Mjolnir.MemorySnapshot do
     else
       case pause.(socket) do
         :ok ->
-          # Everything between here and the `after` runs with no vCPU
-          # scheduled. That is the entire correctness argument: the guest
-          # cannot write to the filesystem between the BTRFS snapshot and the
-          # RAM capture, so the two describe the same instant.
-          try do
-            capture(vm, name, mem_dir, opts)
-          after
-            case resume.(socket) do
-              :ok ->
-                Logger.debug("VM #{vm.id} resumed after memory snapshot")
+          # Everything from here runs with no vCPU scheduled. That is the whole
+          # correctness argument: the guest cannot write to the filesystem
+          # between the BTRFS snapshot and the RAM capture, so the two describe
+          # the same instant.
+          #
+          # There is no `after resume` because there is no resume — see the
+          # moduledoc above. The pause is not a window we exit; it is the end
+          # of this VM's life in this VMM.
+          case capture(vm, name, mem_dir, opts) do
+            {:ok, metadata} ->
+              Logger.info(
+                "VM #{vm.id} is now PARKED — vm.snapshot is terminal for a virtio-fs VM. " <>
+                  "Tear it down; thaw '#{name}' into a fresh VMM to get it back."
+              )
 
-              {:error, reason} ->
-                Logger.error(
-                  "VM #{vm.id} FAILED TO RESUME after memory snapshot: #{inspect(reason)} — " <>
-                    "the VM is paused and needs manual intervention"
-                )
-            end
+              {:ok, Map.put(metadata, :source_terminal, true)}
+
+            {:error, reason} ->
+              # The VM is left paused and, having been snapshotted or partially
+              # snapshotted, may already be unable to continue. Say so rather
+              # than implying a resume would fix it.
+              Logger.error(
+                "Freeze of VM #{vm.id} failed: #{inspect(reason)}. The VM is paused and may " <>
+                  "not be resumable; treat it as parked and tear it down."
+              )
+
+              {:error, reason}
           end
 
         {:error, reason} ->
+          # Nothing was captured and no snapshot was taken, so the VM is
+          # untouched apart from a failed pause attempt.
           {:error, {:pause_failed, reason}}
       end
     end

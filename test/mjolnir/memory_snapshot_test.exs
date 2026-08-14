@@ -164,6 +164,73 @@ defmodule Mjolnir.MemorySnapshotTest do
     end
   end
 
+  describe "freeze/3 does not pretend the source survives" do
+    setup do
+      tmp = Path.join(System.tmp_dir!(), "memsnap-freeze-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(tmp, "@snapshots"))
+      prev = Application.get_env(:mjolnir, :btrfs_root)
+      Application.put_env(:mjolnir, :btrfs_root, tmp)
+
+      on_exit(fn ->
+        File.rm_rf!(tmp)
+        if prev, do: Application.put_env(:mjolnir, :btrfs_root, prev)
+      end)
+
+      {:ok, root: tmp}
+    end
+
+    test "refuses a name whose memory dir already exists, without pausing", ctx do
+      # Pausing first would stop a live VM for a freeze that was never going to
+      # happen — and since vm.snapshot is terminal, a needless pause on the way
+      # to an error is a needless outage.
+      File.mkdir_p!(Path.join([ctx.root, "@snapshots", "taken.mem"]))
+      test_pid = self()
+
+      assert {:error, {:snapshot_exists, "taken"}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "taken",
+                 pause_fun: fn _ ->
+                   send(test_pid, :paused)
+                   :ok
+                 end
+               )
+
+      refute_receive :paused, 50
+    end
+
+    test "a failed pause reports pause_failed and captures nothing", ctx do
+      assert {:error, {:pause_failed, :boom}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "fresh",
+                 pause_fun: fn _ -> {:error, :boom} end
+               )
+
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "fresh.mem"]))
+    end
+
+    test "freeze/3 takes no :resume_fun — there is no resume to override" do
+      # Guards the correction in this module's docs. vm.snapshot is TERMINAL for
+      # a virtio-fs VM: measured on the host, a 1/sec tick stopped dead after
+      # snapshot+resume while CH still reported Running and a second resume
+      # returned 500. The old code called resume in an `after` block and logged
+      # success, which handed back a VM that health checks would call alive
+      # while nothing inside it executed. If a :resume_fun option ever comes
+      # back, that mistake has come back with it.
+      {:docs_v1, _, _, _, _, _, docs} = Code.fetch_docs(MemorySnapshot)
+
+      freeze_doc =
+        Enum.find_value(docs, fn
+          {{:function, :freeze, 3}, _, _, %{"en" => doc}, _} -> doc
+          _ -> nil
+        end)
+
+      refute freeze_doc =~ ":resume_fun"
+      assert freeze_doc =~ "ONE-WAY PARK"
+    end
+  end
+
   describe "prepare_thaw/2 refusals" do
     setup do
       tmp = Path.join(System.tmp_dir!(), "memsnap-thaw-#{System.unique_integer([:positive])}")
