@@ -722,7 +722,15 @@ defmodule Mjolnir.Gateway.Certs do
   end
 
   defp with_tmp(contents, fun) do
-    path = Path.join(System.tmp_dir!(), "mjolnir-cert-#{System.unique_integer([:positive])}.pem")
+    # ProtectSystem=strict makes the default /tmp unwritable. Prefer TMPDIR,
+    # then the service's /tmp/mjolnir (ReadWritePaths), then System.tmp_dir/0.
+    tmp =
+      System.get_env("TMPDIR") ||
+        (File.dir?("/tmp/mjolnir") && "/tmp/mjolnir") ||
+        System.tmp_dir() ||
+        "/var/lib/mjolnir/tmp"
+
+    path = Path.join(tmp, "mjolnir-cert-#{System.unique_integer([:positive])}.pem")
 
     try do
       case File.write(path, contents) do
