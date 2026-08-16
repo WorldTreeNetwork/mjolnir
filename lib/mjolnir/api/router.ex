@@ -95,6 +95,54 @@ defmodule Mjolnir.API.Router do
     json(conn, 200, %{status: "ok"})
   end
 
+  # IdentiKey Connect login (device-code, same client as `mj login`).
+  get "/auth/login" do
+    next = Mjolnir.Auth.Login.safe_next(conn.query_params["next"])
+
+    case Mjolnir.Auth.Login.begin(next) do
+      {:ok, started} ->
+        conn
+        |> put_resp_content_type("text/html; charset=utf-8")
+        |> send_resp(200, Mjolnir.API.LoginPage.render(started))
+
+      {:error, reason} ->
+        Logger.error("IdentiKey login failed to start: #{inspect(reason)}")
+
+        json(conn, 502, %{
+          error: "identikey_unavailable",
+          message: "IdentiKey Connect did not start a login"
+        })
+    end
+  end
+
+  get "/auth/wait/:id" do
+    case Mjolnir.Auth.Login.poll(id) do
+      {:ok, token, next} ->
+        conn
+        |> put_resp_cookie(Mjolnir.API.Auth.term_cookie(), token,
+          http_only: true,
+          secure: true,
+          same_site: "Lax",
+          path: "/",
+          max_age: 12 * 60 * 60
+        )
+        |> json(200, %{ok: true, next: next})
+
+      :pending ->
+        json(conn, 200, %{ok: false, pending: true})
+
+      {:error, reason} ->
+        json(conn, 200, %{ok: false, error: to_string(reason)})
+    end
+  end
+
+  get "/auth/logout" do
+    conn
+    |> delete_resp_cookie(Mjolnir.API.Auth.term_cookie(), path: "/")
+    |> put_resp_header("location", "/auth/login")
+    |> send_resp(302, "")
+  end
+
   # Hosted browser terminal (mjolnir-wrug). Same origin as the PTY socket
   # so the `mj_term` cookie can authenticate the WebSocket upgrade — a
   # browser cannot set Authorization on `new WebSocket(...)`.

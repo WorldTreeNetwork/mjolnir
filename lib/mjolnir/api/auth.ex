@@ -47,7 +47,7 @@ defmodule Mjolnir.API.Auth do
     conn = conn |> fetch_query_params() |> fetch_cookies()
 
     cond do
-      conn.request_path in @skip_auth_paths ->
+      skip_auth?(conn) ->
         conn
 
       sites_token_presented?(conn) ->
@@ -61,6 +61,11 @@ defmodule Mjolnir.API.Auth do
       true ->
         verify_token(conn)
     end
+  end
+
+  defp skip_auth?(conn) do
+    conn.request_path in @skip_auth_paths or
+      String.starts_with?(conn.request_path, "/auth/")
   end
 
   @doc "Name of the cookie `GET /term/:id` uses to carry a JWT to the PTY socket."
@@ -149,9 +154,28 @@ defmodule Mjolnir.API.Auth do
       |> assign(:claims, claims)
       |> assign(:user_id, Map.get(claims, "sub"))
     else
-      _ -> unauthorized(conn)
+      _ -> unauthenticated(conn)
     end
   end
+
+  # A browser hitting /term without a JWT should bounce through IdentiKey
+  # Connect, not see a JSON 401. API and PTY sockets stay 401.
+  defp unauthenticated(conn) do
+    if String.starts_with?(conn.request_path, "/term/") do
+      next = conn.request_path <> query_suffix(conn)
+      loc = "/auth/login?next=" <> URI.encode_www_form(next)
+
+      conn
+      |> put_resp_header("location", loc)
+      |> send_resp(302, "")
+      |> halt()
+    else
+      unauthorized(conn)
+    end
+  end
+
+  defp query_suffix(%{query_string: q}) when is_binary(q) and q != "", do: "?" <> q
+  defp query_suffix(_), do: ""
 
   # Joken's JWKS hook peeks the header and can raise on a garbage token
   # (Jason.DecodeError). A junk ?token= or mj_term cookie must 401, not 500.

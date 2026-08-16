@@ -9,6 +9,11 @@ defmodule Mjolnir.API.AuthTest do
     Auth.call(conn, Auth.init([]))
   end
 
+  defp put_auth(overrides) do
+    current = Application.get_env(:mjolnir, :auth, [])
+    Application.put_env(:mjolnir, :auth, Keyword.merge(current, overrides))
+  end
+
   describe "health endpoint bypass" do
     test "skips auth for /api/health" do
       conn =
@@ -28,7 +33,7 @@ defmodule Mjolnir.API.AuthTest do
     end
 
     test "grants all scopes when bypass_localhost is true and request is from localhost" do
-      Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+      put_auth(bypass_localhost: true)
 
       conn =
         conn(:get, "/api/vms")
@@ -41,7 +46,7 @@ defmodule Mjolnir.API.AuthTest do
     end
 
     test "grants all scopes for IPv6 localhost" do
-      Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+      put_auth(bypass_localhost: true)
 
       conn =
         conn(:get, "/api/vms")
@@ -53,7 +58,7 @@ defmodule Mjolnir.API.AuthTest do
     end
 
     test "sets user_id to 'localhost' in assigns" do
-      Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+      put_auth(bypass_localhost: true)
 
       conn =
         conn(:get, "/api/vms")
@@ -64,7 +69,7 @@ defmodule Mjolnir.API.AuthTest do
     end
 
     test "returns 401 when bypass_localhost is false and no token provided" do
-      Application.put_env(:mjolnir, :auth, bypass_localhost: false)
+      put_auth(bypass_localhost: false)
 
       conn =
         conn(:get, "/api/vms")
@@ -76,7 +81,7 @@ defmodule Mjolnir.API.AuthTest do
     end
 
     test "returns 401 when bypass_localhost is true but request is not from localhost" do
-      Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+      put_auth(bypass_localhost: true)
 
       conn =
         conn(:get, "/api/vms")
@@ -91,7 +96,7 @@ defmodule Mjolnir.API.AuthTest do
   describe "bearer token" do
     setup do
       original = Application.get_env(:mjolnir, :auth, [])
-      Application.put_env(:mjolnir, :auth, bypass_localhost: false)
+      put_auth(bypass_localhost: false)
       on_exit(fn -> Application.put_env(:mjolnir, :auth, original) end)
       :ok
     end
@@ -106,6 +111,28 @@ defmodule Mjolnir.API.AuthTest do
       assert conn.status == 401
       body = Jason.decode!(conn.resp_body)
       assert body["error"] == "invalid_token"
+    end
+
+    test "redirects an unauthenticated /term request to IdentiKey login" do
+      conn =
+        conn(:get, "/term/01234567-89ab-cdef-0123-456789abcdef?session=main")
+        |> Map.put(:remote_ip, {10, 0, 0, 1})
+        |> call_auth()
+
+      assert conn.halted
+      assert conn.status == 302
+      [loc] = get_resp_header(conn, "location")
+      assert loc =~ "/auth/login?next="
+      assert loc =~ "01234567-89ab-cdef-0123-456789abcdef"
+    end
+
+    test "still 401s API requests — they are not a browser login bounce" do
+      conn =
+        conn(:get, "/api/vms")
+        |> Map.put(:remote_ip, {10, 0, 0, 1})
+        |> call_auth()
+
+      assert conn.status == 401
     end
 
     test "returns 401 with invalid token" do

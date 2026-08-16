@@ -185,6 +185,9 @@ config :mjolnir, :syslog,
 config :mjolnir, :auth,
   bypass_localhost: false,
   issuer: "https://connect.identikey.io/realms/identikey",
-  audience: "mjolnir"
+  audience: "mjolnir",
+  # Public client `mj login` already uses. No new Keycloak client required;
+  # device-code + PKCE is registered, authorization-code redirect_uris are not.
+  client_id: "mjolnir-cli"
 
 import_config "#{config_env()}.exs"

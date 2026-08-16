@@ -97,6 +97,9 @@ defmodule Mjolnir.Application do
         maybe_runner_children() ++
         maybe_jwks_strategy() ++
         [
+          # In-flight browser logins against IdentiKey Connect (mjolnir-wrug.3)
+          Mjolnir.Auth.Login,
+
           # HTTP API
           {Bandit,
            plug: Mjolnir.API.Router,
