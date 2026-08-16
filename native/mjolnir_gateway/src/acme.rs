@@ -583,6 +583,150 @@ pub async fn issue_manual(
     finalize_issued_cert(cfg, chain_pem, key_pem)
 }
 
+/// HTTP-01 issuance for a name that already reaches this gateway (CNAME or A).
+/// Wildcards are rejected — HTTP-01 cannot prove `*.example.com`.
+pub async fn issue_http01(
+    cfg: &AcmeConfig,
+    webroot: &std::path::Path,
+) -> Result<IssuedCert, AcmeError> {
+    use instant_acme::{
+        Account, AccountCredentials, AuthorizationStatus, ChallengeType, Identifier, NewAccount,
+        NewOrder, OrderStatus,
+    };
+
+    if cfg.domains.is_empty() {
+        return Err(AcmeError::NoDomains);
+    }
+    if cfg.domains.iter().any(|d| d.starts_with("*.")) {
+        return Err(AcmeError::Acme(
+            "HTTP-01 cannot issue wildcards; use DNS-01 (mj cert issue --wildcard)".into(),
+        ));
+    }
+
+    fs::create_dir_all(&cfg.state_dir)?;
+    fs::create_dir_all(webroot)?;
+    let account_path = cfg.state_dir.join("account.json");
+
+    let account = if account_path.exists() {
+        let data = fs::read(&account_path)?;
+        let creds: AccountCredentials = serde_json::from_slice(&data)
+            .map_err(|e| AcmeError::Acme(format!("account.json parse: {e}")))?;
+        Account::from_credentials(creds).await?
+    } else {
+        let contact = format!("mailto:{}", cfg.email);
+        let (account, credentials) = Account::create(
+            &NewAccount {
+                contact: &[contact.as_str()],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            &cfg.directory_url,
+            None,
+        )
+        .await?;
+        let creds_json = serde_json::to_vec(&credentials)
+            .map_err(|e| AcmeError::Acme(format!("serialize credentials: {e}")))?;
+        atomic_write(&account_path, &creds_json)?;
+        info!(event = "acme.account_created", email = %cfg.email, "ACME account created");
+        account
+    };
+
+    let identifiers: Vec<Identifier> = cfg
+        .domains
+        .iter()
+        .map(|d| Identifier::Dns(d.clone()))
+        .collect();
+    let mut order = account
+        .new_order(&NewOrder {
+            identifiers: &identifiers,
+        })
+        .await?;
+
+    let authorizations = order.authorizations().await?;
+    let mut planted: Vec<std::path::PathBuf> = Vec::new();
+
+    for authz in &authorizations {
+        if authz.status == AuthorizationStatus::Valid {
+            continue;
+        }
+        let challenge = authz
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01)
+            .ok_or_else(|| AcmeError::Acme("no http-01 challenge found".into()))?;
+        let body = order.key_authorization(challenge).as_str().to_string();
+        let path = webroot.join(&challenge.token);
+        atomic_write(&path, body.as_bytes())?;
+        planted.push(path);
+    }
+
+    for authz in &authorizations {
+        if authz.status == AuthorizationStatus::Valid {
+            continue;
+        }
+        let challenge = authz
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01)
+            .ok_or_else(|| AcmeError::Acme("no http-01 challenge found".into()))?;
+        order.set_challenge_ready(&challenge.url).await?;
+    }
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let ready = loop {
+        if tokio::time::Instant::now() >= deadline {
+            for p in &planted {
+                let _ = fs::remove_file(p);
+            }
+            return Err(AcmeError::Timeout("order did not become ready"));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let state = order.refresh().await?;
+        match state.status {
+            OrderStatus::Ready => break true,
+            OrderStatus::Invalid => {
+                for p in &planted {
+                    let _ = fs::remove_file(p);
+                }
+                let desc = state
+                    .error
+                    .as_ref()
+                    .and_then(|e| e.detail.clone())
+                    .unwrap_or_else(|| "order invalid".into());
+                return Err(AcmeError::Acme(desc));
+            }
+            _ => {}
+        }
+    };
+    let _ = ready;
+
+    let mut params = rcgen::CertificateParams::new(cfg.domains.clone())?;
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    let key_pair = rcgen::KeyPair::generate()?;
+    let csr = params.serialize_request(&key_pair)?;
+    let key_pem = key_pair.serialize_pem();
+    order.finalize(csr.der()).await?;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let chain_pem = loop {
+        if tokio::time::Instant::now() >= deadline {
+            for p in &planted {
+                let _ = fs::remove_file(p);
+            }
+            return Err(AcmeError::Timeout("certificate not available"));
+        }
+        match order.certificate().await? {
+            Some(chain) => break chain,
+            None => tokio::time::sleep(Duration::from_secs(2)).await,
+        }
+    };
+
+    for p in &planted {
+        let _ = fs::remove_file(p);
+    }
+    finalize_issued_cert(cfg, chain_pem, key_pem)
+}
+
 /// Fire-and-forget cleanup of DNS TXT records; logs on failure.
 async fn cleanup_records(cf: &CloudflareClient, records: &[(ZoneId, crate::cloudflare::RecordId)]) {
     for (zone_id, record_id) in records {
@@ -893,6 +1037,21 @@ mod tests {
         assert!(out.contains("_acme-challenge.identikey.io  TXT  \"def456value\""));
         // Each record on its own line.
         assert_eq!(out.lines().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn issue_http01_rejects_wildcard() {
+        let dir = TempDir::new().unwrap();
+        let mut cfg = make_config(dir.path());
+        cfg.domains = vec!["*.example.com".into()];
+        let err = match issue_http01(&cfg, dir.path()).await {
+            Err(e) => e,
+            Ok(_) => panic!("wildcard must be rejected"),
+        };
+        assert!(
+            err.to_string().contains("wildcard"),
+            "got {err}"
+        );
     }
 
     // 6. challenge_fqdn_is_prefixed_with_underscore_acme_challenge

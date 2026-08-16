@@ -592,6 +592,67 @@ fn host_without_port(host: &str) -> &str {
     host.split(':').next().unwrap_or(host)
 }
 
+const HTTP01_PATH: &str = "/.well-known/acme-challenge/";
+
+/// Token from `GET|HEAD /.well-known/acme-challenge/<token>`. `None` if this
+/// request is not an HTTP-01 challenge (proxy as usual).
+fn extract_acme_http01_token(header_bytes: &[u8]) -> Option<String> {
+    let end = header_bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(header_bytes.len());
+    let headers = String::from_utf8_lossy(&header_bytes[..end]);
+    let first = headers.split("\r\n").next()?;
+    let mut parts = first.split_whitespace();
+    let method = parts.next()?;
+    if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
+        return None;
+    }
+    let path = parts.next()?;
+    let rest = path.strip_prefix(HTTP01_PATH)?;
+    let token = rest.split('?').next().unwrap_or(rest);
+    if token.is_empty() || token.len() > 128 {
+        return None;
+    }
+    if !token
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+fn http01_dir() -> std::path::PathBuf {
+    std::env::var("MJOLNIR_HTTP01_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/mjolnir-gateway/http-01"))
+}
+
+/// If this is an HTTP-01 GET/HEAD, answer from `MJOLNIR_HTTP01_DIR` and do
+/// not proxy. Missing token → 404 (do not leak to the guest).
+fn try_serve_http01(header_bytes: &[u8]) -> Option<Vec<u8>> {
+    let token = extract_acme_http01_token(header_bytes)?;
+    let path = http01_dir().join(&token);
+    let (status, body) = match std::fs::read(&path) {
+        Ok(b) => ("200 OK", b),
+        Err(_) => ("404 Not Found", Vec::new()),
+    };
+    let first = String::from_utf8_lossy(header_bytes);
+    let method = first.split_whitespace().next().unwrap_or("GET");
+    let omit_body = method.eq_ignore_ascii_case("HEAD");
+    let mut out = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    if !omit_body {
+        out.extend_from_slice(&body);
+    }
+    Some(out)
+}
+
 // ── Routing disposition ──────────────────────────────────────────────────────
 
 /// Outcome of Host → route resolution *before* any network work.
@@ -897,6 +958,14 @@ async fn handle_connection<S>(
             return;
         }
     };
+
+    // HTTP-01 must win before classify/proxy. LE follows a customer CNAME
+    // to this :80 with Host=<their apex>; vite must never see the challenge.
+    if let Some(resp) = try_serve_http01(&header_buf) {
+        let _ = stream.write_all(&resp).await;
+        let _ = stream.shutdown().await;
+        return;
+    }
 
     let host = match extract_host(&header_buf) {
         Some(h) => h,
@@ -1753,6 +1822,27 @@ mod tests {
     fn extract_host_returns_none_when_genuinely_absent() {
         let req = b"GET / HTTP/1.1\r\nUser-Agent: x\r\n\r\n";
         assert_eq!(extract_host(req), None);
+    }
+
+    #[test]
+    fn extract_acme_http01_token_from_get() {
+        let req = b"GET /.well-known/acme-challenge/Ab_12-x HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
+        assert_eq!(
+            extract_acme_http01_token(req).as_deref(),
+            Some("Ab_12-x")
+        );
+    }
+
+    #[test]
+    fn extract_acme_http01_token_rejects_path_escape() {
+        let req = b"GET /.well-known/acme-challenge/../etc/passwd HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert_eq!(extract_acme_http01_token(req), None);
+    }
+
+    #[test]
+    fn extract_acme_http01_token_ignores_normal_gets() {
+        let req = b"GET / HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
+        assert_eq!(extract_acme_http01_token(req), None);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
