@@ -248,6 +248,34 @@ defmodule Mjolnir.Vsock.Protocol do
     |> maybe_put("entries", opts[:entries])
   end
 
+  @doc """
+  Wipe the guest's LUKS volume key from kernel RAM before a memory snapshot.
+
+  The guest no-ops (`ok: true, suspended: false`) when no mapper is open, so
+  this is safe to send to a VM that never unlocked secrets.
+  """
+  def suspend_secrets_request(opts \\ []) do
+    %{
+      "type" => "suspend_secrets",
+      "id" => opts[:request_id] || UUID.uuid4()
+    }
+  end
+
+  @doc """
+  Re-install the LUKS volume key after thaw.
+
+  The guest's `inject_secrets` path also resumes a suspended mapper, so this
+  is the explicit form. Use it when the caller already knows the volume is
+  open-but-suspended and does not want create-or-open semantics.
+  """
+  def resume_secrets_request(passphrase, opts \\ []) when is_binary(passphrase) do
+    %{
+      "type" => "resume_secrets",
+      "id" => opts[:request_id] || UUID.uuid4(),
+      "passphrase" => passphrase
+    }
+  end
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 

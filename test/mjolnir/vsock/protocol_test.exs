@@ -461,4 +461,36 @@ defmodule Mjolnir.Vsock.ProtocolTest do
       assert Jason.decode!(payload) == msg
     end
   end
+
+  describe "suspend_secrets_request/1 (mjolnir-k8y.3)" do
+    test "builds a request with a generated id" do
+      msg = Protocol.suspend_secrets_request()
+      assert msg["type"] == "suspend_secrets"
+      assert is_binary(msg["id"])
+      refute Map.has_key?(msg, "passphrase")
+    end
+
+    test "accepts an explicit request_id" do
+      msg = Protocol.suspend_secrets_request(request_id: "req-s")
+      assert msg["id"] == "req-s"
+    end
+  end
+
+  describe "resume_secrets_request/2 (mjolnir-k8y.3)" do
+    test "carries the passphrase" do
+      msg = Protocol.resume_secrets_request("s3cret")
+      assert msg["type"] == "resume_secrets"
+      assert msg["passphrase"] == "s3cret"
+      assert is_binary(msg["id"])
+    end
+
+    test "round-trips through encode on channel 0" do
+      msg = Protocol.resume_secrets_request("pw", request_id: "req-r")
+      encoded = Protocol.encode(msg, 0)
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 0
+      assert byte_size(payload) == length
+      assert Jason.decode!(payload) == msg
+    end
+  end
 end

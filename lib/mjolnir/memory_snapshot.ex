@@ -60,7 +60,10 @@ defmodule Mjolnir.MemorySnapshot do
   3. Start a fresh `cloud-hypervisor` with `--api-socket` and *no* `--vm-config`
   4. `vm.restore` — the VM comes back **paused**
   5. `vm.resume`
-  6. Reseed guest entropy (`Mjolnir.Entropy`), then publish reachability
+  6. Reseed guest entropy (`Mjolnir.Entropy`), reopen secrets if they were
+     suspended (`Mjolnir.Secrets.Quiesce.resume/3` or the existing
+     `inject_secrets` path — it resumes a suspended mapper), then publish
+     reachability
 
   Note the ordering of 5 and 6. The reseed cannot precede the resume: it is
   serviced by the guest agent, which is a userspace process that cannot run
@@ -154,57 +157,102 @@ defmodule Mjolnir.MemorySnapshot do
     - `:pause_fun` — 1-arity override taking the API socket path, so a caller
       holding a hypervisor module can route through it instead of
       `Mjolnir.CloudHypervisor.Client` directly
+    - `:quiesce_fun` — 2-arity override `(vm, secrets_mode -> {:ok, map} |
+      {:error, term})` run **before** pause. Default talks to the guest
+      over vsock when `secrets_mode` is `:managed` or `:persistent`. A
+      secrets VM cannot take a naive memory snapshot: freeze refuses if
+      the key cannot be wiped.
+    - `:secrets_mode` — override; otherwise read from `vm.secrets_mode`
 
   Returns `{:ok, metadata}` — the BTRFS sidecar plus `:memory_dir`,
-  `:memory_bytes`, and `:source_terminal` (always `true`, so a caller cannot
-  read the result as "still running" by omission).
+  `:memory_bytes`, `:secrets_suspended`, and `:source_terminal` (always
+  `true`, so a caller cannot read the result as "still running" by omission).
   """
   @spec freeze(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def freeze(vm, name, opts \\ []) do
     socket = vm.socket_path
     pause = Keyword.get(opts, :pause_fun, &Client.pause_vm/1)
+    quiesce = Keyword.get(opts, :quiesce_fun, &default_quiesce/2)
     mem_dir = memory_dir(name)
+    secrets_mode = secrets_mode(vm, opts)
 
     if File.exists?(mem_dir) do
       {:error, {:snapshot_exists, name}}
     else
-      case pause.(socket) do
-        :ok ->
-          # Everything from here runs with no vCPU scheduled. That is the whole
-          # correctness argument: the guest cannot write to the filesystem
-          # between the BTRFS snapshot and the RAM capture, so the two describe
-          # the same instant.
-          #
-          # There is no `after resume` because there is no resume — see the
-          # moduledoc above. The pause is not a window we exit; it is the end
-          # of this VM's life in this VMM.
-          case capture(vm, name, mem_dir, opts) do
-            {:ok, metadata} ->
-              Logger.info(
-                "VM #{vm.id} is now PARKED — vm.snapshot is terminal for a virtio-fs VM. " <>
-                  "Tear it down; thaw '#{name}' into a fresh VMM to get it back."
-              )
+      # Quiesce BEFORE pause. luksSuspend is a guest-userspace call; once
+      # vCPUs stop, the agent cannot wipe the key, and the snapshot would
+      # capture it. A failed wipe leaves the VM running.
+      case quiesce.(vm, secrets_mode) do
+        {:ok, quiesce_info} ->
+          case pause.(socket) do
+            :ok ->
+              # Everything from here runs with no vCPU scheduled. That is the
+              # whole correctness argument: the guest cannot write to the
+              # filesystem between the BTRFS snapshot and the RAM capture, so
+              # the two describe the same instant.
+              #
+              # There is no `after resume` because there is no resume — see
+              # the moduledoc above. The pause is not a window we exit; it
+              # is the end of this VM's life in this VMM.
+              case capture(vm, name, mem_dir, opts) do
+                {:ok, metadata} ->
+                  _ = write_secrets_sidecar(mem_dir, quiesce_info)
 
-              {:ok, Map.put(metadata, :source_terminal, true)}
+                  Logger.info(
+                    "VM #{vm.id} is now PARKED — vm.snapshot is terminal for a virtio-fs VM. " <>
+                      "Tear it down; thaw '#{name}' into a fresh VMM to get it back."
+                  )
+
+                  {:ok,
+                   metadata
+                   |> Map.put(:source_terminal, true)
+                   |> Map.put(:secrets_suspended, Map.get(quiesce_info, :suspended, false))}
+
+                {:error, reason} ->
+                  # The VM is left paused and, having been snapshotted or
+                  # partially snapshotted, may already be unable to continue.
+                  # Say so rather than implying a resume would fix it.
+                  Logger.error(
+                    "Freeze of VM #{vm.id} failed: #{inspect(reason)}. The VM is paused and may " <>
+                      "not be resumable; treat it as parked and tear it down."
+                  )
+
+                  {:error, reason}
+              end
 
             {:error, reason} ->
-              # The VM is left paused and, having been snapshotted or partially
-              # snapshotted, may already be unable to continue. Say so rather
-              # than implying a resume would fix it.
-              Logger.error(
-                "Freeze of VM #{vm.id} failed: #{inspect(reason)}. The VM is paused and may " <>
-                  "not be resumable; treat it as parked and tear it down."
-              )
-
-              {:error, reason}
+              # Nothing was captured and no snapshot was taken, so the VM is
+              # untouched apart from a failed pause attempt.
+              {:error, {:pause_failed, reason}}
           end
 
+        {:error, {:secrets_quiesce_required, _} = reason} ->
+          {:error, reason}
+
         {:error, reason} ->
-          # Nothing was captured and no snapshot was taken, so the VM is
-          # untouched apart from a failed pause attempt.
-          {:error, {:pause_failed, reason}}
+          {:error, {:secrets_quiesce_failed, reason}}
       end
     end
+  end
+
+  # A :managed/:persistent VM must not be snapshotted with the DEK still in
+  # RAM. No vsock and no override is a refusal, not a skip. Other modes have
+  # nothing to wipe.
+  defp default_quiesce(vm, mode) when mode in [:managed, :persistent] do
+    case vsock_path(vm) do
+      path when is_binary(path) -> Mjolnir.Secrets.Quiesce.suspend(path)
+      _ -> {:error, {:secrets_quiesce_required, mode}}
+    end
+  end
+
+  defp default_quiesce(_vm, _mode), do: {:ok, %{suspended: false}}
+
+  defp secrets_mode(vm, opts) do
+    Keyword.get(opts, :secrets_mode) || Map.get(vm, :secrets_mode) || :none
+  end
+
+  defp vsock_path(vm) when is_map(vm) do
+    Map.get(vm, :vsock_path)
   end
 
   defp capture(vm, name, mem_dir, opts) do
@@ -679,6 +727,37 @@ defmodule Mjolnir.MemorySnapshot do
         Process.sleep(100)
         await_socket(path, deadline, timeout)
     end
+  end
+
+  @doc """
+  Whether this memory snapshot captured a suspended secrets volume.
+
+  Reads `secrets.json` next to the CH artifacts. Missing file means the
+  snapshot predates this record — treat as "unknown", not "not suspended".
+  """
+  @spec secrets_suspended?(String.t()) :: true | false | :unknown
+  def secrets_suspended?(name) do
+    path = Path.join(memory_dir(name), "secrets.json")
+
+    case File.read(path) do
+      {:ok, body} ->
+        case Jason.decode(body) do
+          {:ok, %{"suspended" => true}} -> true
+          {:ok, %{"suspended" => false}} -> false
+          _ -> :unknown
+        end
+
+      {:error, :enoent} ->
+        :unknown
+
+      {:error, _} ->
+        :unknown
+    end
+  end
+
+  defp write_secrets_sidecar(mem_dir, info) do
+    payload = Jason.encode!(%{"suspended" => Map.get(info, :suspended, false)})
+    File.write(Path.join(mem_dir, "secrets.json"), payload)
   end
 
   defp dir_bytes(dir) do

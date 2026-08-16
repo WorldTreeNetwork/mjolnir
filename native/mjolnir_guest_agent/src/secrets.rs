@@ -65,6 +65,15 @@ pub fn release_injection_claim() {
 /// `inject_secrets` action (host-escrowed `:managed`) so the two delivery
 /// channels can never diverge in LUKS handling.
 pub fn inject(passphrase: &str, init_size_mb: Option<u32>) -> Result<(bool, bool), String> {
+    // A thawed VM still has SECRETS_INJECTED set (it was true at freeze) and
+    // a suspended mapper. Re-using inject — the existing vsock and Iroh
+    // delivery path — is the thaw, so a suspended volume is a resume, not a
+    // "already injected" rejection.
+    if is_suspended() {
+        resume(passphrase)?;
+        return Ok((false, is_mounted()));
+    }
+
     if !try_claim_injection() {
         return Err("secrets already injected".to_string());
     }
@@ -370,6 +379,123 @@ pub fn open_secrets_volume(passphrase: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Parsed `cryptsetup status` for the secrets mapper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LuksStatus {
+    Inactive,
+    Active,
+    Suspended,
+}
+
+/// Classify `cryptsetup status` output. Pure so it is unit-testable without
+/// a mapper node — the freeze path's load-bearing question is "is the key
+/// still in RAM?", which this is how we ask.
+pub fn parse_cryptsetup_status(output: &str) -> LuksStatus {
+    if output.contains("(suspended)") {
+        LuksStatus::Suspended
+    } else if output.contains(" is active") {
+        LuksStatus::Active
+    } else {
+        LuksStatus::Inactive
+    }
+}
+
+/// Whether the secrets mapper currently exists (open or suspended).
+pub fn mapper_present() -> bool {
+    Path::new("/dev/mapper").join(SECRETS_MAPPER_NAME).exists()
+}
+
+/// Live mapper status. Fail-closed: if we cannot ask cryptsetup, treat the
+/// device as inactive rather than guessing it is safe to snapshot.
+pub fn luks_status() -> LuksStatus {
+    if !mapper_present() {
+        return LuksStatus::Inactive;
+    }
+    match run_cmd("cryptsetup", &["status", SECRETS_MAPPER_NAME]) {
+        Ok(out) => parse_cryptsetup_status(&out),
+        Err(e) => parse_cryptsetup_status(&e),
+    }
+}
+
+pub fn is_suspended() -> bool {
+    luks_status() == LuksStatus::Suspended
+}
+
+/// Suspend the secrets mapper and wipe the volume key from kernel RAM.
+///
+/// This is the freeze-path primitive: a memory snapshot captures the guest
+/// address space, so the only way the dm-crypt DEK stays out of `@snapshots/`
+/// is for it not to exist at capture time. `cryptsetup luksSuspend` does
+/// exactly that.
+///
+/// Safe no-op when no mapper is open (`Ok(false)`). Idempotent if already
+/// suspended (`Ok(true)`). The LUKS container is a loopback file, not root,
+/// so suspending it cannot deadlock the guest.
+///
+/// `fsfreeze` + `drop_caches` run first to narrow residual plaintext in the
+/// page cache. They are best-effort; the DEK wipe is the load-bearing step.
+pub fn suspend() -> Result<bool, String> {
+    match luks_status() {
+        LuksStatus::Inactive => {
+            info!("suspend: no secrets mapper; nothing to wipe");
+            Ok(false)
+        }
+        LuksStatus::Suspended => {
+            info!("suspend: mapper already suspended");
+            Ok(true)
+        }
+        LuksStatus::Active => {
+            check_cryptsetup()?;
+            if let Err(e) = fsfreeze_freeze() {
+                warn!(
+                    "fsfreeze -f {} failed ({}); continuing to luksSuspend",
+                    SECRETS_MOUNT, e
+                );
+            }
+            drop_page_cache();
+            run_cmd("cryptsetup", &["luksSuspend", SECRETS_MAPPER_NAME])?;
+            info!(
+                "luksSuspend {} — volume key wiped from kernel RAM",
+                SECRETS_MAPPER_NAME
+            );
+            Ok(true)
+        }
+    }
+}
+
+/// Resume a suspended secrets mapper with `passphrase` and unfreeze the FS.
+///
+/// Idempotent if the mapper is already active. Refuses if nothing is open —
+/// that is a create/open job for [`inject`], not a resume.
+pub fn resume(passphrase: &str) -> Result<(), String> {
+    if passphrase.is_empty() {
+        return Err("passphrase is required".to_string());
+    }
+
+    match luks_status() {
+        LuksStatus::Inactive => {
+            Err("secrets mapper is not open — use inject/open, not resume".to_string())
+        }
+        LuksStatus::Active => {
+            info!("resume: mapper already active");
+            let _ = fsfreeze_unfreeze();
+            Ok(())
+        }
+        LuksStatus::Suspended => {
+            check_cryptsetup()?;
+            luks_resume(passphrase)?;
+            if let Err(e) = fsfreeze_unfreeze() {
+                warn!(
+                    "fsfreeze -u {} failed after luksResume: {}",
+                    SECRETS_MOUNT, e
+                );
+            }
+            info!("luksResume {} — volume key restored", SECRETS_MAPPER_NAME);
+            Ok(())
+        }
+    }
+}
+
 /// Close the LUKS secrets volume: unmount, close LUKS, detach loop.
 pub fn close_secrets_volume() -> Result<(), String> {
     // Not `!is_mounted()`: now that is_mounted() means "mounted at SECRETS_MOUNT"
@@ -636,6 +762,61 @@ fn luks_open(loop_dev: &str, passphrase: &str) -> Result<(), String> {
     result.map(|_| ())
 }
 
+fn luks_resume(passphrase: &str) -> Result<(), String> {
+    let mut passphrase_copy = passphrase.to_string();
+    write_keyfile(&passphrase_copy)?;
+    passphrase_copy.zeroize();
+
+    let result = run_cmd(
+        "cryptsetup",
+        &[
+            "luksResume",
+            "--key-file",
+            "/tmp/.mjolnir-keyfile",
+            SECRETS_MAPPER_NAME,
+        ],
+    );
+
+    secure_delete_keyfile();
+    result.map(|_| ())
+}
+
+fn fsfreeze_freeze() -> Result<(), String> {
+    if !is_mounted() {
+        return Ok(());
+    }
+    // Flush dirty pages first; fsfreeze then holds the FS still while we
+    // wipe the key so a thaw does not replay a half-written journal.
+    let _ = run_cmd("sync", &[]);
+    match run_cmd("fsfreeze", &["-f", SECRETS_MOUNT]) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_lowercase().contains("already frozen") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn fsfreeze_unfreeze() -> Result<(), String> {
+    if !Path::new(SECRETS_MOUNT).exists() {
+        return Ok(());
+    }
+    match run_cmd("fsfreeze", &["-u", SECRETS_MOUNT]) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_lowercase().contains("not frozen") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn drop_page_cache() {
+    // Narrow residual plaintext from the secrets volume that was already
+    // faulted in. Does not eliminate it (mmap'd / in-use pages stay).
+    if let Err(e) = std::fs::write("/proc/sys/vm/drop_caches", b"3") {
+        warn!(
+            "drop_caches failed ({}); page-cache residue may remain in the snapshot",
+            e
+        );
+    }
+}
+
 fn cleanup_luks(loop_dev: &str) -> Result<(), String> {
     let _ = run_cmd("umount", &[SECRETS_MOUNT]);
     let _ = run_cmd("cryptsetup", &["luksClose", SECRETS_MAPPER_NAME]);
@@ -864,6 +1045,38 @@ mod tests {
 
         // Device is the final argument.
         assert_eq!(args.last(), Some(&"/dev/loop0"));
+    }
+
+    #[test]
+    fn test_parse_cryptsetup_status_active_suspended_inactive() {
+        assert_eq!(
+            parse_cryptsetup_status("/dev/mapper/mjolnir-secrets is active.\n  type: LUKS2\n"),
+            LuksStatus::Active
+        );
+        assert_eq!(
+            parse_cryptsetup_status(
+                "/dev/mapper/mjolnir-secrets is active (suspended).\n  type: LUKS2\n"
+            ),
+            LuksStatus::Suspended
+        );
+        assert_eq!(
+            parse_cryptsetup_status("/dev/mapper/mjolnir-secrets is inactive.\n"),
+            LuksStatus::Inactive
+        );
+        assert_eq!(
+            parse_cryptsetup_status("Device mjolnir-secrets doesn't exist or access denied.\n"),
+            LuksStatus::Inactive
+        );
+    }
+
+    #[test]
+    fn test_parse_cryptsetup_status_suspended_beats_active() {
+        // The live line is "is active (suspended)" — a naive "is active"
+        // check would mis-report a wiped key as still present and let freeze
+        // skip the wipe.
+        let out = "/dev/mapper/mjolnir-secrets is active (suspended).";
+        assert_eq!(parse_cryptsetup_status(out), LuksStatus::Suspended);
+        assert_ne!(parse_cryptsetup_status(out), LuksStatus::Active);
     }
 
     #[test]

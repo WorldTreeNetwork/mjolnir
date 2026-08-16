@@ -1259,6 +1259,46 @@ async fn handle_request(
                 }
             }
         }
+        #[cfg(feature = "full")]
+        VsockRequest::SuspendSecrets { id } => {
+            info!("SuspendSecrets");
+            match crate::secrets::suspend() {
+                Ok(suspended) => VsockResponse::SuspendSecretsResponse {
+                    id,
+                    ok: true,
+                    suspended,
+                    error: None,
+                },
+                Err(e) => {
+                    warn!("SuspendSecrets failed: {}", e);
+                    VsockResponse::SuspendSecretsResponse {
+                        id,
+                        ok: false,
+                        suspended: false,
+                        error: Some(e),
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "full")]
+        VsockRequest::ResumeSecrets { id, passphrase } => {
+            info!("ResumeSecrets");
+            match crate::secrets::resume(&passphrase) {
+                Ok(()) => VsockResponse::ResumeSecretsResponse {
+                    id,
+                    ok: true,
+                    error: None,
+                },
+                Err(e) => {
+                    warn!("ResumeSecrets failed: {}", e);
+                    VsockResponse::ResumeSecretsResponse {
+                        id,
+                        ok: false,
+                        error: Some(e),
+                    }
+                }
+            }
+        }
         VsockRequest::SpawnSubAgent { id, .. }
         | VsockRequest::SnapshotSelf { id, .. }
         | VsockRequest::EmitEvent { id, .. }

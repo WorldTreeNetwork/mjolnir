@@ -228,13 +228,13 @@ key exists at the moment of capture.**
 (it exists for exactly this reason: suspend-to-disk). So:
 
 ```
-freeze:  fsfreeze -f /mnt/secrets
-         cryptsetup luksSuspend secrets     # volume key wiped from kernel RAM
-         CH vm.pause + capture RAM          # captured RAM holds no usable key
+freeze:  fsfreeze -f /secrets
+         cryptsetup luksSuspend mjolnir-secrets   # volume key wiped from kernel RAM
+         CH vm.pause + capture RAM                # captured RAM holds no usable key
 thaw:    CH vm.resume
-         inject_secrets over vsock          # EXISTING path — vm.ex:2422
-         cryptsetup luksResume secrets
-         fsfreeze -u /mnt/secrets
+         inject_secrets over vsock                # EXISTING path — vm.ex:2422
+         cryptsetup luksResume mjolnir-secrets    # inject() resumes a suspended mapper
+         fsfreeze -u /secrets
 ```
 
 Three properties make this fit Mjolnir specifically:

@@ -143,6 +143,23 @@ defmodule Mjolnir.MemorySnapshotTest do
       {:ok, root: tmp}
     end
 
+    test "secrets_suspended?/1 is unknown when the sidecar is missing", ctx do
+      File.mkdir_p!(Path.join([ctx.root, "@snapshots", "legacy.mem"]))
+      File.write!(Path.join([ctx.root, "@snapshots", "legacy.mem", "state.json"]), "{}")
+      assert MemorySnapshot.secrets_suspended?("legacy") == :unknown
+    end
+
+    test "secrets_suspended?/1 reads the sidecar", ctx do
+      dir = Path.join([ctx.root, "@snapshots", "frozen.mem"])
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "state.json"), "{}")
+      File.write!(Path.join(dir, "secrets.json"), ~s({"suspended":true}))
+      assert MemorySnapshot.secrets_suspended?("frozen") == true
+
+      File.write!(Path.join(dir, "secrets.json"), ~s({"suspended":false}))
+      assert MemorySnapshot.secrets_suspended?("frozen") == false
+    end
+
     test "false when only a filesystem snapshot exists", ctx do
       File.mkdir_p!(Path.join([ctx.root, "@snapshots", "fs-only"]))
       refute MemorySnapshot.memory_snapshot?("fs-only")
@@ -208,6 +225,94 @@ defmodule Mjolnir.MemorySnapshotTest do
                )
 
       refute File.exists?(Path.join([ctx.root, "@snapshots", "fresh.mem"]))
+    end
+
+    test "a managed VM without vsock and without quiesce_fun is refused, without pausing",
+         ctx do
+      # The structural guarantee: a secrets VM cannot take a naive memory
+      # snapshot. Missing the wipe is a refusal, not a skip.
+      _ = ctx
+      test_pid = self()
+
+      assert {:error, {:secrets_quiesce_required, :managed}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock", secrets_mode: :managed},
+                 "fresh",
+                 pause_fun: fn _ ->
+                   send(test_pid, :paused)
+                   :ok
+                 end
+               )
+
+      refute_receive :paused, 50
+    end
+
+    test "the same refusal holds for :persistent" do
+      assert {:error, {:secrets_quiesce_required, :persistent}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock", secrets_mode: :persistent},
+                 "fresh",
+                 pause_fun: fn _ -> :ok end
+               )
+    end
+
+    test "failed quiesce never pauses" do
+      test_pid = self()
+
+      assert {:error, {:secrets_quiesce_failed, :nope}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock", secrets_mode: :managed},
+                 "fresh",
+                 quiesce_fun: fn _vm, :managed -> {:error, :nope} end,
+                 pause_fun: fn _ ->
+                   send(test_pid, :paused)
+                   :ok
+                 end
+               )
+
+      refute_receive :paused, 50
+    end
+
+    test "quiesce runs before pause for a managed VM" do
+      test_pid = self()
+
+      # Capture will fail (no BTRFS); we only care about the order.
+      _ =
+        MemorySnapshot.freeze(
+          %{id: "vm-1", socket_path: "/nope.sock", secrets_mode: :managed},
+          "fresh",
+          quiesce_fun: fn vm, :managed ->
+            send(test_pid, {:quiesced, vm.id})
+            {:ok, %{suspended: true}}
+          end,
+          pause_fun: fn _ ->
+            send(test_pid, :paused)
+            {:error, :stop_here}
+          end
+        )
+
+      assert_received {:quiesced, "vm-1"}
+      assert_received :paused
+    end
+
+    test "secrets_mode can be passed as an option rather than on the vm map" do
+      assert {:error, {:secrets_quiesce_required, :managed}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "fresh",
+                 secrets_mode: :managed,
+                 pause_fun: fn _ -> :ok end
+               )
+    end
+
+    test "a :none VM still skips quiesce (unit tests, no guest)" do
+      # Existing callers pass no secrets_mode. They must keep working.
+      assert {:error, {:pause_failed, :boom}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "fresh",
+                 pause_fun: fn _ -> {:error, :boom} end
+               )
     end
 
     test "freeze/3 takes no :resume_fun — there is no resume to override" do

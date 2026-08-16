@@ -383,6 +383,8 @@ async fn handle_secret_inject(
 
     let response = match action {
         "inject" => handle_inject_action(&request),
+        "suspend" => handle_suspend_action(),
+        "resume" => handle_resume_action(&request),
         "status" => handle_status_action(),
         "close" | "set_env" | "push_env" => {
             if !crate::secrets::is_injected() {
@@ -429,12 +431,31 @@ fn handle_inject_action(request: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+fn handle_suspend_action() -> serde_json::Value {
+    match crate::secrets::suspend() {
+        Ok(suspended) => serde_json::json!({ "ok": true, "suspended": suspended }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
+fn handle_resume_action(request: &serde_json::Value) -> serde_json::Value {
+    let passphrase = request
+        .get("passphrase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match crate::secrets::resume(passphrase) {
+        Ok(()) => serde_json::json!({ "ok": true, "mounted": crate::secrets::is_mounted() }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    }
+}
+
 fn handle_status_action() -> serde_json::Value {
     use crate::secrets;
     serde_json::json!({
         "ok": true,
         "mounted": secrets::is_mounted(),
         "injected": secrets::is_injected(),
+        "suspended": secrets::is_suspended(),
         "luks_exists": std::path::Path::new(secrets::SECRETS_LUKS_PATH).exists()
     })
 }

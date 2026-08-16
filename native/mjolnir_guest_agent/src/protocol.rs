@@ -150,6 +150,17 @@ pub enum VsockRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entries: Option<std::collections::HashMap<String, String>>,
     },
+    /// Wipe the LUKS volume key from kernel RAM before a memory snapshot.
+    /// No-op (ok, suspended=false) when no mapper is open.
+    #[cfg(feature = "full")]
+    #[serde(rename = "suspend_secrets")]
+    SuspendSecrets { id: String },
+    /// Re-install the volume key after thaw. Prefer this over a second
+    /// `inject_secrets` when the caller already knows the volume is open
+    /// but suspended; `inject` itself also resumes a suspended mapper.
+    #[cfg(feature = "full")]
+    #[serde(rename = "resume_secrets")]
+    ResumeSecrets { id: String, passphrase: String },
 }
 
 /// Messages from guest to host (vsock)
@@ -215,6 +226,23 @@ pub enum VsockResponse {
         id: String,
         ok: bool,
         created: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[cfg(feature = "full")]
+    #[serde(rename = "suspend_secrets_response")]
+    SuspendSecretsResponse {
+        id: String,
+        ok: bool,
+        suspended: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[cfg(feature = "full")]
+    #[serde(rename = "resume_secrets_response")]
+    ResumeSecretsResponse {
+        id: String,
+        ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
