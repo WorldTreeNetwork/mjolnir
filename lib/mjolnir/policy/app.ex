@@ -26,7 +26,8 @@ defmodule Mjolnir.Policy.App do
   policy, or every legacy app stays permanently world-writable.
   """
 
-  @type action :: :deploy_new | :list | :read | :deploy | :set_domain | :remove_domain
+  @type action ::
+          :deploy_new | :list | :read | :deploy | :set_domain | :remove_domain | :issue_cert
   @type user :: %{user_id: String.t()} | nil
   @type resource :: %{owner_id: String.t() | nil} | nil
 
@@ -51,7 +52,7 @@ defmodule Mjolnir.Policy.App do
 
   # Resource actions: owner only
   def authorize(action, %{user_id: uid}, %{owner_id: oid})
-      when action in [:read, :deploy, :set_domain, :remove_domain] do
+      when action in [:read, :deploy, :set_domain, :remove_domain, :issue_cert] do
     if uid == oid, do: :ok, else: :error
   end
 

@@ -385,6 +385,42 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  describe "POST /api/certs/issue" do
+    test "400 when fqdn is missing" do
+      conn = request(:post, "/api/certs/issue", %{})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "fqdn is required"
+    end
+
+    test "400 refuses wildcards and never issues" do
+      conn = request(:post, "/api/certs/issue", %{fqdn: "*.taskmaster.dev"})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "wildcard_not_supported"
+    end
+
+    test "404 when no app owns the domain" do
+      conn = request(:post, "/api/certs/issue", %{fqdn: "no-such-#{System.unique_integer()}.dev"})
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
+    end
+  end
+
+  describe "GET /api/certs" do
+    test "returns 200 with a certs list (no PEMs)" do
+      conn = request(:get, "/api/certs")
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert is_list(body["certs"])
+
+      for c <- body["certs"] do
+        refute Map.has_key?(c, "cert")
+        refute Map.has_key?(c, "key")
+        refute Map.has_key?(c, "fullchain")
+        refute Map.has_key?(c, "privkey")
+      end
+    end
+  end
+
   describe "POST /api/deploy" do
     test "400 for a body that is not a gzipped tar" do
       conn =

@@ -1265,7 +1265,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Certificate management (manual ACME issuance).
+    /// Certificate management (HTTP-01 issuance; `--manual` for DNS-01 TXT).
     Cert {
         #[command(subcommand)]
         command: CertCommands,
@@ -1274,9 +1274,9 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum CertCommands {
-    /// Issue a certificate. With `--manual`, runs ACME DNS-01 but prints the
-    /// required TXT records and waits for the operator to add them (no
-    /// Cloudflare token needed).
+    /// Issue a certificate. Default is HTTP-01 (name must already reach this
+    /// gateway). `--manual` runs ACME DNS-01, prints the required TXT records,
+    /// and waits for the operator to add them (no Cloudflare token needed).
     Issue {
         /// Manual DNS-01: print TXT records and wait for operator confirmation.
         #[arg(long)]
@@ -1293,22 +1293,36 @@ enum CertCommands {
         /// Use Let's Encrypt staging directory.
         #[arg(long)]
         staging: bool,
+        /// HTTP-01 webroot. The running daemon serves this dir; the one-shot
+        /// issuer plants challenge files here. Ignored with `--manual`.
+        #[arg(long, default_value = "/var/lib/mjolnir-gateway/http-01")]
+        http01_dir: PathBuf,
     },
 }
 
-/// Run the manual cert-issuance subcommand. Returns without starting the server.
+/// HTTP-01 cannot prove `*.example.com`. Refuse before we talk to LE.
+fn reject_http01_wildcards(domains: &[String]) -> Result<(), String> {
+    if domains.iter().any(|d| d.starts_with("*.")) {
+        Err("HTTP-01 cannot issue wildcards (v1); use --manual for DNS-01 TXT".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Run the cert-issuance subcommand. Returns without starting the server.
 async fn run_cert_issue(
     manual: bool,
     domains: Vec<String>,
     email: String,
     out: PathBuf,
     staging: bool,
+    http01_dir: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !manual {
-        return Err("only --manual is supported".into());
-    }
     if domains.is_empty() {
         return Err("at least one --domain is required".into());
+    }
+    if !manual {
+        reject_http01_wildcards(&domains)?;
     }
 
     let directory_url = if staging {
@@ -1325,17 +1339,21 @@ async fn run_cert_issue(
         renew_before: Duration::from_secs(30 * 24 * 3600),
     };
 
-    let issued = mjolnir_gateway::acme::issue_manual(&cfg, |records| {
-        use std::io::Write as _;
-        let instructions = mjolnir_gateway::acme::manual_dns_instructions(records);
-        eprint!("{}", instructions);
-        let _ = std::io::stderr().flush();
-        // Block on the operator: read (and discard) a line from stdin.
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        Ok(())
-    })
-    .await?;
+    let issued = if manual {
+        mjolnir_gateway::acme::issue_manual(&cfg, |records| {
+            use std::io::Write as _;
+            let instructions = mjolnir_gateway::acme::manual_dns_instructions(records);
+            eprint!("{}", instructions);
+            let _ = std::io::stderr().flush();
+            // Block on the operator: read (and discard) a line from stdin.
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            Ok(())
+        })
+        .await?
+    } else {
+        mjolnir_gateway::acme::issue_http01(&cfg, &http01_dir).await?
+    };
 
     let fullchain = out.join("fullchain.pem");
     let privkey = out.join("privkey.pem");
@@ -1370,10 +1388,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 email,
                 out,
                 staging,
+                http01_dir,
             },
     }) = cli.command
     {
-        return run_cert_issue(manual, domains, email, out, staging).await;
+        return run_cert_issue(manual, domains, email, out, staging, http01_dir).await;
     }
 
     // ── Load config ───────────────────────────────────────────────────────────
@@ -1826,11 +1845,9 @@ mod tests {
 
     #[test]
     fn extract_acme_http01_token_from_get() {
-        let req = b"GET /.well-known/acme-challenge/Ab_12-x HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
-        assert_eq!(
-            extract_acme_http01_token(req).as_deref(),
-            Some("Ab_12-x")
-        );
+        let req =
+            b"GET /.well-known/acme-challenge/Ab_12-x HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
+        assert_eq!(extract_acme_http01_token(req).as_deref(), Some("Ab_12-x"));
     }
 
     #[test]
@@ -1843,6 +1860,13 @@ mod tests {
     fn extract_acme_http01_token_ignores_normal_gets() {
         let req = b"GET / HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
         assert_eq!(extract_acme_http01_token(req), None);
+    }
+
+    #[test]
+    fn reject_http01_wildcards_refuses_star_dot() {
+        assert!(reject_http01_wildcards(&["taskmaster.dev".into()]).is_ok());
+        assert!(reject_http01_wildcards(&["*.taskmaster.dev".into()]).is_err());
+        assert!(reject_http01_wildcards(&["a.dev".into(), "*.b.dev".into()]).is_err());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

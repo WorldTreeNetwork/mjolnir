@@ -12,6 +12,7 @@
 
 mod api;
 mod auth;
+mod cert;
 mod config;
 mod connect;
 mod deploy;
@@ -334,6 +335,12 @@ enum Command {
         #[command(subcommand)]
         action: DomainAction,
     },
+    /// Issue and list custom-domain TLS certificates (HTTP-01)
+    #[command(next_help_heading = "Apps")]
+    Cert {
+        #[command(subcommand)]
+        action: CertAction,
+    },
     /// Publish static sites owned by an IdentiKey (publish / keygen)
     #[command(next_help_heading = "Apps")]
     Sites {
@@ -534,6 +541,41 @@ enum DomainAction {
         token: Option<String>,
     },
     /// List apps with their URLs, custom domains, and backends
+    Ls {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+fn parse_exact_fqdn(s: &str) -> Result<String, String> {
+    if s.starts_with("*.") {
+        Err("wildcards are not supported; HTTP-01 issues exact names only".into())
+    } else if s.trim().is_empty() {
+        Err("fqdn is required".into())
+    } else {
+        Ok(s.to_string())
+    }
+}
+
+#[derive(Subcommand)]
+enum CertAction {
+    /// Issue a public HTTP-01 cert for an exact name (must already reach the gateway)
+    Issue {
+        /// Fully-qualified domain name (e.g. taskmaster.dev). Wildcards refused.
+        #[arg(value_parser = parse_exact_fqdn)]
+        fqdn: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// List installed custom-domain certificates
     Ls {
         /// Mjolnir API base URL
         #[arg(long)]
@@ -945,6 +987,12 @@ async fn main() {
             DomainAction::Ls { api, token } => {
                 domain::cmd_domain_ls(&profile, &api, &token, json).await
             }
+        },
+        Command::Cert { action } => match action {
+            CertAction::Issue { fqdn, api, token } => {
+                cert::cmd_cert_issue(&profile, &api, &token, &fqdn, json).await
+            }
+            CertAction::Ls { api, token } => cert::cmd_cert_ls(&profile, &api, &token, json).await,
         },
         Command::Sites { action } => match action {
             SitesAction::Publish {

@@ -48,7 +48,8 @@ defmodule Mjolnir.API.Domains do
           apexes: (-> [String.t()]),
           running_vm_ids: (-> [String.t()] | MapSet.t()),
           ip_resolver: (String.t() -> String.t()),
-          cert_present: (String.t() -> boolean())
+          cert_present: (String.t() -> boolean()),
+          http01_ready: (String.t() -> boolean())
         }
 
   @doc """
@@ -120,17 +121,21 @@ defmodule Mjolnir.API.Domains do
   List all deployed apps joined with their live gateway backend.
 
   Each entry is `%{app_name, url, custom_domain, service_vm_id, backend, port,
-  apex_registered}` where `backend` is `"<guest_ip>:<port>"` when the app's
-  service VM is currently running/local (and a port is known), else `nil`.
+  apex_registered, cert_present, http01_ready}` where `backend` is
+  `"<guest_ip>:<port>"` when the app's service VM is currently running/local
+  (and a port is known), else `nil`.
 
-  `apex_registered` mirrors the field `set_domain/3` already returns: `true`
-  when `custom_domain`'s apex is currently in `:gateway_apexes` (so the
-  reconciler can emit a route for it), `false` when it is not (the app is
-  silently 400ing — mjolnir-1pk), and `nil` when the app has no
-  `custom_domain` at all. Computed live against the *current* config, so it
-  catches the case that bit us on 2026-08-07: the domain was valid when set,
-  but the apex it needs was later dropped from `:gateway_apexes` (e.g. an
-  unpersisted runtime override reverting on restart).
+  `apex_registered` / `cert_present` / `http01_ready` are `nil` when the app
+  has no `custom_domain`. Otherwise:
+
+    * `apex_registered` — `true` when `custom_domain`'s apex is currently in
+      `:gateway_apexes` (so the reconciler can emit a route), `false` when it
+      is not (the app is silently 400ing — mjolnir-1pk). Computed live against
+      the *current* config, so it catches the case that bit us on 2026-08-07:
+      the domain was valid when set, but the apex it needs was later dropped
+      from `:gateway_apexes`.
+    * `cert_present` — a serving `[[cert]]` exists for the fqdn.
+    * `http01_ready` — HTTP-01 can issue for this name (exact name, not `*.`).
   """
   @spec list_apps(keyword()) :: [map()]
   def list_apps(opts \\ []) do
@@ -147,6 +152,8 @@ defmodule Mjolnir.API.Domains do
         port: entry.port,
         backend: live_backend(entry, running, ops),
         apex_registered: apex_registered?(entry.custom_domain, apexes),
+        cert_present: cert_present?(entry.custom_domain, ops),
+        http01_ready: http01_ready?(entry.custom_domain, ops),
         # Carried for Mjolnir.Policy.App.filter_readable/2 (mjolnir-xuv). The
         # router strips it before rendering so the documented GET /api/apps
         # response shape is unchanged.
@@ -173,6 +180,14 @@ defmodule Mjolnir.API.Domains do
       {:error, :no_apex} -> false
     end
   end
+
+  defp cert_present?(nil, _ops), do: nil
+  defp cert_present?("", _ops), do: nil
+  defp cert_present?(fqdn, ops), do: ops.cert_present.(fqdn)
+
+  defp http01_ready?(nil, _ops), do: nil
+  defp http01_ready?("", _ops), do: nil
+  defp http01_ready?(fqdn, ops), do: ops.http01_ready.(fqdn)
 
   # Rebuild the full settable attr set from the current entry, then apply the
   # override. Every Registry.Entry field the reconciler/route generator relies on
@@ -219,7 +234,8 @@ defmodule Mjolnir.API.Domains do
       apexes: &configured_apexes/0,
       running_vm_ids: &default_running_vm_ids/0,
       ip_resolver: &Mjolnir.Network.allocate_ip/1,
-      cert_present: &default_cert_present/1
+      cert_present: &default_cert_present/1,
+      http01_ready: &default_http01_ready/1
     }
   end
 
@@ -246,5 +262,11 @@ defmodule Mjolnir.API.Domains do
   # provisions; use Mjolnir.Gateway.Certs.ensure/2 for that.
   defp default_cert_present(fqdn) do
     Mjolnir.Gateway.Certs.present?(fqdn)
+  end
+
+  # Exact names are HTTP-01-issuable. Wildcards are not (v1 has no DNS-01
+  # `--wildcard` path on this surface).
+  defp default_http01_ready(fqdn) do
+    is_binary(fqdn) and fqdn != "" and not String.starts_with?(fqdn, "*.")
   end
 end

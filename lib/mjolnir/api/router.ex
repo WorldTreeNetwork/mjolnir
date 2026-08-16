@@ -47,12 +47,28 @@ defmodule Mjolnir.API.Router do
   ### `GET /api/apps`
 
     * **Response**: `200` `{"apps": [{"app_name", "url", "custom_domain",
-      "service_vm_id", "backend", "port", "apex_registered"}]}` (`backend` is
-      `"<ip>:<port>"` when the service VM is running/local, else `null`).
-      `apex_registered` is `true`/`false` when `custom_domain` is set (whether
-      its apex is currently in `:gateway_apexes` — `false` means the gateway
-      route is silently dropped for it, mjolnir-1pk) and `null` when there is
-      no `custom_domain`.
+      "service_vm_id", "backend", "port", "apex_registered", "cert_present",
+      "http01_ready"}]}` (`backend` is `"<ip>:<port>"` when the service VM is
+      running/local, else `null`). `apex_registered` / `cert_present` /
+      `http01_ready` are `true`/`false` when `custom_domain` is set and `null`
+      when there is no `custom_domain`. `apex_registered` is whether the
+      fqdn's apex is currently in `:gateway_apexes` (`false` means the
+      gateway route is silently dropped, mjolnir-1pk).
+
+  ### `POST /api/certs/issue`
+
+    * **Body**: `{"fqdn": "taskmaster.dev"}`. Wildcards (`*.`) are refused
+      (`400 wildcard_not_supported`). HTTP-01 only — the name must already
+      reach this gateway.
+    * **Response**: `200` `{"fqdn", "status", "not_after"}`. Never returns
+      PEMs. `404` if no app owns that custom domain (or the caller does not
+      own the app). `400` if `fqdn` is missing or a wildcard.
+
+  ### `GET /api/certs`
+
+    * **Response**: `200` `{"certs": [{"host", "not_after", "issuer", "sans"}]}`.
+      Localhost sees every `[[cert]]`; a regular user sees only certs for
+      apps they own. Never returns PEMs.
   """
 
   use Plug.Router
@@ -1338,6 +1354,102 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Issue a public HTTP-01 cert for a CNAME'd custom domain (mjolnir-r7b3.3).
+  # Issuance runs on the host; the client never sees PEMs. Wildcard refuse
+  # happens before the app lookup so a `*.` name is never confused with
+  # app_not_found. Ownership is the same check as :set_domain.
+  post "/api/certs/issue" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      case conn.body_params["fqdn"] do
+        fqdn when is_binary(fqdn) and fqdn != "" ->
+          if String.starts_with?(String.trim(fqdn), "*.") do
+            json(conn, 400, %{
+              error: "wildcard_not_supported",
+              detail: "HTTP-01 cannot issue wildcards (v1)"
+            })
+          else
+            case app_for_domain(fqdn) do
+              nil ->
+                json(conn, 404, %{error: "app_not_found", fqdn: fqdn})
+
+              entry ->
+                authorize_app(conn, entry.app_name, :issue_cert, fn _entry ->
+                  case Mjolnir.API.Certs.issue(fqdn) do
+                    {:ok, result} ->
+                      json(conn, 200, result)
+
+                    {:error, :wildcard_not_supported} ->
+                      json(conn, 400, %{
+                        error: "wildcard_not_supported",
+                        detail: "HTTP-01 cannot issue wildcards (v1)"
+                      })
+
+                    {:error, :fqdn_required} ->
+                      json(conn, 400, %{error: "fqdn is required"})
+
+                    {:error, {:issue_failed, _code, output}} ->
+                      Logger.error("Cert issue failed for #{fqdn}: #{output}")
+                      json(conn, 500, %{error: "cert_issue_failed"})
+
+                    {:error, {:ensure_failed, reason}} ->
+                      Logger.error("Cert install failed for #{fqdn}: #{inspect(reason)}")
+                      json(conn, 500, %{error: "cert_install_failed"})
+
+                    {:error, reason} ->
+                      Logger.error("Cert issue failed for #{fqdn}: #{inspect(reason)}")
+                      json(conn, 500, %{error: "cert_issue_failed"})
+                  end
+                end)
+            end
+          end
+
+        _ ->
+          json(conn, 400, %{error: "fqdn is required"})
+      end
+    else
+      conn
+    end
+  end
+
+  # List installed [[cert]] entries (no PEMs).
+  get "/api/certs" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      user = %{user_id: conn.assigns[:user_id]}
+
+      owned_hosts =
+        Mjolnir.API.Domains.list_apps()
+        |> Mjolnir.Policy.App.filter_readable(user)
+        |> Enum.map(& &1.custom_domain)
+        |> Enum.filter(&is_binary/1)
+        |> MapSet.new(&String.downcase/1)
+
+      case Mjolnir.API.Certs.list() do
+        {:ok, certs} ->
+          visible =
+            if user.user_id == "localhost" do
+              certs
+            else
+              Enum.filter(certs, fn c ->
+                host = c.host || ""
+                MapSet.member?(owned_hosts, String.downcase(host))
+              end)
+            end
+
+          json(conn, 200, %{certs: visible})
+
+        {:error, reason} ->
+          Logger.error("Cert list failed: #{inspect(reason)}")
+          json(conn, 500, %{error: "cert_list_failed"})
+      end
+    else
+      conn
+    end
+  end
+
   # MCP endpoint — Model Context Protocol for AI agent access
   forward("/mcp", to: Mjolnir.MCP.Plug)
 
@@ -1360,6 +1472,15 @@ defmodule Mjolnir.API.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
+  end
+
+  defp app_for_domain(fqdn) do
+    want = fqdn |> String.trim() |> String.trim_trailing(".") |> String.downcase()
+
+    Enum.find(Mjolnir.Deploy.Registry.list(), fn e ->
+      is_binary(e.custom_domain) and
+        String.downcase(String.trim_trailing(String.trim(e.custom_domain), ".")) == want
+    end)
   end
 
   # --- POST /api/deploy ------------------------------------------------------

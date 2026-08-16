@@ -599,7 +599,7 @@ pub async fn issue_http01(
     }
     if cfg.domains.iter().any(|d| d.starts_with("*.")) {
         return Err(AcmeError::Acme(
-            "HTTP-01 cannot issue wildcards; use DNS-01 (mj cert issue --wildcard)".into(),
+            "HTTP-01 cannot issue wildcards (v1)".into(),
         ));
     }
 
@@ -1048,10 +1048,7 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("wildcard must be rejected"),
         };
-        assert!(
-            err.to_string().contains("wildcard"),
-            "got {err}"
-        );
+        assert!(err.to_string().contains("wildcard"), "got {err}");
     }
 
     // 6. challenge_fqdn_is_prefixed_with_underscore_acme_challenge

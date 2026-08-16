@@ -17,6 +17,7 @@ defmodule Mjolnir.Policy.AppTest do
     test "a non-owner cannot retarget another tenant's domain" do
       assert App.authorize(:set_domain, @mallory, app("alice")) == :error
       assert App.authorize(:remove_domain, @mallory, app("alice")) == :error
+      assert App.authorize(:issue_cert, @mallory, app("alice")) == :error
     end
 
     test "a non-owner cannot redeploy another tenant's app" do
@@ -29,7 +30,7 @@ defmodule Mjolnir.Policy.AppTest do
   end
 
   describe "owners" do
-    for action <- [:read, :deploy, :set_domain, :remove_domain] do
+    for action <- [:read, :deploy, :set_domain, :remove_domain, :issue_cert] do
       test "the owner may #{action}" do
         assert App.authorize(unquote(action), @alice, app("alice")) == :ok
       end
@@ -51,7 +52,7 @@ defmodule Mjolnir.Policy.AppTest do
 
   describe "legacy entries (owner_id: nil)" do
     test "are denied to regular users — fail closed, then back-fill" do
-      for action <- [:read, :deploy, :set_domain, :remove_domain] do
+      for action <- [:read, :deploy, :set_domain, :remove_domain, :issue_cert] do
         assert App.authorize(action, @alice, app(nil)) == :error,
                "#{action} on an unowned app must not be allowed to a regular user: " <>
                  "every pre-ownership app would otherwise stay world-writable"
@@ -65,7 +66,7 @@ defmodule Mjolnir.Policy.AppTest do
 
   describe "localhost bypass" do
     test "reaches every action on any app" do
-      for action <- [:read, :deploy, :set_domain, :remove_domain, :deploy_new, :list] do
+      for action <- [:read, :deploy, :set_domain, :remove_domain, :issue_cert, :deploy_new, :list] do
         assert App.authorize(action, @localhost, app("alice")) == :ok
       end
     end

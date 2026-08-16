@@ -37,6 +37,7 @@ struct DomainRmResponse {
 #[derive(Deserialize)]
 struct AppSummary {
     app_name: String,
+    #[allow(dead_code)]
     url: Option<String>,
     custom_domain: Option<String>,
     #[allow(dead_code)]
@@ -44,6 +45,9 @@ struct AppSummary {
     backend: Option<String>,
     #[allow(dead_code)]
     port: Option<u16>,
+    cert_present: Option<bool>,
+    apex_registered: Option<bool>,
+    http01_ready: Option<bool>,
 }
 
 /// `GET /api/apps` wraps the entries in `{"apps": [...]}`.
@@ -177,17 +181,38 @@ pub async fn cmd_domain_ls(
     }
 
     println!(
-        "{:<24} {:<40} {:<28} {}",
-        "APP", "URL", "CUSTOM DOMAIN", "BACKEND"
+        "{:<20} {:<32} {:<22} {:<8} {:<8} {}",
+        "APP", "DOMAIN", "BACKEND", "CERT", "APEX", "HTTP-01"
     );
+    let mut missing: Vec<&str> = Vec::new();
     for a in &apps {
+        let domain = a.custom_domain.as_deref().unwrap_or("-");
         println!(
-            "{:<24} {:<40} {:<28} {}",
+            "{:<20} {:<32} {:<22} {:<8} {:<8} {}",
             a.app_name,
-            a.url.as_deref().unwrap_or("-"),
-            a.custom_domain.as_deref().unwrap_or("-"),
+            domain,
             a.backend.as_deref().unwrap_or("-"),
+            flag(a.cert_present),
+            flag(a.apex_registered),
+            flag(a.http01_ready),
+        );
+        if a.custom_domain.is_some() && a.cert_present != Some(true) {
+            missing.push(a.custom_domain.as_deref().unwrap());
+        }
+    }
+    for fqdn in missing {
+        eprintln!(
+            "\x1b[33mno cert for {} — issue with: mj cert issue {}\x1b[0m",
+            fqdn, fqdn
         );
     }
     Ok(())
+}
+
+fn flag(v: Option<bool>) -> &'static str {
+    match v {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "-",
+    }
 }

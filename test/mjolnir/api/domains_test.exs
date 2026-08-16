@@ -46,7 +46,8 @@ defmodule Mjolnir.API.DomainsTest do
       apexes: fn -> @apexes end,
       running_vm_ids: fn -> running end,
       ip_resolver: fn _vm -> "10.0.0.5" end,
-      cert_present: fn _fqdn -> cert end
+      cert_present: fn _fqdn -> cert end,
+      http01_ready: fn fqdn -> is_binary(fqdn) and not String.starts_with?(fqdn, "*.") end
     }
   end
 
@@ -137,14 +138,27 @@ defmodule Mjolnir.API.DomainsTest do
       assert [app] = Domains.list_apps(ops: ops)
       assert app.custom_domain == nil
       assert app.apex_registered == nil
+      assert app.cert_present == nil
+      assert app.http01_ready == nil
     end
 
     test "apex_registered is true when custom_domain's apex is configured", %{agent: agent} do
       Agent.update(agent, &Map.put(&1, "zine", entry(%{custom_domain: "zine.identikey.io"})))
-      ops = fake_ops(agent, [])
+      ops = fake_ops(agent, cert: true)
 
       assert [app] = Domains.list_apps(ops: ops)
       assert app.apex_registered == true
+      assert app.cert_present == true
+      assert app.http01_ready == true
+    end
+
+    test "cert_present and http01_ready report per-fqdn when a domain is set", %{agent: agent} do
+      Agent.update(agent, &Map.put(&1, "zine", entry(%{custom_domain: "zine.identikey.io"})))
+      ops = fake_ops(agent, cert: false)
+
+      assert [app] = Domains.list_apps(ops: ops)
+      assert app.cert_present == false
+      assert app.http01_ready == true
     end
 
     test "apex_registered is false when the apex is missing — surfaces the mjolnir-1pk drop via GET /api/apps",
