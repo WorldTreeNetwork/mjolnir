@@ -95,6 +95,41 @@ defmodule Mjolnir.API.Router do
     json(conn, 200, %{status: "ok"})
   end
 
+  # Hosted browser terminal (mjolnir-wrug). Same origin as the PTY socket
+  # so the `mj_term` cookie can authenticate the WebSocket upgrade — a
+  # browser cannot set Authorization on `new WebSocket(...)`.
+  get "/term/:id" do
+    conn = require_scope(conn, "pty:connect")
+
+    unless conn.halted do
+      case Validation.validate_vm_id(id) do
+        {:ok, vm_id} ->
+          conn = Mjolnir.API.TermPage.stash_token(conn)
+
+          unless conn.halted do
+            case pty_session_param(conn.query_params["session"]) do
+              {:ok, session} ->
+                html = Mjolnir.API.TermPage.render(vm_id, session || "main")
+
+                conn
+                |> put_resp_content_type("text/html; charset=utf-8")
+                |> send_resp(200, html)
+
+              {:error, message} ->
+                json(conn, 400, %{error: "invalid_session", message: message})
+            end
+          else
+            conn
+          end
+
+        {:error, message} ->
+          json(conn, 400, %{error: "invalid_vm_id", message: message})
+      end
+    else
+      conn
+    end
+  end
+
   # Spawn a new VM
   post "/api/vms" do
     conn = require_scope(conn, "vms:spawn")

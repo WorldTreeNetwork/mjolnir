@@ -119,4 +119,43 @@ defmodule Mjolnir.API.AuthTest do
       assert conn.status == 401
     end
   end
+
+  describe "extract_jwt/1 (mjolnir-wrug.1)" do
+    test "prefers the Bearer header over query and cookie" do
+      conn =
+        conn(:get, "/api/vms?token=from-query")
+        |> put_req_header("authorization", "Bearer from-header")
+        |> put_req_cookie(Auth.term_cookie(), "from-cookie")
+
+      assert {:ok, "from-header"} = Auth.extract_jwt(conn)
+    end
+
+    test "falls back to ?token= when there is no header" do
+      conn = conn(:get, "/term/x?token=from-query")
+      assert {:ok, "from-query"} = Auth.extract_jwt(conn)
+    end
+
+    test "falls back to the mj_term cookie" do
+      conn =
+        conn(:get, "/api/vms/x/pty")
+        |> put_req_cookie(Auth.term_cookie(), "from-cookie")
+
+      assert {:ok, "from-cookie"} = Auth.extract_jwt(conn)
+    end
+
+    test "refuses a sites token in the Bearer header so it cannot be widened" do
+      # Sites tokens are mjsk_... and take the narrow sites path in call/2.
+      # extract_jwt must not hand them to the JWT verifier.
+      conn =
+        conn(:get, "/api/vms")
+        |> put_req_header("authorization", "Bearer mjsk_thisisnotajwt")
+
+      assert :error = Auth.extract_jwt(conn)
+    end
+
+    test "empty query token is not a credential" do
+      conn = conn(:get, "/term/x?token=")
+      assert :error = Auth.extract_jwt(conn)
+    end
+  end
 end

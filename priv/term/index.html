@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mjolnir · {{SESSION}}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <style>
+    :root {
+      --bg: #0b0c0b;
+      --fg: #d7d4c8;
+      --dim: #6d7168;
+      --line: #1c1e1b;
+      --accent: #c4a35a;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font: 12px/1.4 "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    }
+    #bar {
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      padding: 0.45rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      letter-spacing: 0.04em;
+      user-select: none;
+    }
+    #bar .mark { color: var(--accent); font-weight: 600; }
+    #bar .id { color: var(--dim); }
+    #bar .sess { color: var(--fg); }
+    #term { height: calc(100% - 2rem); padding: 0.4rem 0.5rem 0.6rem; }
+    .xterm { height: 100%; }
+    .xterm-viewport { overflow-y: auto !important; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <span class="mark">MJOLNIR</span>
+    <span class="id">{{VM_SHORT}}</span>
+    <span class="sess">{{SESSION}}</span>
+  </div>
+  <div id="term"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script>
+    const VM_ID = {{VM_ID_JSON}};
+    const SESSION = {{SESSION_JSON}};
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: '"IBM Plex Mono", ui-monospace, Menlo, monospace',
+      fontSize: 13,
+      lineHeight: 1.25,
+      theme: {
+        background: "#0b0c0b",
+        foreground: "#d7d4c8",
+        cursor: "#c4a35a",
+        cursorAccent: "#0b0c0b",
+        selectionBackground: "#c4a35a44",
+        black: "#0b0c0b",
+        red: "#c45c4a",
+        green: "#8aa36a",
+        yellow: "#c4a35a",
+        blue: "#6e8ea0",
+        magenta: "#9b7e9a",
+        cyan: "#6fa09a",
+        white: "#d7d4c8",
+        brightBlack: "#6d7168",
+        brightRed: "#e07a68",
+        brightGreen: "#a8c084",
+        brightYellow: "#ddc07a",
+        brightBlue: "#8eafc0",
+        brightMagenta: "#b99ab8",
+        brightCyan: "#8cbcb6",
+        brightWhite: "#f2efe4"
+      }
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("term"));
+    fit.fit();
+
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const qs = SESSION ? ("?session=" + encodeURIComponent(SESSION)) : "";
+    const ws = new WebSocket(proto + "://" + location.host + "/api/vms/" + VM_ID + "/pty" + qs);
+    ws.binaryType = "arraybuffer";
+
+    function sendResize() {
+      fit.fit();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+      }
+    }
+
+    ws.addEventListener("open", () => {
+      sendResize();
+      term.focus();
+    });
+    ws.addEventListener("message", (ev) => {
+      if (typeof ev.data === "string") return;
+      term.write(new Uint8Array(ev.data));
+    });
+    ws.addEventListener("close", () => {
+      term.writeln("\r\n\x1b[90m— connection closed —\x1b[0m");
+    });
+    ws.addEventListener("error", () => {
+      term.writeln("\r\n\x1b[31m— connection error —\x1b[0m");
+    });
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+    });
+
+    window.addEventListener("resize", sendResize);
+  </script>
+</body>
+</html>
