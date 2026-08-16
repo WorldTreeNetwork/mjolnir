@@ -171,14 +171,15 @@ pub async fn cmd_list(
     if resp.vms.is_empty() {
         eprintln!("No VMs running.");
     } else {
+        let names = crate::domain::vm_app_names(profile, api_flag, token).await;
         println!(
-            "{:<54} {:<10} {:<16} {:<6} {}",
-            "TICKET", "STATE", "IP", "SHELL", "ID"
+            "{:<22} {:<10} {:<16} {:<6} {:<38} {}",
+            "NAME", "STATE", "IP", "SHELL", "ID", "TICKET"
         );
         for vm in &resp.vms {
             println!(
-                "{:<54} {:<10} {:<16} {:<6} {}",
-                vm.ticket.as_deref().unwrap_or("-"),
+                "{:<22} {:<10} {:<16} {:<6} {:<38} {}",
+                names.get(&vm.id).map(String::as_str).unwrap_or("-"),
                 vm.state,
                 vm.guest_ip.as_deref().unwrap_or("-"),
                 if vm.shell_ready == Some(true) {
@@ -187,6 +188,7 @@ pub async fn cmd_list(
                     "-"
                 },
                 vm.id,
+                vm.ticket.as_deref().unwrap_or("-"),
             );
         }
     }

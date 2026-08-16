@@ -153,6 +153,33 @@ pub async fn cmd_domain_rm(
     Ok(())
 }
 
+/// Map `service_vm_id` → app name for `mj list`. Failures return empty (list
+/// VMs anyway). One name per VM; last writer wins if two apps share a VM.
+pub async fn vm_app_names(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+    let Ok(body) = send_text(client.get(format!("{}/api/apps", base)), "apps list").await else {
+        return out;
+    };
+    let Ok(apps) = serde_json::from_str::<AppsList>(&body) else {
+        return out;
+    };
+    for a in apps.apps {
+        if let Some(id) = a.service_vm_id {
+            if !id.is_empty() && !a.app_name.is_empty() {
+                out.insert(id, a.app_name);
+            }
+        }
+    }
+    out
+}
+
 /// `mj domain ls` — list apps with their URLs, custom domains, and backends.
 pub async fn cmd_domain_ls(
     profile: &Profile,
