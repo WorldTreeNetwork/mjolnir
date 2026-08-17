@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "id": "res-mjolnir-e70.2",
+  "node_id": "mjolnir-e70.2",
+  "packet_id": "pkt-mjolnir-e70.2",
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok-4.6"
+    }
+  },
+  "disposition": "pass",
+  "summary": "Admit evaluator fail-closed on unattested thaw; :never refuses dormancy. 36 focused tests green.",
+  "verify_command": "mix test test/mjolnir/admit_test.exs test/mjolnir/dormant_registry_test.exs",
+  "verify_exit": 0,
+  "commit": {
+    "sha": "ada24b7da9d565bc1c1a21471b68dd28c68613cc",
+    "paths": [
+      "lib/mjolnir/admit.ex",
+      "lib/mjolnir/vm.ex",
+      "lib/mjolnir/dormant_registry.ex",
+      "test/mjolnir/admit_test.exs",
+      "test/mjolnir/dormant_registry_test.exs",
+      "test/mjolnir/dormant_integration_test.exs",
+      "groups/mjolnir-e70.2/packet.json"
+    ]
+  },
+  "changed_files": [
+    "lib/mjolnir/admit.ex",
+    "lib/mjolnir/vm.ex",
+    "lib/mjolnir/dormant_registry.ex",
+    "test/mjolnir/admit_test.exs",
+    "test/mjolnir/dormant_registry_test.exs",
+    "test/mjolnir/dormant_integration_test.exs"
+  ],
+  "blockers": [],
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok-4.6",
+    "content_hash": "sha256:c2d81c2e875e551cecb42135bc7d75553b49619a229472c1cd62c45b4014da7c"
+  }
+}
