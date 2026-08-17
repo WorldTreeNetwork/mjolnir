@@ -1,6 +1,9 @@
 # add-buzz-local-client
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-08-16 → `openspec/specs/buzz-local-client/spec.md`.
+> Unimplemented SHALLs moved to `add-buzz-local-runtime`.
 
 ## Why
 

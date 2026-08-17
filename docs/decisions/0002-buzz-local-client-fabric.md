@@ -1,10 +1,12 @@
 # ADR 0002 — Local Buzz client fabric
 
 **Status:** Accepted (2026-08-16)
-**Change:** [`add-buzz-local-client`](../../openspec/changes/add-buzz-local-client/proposal.md)
+**Change:** [`add-buzz-local-client`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/proposal.md) (folded 2026-08-16)
+**Living spec:** [`openspec/specs/buzz-local-client/spec.md`](../../openspec/specs/buzz-local-client/spec.md)
+**Remaining:** [`add-buzz-local-runtime`](../../openspec/changes/add-buzz-local-runtime/proposal.md)
 **Epic:** `mjolnir-e70`
 
-Full argument: [`openspec/changes/add-buzz-local-client/design.md`](../../openspec/changes/add-buzz-local-client/design.md).
+Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md).
 
 ## One screen
 
@@ -22,7 +24,12 @@ Full argument: [`openspec/changes/add-buzz-local-client/design.md`](../../opensp
 8. **Dev = CI = `@base/dev`**. **Relay** is a Mjolnir VM (`mjolnir-gti`).
 9. **CDN** (ADR 0001) is the same plugin shape at HTTP. Not this change.
 
-## Do not implement from this file
+## Built vs remaining
 
-Implementation is later intend nodes (`nod-identikey-admit`,
-`nod-mailbox-control`, `nod-local-relay`, `nod-deploy-happy`, …).
+Built (living spec): fail-closed `Mjolnir.Admit` shape-check, `:never`
+refuses `DormantRegistry`, guests stay off the cluster, sidecar is
+catalog-only.
+
+Remaining implementation is `add-buzz-local-runtime` (`nod-identikey-admit`,
+`nod-mailbox-control`, `nod-local-relay`, `nod-deploy-happy`, …). Do not
+implement from this ADR.

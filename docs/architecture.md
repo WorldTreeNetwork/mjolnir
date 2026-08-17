@@ -448,7 +448,7 @@ overlayfs is great for containers but doesn't compose well with virtio-fs shared
 | Supervision trees | If a VM process crashes, only that VM is affected. Automatic cleanup. |
 | GenServer per VM | Each VM has its own isolated state, mailbox, and lifecycle. |
 | Registry for lookup | O(1) VM lookup by UUID without a separate database. |
-| Distributed by default | Erlang distribution connects **hosts we operate**. Guests stay off the cluster (vsock / Iroh / gateway). See change `add-buzz-local-client`. |
+| Distributed by default | Erlang distribution connects **hosts we operate**. Guests stay off the cluster (vsock / Iroh / gateway). See [`openspec/specs/buzz-local-client/spec.md`](../openspec/specs/buzz-local-client/spec.md). |
 | Hot code reloading | Update orchestration logic without stopping running VMs. |
 | Pattern matching | Clean protocol handling for vsock message parsing. |
 
@@ -662,11 +662,12 @@ Agents get hardware-isolated Linux environments with apt, pip, cargo — everyth
 
 ### Channel System (Future)
 
-The local Buzz client fabric (`add-buzz-local-client`, ADR
+The local Buzz client fabric (living spec
+[`buzz-local-client`](../openspec/specs/buzz-local-client/spec.md), ADR
 [`0002`](decisions/0002-buzz-local-client-fabric.md)) takes the first cut:
 OTP mailboxes on the host are the body-control queue; Nostr stays the Buzz
-event log; admission happens before thaw. Channel mobility below is still
-later.
+event log; admission happens before thaw. Remaining runtime SHALLs live in
+`add-buzz-local-runtime`. Channel mobility below is still later.
 
 Inspired by pi-calculus, channels will be the universal communication primitive:
 
