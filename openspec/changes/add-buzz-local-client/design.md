@@ -68,20 +68,19 @@ I5 falls out of the door: a mention that is not an admitted wake never
 hits `deliver_message`, so `DormantRegistry` never runs. Wake-on-message
 stays; it is no longer the public front door.
 
-## Decision 4 — The facade is identikey-protocol, not identikey-core
+## Decision 4 — Protocol crate is wire + validators; the host owns the facade
 
-Both repos are open. The split is license:
+Both repos are open. The split is license **and** job:
 
 | Repo | License | Job |
 |---|---|---|
-| `identikey-protocol` | Apache-2.0 OR BSD-2-Clause-Patent | Embeddable formats and protocols |
-| `identikey-core` | AGPL-3.0-or-later + commercial | Product platform (Keycloak, passkeys, JWTs) |
+| `identikey-protocol` | Apache-2.0 OR BSD-2-Clause-Patent | Envelope, attestation *shape*, verdict vocabulary (deny / drop / reply-here / deliver), pure validators. No lifecycle. |
+| `identikey-core` | AGPL-3.0-or-later + commercial | Product platform (Keycloak, passkeys, JWTs). May *use* the protocol crate. |
 
-Admission is a protocol (admit / deny / forward). It must embed in
-Mjolnir, a gateway plugin, and later a CDN edge without AGPL-infecting
-the provider. New crate (working name `identikey-admit`) or an extension
-of `identikey-auth`. Core may *use* it later as a Keycloak/passkey
-plugin.
+The **ingress proxy / facade and the lifecycle-aware evaluator live in
+Mjolnir** (or another embedder). A conforming Mjolnir-local evaluator
+is permitted — v1 may be a process allowlist. The protocol crate must
+not decide run state, `restart_policy`, generation, or restore.
 
 Tracked as intend `nod-identikey-admit`. Not built here.
 
@@ -91,9 +90,9 @@ Today: one Port-managed postgres, Unix socket, peer auth, roles
 `mjolnir_admin` / `mjolnir_sites`, **derived indexes**. Filesystem is
 source of truth. That contract stays.
 
-The sidecar grows named databases for *host services* (`sites`, maybe
-`admit`, maybe `forge`). It does not grow a database per VM, per tenant,
-or per Buzz community.
+The sidecar grows **schemas in the existing host database** (`sites`,
+maybe `admit`, maybe `forge`) plus matching service roles. It does not
+`CREATE DATABASE` per service, per VM, per tenant, or per Buzz community.
 
 - No guest network path to the sidecar socket.
 - No “provision a DB for this VM” API.
@@ -162,11 +161,16 @@ topology.
 ## Decision 11 — Proxies attest; trusted deliver checks the stamp
 
 The request path is: untrusted ingress → proxy (authorize, fail
-closed) → signed attestation bound to VM + generation →
+closed) → signed attestation bound to VM + **lifecycle epoch** →
 `deliver_message` / queue. The VM with the large application thaws
 only for attested requests. `deliver_message/3` is the trusted hop,
 not the public door — but it must reject a missing/invalid stamp so
 vsock/MCP/CLI cannot skip the proxy.
+
+Lifecycle epoch is **not** `StateStore`'s persist `generation` (that
+bumps on every heal and metadata merge). It is a boot/restore epoch
+that changes when the body is created, restored, or owner-started.
+`nod-identikey-admit` / mailbox-control name the field.
 
 ## Decision 12 — The facade is not the only resurrection path
 

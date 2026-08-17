@@ -51,8 +51,11 @@ an admission proxy before any restore. The proxy SHALL authorize,
 fail closed if it cannot decide, and on accept stamp a signed
 attestation. `Mjolnir.VM.deliver_message/3` (and
 `DormantRegistry.queue_message/3`) SHALL accept a thaw only when that
-attestation is present and valid for this VM and lifecycle
-generation. A denied or dropped message SHALL NOT be queued and SHALL
+attestation is present and valid for this VM and its **lifecycle
+epoch**. Lifecycle epoch SHALL NOT be `StateStore`'s persist
+`generation` (bumped on every heal and metadata merge). It SHALL
+change when the body is created, restored from dormant, or
+owner-started. A denied or dropped message SHALL NOT be queued and SHALL
 leave run state unchanged. Admission SHALL run before any
 `pending_messages` write and on the restore-retry path.
 
@@ -67,10 +70,18 @@ NOT be specified as the only resurrection path.
 - THEN the VM is not restored, not spawned, and not marked running
 - AND the payload is not stored in `pending_messages`
 
+#### Scenario: Persist generation is not an epoch
+
+- GIVEN a dormant VM whose StateStore `generation` has bumped from a
+  host-side metadata merge with no restore
+- WHEN an attestation bound to the prior persist generation is checked
+- THEN that mismatch alone SHALL NOT be the epoch check
+- AND the epoch is still the last create / restore / owner-start
+
 #### Scenario: Proxy-attested request may thaw
 
 - GIVEN a dormant VM and a proxy that has vetted the request and
-  stamped an attestation for that VM and generation
+  stamped an attestation for that VM and lifecycle epoch
 - WHEN trusted deliver runs
 - THEN delivery follows the existing vsock / restore path
 

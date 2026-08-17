@@ -12,9 +12,9 @@ Work this change owes (architecture write only):
 - [x] Amend spec: proxies attest; trusted deliver checks stamp; before queue
 - [x] Amend spec: Nostr/Matrix facade; wake producer; dormant vs `:stopped` vs `:never`
 - [x] Amend spec: protocol vs host policy; fail-closed; sidecar is schemas
-- [ ] design.md Decision 4: protocol crate is wire+validators, not the host facade
-- [ ] design.md Decision 5: sidecar grows schemas, not named databases
-- [ ] Spec: lifecycle generation is not StateStore persist generation
+- [x] design.md Decision 4: protocol crate is wire+validators, not the host facade
+- [x] design.md Decision 5: sidecar grows schemas, not named databases
+- [x] Spec: lifecycle epoch is not StateStore persist generation
 
 Handoffs (not checkboxes):
 
