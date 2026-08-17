@@ -142,6 +142,41 @@ kills `!shutdown`.
 - `nsec` is opaque. No curve math on our side. Injected over vsock.
   Never written to the VM record, API response, host logs, or syslog.
 
+## Decision 10 — Wake producer is the protocol ingress (2026-08-16)
+
+For Buzz, a wake is produced by **incoming traffic on the external
+queue** — Nostr first, Matrix later. The host runs an emulation
+layer: external event → internal OTP message (mailbox / broadcast /
+0MQ-shaped patterns) → last hop back to a conformant Nostr event
+for `buzz-acp`. The host is not a second event log.
+
+A running harness still reads the relay directly. Dormant bodies
+cannot; the ingress is what makes a mention *exist* as an internal
+message the proxy can admit or drop.
+
+v1 posture: a mention is a candidate wake only after that
+translation and a proxy attestation. A `:stopped` `:never` body
+still does not auto-resume; owner/provider Start is a different
+topology.
+
+## Decision 11 — Proxies attest; trusted deliver checks the stamp
+
+The request path is: untrusted ingress → proxy (authorize, fail
+closed) → signed attestation bound to VM + generation →
+`deliver_message` / queue. The VM with the large application thaws
+only for attested requests. `deliver_message/3` is the trusted hop,
+not the public door — but it must reject a missing/invalid stamp so
+vsock/MCP/CLI cannot skip the proxy.
+
+## Decision 12 — The facade is not the only resurrection path
+
+Request-based services usually go through the proxy. Operator
+revive, Health, Reconcile under `restart_policy: always`, and later
+snapshot-resume on owner Start are other topologies. The spec must
+not pretend the facade is the only way a VM runs again. Buzz bodies
+stay `:never`: Reconcile does not auto-resume; `signal_done` must
+not park them in `DormantRegistry`.
+
 ## Decision 9 — CDN is the same plugin, later
 
 Admit-or-serve-from-cache is the OpenResty plugin at HTTP layer. ADR

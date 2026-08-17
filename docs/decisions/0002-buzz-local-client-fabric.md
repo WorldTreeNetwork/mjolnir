@@ -8,21 +8,19 @@ Full argument: [`openspec/changes/add-buzz-local-client/design.md`](../../opensp
 
 ## One screen
 
-1. **OTP mailboxes** are the host queue (0MQ patterns, not libzmq). **Nostr**
-   is the Buzz event log. Not a chat-bridge.
-2. **Guests do not join Distributed Erlang.** Span is vsock, Iroh, gateway.
-3. **Admit, then thaw.** OpenResty-shaped plugins on the host; junk never
-   hits `DormantRegistry`.
-4. **Admission crate** lives in **identikey-protocol** (permissive), not
-   identikey-core (AGPL).
-5. **Host Postgres sidecar** is a control-plane catalog. Buzz/tenant data
-   lives in the guest. PGlite is in-guest for `@base/dev` only.
-6. **Dev = CI = `@base/dev`**. Prod differs by image contents, not by a
-   second orchestrator.
-7. **Relay** is a Mjolnir VM (`mjolnir-gti`). Join policy accepts
-   provider-deployed identity. Compose-on-Mac is an on-ramp, not the design.
-8. **CDN** (ADR 0001 / Bunny) is the same plugin shape at HTTP. Not this
-   change.
+1. **OTP mailboxes** are the host queue (0MQ patterns, not libzmq).
+2. **Protocol facade:** Nostr (later Matrix) → internal messages →
+   conformant Nostr at a Buzz body. Host is not a second event log.
+3. **Wake producer** for Buzz is that ingress, not the guest or Reconcile.
+4. **Proxies attest; `deliver_message` is the trusted hop** and rejects
+   unstamped thaws. Facade is the common *request* path, not the only
+   resurrection topology.
+5. **Guests do not join Distributed Erlang.**
+6. **identikey-protocol** owns wire + validators; Mjolnir owns lifecycle.
+   Fail closed. Verify ≠ custody.
+7. **Host Postgres sidecar** is schemas in one catalog DB, not a hotel.
+8. **Dev = CI = `@base/dev`**. **Relay** is a Mjolnir VM (`mjolnir-gti`).
+9. **CDN** (ADR 0001) is the same plugin shape at HTTP. Not this change.
 
 ## Do not implement from this file
 

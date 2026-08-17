@@ -9,14 +9,18 @@ Work this change owes (architecture write only):
 - [x] Deltas under `specs/buzz-local-client/spec.md`
 - [x] Bead note on `mjolnir-e70` pointing at this change
 - [x] Independent architecture read (Fable 5 + GPT-5.6 Sol, 2026-08-16)
-- [ ] Amend spec: enforcement is `deliver_message/3` before queue, all callers
-- [ ] Amend spec: dormant vs `:stopped` vs `:never`; mention-wake v1 posture
-- [ ] Amend spec: protocol (identikey-protocol) vs host lifecycle policy; fail-closed
+- [x] Amend spec: proxies attest; trusted deliver checks stamp; before queue
+- [x] Amend spec: Nostr/Matrix facade; wake producer; dormant vs `:stopped` vs `:never`
+- [x] Amend spec: protocol vs host policy; fail-closed; sidecar is schemas
 
 Handoffs (not checkboxes):
 
 - Review write-up: `reviews/2026-08-16-advise.md`
-- Combined verdict: amend deltas before `act` on mailbox / admit / deploy
+- Architecture write (including 2026-08-16 amend) is complete
+- Fold blocked until later act nodes make the SHALLs true
+- Pubkey distribution for envelope verify → `nod-identikey-admit`
+- `change add-identikey-admit` in `identikey-protocol`
+- `act` on this change is **not** deploy
 
 - `change add-identikey-admit` in `identikey-protocol` after the read
 - `act` on this change is **not** deploy — later nodes implement
