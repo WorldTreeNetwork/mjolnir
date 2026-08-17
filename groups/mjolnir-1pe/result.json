@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "id": "res-mjolnir-1pe",
+  "node_id": "mjolnir-1pe",
+  "packet_id": "pkt-mjolnir-1pe",
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok-4.6"
+    }
+  },
+  "disposition": "pass",
+  "summary": "Buzz nsec stored in SecretStore, injected over vsock to buzz.env. Negative test: nsec absent from VM record, API views, Inspect, and logs. 65 focused tests green.",
+  "verify_command": "mix test test/mjolnir/identity_inject_test.exs test/mjolnir/secret_store_test.exs test/mjolnir/vsock/protocol_test.exs",
+  "verify_exit": 0,
+  "commit": {
+    "sha": "ab24433f3b2ab43c86a208c6f49652efcd19fbc7",
+    "paths": [
+      "lib/mjolnir/identity.ex",
+      "lib/mjolnir/secret_store.ex",
+      "lib/mjolnir/vm.ex",
+      "lib/mjolnir/vsock/protocol.ex",
+      "lib/mjolnir/api/router.ex",
+      "native/mjolnir_guest_agent/src/protocol.rs",
+      "native/mjolnir_guest_agent/src/vsock.rs",
+      "native/mjolnir_guest_agent/src/secrets.rs",
+      "test/mjolnir/identity_inject_test.exs",
+      "test/mjolnir/secret_store_test.exs",
+      "test/mjolnir/vsock/protocol_test.exs",
+      "openspec/changes/add-buzz-local-runtime/tasks.md",
+      "groups/mjolnir-1pe/packet.json"
+    ]
+  },
+  "changed_files": [
+    "lib/mjolnir/identity.ex",
+    "lib/mjolnir/secret_store.ex",
+    "lib/mjolnir/vm.ex",
+    "lib/mjolnir/vsock/protocol.ex",
+    "lib/mjolnir/api/router.ex",
+    "native/mjolnir_guest_agent/src/protocol.rs",
+    "native/mjolnir_guest_agent/src/vsock.rs",
+    "native/mjolnir_guest_agent/src/secrets.rs",
+    "test/mjolnir/identity_inject_test.exs",
+    "test/mjolnir/secret_store_test.exs",
+    "test/mjolnir/vsock/protocol_test.exs"
+  ],
+  "blockers": [],
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok-4.6",
+    "content_hash": "sha256:8af1b2427a2602747ff734127783ba0c08f84c64f5e22d347bf4d932bad27e22"
+  }
+}
