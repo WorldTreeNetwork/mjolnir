@@ -99,33 +99,45 @@ defmodule Mjolnir.DormantRegistryTest do
   describe "queue_message/3" do
     test "queues a message for a dormant VM", %{vm_id: vm_id} do
       DormantRegistry.register(vm_id, "snap-1", %{})
-      assert :ok = DormantRegistry.queue_message(vm_id, "sender-1", %{hello: "world"})
+      payload = attested(vm_id, %{"hello" => "world"})
+      assert :ok = DormantRegistry.queue_message(vm_id, "sender-1", payload)
 
       messages = DormantRegistry.take_pending_messages(vm_id)
-      assert [{"sender-1", %{hello: "world"}}] = messages
+      assert [{"sender-1", ^payload}] = messages
     end
 
-    test "returns {:error, :not_found} for unknown vm_id" do
-      assert {:error, :not_found} = DormantRegistry.queue_message("nonexistent", "s", %{})
+    test "refuses an unattested queue (add-buzz-local-client)", %{vm_id: vm_id} do
+      DormantRegistry.register(vm_id, "snap-1", %{})
+
+      assert {:error, :admission_denied} =
+               DormantRegistry.queue_message(vm_id, "s", %{hello: "world"})
+
+      assert [] = DormantRegistry.take_pending_messages(vm_id)
+    end
+
+    test "returns {:error, :not_found} for unknown vm_id with a valid attestation" do
+      payload = attested("nonexistent")
+      assert {:error, :not_found} = DormantRegistry.queue_message("nonexistent", "s", payload)
     end
 
     test "returns {:error, :restoring} when VM is restoring", %{vm_id: vm_id} do
       DormantRegistry.register(vm_id, "snap-1", %{})
       DormantRegistry.begin_restore(vm_id)
 
-      assert {:error, :restoring} = DormantRegistry.queue_message(vm_id, "s", %{})
+      assert {:error, :restoring} = DormantRegistry.queue_message(vm_id, "s", attested(vm_id))
     end
   end
 
   describe "take_pending_messages/1" do
     test "returns messages in order and clears the queue", %{vm_id: vm_id} do
       DormantRegistry.register(vm_id, "snap-1", %{})
-      DormantRegistry.queue_message(vm_id, "s1", :msg1)
-      DormantRegistry.queue_message(vm_id, "s2", :msg2)
-      DormantRegistry.queue_message(vm_id, "s3", :msg3)
+      DormantRegistry.queue_message(vm_id, "s1", attested(vm_id, %{"n" => 1}))
+      DormantRegistry.queue_message(vm_id, "s2", attested(vm_id, %{"n" => 2}))
+      DormantRegistry.queue_message(vm_id, "s3", attested(vm_id, %{"n" => 3}))
 
       messages = DormantRegistry.take_pending_messages(vm_id)
-      assert [{"s1", :msg1}, {"s2", :msg2}, {"s3", :msg3}] = messages
+      assert length(messages) == 3
+      assert Enum.map(messages, fn {from, _} -> from end) == ["s1", "s2", "s3"]
 
       # Queue is now empty
       assert [] = DormantRegistry.take_pending_messages(vm_id)
@@ -332,5 +344,9 @@ defmodule Mjolnir.DormantRegistryTest do
       assert entry.state == :dormant
       GenServer.stop(pid2)
     end
+  end
+
+  defp attested(vm_id, extra \\ %{}) do
+    Map.put(extra, "attestation", %{"vm_id" => vm_id, "epoch" => 0})
   end
 end

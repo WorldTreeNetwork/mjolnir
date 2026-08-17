@@ -791,17 +791,21 @@ defmodule Mjolnir.VM do
         # Check if the VM is dormant
         case Mjolnir.DormantRegistry.lookup(target_vm_id) do
           {:ok, _entry} ->
-            case Mjolnir.DormantRegistry.queue_message(target_vm_id, from_vm_id, payload) do
-              :ok ->
-                restore_dormant_vm(target_vm_id)
+            if Mjolnir.Admit.thaw_allowed?(target_vm_id, payload) do
+              case Mjolnir.DormantRegistry.queue_message(target_vm_id, from_vm_id, payload) do
+                :ok ->
+                  restore_dormant_vm(target_vm_id)
 
-              {:error, :restoring} ->
-                # VM is being restored — retry delivery via VMRegistry
-                # (it may be booting, in which case the message gets queued in the VM GenServer)
-                retry_deliver_message(target_vm_id, from_vm_id, payload)
+                {:error, :restoring} ->
+                  # VM is being restored — retry delivery via VMRegistry
+                  # (it may be booting, in which case the message gets queued in the VM GenServer)
+                  retry_deliver_message(target_vm_id, from_vm_id, payload)
 
-              {:error, :not_found} ->
-                {:error, :not_found}
+                {:error, :not_found} ->
+                  {:error, :not_found}
+              end
+            else
+              {:error, :admission_denied}
             end
 
           :not_found ->
@@ -1113,18 +1117,24 @@ defmodule Mjolnir.VM do
     {:reply, {:error, {:not_available, state.state}}, state}
   end
 
-  # VMs with persistent secrets cannot go dormant — nobody can provide the
-  # passphrase when auto-restoring on incoming message.
-  def handle_call(:handle_done, _from, %{secrets_mode: :persistent} = state) do
-    Logger.warning(
-      "VM #{state.id} has secrets_mode=persistent, refusing dormancy. " <>
-        "Stop explicitly with VM.stop/1 or snapshot manually with VM.snapshot/2."
-    )
+  # Persistent secrets and restart_policy: :never cannot go dormant
+  # (add-buzz-local-client: :never must not enter DormantRegistry).
+  def handle_call(:handle_done, _from, state) do
+    case Mjolnir.Admit.dormancy_reason(state) do
+      {:error, reason} ->
+        Logger.warning(
+          "VM #{state.id} refusing dormancy (#{reason}). " <>
+            "Stop explicitly with VM.stop/1 or snapshot manually with VM.snapshot/2."
+        )
 
-    {:reply, {:error, :secrets_prevent_dormancy}, state}
+        {:reply, {:error, reason}, state}
+
+      :ok ->
+        do_handle_done(state)
+    end
   end
 
-  def handle_call(:handle_done, _from, state) do
+  defp do_handle_done(state) do
     snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
 
     case do_snapshot(state, snapshot_name, []) do

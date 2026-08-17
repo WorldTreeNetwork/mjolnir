@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-e70.2",
+  "node_id": "mjolnir-e70.2",
+  "change_id": "add-buzz-local-client",
+  "capability": "buzz-local-client",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4.6" }
+  },
+  "goal": "Fail-closed admit-then-thaw: unattested deliver_message does not queue or restore; restart_policy never refuses handle_done.",
+  "anchors": [
+    { "symbol": "Mjolnir.VM.deliver_message/3", "invariant": "dormant path requires Admit.thaw_allowed?" },
+    { "symbol": "Mjolnir.VM.handle_call(:handle_done)", "invariant": ":never refuses dormancy" },
+    { "symbol": "Mjolnir.Admit", "invariant": "v1 shape check; missing attestation is deny" }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/admit_test.exs"
+  },
+  "out_of_scope": [
+    { "item": "identikey-protocol crate / real signatures", "tracked_as": "nod-identikey-admit" },
+    { "item": "Buzz relay VM", "tracked_as": "mjolnir-gti" },
+    { "item": "Nostr ingress / protocol facade", "tracked_as": "later" },
+    { "item": "secret inject", "tracked_as": "mjolnir-1pe" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/admit.ex",
+      "lib/mjolnir/vm.ex",
+      "lib/mjolnir/dormant_registry.ex",
+      "test/mjolnir/admit_test.exs",
+      "test/mjolnir/dormant_integration_test.exs"
+    ],
+    "do_not": ["deploy", "push"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "standard"
+}

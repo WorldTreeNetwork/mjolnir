@@ -38,7 +38,11 @@ defmodule Mjolnir.DormantIntegrationTest do
     assert Registry.lookup(VMRegistry, vm_id) == []
 
     # 6. Deliver a message to trigger restore
-    :ok = VM.deliver_message(vm_id, "test", %{wake: true})
+    :ok =
+      VM.deliver_message(vm_id, "test", %{
+        "wake" => true,
+        "attestation" => %{"vm_id" => vm_id, "epoch" => 0}
+      })
 
     # 7. Poll until vm_id reappears in VMRegistry (restore is async via Task)
     poll_until(

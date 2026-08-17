@@ -77,9 +77,14 @@ defmodule Mjolnir.DormantRegistry do
   @doc """
   Queue a message for a dormant VM.
   """
-  @spec queue_message(String.t(), String.t(), term()) :: :ok | {:error, :not_found}
+  @spec queue_message(String.t(), String.t(), term()) ::
+          :ok | {:error, :not_found | :restoring | :admission_denied}
   def queue_message(vm_id, from_vm_id, payload) do
-    GenServer.call(__MODULE__, {:queue_message, vm_id, from_vm_id, payload})
+    if Mjolnir.Admit.thaw_allowed?(vm_id, payload) do
+      GenServer.call(__MODULE__, {:queue_message, vm_id, from_vm_id, payload})
+    else
+      {:error, :admission_denied}
+    end
   end
 
   @doc """
