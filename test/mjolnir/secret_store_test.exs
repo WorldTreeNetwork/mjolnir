@@ -102,4 +102,20 @@ defmodule Mjolnir.SecretStoreTest do
   test "empty envelopes are rejected", %{fp: fp} do
     assert {:error, :empty_envelope} = SecretStore.put(fp, "k", "")
   end
+
+  test "opaque put/get/delete is path-safe and mode 0600", %{tmp: tmp} do
+    assert :ok = SecretStore.put_opaque("vms", "vm-1", "identity", "nsec-bytes")
+    assert {:ok, "nsec-bytes"} = SecretStore.get_opaque("vms", "vm-1", "identity")
+
+    path = Path.join([tmp, "_opaque", "vms", "vm-1", "identity"])
+    %File.Stat{mode: mode} = File.stat!(path)
+    assert Bitwise.band(mode, 0o777) == 0o600
+
+    assert {:error, :invalid_opaque_id} = SecretStore.put_opaque("vms", "../x", "k", "b")
+    assert {:error, :invalid_opaque_key} = SecretStore.put_opaque("vms", "vm-1", "a/b", "b")
+
+    assert :ok = SecretStore.delete_opaque("vms", "vm-1", "identity")
+    assert :not_found = SecretStore.get_opaque("vms", "vm-1", "identity")
+    assert :ok = SecretStore.delete_opaque_id("vms", "vm-1")
+  end
 end

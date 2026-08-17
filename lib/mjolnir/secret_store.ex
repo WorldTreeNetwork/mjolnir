@@ -145,6 +145,74 @@ defmodule Mjolnir.SecretStore do
     Application.fetch_env!(:mjolnir, :secret_store_root)
   end
 
+  @doc """
+  Persist an opaque (unsigned) blob under `_opaque/<kind>/<id>/<key>`.
+
+  Used for VM-scoped material that is not a Gordian envelope (Buzz nsec).
+  Atomic write, mode 0600. Never logged. `kind` and `id` must be path-safe.
+  """
+  @spec put_opaque(String.t(), String.t(), String.t(), binary()) :: :ok | {:error, term()}
+  def put_opaque(kind, id, key, bytes)
+      when is_binary(kind) and is_binary(id) and is_binary(key) and is_binary(bytes) do
+    with :ok <- validate_opaque_segment(kind),
+         :ok <- validate_opaque_segment(id),
+         :ok <- validate_opaque_key(key),
+         path = opaque_path(kind, id, key),
+         :ok <- File.mkdir_p(Path.dirname(path)),
+         tmp = path <> ".tmp",
+         :ok <- File.write(tmp, bytes),
+         _ = File.chmod(tmp, 0o600),
+         :ok <- File.rename(tmp, path),
+         _ = File.chmod(path, 0o600) do
+      :ok
+    end
+  end
+
+  @doc "Read an opaque blob. `:not_found` if missing."
+  @spec get_opaque(String.t(), String.t(), String.t()) ::
+          {:ok, binary()} | :not_found | {:error, term()}
+  def get_opaque(kind, id, key) do
+    with :ok <- validate_opaque_segment(kind),
+         :ok <- validate_opaque_segment(id),
+         :ok <- validate_opaque_key(key),
+         path = opaque_path(kind, id, key) do
+      case File.read(path) do
+        {:ok, bytes} -> {:ok, bytes}
+        {:error, :enoent} -> :not_found
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc "Delete one opaque blob. Idempotent."
+  @spec delete_opaque(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_opaque(kind, id, key) do
+    with :ok <- validate_opaque_segment(kind),
+         :ok <- validate_opaque_segment(id),
+         :ok <- validate_opaque_key(key),
+         path = opaque_path(kind, id, key) do
+      case File.rm(path) do
+        :ok -> :ok
+        {:error, :enoent} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc "Delete every opaque blob for `<kind>/<id>`. Idempotent."
+  @spec delete_opaque_id(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_opaque_id(kind, id) do
+    with :ok <- validate_opaque_segment(kind),
+         :ok <- validate_opaque_segment(id) do
+      dir = Path.join([root(), "_opaque", kind, id])
+
+      case File.rm_rf(dir) do
+        {:ok, _} -> :ok
+        {:error, reason, _} -> {:error, reason}
+      end
+    end
+  end
+
   ## GenServer
 
   @impl true
@@ -426,6 +494,31 @@ defmodule Mjolnir.SecretStore do
     safe_key = validate_key!(key)
     Path.join([root(), validate_fp!(identikey_fp), safe_key])
   end
+
+  defp opaque_path(kind, id, key) do
+    Path.join([root(), "_opaque", kind, id, key])
+  end
+
+  defp validate_opaque_segment(seg) when is_binary(seg) and seg != "" do
+    if String.contains?(seg, ["/", "\\", "\0"]) or seg in [".", ".."] or
+         String.contains?(seg, "..") do
+      {:error, :invalid_opaque_id}
+    else
+      :ok
+    end
+  end
+
+  defp validate_opaque_segment(_), do: {:error, :invalid_opaque_id}
+
+  defp validate_opaque_key(key) when is_binary(key) and key != "" do
+    if String.contains?(key, ["/", "\\", "\0", ".."]) do
+      {:error, :invalid_opaque_key}
+    else
+      :ok
+    end
+  end
+
+  defp validate_opaque_key(_), do: {:error, :invalid_opaque_key}
 
   defp validate_fp!(fp) when is_binary(fp) do
     if String.match?(fp, ~r/^[A-Za-z0-9]+$/) do

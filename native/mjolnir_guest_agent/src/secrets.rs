@@ -11,7 +11,8 @@
 //! re-created by `load_env_vars()` on each open (re-inject / re-mount after boot).
 
 use std::collections::HashMap;
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +25,9 @@ pub const SECRETS_MAPPER_NAME: &str = "mjolnir-secrets";
 // Rendered env lives on tmpfs (/run) so plaintext never lands on the rootfs or
 // in a snapshot. The encrypted LUKS volume is the at-rest source of truth.
 pub const SECRETS_ENV_PATH: &str = "/run/mjolnir/secrets.env";
+/// Buzz harness start trigger. Tmpfs. KEY=value (no `export`) for systemd
+/// EnvironmentFile. Group-readable so User=agent can load it.
+pub const IDENTITY_ENV_PATH: &str = "/run/mjolnir/buzz.env";
 pub const SECRETS_PROFILE_PATH: &str = "/etc/profile.d/mjolnir-secrets.sh";
 pub const DEFAULT_SECRETS_SIZE_MB: u32 = 32;
 
@@ -561,6 +565,62 @@ pub fn load_env_vars() -> Result<HashMap<String, String>, String> {
 
     info!("Loaded {} env vars from secrets volume", vars.len());
     Ok(vars)
+}
+
+/// Write `/run/mjolnir/buzz.env` (tmpfs) for the Buzz harness path unit.
+///
+/// Requires `BUZZ_PRIVATE_KEY` and `BUZZ_RELAY_URL`. Does not touch the LUKS
+/// volume. Values are never logged.
+pub fn write_identity_env(entries: &HashMap<String, String>) -> Result<(), String> {
+    for required in ["BUZZ_PRIVATE_KEY", "BUZZ_RELAY_URL"] {
+        match entries.get(required) {
+            Some(v) if !v.is_empty() => {}
+            _ => return Err(format!("missing {required}")),
+        }
+    }
+
+    for key in entries.keys() {
+        if !is_valid_env_key(key) {
+            return Err(format!("Invalid env key: {:?}", key));
+        }
+    }
+
+    if let Some(parent) = Path::new(IDENTITY_ENV_PATH).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        let _ = Command::new("chown")
+            .args(["root:agent", &parent.display().to_string()])
+            .status();
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o750));
+    }
+
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|(k, v)| format!("{}='{}'", k, v.replace('\'', "'\\''")))
+        .collect();
+    lines.sort();
+    let content = lines.join("\n") + "\n";
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o640)
+        .open(IDENTITY_ENV_PATH)
+        .map_err(|e| format!("Failed to write {}: {}", IDENTITY_ENV_PATH, e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {}", IDENTITY_ENV_PATH, e))?;
+
+    let _ = Command::new("chown")
+        .args(["root:agent", IDENTITY_ENV_PATH])
+        .status();
+    let _ = std::fs::set_permissions(
+        IDENTITY_ENV_PATH,
+        std::fs::Permissions::from_mode(0o640),
+    );
+
+    info!("Wrote {} identity vars to {}", entries.len(), IDENTITY_ENV_PATH);
+    Ok(())
 }
 
 /// Set specific env vars in the secrets .env file.

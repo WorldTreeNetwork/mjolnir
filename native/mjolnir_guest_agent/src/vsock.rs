@@ -1260,6 +1260,26 @@ async fn handle_request(
             }
         }
         #[cfg(feature = "full")]
+        VsockRequest::InjectIdentity { id, entries } => {
+            let keys: Vec<&str> = entries.keys().map(|k| k.as_str()).collect();
+            info!("InjectIdentity: keys={:?}", keys);
+            match crate::secrets::write_identity_env(&entries) {
+                Ok(()) => VsockResponse::InjectIdentityResponse {
+                    id,
+                    ok: true,
+                    error: None,
+                },
+                Err(e) => {
+                    warn!("InjectIdentity failed: {}", e);
+                    VsockResponse::InjectIdentityResponse {
+                        id,
+                        ok: false,
+                        error: Some(e),
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "full")]
         VsockRequest::SuspendSecrets { id } => {
             info!("SuspendSecrets");
             match crate::secrets::suspend() {

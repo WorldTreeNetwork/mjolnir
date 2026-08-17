@@ -423,6 +423,40 @@ defmodule Mjolnir.Vsock.ProtocolTest do
     end
   end
 
+  describe "inject_identity_request/2 (mjolnir-1pe)" do
+    test "builds entries for buzz.env without extra host fields" do
+      identity = %{
+        private_key_nsec: "nsec1test",
+        relay_url: "wss://relay.test"
+      }
+
+      msg = Protocol.inject_identity_request(identity, request_id: "id-1")
+      assert msg["type"] == "inject_identity"
+      assert msg["id"] == "id-1"
+
+      assert msg["entries"] == %{
+               "BUZZ_PRIVATE_KEY" => "nsec1test",
+               "BUZZ_RELAY_URL" => "wss://relay.test"
+             }
+
+      refute Map.has_key?(msg, "passphrase")
+    end
+
+    test "round-trips through encode on channel 0" do
+      msg =
+        Protocol.inject_identity_request(%{
+          private_key_nsec: "nsec1test",
+          relay_url: "wss://relay.test"
+        })
+
+      encoded = Protocol.encode(msg, 0)
+      <<channel::8, length::big-32, payload::binary>> = encoded
+      assert channel == 0
+      assert byte_size(payload) == length
+      assert Jason.decode!(payload) == msg
+    end
+  end
+
   describe "inject_secrets_request/2 (managed secrets)" do
     test "builds a minimal request with just a passphrase" do
       msg = Protocol.inject_secrets_request("s3cret")

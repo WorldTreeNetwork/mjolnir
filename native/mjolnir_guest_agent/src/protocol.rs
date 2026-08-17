@@ -150,6 +150,14 @@ pub enum VsockRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entries: Option<std::collections::HashMap<String, String>>,
     },
+    /// Write `/run/mjolnir/buzz.env` (tmpfs) with opaque agent identity.
+    /// Independent of the LUKS volume. Values must never be logged.
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_identity")]
+    InjectIdentity {
+        id: String,
+        entries: std::collections::HashMap<String, String>,
+    },
     /// Wipe the LUKS volume key from kernel RAM before a memory snapshot.
     /// No-op (ok, suspended=false) when no mapper is open.
     #[cfg(feature = "full")]
@@ -226,6 +234,14 @@ pub enum VsockResponse {
         id: String,
         ok: bool,
         created: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_identity_response")]
+    InjectIdentityResponse {
+        id: String,
+        ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },

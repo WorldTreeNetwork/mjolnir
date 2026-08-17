@@ -167,6 +167,7 @@ defmodule Mjolnir.VM do
           optional(:owner_id) => String.t() | nil,
           optional(:extra_mounts) => list(extra_mount()),
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
+          optional(:identity) => Mjolnir.Identity.t(),
           optional(:restart_policy) => :always | :never,
           optional(:await_boot_timeout) => timeout()
         }
@@ -194,6 +195,9 @@ defmodule Mjolnir.VM do
   - `:await_boot_timeout` - How long `spawn/1` waits for boot to complete
     (default: 30s; auto-raised to #{@managed_await_boot_timeout}ms for
     `secrets_mode: :managed`, whose LUKS setup runs during boot).
+  - `:identity` - `%{private_key_nsec: nsec, relay_url: url}` stored in
+    SecretStore and injected over vsock to `/run/mjolnir/buzz.env`. The nsec
+    is never kept on this struct or written to StateStore.
   - `:restart_policy` - `:always` (default) or `:never`. `:never` stops
     `Mjolnir.Reconcile` from rehydrating this VM if it is later found stranded;
     the record is finalized to `:stopped` with the rootfs preserved. Use it for
@@ -1025,6 +1029,25 @@ defmodule Mjolnir.VM do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
+    case store_identity(opts) do
+      :ok ->
+        init_state(opts)
+
+      {:error, reason} ->
+        Logger.error("VM #{opts.id} refused spawn: identity store failed (#{inspect(reason)})")
+
+        {:stop, :normal}
+    end
+  end
+
+  defp store_identity(opts) do
+    case opts[:identity] do
+      nil -> :ok
+      identity -> Mjolnir.Identity.put(opts.id, identity)
+    end
+  end
+
+  defp init_state(opts) do
     # Resolve SSH public key: spawn opts > app config > nil
     ssh_key = opts[:ssh_public_key] || Application.get_env(:mjolnir, :default_ssh_public_key)
 
@@ -1656,6 +1679,18 @@ defmodule Mjolnir.VM do
       end
     end
 
+    # Drop the stored nsec on a real teardown (same preserve/dormant rules as
+    # escrow). Resume and wake must still be able to re-inject from SecretStore.
+    if not preserve do
+      case Mjolnir.DormantRegistry.lookup(state.id) do
+        {:ok, _entry} ->
+          :ok
+
+        :not_found ->
+          _ = Mjolnir.Identity.delete(state.id)
+      end
+    end
+
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
     end
@@ -1812,6 +1847,18 @@ defmodule Mjolnir.VM do
           :ok -> Logger.info("VM identity ok for VM #{state.id}")
           :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
           {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
+        end
+
+        # Buzz nsec: re-inject every boot (buzz.env is tmpfs). Never log values.
+        case maybe_inject_agent_identity(state, vsock_path) do
+          :ok ->
+            Logger.info("Agent identity injected for VM #{state.id}")
+
+          :skipped ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Agent identity inject failed for VM #{state.id}: #{inspect(reason)}")
         end
 
         # Tell guest agent whether to start Iroh. Skip the reconfigure in resume
@@ -2475,6 +2522,35 @@ defmodule Mjolnir.VM do
 
   defp maybe_unlock_secrets(_state, _vsock_path), do: :skipped
 
+  # Re-inject Buzz identity every boot: /run/mjolnir/buzz.env is tmpfs.
+  # The nsec is read from SecretStore for the request and not stored on state.
+  defp maybe_inject_agent_identity(%__MODULE__{id: vm_id}, vsock_path) do
+    case Mjolnir.Identity.get(vm_id) do
+      {:ok, identity} ->
+        request = Mjolnir.Vsock.Protocol.inject_identity_request(identity)
+
+        case vsock_request(vsock_path, request, 10_000) do
+          {:ok, %{"ok" => true}} ->
+            :ok
+
+          {:ok, %{"ok" => false, "error" => err}} ->
+            {:error, {:identity_inject_rejected, err}}
+
+          {:ok, _other} ->
+            {:error, :unexpected_identity_response}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :not_found ->
+        :skipped
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # Watchdog slack over the 60s vsock bound inside maybe_unlock_secrets/2. Only
   # reached when the worker is stuck somewhere that bound does not cover.
   @secrets_unlock_watchdog_ms 90_000
@@ -3056,5 +3132,24 @@ defmodule Mjolnir.VM do
       :not_found ->
         Logger.warning("Dormant VM #{vm_id} not found during restore")
     end
+  end
+end
+
+defimpl Inspect, for: Mjolnir.VM do
+  def inspect(%Mjolnir.VM{} = vm, opts) do
+    payload =
+      case vm.secrets_payload do
+        nil -> nil
+        _ -> :redacted
+      end
+
+    Inspect.Algebra.concat([
+      "#Mjolnir.VM<",
+      Inspect.Algebra.to_doc(
+        [id: vm.id, state: vm.state, secrets_payload: payload],
+        opts
+      ),
+      ">"
+    ])
   end
 end

@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-1pe",
+  "node_id": "mjolnir-1pe",
+  "capability": "buzz-local-client",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4.6" }
+  },
+  "goal": "Store Buzz nsec in SecretStore, inject over vsock to /run/mjolnir/buzz.env, and prove it never appears in host artifacts.",
+  "anchors": [
+    { "symbol": "Mjolnir.Identity", "invariant": "nsec is opaque; stored in SecretStore; never on VM struct" },
+    { "symbol": "Mjolnir.Vsock.Protocol.inject_identity_request/2", "invariant": "vsock hop carries BUZZ_PRIVATE_KEY + BUZZ_RELAY_URL" },
+    { "symbol": "Mjolnir.VM.build_running_record/1", "invariant": "StateStore record does not contain nsec" },
+    { "symbol": "Mjolnir.API.Views.render_vm/1", "invariant": "list/info bodies do not contain nsec" }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/identity_inject_test.exs test/mjolnir/secret_store_test.exs test/mjolnir/vsock/protocol_test.exs"
+  },
+  "out_of_scope": [
+    { "item": "IdentiKey wallet custody of nsec", "tracked_as": "optional on mjolnir-1pe" },
+    { "item": "identikey-protocol crate / signed attestation", "tracked_as": "nod-identikey-admit" },
+    { "item": "Buzz relay VM", "tracked_as": "mjolnir-gti" },
+    { "item": "Nostr ingress / protocol facade", "tracked_as": "add-buzz-local-runtime" },
+    { "item": "deploy / guest-agent rebuild on server", "tracked_as": "later" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/identity.ex",
+      "lib/mjolnir/secret_store.ex",
+      "lib/mjolnir/vm.ex",
+      "lib/mjolnir/vsock/protocol.ex",
+      "lib/mjolnir/api/router.ex",
+      "native/mjolnir_guest_agent/src/protocol.rs",
+      "native/mjolnir_guest_agent/src/vsock.rs",
+      "native/mjolnir_guest_agent/src/secrets.rs",
+      "test/mjolnir/identity_inject_test.exs",
+      "test/mjolnir/secret_store_test.exs",
+      "test/mjolnir/vsock/protocol_test.exs",
+      "openspec/changes/add-buzz-local-runtime/tasks.md",
+      "groups/mjolnir-1pe/packet.json"
+    ],
+    "do_not": ["deploy", "push"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "brief",
+  "density": "standard"
+}

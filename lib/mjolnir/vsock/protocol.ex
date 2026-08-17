@@ -249,6 +249,20 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Build an inject_identity request (Buzz nsec + relay URL).
+
+  The guest writes `/run/mjolnir/buzz.env` on tmpfs. Do not log the
+  returned map — it contains the nsec.
+  """
+  def inject_identity_request(identity, opts \\ []) do
+    %{
+      "type" => "inject_identity",
+      "id" => opts[:request_id] || UUID.uuid4(),
+      "entries" => Mjolnir.Identity.env_entries(identity)
+    }
+  end
+
+  @doc """
   Wipe the guest's LUKS volume key from kernel RAM before a memory snapshot.
 
   The guest no-ops (`ok: true, suspended: false`) when no mapper is open, so

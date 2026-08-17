@@ -333,6 +333,20 @@ defmodule Mjolnir.API.Router do
             Map.put(opts, :_validation_error, "extra_mounts must be an array")
         end
 
+      # Buzz agent identity (nsec + relay). Stored in SecretStore, never on the
+      # VM record. Independent of secrets_mode — this is not LUKS material.
+      opts =
+        case Mjolnir.Identity.parse_params(conn.body_params["identity"]) do
+          :absent ->
+            opts
+
+          {:ok, identity} ->
+            Map.put(opts, :identity, identity)
+
+          {:error, msg} ->
+            Map.put(opts, :_validation_error, msg)
+        end
+
       # Optional secret material delivered into the LUKS volume on first boot
       # (managed mode only). Held transiently; ends up encrypted in the volume.
       opts =
