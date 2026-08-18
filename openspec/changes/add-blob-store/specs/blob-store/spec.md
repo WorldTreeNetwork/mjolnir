@@ -58,8 +58,8 @@ process or guest SHALL NOT be the durability mechanism.
 
 ### Requirement: Working-set guests are not snapshot-backed as the archive
 
-If a later node adds a working-set guest (iroh-blobs, MinIO, or
-other cache), that guest SHALL NOT be enrolled in Mjolnir
+If a later node adds an iroh-blobs working-set guest, that guest
+SHALL NOT be enrolled in Mjolnir
 filesystem snapshot backup to B2 (`mjolnir-qwp`, or an equivalent
 `btrfs send` / rclone of the guest root or data volume as the
 object archive). Image snapshots for faster spawn remain allowed
@@ -89,7 +89,7 @@ database. Ready SHALL remain derived from edges.
 
 ### Requirement: The store is untrusted for confidentiality
 
-B2 and any working-set cache (iroh-blobs peer, MinIO, local disk)
+B2 and any working-set cache (iroh-blobs peer or local disk)
 SHALL be treated as untrusted for confidentiality. Encryption to a
 personal key (then PRE-share) or to a Guild-Key, when present,
 SHALL happen above the store. A host SHALL NOT treat bucket ACLs,

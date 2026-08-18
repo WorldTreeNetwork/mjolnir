@@ -9,7 +9,8 @@ stays browsable.
 **First consumer:** Taskmaster (`~/work/Taskmaster/taskmaster-web`)
 **Implement after accept:** `add-blob-api` (v1: recrypt layout on B2 +
 our door) → `add-blob-client`. Mesh transmit: `add-iroh-blobs`.
-Encryption: `add-encrypt-blobs`. There is no `add-minio-mesh`.
+Encryption: `add-encrypt-blobs`. **We are not doing MinIO** — not
+v1, not a later cache, no `add-minio-mesh`.
 
 Amended after advise 2026-08-17 (`reviews/2026-08-17-advise.md`).
 
@@ -67,20 +68,20 @@ Rejected as durability:
 
 - **`mjolnir-qwp` / `btrfs send` → B2.** Filesystem generation, not
   “give me hash H.”
-- **MinIO as the write-through cache.** Extra VM in front of an S3
-  API B2 already has. Does not buy the durability SHALL. May return
-  later as *a* working-set option; it is not v1 and not the
-  definition of a provider.
+- **MinIO, at all.** Extra VM in front of an S3 API B2 already has.
+  Does not buy the durability SHALL. Not v1. Not a later cache.
+  Not the definition of a provider. We are not doing it.
 - **iroh-blobs as the archive.** Transfer protocol + local store.
   No B2 sink. Last peer offline = data gone. That is the failure
   Decision 1 exists to kill.
 - **LUKS volume as the object store.** Store is untrusted for
   confidentiality (Decision 5).
 
-No storage-provider VM is required for v1. If a later node adds a
-cache guest (iroh-blobs `FsStore`, or MinIO), that guest is **not**
+No storage-provider VM is required for v1. If a later node adds an
+iroh-blobs `FsStore` working-set guest, that guest is **not**
 enrolled in filesystem-snapshot backup (`mjolnir-qwp`). Image
-snapshots for faster spawn are not the blob archive.
+snapshots for faster spawn are not the blob archive. Do not add a
+MinIO guest instead.
 
 ## Decision 1b — Our door, not S3 as the client contract
 
@@ -163,8 +164,8 @@ encoding we explicitly choose. Do not add convergent encryption.
 ## Decision 5 — Encryption sits above the store
 
 The store is **untrusted for confidentiality, trusted for
-availability**. B2 (and any later cache: iroh-blobs peer, MinIO,
-local disk) sees bytes and hashes. They do not see keys.
+availability**. B2 (and any later iroh-blobs peer or local cache)
+sees bytes and hashes. They do not see keys.
 
 E2E Iroh QUIC hides bytes from relays and the ISP. It does **not**
 hide bytes from the peer that stores them. Transmit confidentiality
@@ -240,8 +241,8 @@ our door; agents and mesh nodes may fetch over Iroh.
 | Existing fabric | none | transport paid; store unpaid | none required | Mjolnir + Lightning Mesh |
 | Why pick it | cache that speaks the layout | mesh-native fetch | no extra VM; S3 is not the client API | E2E verified transfer; same hashes |
 
-v1 is the third column. v2 is the fourth. MinIO is not a landing.
-iroh-blobs as the *archive* is rejected.
+v1 is the third column. v2 is the fourth. MinIO is rejected, not
+deferred. iroh-blobs as the *archive* is rejected.
 
 ## Consequences
 
@@ -273,7 +274,7 @@ In `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md`:
 | New Taskmaster key scheme (`/taskmaster/{uuid}`) | Third layout beside recrypt |
 | BTRFS snapshot → B2 of a store guest | Durability tied to one filesystem generation |
 | Encrypt everything at LUKS on a guest | Store is untrusted; B2 still needed; no hash mesh |
-| MinIO as v1 / as the meaning of “provider” | Extra VM in front of B2; first box becomes architecture |
+| MinIO (v1, cache, or “provider”) | Extra VM in front of B2; we are not doing it |
 | iroh-blobs as the archive | No independent copy; last peer offline loses data |
 | recrypt-server as the only door | PRE proxy is a later node; our door is ours |
 | Sites rclone as the accept-path | Async; cannot be the B2 ack |

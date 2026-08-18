@@ -11,8 +11,8 @@ back; the four boxes are closed in this amend. Re-advise is next.
 - [x] Send-back: `accepted ⇒ on B2` is HeadObject/GET before ack. ILM / async replicate are not an accept-path.
 - [x] Send-back: hash-refuse and re-PUT no-op live on the put path, not raw S3.
 - [x] Re-advise after the four boxes (`reviews/2026-08-17-readvise.md` accept-with-nits)
-- [ ] After accept: amend `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md` with the sketch block in design.md
-- [ ] After accept: one-line hop in Taskmaster `docs/GHOST.md` (blob mesh, not the ready-set)
+- [x] After accept: amend `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md` with the sketch block in design.md
+- [x] After accept: one-line hop in Taskmaster `docs/GHOST.md` (blob mesh, not the ready-set)
 
 Handoffs (not checkboxes):
 

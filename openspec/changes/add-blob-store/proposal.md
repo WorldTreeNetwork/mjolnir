@@ -23,7 +23,8 @@ canonical copy, working set / transmit.
   do not speak S3. v2 working set / transmit is **iroh-blobs** on
   Mjolnir and Lightning Mesh nodes, draining to the same B2 keys.
 - Accepted ⇒ HeadObject/GET on B2 succeeded. No ILM, no async
-  replicate, no MinIO as the definition of a provider.
+  replicate. **We are not doing MinIO** — not as the provider, not
+  as a later cache.
 - Hash-refuse and re-PUT no-op live on the put path.
 - Encryption modes named (personal + PRE-share, or Guild-Key). Not
   implemented here. Store is untrusted for confidentiality; E2E Iroh
@@ -64,5 +65,5 @@ implement node. `add-blob-client` is the first Taskmaster surface.
 - Personal / Guild encryption and PRE — `add-encrypt-blobs`
 - IdentiKey login, OIDC, managed-sign — their own nodes
 - `mjolnir-qwp` for *other* VM classes
-- Spawning MinIO — not a landing
+- MinIO — not at all (not a landing, not a later cache)
 - Naming B2, MinIO, Iroh, or SvelteKit in bazaar `openspec/specs/`
