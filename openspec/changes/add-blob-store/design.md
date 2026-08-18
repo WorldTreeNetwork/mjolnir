@@ -4,10 +4,14 @@ Canonical ADR index: [`docs/decisions/0003-blob-store-mesh.md`](../../../docs/de
 This file is the full argument. The index exists so `docs/decisions/`
 stays browsable.
 
-**Status:** Proposed — awaiting advise (activated 2026-08-17, `nod-blob-arch`).
+**Status:** Proposed — send-back amend 2026-08-17. Awaiting re-advise.
 **Change:** `add-blob-store`
 **First consumer:** Taskmaster (`~/work/Taskmaster/taskmaster-web`)
-**Implement after accept:** `add-minio-mesh` → `add-blob-client`. Encryption is `add-encrypt-blobs`.
+**Implement after accept:** `add-blob-api` (v1: recrypt layout on B2 +
+our door) → `add-blob-client`. Mesh transmit: `add-iroh-blobs`.
+Encryption: `add-encrypt-blobs`. There is no `add-minio-mesh`.
+
+Amended after advise 2026-08-17 (`reviews/2026-08-17-advise.md`).
 
 ## Problem
 
@@ -19,63 +23,110 @@ Four questions were still open after intend:
 3. Do we grow a Taskmaster-only blob API, or consume recrypt’s?
 4. What does “de-duped” mean once guild/hive bytes are encrypted?
 
-Guessing any of these in a spawn recipe makes the first MinIO box the
-architecture.
+Advise added a fifth: the first word of “provider” must not be a
+product. Guessing MinIO in a spawn recipe makes the first box the
+architecture. This amend splits the layers.
 
-## Decision 1 — A provider is a cache. B2 is the copy that counts.
+## Three layers (do not fuse)
 
-A **storage provider** is a Mjolnir guest running MinIO. It is not a
-disk we backup. It is a working set: recently used and recently written
-objects, served over S3.
+| Layer | Job | v1 | Later |
+|---|---|---|---|
+| Address / layout | Hash is identity | recrypt `blob/b3/{base58}` + optional `.obao` | same keys, always |
+| Canonical durability | Outlive any process | **B2, written directly** in that layout | still B2 |
+| Working set + transmit | Serve recent bytes, NAT-traverse | none required | **iroh-blobs** on Mjolnir *and* Lightning Mesh nodes |
+
+A **provider** is anything that can put/get those keys and register in
+`ProviderIndex`. It is not “a MinIO guest.”
+
+## Decision 1 — v1 is recrypt layout straight onto B2
 
 **Backblaze B2 holds the canonical copy of every accepted object.**
-The guest may be destroyed, snapshotted for *image* cutover, or
-replaced. None of those events may be how we keep a blob.
+The key is recrypt’s. The writer is our put path. There is no MinIO
+in the middle, no ILM, no async replicate, no guest disk that we
+pretend is the archive.
 
-Mechanism (preferred): MinIO’s S3-compatible remote to B2 — replicate
-or ILM-transition so that an accepted PUT is on B2 before we tell the
-caller the hash is durable. Local eviction is allowed. Local-only
-objects are not accepted.
+Accepted means the put path has observed the object on B2
+(`HeadObject` or a GET of the same key) **before** it returns the
+hash. ILM transition and bucket replication are not an accept-path.
 
-Rejected for this VM class:
+Sites already planned this: `S3Storage` pointed at a B2 endpoint is
+the same constructor as MinIO, different URL
+(`docs/plans/initiatives/identikey-sites.md`). Recrypt already speaks
+the layout (`recrypt-storage` `S3Storage`, keys in `src/s3.rs`).
+Sites’ rclone of `@sites` stays the durability path for the *Sites
+tree*. It is not this mesh: rclone is async, so it cannot be the
+accept ack, and mixing GC/authz with site chunks is a later mess.
 
-- **`mjolnir-qwp` / `btrfs send` → B2.** That backups a filesystem
-  generation. It cannot answer “give me hash H from any provider.”
-  Keep it for app guests and other disks.
-- **Sites rclone of `@sites`.** Right shape for the host Sites tree
-  (content-addressed, append-only copy). Wrong place: the MinIO guest
-  is not that tree, and we do not want a second copy pipeline beside
-  MinIO→B2.
-- **LUKS volume as the object store.** Tier-3 is for secrets the host
-  must not read. Blob *bytes* are either public or already encrypted
-  above the store; the store is untrusted for confidentiality. Paying
-  LUKS here loses BTRFS features and does not make B2 canonical.
+B2 versioning is **on** for this bucket. Blob keys are immutable
+(re-PUT of the same hash is a no-op). Versioning is the safety net
+if a mutable pointer or a mistaken overwrite ever appears. The
+service principal that can `DeleteObject` is not the Taskmaster
+principal.
 
-Turn **off** filesystem-snapshot backup for this VM class. Snapshot
-the *image* if we need a faster spawn; do not treat those snapshots as
-the blob backup.
+Rejected as durability:
+
+- **`mjolnir-qwp` / `btrfs send` → B2.** Filesystem generation, not
+  “give me hash H.”
+- **MinIO as the write-through cache.** Extra VM in front of an S3
+  API B2 already has. Does not buy the durability SHALL. May return
+  later as *a* working-set option; it is not v1 and not the
+  definition of a provider.
+- **iroh-blobs as the archive.** Transfer protocol + local store.
+  No B2 sink. Last peer offline = data gone. That is the failure
+  Decision 1 exists to kill.
+- **LUKS volume as the object store.** Store is untrusted for
+  confidentiality (Decision 5).
+
+No storage-provider VM is required for v1. If a later node adds a
+cache guest (iroh-blobs `FsStore`, or MinIO), that guest is **not**
+enrolled in filesystem-snapshot backup (`mjolnir-qwp`). Image
+snapshots for faster spawn are not the blob archive.
+
+## Decision 1b — Our door, not S3 as the client contract
+
+v1 puts a service we own in front of B2. Callers do not speak B2
+and do not need an S3 SDK. The door can be REST, another RPC, or
+**Mjolnir messages** (`deliver_message` / vsock / Iroh ALPNs the
+fabric already has). Same put path behind every face: verify hash,
+write recrypt keys to B2, ack only after B2 has the object.
+
+That is why S3-compatibility is not a reason to run MinIO. Agents
+write the door. The scarce thing is the layout and the ack, not an
+object-store OS.
+
+Hash-refuse and re-PUT-as-no-op live on **this put path**
+(`BlobStorage` impl or the sidecar). Raw S3 to B2 will accept any
+bytes at any key; we never hand callers that socket. Recrypt’s
+`put` already hashes; `put_with_outboard` today does not
+(`recrypt-storage/src/s3.rs`) — the first implementer closes that
+or wraps it.
+
+`ProviderIndex` (`hash → [locator]`) exists from day one so a
+second provider does not rename objects. v1 locators are the B2
+(or door) URL. Later locators may be an iroh node-id + ticket.
+Grammar is named in `add-blob-api`; this ADR only forbids a
+parallel hash space.
 
 ## Decision 2 — Address is the hash. Layout is recrypt’s.
-
-Objects are keyed by the **Blake3** hash of the bytes we store
-(ciphertext, when encrypted). Wire key:
 
 ```
 blob/b3/{base58(hash)}
 blob/b3/{base58(hash)}.obao    # bao outboard; omitted ≤ 16 KiB
 ```
 
-This is `recrypt-storage`’s S3 layout (`BlobStorage`, `S3Storage`).
-Taskmaster **consumes that crate** (or a thin TS client that speaks
-the same keys). It does not grow a third path scheme.
+Blake3 of the **stored** bytes (ciphertext, when encrypted). This
+is `recrypt-storage` (`BlobStorage`). Taskmaster does not grow a
+third path scheme.
 
-A second provider is a second URL for the same hash. Recrypt’s
-`ProviderIndex` (`hash → [provider_url]`) is the registry. First
-landing is one MinIO VM plus B2; the index still exists so a second
-provider does not rename anything.
+Recrypt chose `bao-tree` over embedding `iroh-blobs` so the
+32-byte root stays bit-identical without taking iroh’s QUIC stack
+(`docs/plans/2026-04-06-bao-streaming-and-storage-simplification.md`
+§2.1). Sibling suffix is `.obao` here. iroh-blobs on disk uses
+`.obao4`. Address bits match; the suffix is pinned when
+`add-iroh-blobs` drains to B2. Do not fork the hash.
 
-iroh-blobs uses the same 32-byte Blake3 root. We do not speak iroh
-in this change. We do not pick a different hash.
+Do not hash through `Mjolnir.Sites.Crypto.blake3_hash/1` — that
+seam is still a SHA-256 stub.
 
 ## Decision 3 — What a Taskmaster blob is
 
@@ -90,82 +141,127 @@ A blob is any host object that is **not** the work graph.
 SQLite holds a **hash** (and maybe size, content-type, encryption
 mode). It does not hold the bytes. Ready stays derived from edges.
 
-The mesh is not Taskmaster-specific. Guild/hive hosts are later
-consumers of the same providers. First writer is Taskmaster so the
-path is real.
+The mesh is not Taskmaster-specific. First writer is Taskmaster so
+the path is real. Guild/hive and Lightning Mesh nodes are later
+consumers of the same hashes.
 
-“Large” means: bigger than we will put in a SQLite page or a JSON
-column. The store path (MinIO + B2) accepts multipart / streaming.
-The first client (`add-blob-client`) may still buffer if that is
-called out; the store must not.
+“Large” means bigger than a SQLite page or a JSON column. B2
+accepts multipart. The door must stream; a first client may
+buffer if that is called out. Recrypt’s `Vec<u8>` put is a client
+limit, not a store limit.
 
 ## Decision 4 — De-dupe is identity of stored bytes
 
-Recrypt’s hybrid encrypt uses fresh random XChaCha20 material. Two
-encrypts of the same plaintext are different ciphertexts. **Plaintext
-dedup does not happen** for encrypted objects. Recrypt already
-recorded this; do not cite it as a benefit of those objects.
+Recrypt’s hybrid encrypt uses fresh random XChaCha20 material.
+**Plaintext dedup does not happen** for encrypted objects. Recrypt
+already recorded this.
 
-What does dedup:
-
-- Re-PUT of the **same stored bytes** (same hash → no-op).
-- Unencrypted / public objects whose plaintext *is* the stored bytes.
-- Any later deterministic encoding we explicitly choose.
-
-Do not add convergent encryption to force plaintext dedup. That is a
-new cryptosystem.
+What does dedup: re-PUT of the same stored bytes; public objects
+whose plaintext *is* the stored bytes; any later deterministic
+encoding we explicitly choose. Do not add convergent encryption.
 
 ## Decision 5 — Encryption sits above the store
 
 The store is **untrusted for confidentiality, trusted for
-availability**. MinIO and B2 see bytes and hashes. They do not see
-keys.
+availability**. B2 (and any later cache: iroh-blobs peer, MinIO,
+local disk) sees bytes and hashes. They do not see keys.
+
+E2E Iroh QUIC hides bytes from relays and the ISP. It does **not**
+hide bytes from the peer that stores them. Transmit confidentiality
+is not store confidentiality.
 
 Two modes, same chunk layer (Sites already uses this split):
 
-1. **Personal, then PRE-share.** Encrypt to the user’s key. Share by
-   recrypting the wrapped key (KEM). Bulk ciphertext (DEM) unmoved.
-2. **Guild-Key.** Encrypt to a guild key. Members who hold that key
-   decrypt. Revocation is a guild-key problem, not a rewrite of the
-   blob.
+1. **Personal, then PRE-share.** Encrypt to the user’s key. Share
+   by recrypting the wrapped key (KEM). Bulk ciphertext unmoved.
+2. **Guild-Key.** Encrypt to a guild key. Revocation is a
+   guild-key problem, not a rewrite of the blob.
 
 Public objects skip both. `add-encrypt-blobs` implements the modes.
-This change only forbids treating MinIO/B2 as the confidentiality
-boundary, and forbids a third mode invented in Taskmaster.
+This change forbids treating B2, bucket ACLs, LUKS, or Iroh
+tickets as the confidentiality boundary, and forbids a third mode
+invented in Taskmaster.
 
-C2 managed keys and C3/C4 self-custody are how those keys exist.
-They are other nodes. The store does not wait on login to be
-*shaped*; the first put/get may use a Mjolnir managed-secrets
-service principal. User-scoped authz waits on IdentiKey.
+User-scoped authz waits on IdentiKey. v1 may use a Mjolnir
+managed-secrets service principal on the door, not on B2 exposed
+to Taskmaster.
 
 ## Decision 6 — One process, one SQLite file still holds
 
 Taskmaster’s app VM stays one process, one SQLite file. The blob
-mesh is a **sibling guest**, not a second writer on that file.
-libsql-onto-LUKS and write pools stay later, and stay off this
-change.
+door is a sibling (process or guest), not a second writer on that
+file. libsql-onto-LUKS and write pools stay later.
 
-Bazaar living specs do not name MinIO, B2, SvelteKit, or SQLite.
+Bazaar living specs do not name B2, MinIO, Iroh, SvelteKit, or SQLite.
+
+## Decision 7 — Graduate to iroh-blobs as working-set / transmit
+
+v2 of the *mesh*, not a replacement for B2.
+
+Iroh in Mjolnir and Lightning Mesh today is **transport**: guest
+shell / tcp-fwd / secret-inject ALPNs; mesh TUN + gossip. Neither
+tree depends on `iroh-blobs`. Tickets are node addresses, not blob
+capabilities. Relays assist hole-punch and **can** forward
+ciphertext if a session never goes direct; they cannot decrypt
+QUIC. LAN mesh is relay-free. That cost is already paid.
+
+`add-iroh-blobs` adds the blobs ALPN and a local `FsStore` (or
+equivalent) on:
+
+- Mjolnir storage / app guests that should serve the working set
+- **Lightning Mesh nodes** (the overlay already has Iroh identity
+  and a path to every peer)
+
+Those nodes register in `ProviderIndex` as locators for hashes
+they hold. They **drain** accepted objects to B2 in recrypt
+layout (or refuse to ack until the door has). Losing every
+iroh-blobs peer is an availability blip, not data loss.
+
+Verified streaming, range GET, resume, multi-source fetch are why
+this layer exists. Recrypt’s decrypt path already wants
+“iroh-blobs-style range protocol.” Do not take the `iroh-blobs`
+crate as the durability backend (recrypt already rejected that
+coupling).
+
+Pin a production-quality iroh-blobs version when that node starts
+(n0’s latest has been flagged not-prod). Decide `.obao` vs
+`.obao4` on the drain. Taskmaster’s browser path stays HTTP to
+our door; agents and mesh nodes may fetch over Iroh.
+
+## Contrast (the table advise owed)
+
+| Criterion | MinIO guest + B2 remote | iroh-blobs as archive | **v1: B2-direct + our door** | v2: iroh-blobs working set + B2 drain |
+|---|---|---|---|---|
+| Address | recrypt keys native | Blake3-32; must export to recrypt keys | recrypt keys native | same hashes; drain writes recrypt keys |
+| Client contract | S3 | blobs ALPN + ticket | **our** REST / RPC / Mjolnir message | Iroh for mesh; door still for TS/browser |
+| Transport | TLS to MinIO/B2 | Iroh QUIC E2E (relays already paid) | TLS to our door, then TLS to B2 | Iroh between mesh nodes |
+| Durability | unproven sync (ILM/replicate ≠ ack) | local disk + peers; **no B2** | **PUT is the canonical copy** | B2 still the copy that counts |
+| Existing code | `S3Storage` | no crate dep, no ALPN | `S3Storage` at a B2 endpoint | endpoints/relays paid; blobs unpaid |
+| Existing fabric | none | transport paid; store unpaid | none required | Mjolnir + Lightning Mesh |
+| Why pick it | cache that speaks the layout | mesh-native fetch | no extra VM; S3 is not the client API | E2E verified transfer; same hashes |
+
+v1 is the third column. v2 is the fourth. MinIO is not a landing.
+iroh-blobs as the *archive* is rejected.
 
 ## Consequences
 
-- Losing the MinIO VM is an availability blip, not data loss.
+- Losing any guest or mesh node is an availability blip, not data loss.
 - A hash that is not on B2 is not accepted.
-- Snapshotting the MinIO guest to “back up the blobs” is a bug.
+- Snapshotting a cache guest to “back up the blobs” is a bug.
+- Callers never hold B2 keys.
 - Taskmaster cannot answer “what can I start” from blob storage.
-- Recrypt-storage’s current `Vec<u8>` put is a client limit, not a
-  store limit. Streaming is `add-blob-client` / an upstream recrypt
-  slice, not a reason to fork the layout.
+- The first VM (if any) is not the architecture.
 
 ## Proposed Taskmaster sketch amendment (apply after advise accept)
 
 In `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md`:
 
 - Add a decided row: objects too large for the graph live in the
-  blob mesh; SQLite stores the hash. Landing: `add-blob-store`
-  (this change). Implement: `add-minio-mesh`, `add-blob-client`.
-- Remove “Backup / sync / multi-instance are later” as if it still
-  covered blobs. Multi-instance *SQLite* stays later.
+  blob mesh; SQLite stores the hash. Landing: `add-blob-store`.
+  Implement: `add-blob-api`, `add-blob-client`. Mesh transmit later:
+  `add-iroh-blobs` (Mjolnir + Lightning Mesh).
+- Retract “backup is later” as if it covered blobs. Multi-instance
+  *SQLite* stays later.
 - Open item: IdentiKey login still a hop; user-scoped blob authz
   waits on it.
 
@@ -174,18 +270,21 @@ In `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md`:
 | Alternative | Why not |
 |---|---|
 | Bytes in SQLite | Large blobs, no mesh, backup is the DB file |
-| New Taskmaster S3 client with ad-hoc keys | Third layout beside recrypt |
-| BTRFS snapshot → B2 of the MinIO guest | Durability tied to one filesystem generation |
-| Encrypt everything at LUKS on the guest | Host-visible working set lost; B2 still needed; no hash mesh |
-| Wait for iroh-blobs | Compatible addresses; not a first provider |
-| recrypt-server as the only door | Extra hop; PRE proxy is a later node |
+| New Taskmaster key scheme (`/taskmaster/{uuid}`) | Third layout beside recrypt |
+| BTRFS snapshot → B2 of a store guest | Durability tied to one filesystem generation |
+| Encrypt everything at LUKS on a guest | Store is untrusted; B2 still needed; no hash mesh |
+| MinIO as v1 / as the meaning of “provider” | Extra VM in front of B2; first box becomes architecture |
+| iroh-blobs as the archive | No independent copy; last peer offline loses data |
+| recrypt-server as the only door | PRE proxy is a later node; our door is ours |
+| Sites rclone as the accept-path | Async; cannot be the B2 ack |
 
 ## Open (do not block this ADR)
 
-- Immediate replicate vs ILM transition delay — implement node picks
-  the MinIO knob; the invariant is “accepted ⇒ on B2.”
-- ML-DSA parameter set for *signing* manifests (65 vs 87) — protocol
-  node, not the store.
-- Whether B2 versioning is on. Prefer on, so a mistaken overwrite of
-  a mutable pointer cannot silently destroy history. Blob keys
-  themselves are immutable.
+- Exact faces on the door (which REST routes, which Mjolnir message
+  types) — `add-blob-api`.
+- `ProviderIndex` process and locator grammar — `add-blob-api`.
+- ML-DSA parameter set for signing manifests (65 vs 87) — protocol
+  node.
+- iroh-blobs crate pin and `.obao` vs `.obao4` — `add-iroh-blobs`.
+- Relay policy for bulk Iroh transfer — `add-iroh-blobs` (default
+  can match Lightning Mesh: n0 Staging, `--relay` hatch, LAN off).
