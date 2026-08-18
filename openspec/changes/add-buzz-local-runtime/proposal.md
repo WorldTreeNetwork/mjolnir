@@ -8,18 +8,19 @@
 
 `add-buzz-local-client` (archived
 `openspec/changes/archive/2026-08-16-add-buzz-local-client/`) folded
-the fabric *decisions* and the one implement slice that is true in
-code (fail-closed thaw, `:never` refuses dormancy). The rest of the
-local Buzz client — Nostr/Matrix ingress, identikey-protocol crate,
-`@base/dev`, self-hosted relay, nsec inject — is not built. Living
-specs must not claim it.
+the fabric *decisions* and the implement slices that are true in
+code (fail-closed thaw, `:never` refuses dormancy, nsec off host
+artifacts). The rest of the local Buzz client — Nostr/Matrix
+ingress, identikey-protocol crate, `@base/dev`, self-hosted relay —
+is not built. Living specs must not claim it.
 
 ## What
 
-- Carry the unimplemented SHALLs from `add-buzz-local-client` as this
-  change’s deltas.
-- Implement via existing beads: `mjolnir-gti`, `mjolnir-1pe`,
-  `nod-identikey-admit`, `nod-base-dev`, Nostr ingress.
+- Carry the remaining unimplemented SHALLs from `add-buzz-local-client`
+  as this change’s deltas. `mjolnir-1pe` (nsec inject) folded into
+  the living spec on 2026-08-17.
+- Implement via existing beads: `mjolnir-gti`, `nod-identikey-admit`,
+  `nod-base-dev`, Nostr ingress.
 
 ## Impact
 

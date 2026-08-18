@@ -89,17 +89,3 @@ the default join path.
   `auth_tag`
 - WHEN the harness authenticates
 - THEN the relay does not refuse with `restricted: not a relay member`
-
-### Requirement: Secrets stay off the host artifacts
-
-The agent `nsec` SHALL be treated as an opaque string, stored in
-SecretStore, and injected over vsock. Host-originated artifacts
-(VM record, API responses, host journald, host-written syslog
-lines) SHALL NOT contain it. The harness SHALL NOT log it.
-
-#### Scenario: Negative scan of host artifacts
-
-- GIVEN a successful deploy of a Buzz body
-- WHEN the VM record, list/info API bodies, and host journald are
-  searched for the nsec
-- THEN there are no matches

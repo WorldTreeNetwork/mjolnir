@@ -666,7 +666,8 @@ The local Buzz client fabric (living spec
 [`buzz-local-client`](../openspec/specs/buzz-local-client/spec.md), ADR
 [`0002`](decisions/0002-buzz-local-client-fabric.md)) takes the first cut:
 OTP mailboxes on the host are the body-control queue; Nostr stays the Buzz
-event log; admission happens before thaw. Remaining runtime SHALLs live in
+event log; admission happens before thaw; the agent nsec is an opaque
+SecretStore blob, not a VM-record field. Remaining runtime SHALLs live in
 `add-buzz-local-runtime`. Channel mobility below is still later.
 
 Inspired by pi-calculus, channels will be the universal communication primitive:

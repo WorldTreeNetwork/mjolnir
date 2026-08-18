@@ -2,7 +2,8 @@
 
 What is built. Folded from
 [`add-buzz-local-client`](../../changes/archive/2026-08-16-add-buzz-local-client/proposal.md)
-on 2026-08-16. Decisions that are not yet code live in
+on 2026-08-16, and from `mjolnir-1pe` on 2026-08-17. Decisions that
+are not yet code live in
 [`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md)
 and `openspec/changes/add-buzz-local-runtime/`.
 
@@ -11,6 +12,8 @@ and `openspec/changes/add-buzz-local-runtime/`.
 Request-path thaws are fail-closed. Buzz bodies with `restart_policy:
 never` cannot enter `DormantRegistry`. Guests stay off the Erlang
 cluster. The host Postgres sidecar is a catalog, not a tenant hotel.
+The agent nsec is an opaque SecretStore blob, not a field on the VM
+record.
 
 ## Requirements
 
@@ -82,3 +85,24 @@ no network path to the sidecar socket.
 - GIVEN a running guest and the sidecar on its Unix socket
 - WHEN the guest attempts TCP or vsock to host Postgres
 - THEN the connection is not possible by default configuration
+
+### Requirement: Secrets stay off the host artifacts
+
+The agent `nsec` SHALL be treated as an opaque string (no curve math).
+`Mjolnir.Identity` SHALL store it in `SecretStore` under
+`_opaque/vms/<vm_id>/` and SHALL inject it over vsock
+(`inject_identity`) as `BUZZ_PRIVATE_KEY` plus `BUZZ_RELAY_URL`.
+The nsec SHALL NOT be kept on the VM struct. `build_running_record/1`,
+list/info API bodies, and `Inspect` of a VM SHALL NOT contain it.
+Host-side `Identity.put/2` and inject logs SHALL NOT print the value.
+
+A guest that prints its own env is out of scope for this host
+invariant. Writing `/run/mjolnir/buzz.env` inside the guest requires
+the `inject_identity` guest agent to be deployed.
+
+#### Scenario: Negative scan of host artifacts
+
+- GIVEN identity stored for a VM
+- WHEN the StateStore running record, list/info API bodies, `Inspect`
+  of the VM, and logs from `Identity.put/2` are searched for the nsec
+- THEN there are no matches

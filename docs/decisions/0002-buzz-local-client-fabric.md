@@ -28,7 +28,8 @@ Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/desig
 
 Built (living spec): fail-closed `Mjolnir.Admit` shape-check, `:never`
 refuses `DormantRegistry`, guests stay off the cluster, sidecar is
-catalog-only.
+catalog-only, nsec is an opaque SecretStore blob injected over vsock
+(`mjolnir-1pe`, 2026-08-17).
 
 Remaining implementation is `add-buzz-local-runtime` (`nod-identikey-admit`,
 `nod-mailbox-control`, `nod-local-relay`, `nod-deploy-happy`, …). Do not
