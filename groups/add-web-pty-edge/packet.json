@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-web-pty-edge-advise",
+  "node_id": "nod-lock-edge-pty",
+  "change_id": "add-web-pty-edge",
+  "capability": "web-pty-edge",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-claude-critic",
+    "kind": "model",
+    "harness": "claude",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-claude-critic" }
+  },
+  "goal": "Advise add-web-pty-edge (ACTIVE BUILD, architecture, Design A). Cross-family read: Grok authored ADR 0004; this reader is Claude. Verdict accept, accept-with-nits, or send-back.",
+  "anchors": [
+    { "symbol": "Mjolnir.API.Auth.extract_jwt/1", "invariant": "JWT from Bearer, then ?token=, then mj_term cookie; browsers cannot set Authorization on WebSocket" },
+    { "symbol": "Mjolnir.API.PtyHandler", "invariant": "binary frames are PTY I/O; text frames are resize JSON" },
+    { "symbol": "mj connect", "invariant": "opens wss://<api>/api/vms/:id/pty with Authorization: Bearer" }
+  ],
+  "acceptance": {
+    "kind": "contrast",
+    "contrast": "Review file exists with an exact ADVISE banner. Accept/accept-with-nits unblocks the brief. Send-back adds owed boxes on tasks.md and does not flip the proposal banner."
+  },
+  "out_of_scope": [
+    { "item": "Stand up ttyd4 / nginx / mj login", "tracked_as": "mjolnir-cid" },
+    { "item": "WS-to-WS proxy binary", "tracked_as": "mjolnir-8rr" },
+    { "item": "Implement PtyHandler or Auth changes", "tracked_as": "not this change" },
+    { "item": "Flip ACTIVE BUILD banner", "tracked_as": "human" },
+    { "item": "Fold into living specs", "tracked_as": "fold after act" }
+  ],
+  "constraints": {
+    "permission": "read",
+    "paths": [
+      "openspec/changes/add-web-pty-edge/reviews/2026-08-18-advise.md",
+      "openspec/changes/add-web-pty-edge/tasks.md"
+    ],
+    "do_not": ["deploy", "push", "implement", "fold", "flip-banner"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean"
+}
