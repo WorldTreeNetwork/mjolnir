@@ -10,7 +10,7 @@ back; the four boxes are closed in this amend. Re-advise is next.
 - [x] Send-back: written contrast (MinIO+B2 remote | iroh-blobs as archive | B2-direct + our door | iroh-blobs working set + B2 drain). Cite Mjolnir + Lightning Mesh Iroh transport; cite recrypt bao-tree vs iroh-blobs. E2E is transmit.
 - [x] Send-back: `accepted ⇒ on B2` is HeadObject/GET before ack. ILM / async replicate are not an accept-path.
 - [x] Send-back: hash-refuse and re-PUT no-op live on the put path, not raw S3.
-- [ ] Re-advise after the four boxes
+- [x] Re-advise after the four boxes (`reviews/2026-08-17-readvise.md` accept-with-nits)
 - [ ] After accept: amend `~/work/Taskmaster/taskmaster-web/docs/ARCHITECTURE.md` with the sketch block in design.md
 - [ ] After accept: one-line hop in Taskmaster `docs/GHOST.md` (blob mesh, not the ready-set)
 
