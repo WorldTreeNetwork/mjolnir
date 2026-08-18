@@ -662,6 +662,12 @@ Agents get hardware-isolated Linux environments with apt, pip, cargo — everyth
 
 ### Channel System (Future)
 
+Content-addressed blobs (living spec
+[`blob-store`](../openspec/specs/blob-store/spec.md), ADR
+[`0003`](decisions/0003-blob-store-mesh.md)): recrypt `blob/b3/` keys,
+B2 canonical, HTTP door sidecar. Callers never hold B2 keys. We are
+not doing MinIO. iroh-blobs as working-set/transmit is later.
+
 The local Buzz client fabric (living spec
 [`buzz-local-client`](../openspec/specs/buzz-local-client/spec.md), ADR
 [`0002`](decisions/0002-buzz-local-client-fabric.md)) takes the first cut:
