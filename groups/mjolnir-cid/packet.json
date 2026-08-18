@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-cid",
+  "node_id": "mjolnir-cid",
+  "change_id": "add-web-pty-edge",
+  "capability": "web-pty-edge",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4.6" }
+  },
+  "goal": "Stand up /devterm4 on xibu: dedicated Mjolnir VM, ttyd on 127.0.0.1:7684, nginx /devterm4, mj connect --session main <uuid>. Browser never holds the JWT.",
+  "anchors": [
+    { "symbol": "mj connect", "invariant": "UUID + Bearer; not an Iroh ticket" },
+    { "symbol": "Mjolnir.Policy.VM.authorize/3", "invariant": "pty is owner-only; spawn with the xibu token" }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "ssh -o BatchMode=yes xibu 'ss -tlnp | grep 7684; sudo -u devterm4 mj list --json | head -c 200; curl -sI -o /dev/null -w %{http_code} https://127.0.0.1/devterm4/'"
+  },
+  "out_of_scope": [
+    { "item": "WS-to-WS proxy", "tracked_as": "mjolnir-8rr" },
+    { "item": "PtyHandler /term/:id changes", "tracked_as": "not this node" },
+    { "item": "Commit TTYD4_CRED", "tracked_as": "never" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "groups/mjolnir-cid/packet.json",
+      "groups/mjolnir-cid/result.json"
+    ],
+    "do_not": ["commit-secrets"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "brief",
+  "density": "explicit"
+}

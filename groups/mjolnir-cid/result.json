@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "id": "res-mjolnir-cid",
+  "packet_id": "pkt-mjolnir-cid",
+  "node_id": "mjolnir-cid",
+  "permission": "write",
+  "disposition": "pass",
+  "summary": "ttyd4 on 127.0.0.1:7684, nginx /devterm4, mj connect to f9eb045b-8ffa-4a53-99db-e5450660913b. Browser page has no JWT. mj connect reported Connected.",
+  "artifacts": [
+    "groups/mjolnir-cid/packet.json",
+    "groups/mjolnir-cid/result.json"
+  ],
+  "commit": null,
+  "acceptance": {
+    "kind": "command",
+    "observed": "https://dreamballz.com/devterm4/ HTTP 200, ttyd+compositor, no JWT; ss 7684; sudo -u devterm4 mj connect → Connected. PTY session active."
+  },
+  "notes": [
+    "VM f9eb045b-8ffa-4a53-99db-e5450660913b spawned with the xibu token (owner bfd22745-…).",
+    "token.json is 0600 devterm4; www-data cannot read it. dashboard node is root so root isolation is not possible.",
+    "TTYD4_CRED lives in /root/.devterm4-cred 0600 and is not in git.",
+    "nginx injects Basic the same way as /devterm3 — browser prompt is not the gate."
+  ]
+}
