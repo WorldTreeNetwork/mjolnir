@@ -2,7 +2,7 @@
 
 Implements ADR 0003 Decision 1b. Not a new ADR.
 
-**Status:** PENDING
+**Status:** ACTIVE BUILD
 **Change:** `add-blob-api`
 **Parent:** `add-blob-store` (accepted shape)
 

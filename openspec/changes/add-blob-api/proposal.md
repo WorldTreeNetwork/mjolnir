@@ -1,6 +1,6 @@
 # add-blob-api
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 **Rigor:** change
 

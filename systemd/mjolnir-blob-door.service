@@ -1,0 +1,21 @@
+[Unit]
+Description=Mjolnir blob door (recrypt layout on B2)
+After=network.target
+Documentation=openspec/changes/add-blob-api/design.md
+
+[Service]
+Type=exec
+User=mjolnir
+Group=mjolnir
+WorkingDirectory=/opt/mjolnir
+ExecStart=/opt/mjolnir/bin/mjolnir-blob-door
+EnvironmentFile=/etc/mjolnir/blob-door.env
+# Keys stay in this process. Do not source this file into Taskmaster.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
