@@ -205,6 +205,20 @@ $ mjolnir connect '<ticket>'
   Interactive shell session. Full TUI support (vim, htop, etc).
 ```
 
+### Foreign-origin web terminals (ADR 0004)
+
+A browser cannot set `Authorization` on `new WebSocket(...)`.
+Mjolnir's hosted `/term/:id` stashes a JWT in the `mj_term` cookie
+for the **API origin**. A dashboard on another host does not get
+that cookie.
+
+Those terminals terminate on a trusted Linux box. The box runs
+`mj connect <vm_id>` against the existing hop
+`wss://<api>/api/vms/:id/pty` (binary = PTY bytes, text = resize
+JSON). The JWT stays in `mj`'s token store. First surface: xibu
+`/devterm4` (ttyd wrapping `mj connect`). See
+[`openspec/specs/web-pty-edge/spec.md`](../openspec/specs/web-pty-edge/spec.md).
+
 ### Executing Commands (Non-Interactive)
 
 For scripted operations, the vsock path is faster:

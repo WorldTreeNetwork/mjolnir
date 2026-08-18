@@ -1,13 +1,13 @@
 # ADR 0004 — Foreign web terminals terminate on a trusted edge
 
-**Status:** Proposed — awaiting advise
+**Status:** Accepted (2026-08-18)
 **Date:** 2026-08-18
-**Change:** [`add-web-pty-edge`](../../openspec/changes/add-web-pty-edge/proposal.md)
-**Living spec:** none yet (capability `web-pty-edge` materializes at fold)
-**Implement:** brief `nod-devterm4-stand` (`mjolnir-cid`). No API write.
+**Change:** [`add-web-pty-edge`](../../openspec/changes/archive/2026-08-18-add-web-pty-edge/proposal.md) (folded 2026-08-18)
+**Living spec:** [`openspec/specs/web-pty-edge/spec.md`](../../openspec/specs/web-pty-edge/spec.md)
+**Implement:** `mjolnir-cid` landed (xibu `/devterm4`). No API write.
 **First consumer:** xibu `/devterm4`
 
-Full argument: [`openspec/changes/add-web-pty-edge/design.md`](../../openspec/changes/add-web-pty-edge/design.md).
+Full argument: [`openspec/changes/archive/2026-08-18-add-web-pty-edge/design.md`](../../openspec/changes/archive/2026-08-18-add-web-pty-edge/design.md).
 
 ## One screen
 
@@ -25,7 +25,10 @@ Full argument: [`openspec/changes/add-web-pty-edge/design.md`](../../openspec/ch
 
 ## Built vs remaining
 
-Built: the PTY WebSocket, `mj connect`, `/term/:id` cookie stash.
+Built: the PTY WebSocket, `mj connect`, `/term/:id` cookie stash,
+and the v1 edge (`ttyd4` on xibu wrapping `mj connect` to a
+dedicated VM). Design B stays available as a later landing, not
+as this one.
 
-Remaining: advise, then the xibu brief (unit + nginx + `mj login`).
-Do not add a proxy binary. Do not change `PtyHandler`.
+Remaining: none on this change. A dedicated WS-to-WS proxy is a
+new change if someone picks it.

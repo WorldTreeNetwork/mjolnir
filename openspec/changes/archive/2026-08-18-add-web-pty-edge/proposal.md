@@ -1,6 +1,8 @@
 # add-web-pty-edge
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-08-18 → `openspec/specs/web-pty-edge/spec.md`.
 
 Activated from `nod-lock-edge-pty` (`mjolnir-alu`). Human picked
 **Design A** in chat (2026-08-18): ttyd on the trusted edge runs

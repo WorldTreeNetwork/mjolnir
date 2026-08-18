@@ -9,3 +9,5 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-08-17 / add-blob-store:** First draft named MinIO as the provider. Advise send-back: three layers (address / B2 canonical / working-set+transmit). We are not doing MinIO — not v1, not a later cache.
 - **2026-08-17 / add-blob-api:** `recrypt-storage::put_with_outboard` does not hash-check (`s3.rs:217–248`); the door wraps it. Recrypt does not compile on macOS, so the door is a thin sidecar, not recrypt-core.
 - **2026-08-17 / add-blob-client:** `BLOB_DOOR_URL` empty at boot so the public site still starts; put/get fail closed. Never put `B2_*` in the Taskmaster env.
+- **2026-08-18 / add-web-pty-edge:** xibu dashboard and ttyd 1–3 run as root, so a dedicated `devterm4` user cannot hide `token.json` from the node app — only from `www-data`. Isolation from “the dashboard uid” is theater until node drops root.
+- **2026-08-18 / add-web-pty-edge:** nginx on xibu injects ttyd Basic (same as `/devterm3`); the browser prompt is not the gate. `curl https://127.0.0.1/devterm4/` without `Host: dreamballz.com` hits the default site (Express 404), not the ttyd location.
