@@ -5,7 +5,7 @@ defmodule Mjolnir.Postgres.TenantsUrlTest do
 
   test "DATABASE_URL is overlay TCP, not a unix socket" do
     url = Tenants.database_url("hypersigil", "p/a+ss", "10.200.0.1")
-    assert url == "postgres://hypersigil:p%2Fa%2Bss@10.200.0.1:5432/hypersigil"
+    assert url == "postgres://hypersigil:p%2Fa%2Bss@10.200.0.1:5432/hypersigil?sslmode=disable"
     refute url =~ "socket"
     refute url =~ "/var/run"
   end

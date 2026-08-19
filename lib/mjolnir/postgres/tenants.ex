@@ -251,7 +251,7 @@ defmodule Mjolnir.Postgres.Tenants do
   def database_url(name, password, listen_ip)
       when is_binary(name) and is_binary(password) and is_binary(listen_ip) do
     userinfo = URI.encode_www_form(name) <> ":" <> URI.encode_www_form(password)
-    "postgres://#{userinfo}@#{listen_ip}:5432/#{URI.encode_www_form(name)}"
+    "postgres://#{userinfo}@#{listen_ip}:5432/#{URI.encode_www_form(name)}?sslmode=disable"
   end
 
   defp write_secret(config, name, slug, password) do
