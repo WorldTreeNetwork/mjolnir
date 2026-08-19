@@ -166,18 +166,39 @@ being a new VM — lands on a new IP. Route regeneration is load-bearing, not co
 
 ### Secrets stay out of the snapshot
 
-Use `secrets_mode: :managed` (host-escrowed). The shape:
+Use `secrets_mode: :managed` (host-escrowed). `mj deploy` enrolls that mode **automatically**
+when a secrets file exists for the app name.
 
-- Stash the credentials **once** on the host, `0600`, *off* the BTRFS data volume:
-  `/var/lib/mjolnir/<app>-secrets.json`.
-- Pass them as `spawn_opts` to **`Runtime.start` only — never to `Builder.build`.** Passing them
-  to the builder bakes a LUKS volume into the release snapshot, keyed to a throwaway build VM's
-  passphrase, which defeats the entire design.
-- The guest renders them to `/run/mjolnir/secrets.env` on **tmpfs**. The secret therefore exists
-  only in RAM inside the running VM and in the host escrow — never in a snapshot, a layer, or a
-  backup. Snapshots stay freely copyable.
-- Rotation = edit the JSON, redeploy. Because the release snapshot carries no LUKS volume, every
-  deploy re-supplies the credentials; the host file is the source of truth.
+**Path the orchestrator actually reads:**
+
+```
+/var/lib/mjolnir/deploy/secrets/<slug>.json
+```
+
+`<slug>` is the deploy name, lowercased, with every character outside `[a-z0-9_-]` replaced
+by `_`. `mj deploy --name hypersigil-api` reads `hypersigil-api.json`. Omitting `--name`
+uses the source directory's basename. `--name hypersigil` looks for `hypersigil.json` and
+**misses** the Hypersigil tenant file.
+
+Do **not** put secrets at `/var/lib/mjolnir/<app>-secrets.json`. That path is not read.
+
+The file is a flat JSON object of string keys to string values (valid env names). The whole
+map is injected — `DATABASE_URL`, `JWT_SECRET`, CORS, whatever is there. Missing or empty
+file → deploy proceeds with no secrets (`secrets_mode: none`).
+
+A declared host-sidecar tenant (`Tenants.ensure`, slug `hypersigil-api`) writes `DATABASE_URL`
+into that same file and **merges**, so existing keys survive `ensure`. See
+[`../runbooks/host-postgres-tenants.md`](../runbooks/host-postgres-tenants.md).
+
+The rest of the shape:
+
+- File is `0600`, *off* the BTRFS data volume.
+- Injected at **`Runtime.start` only — never `Builder.build`.** Baking LUKS into the release
+  snapshot keys it to a throwaway build VM and defeats the design. `mj deploy` already
+  obeys this.
+- The guest renders them to `/run/mjolnir/secrets.env` on **tmpfs**. Snapshots stay copyable.
+- Rotation of a tenant password: `mix mjolnir.pg.tenant ensure <db> --slug <slug> --rotate`,
+  then redeploy so the guest gets the new URL.
 
 Trade-off, stated honestly: `:managed` is **not** zero-knowledge. The host can read the
 credentials because the host injects them. It buys ciphertext-at-rest, an off-volume passphrase,
@@ -188,83 +209,78 @@ opaque snapshots, and transparent dormancy/wake — not survival of a host compr
 
 ## Status: what actually works today
 
-**Verified against the production host on 2026-07-19.** This section exists because the design
-docs describe an intended end state and it is easy to mistake that for a shipped feature.
+**Updated 2026-08-19.** The July write-up is stale on the CLI and the secrets path.
 
 | Piece | Status |
 |---|---|
 | Base images (`ubuntu-24.04`, `ci-ubuntu-24.04`, `arch`) | ✅ present |
 | BTRFS clone / snapshot / spawn-from-snapshot | ✅ shipped, exercised daily |
-| `Deploy.Detector` / `BuildPlan` / `CacheKey` / `Builder` / `Runtime` / `Registry` | ✅ implemented, compiled into the prod release |
+| `Deploy.Detector` / `BuildPlan` / `CacheKey` / `Builder` / `Runtime` / `Registry` | ✅ in the prod release |
 | Gateway route generation + reconciler + DNS-01 TLS | ✅ shipped |
-| Managed (host-escrowed) secrets | ✅ implemented; **not yet used by any deployed app** |
-| `mj deploy` CLI verb | ❌ **does not exist** — the deploy layer is Elixir-only, driven via `mjolnir rpc` |
-| End-to-end pipeline run | ❌ **never completed on the prod host** — registry is empty, no `release-*` snapshot exists |
-| IdentiKey Sites (static-asset offload) | ❌ incomplete — Recrypt storage backend not live, no site published |
+| `mj deploy` CLI | ✅ `mj deploy [PATH] --name <app>` → `POST /api/deploy` |
+| Secrets file | ✅ `/var/lib/mjolnir/deploy/secrets/<slug>.json` auto-read on deploy |
+| Host-sidecar tenant `hypersigil` | ✅ provisioned; `DATABASE_URL` is in `hypersigil-api.json` |
+| Detector scope | SvelteKit + `adapter-node` only; anything else is `:unsupported_app` |
+| Zine | still **hand-provisioned** (`secrets_mode: none`). Not an example to copy. |
+| IdentiKey Sites | Recrypt path incomplete |
 
-**And the honest bit about Zine.** Zine is the only real deployment, and it is **hand-provisioned
-— it does not go through this pipeline.** It runs as a manually-built VM with a manually-managed
-gateway route; its `Deploy.Registry` entry does not exist and its `secrets_mode` is `none`. It
-works, but it is not an example to copy. The point of the deploy layer is to stop doing that.
-
-So: the primitives are real and the modules are written and shipped, but **the first end-to-end
-run has not happened yet.** Expect to debug rough edges the first time. That is a known cost,
-not a surprise.
+The first Hypersigil app deploy through this path is still the thing to do, not a
+completed run. Expect to debug the first cutover.
 
 ---
 
 ## Deploying an app today
 
-Until `mj deploy` exists, the pipeline is driven over `mjolnir rpc` on the host. The shape,
-using a SvelteKit/adapter-node app as the worked example:
-
-**1. Escrow the secrets (once).**
+**1. Escrow secrets (once), if the app needs any.**
 
 ```bash
-ssh root@<host> 'umask 077; cat > /var/lib/mjolnir/<app>-secrets.json' <<'JSON'
+# slug = deploy name (see Secrets above)
+ssh root@<host> 'umask 077; cat > /var/lib/mjolnir/deploy/secrets/hypersigil-api.json' <<'JSON'
 { "SOME_API_KEY": "…" }
 JSON
-ssh root@<host> 'chmod 600 /var/lib/mjolnir/<app>-secrets.json'
+ssh root@<host> 'chmod 600 /var/lib/mjolnir/deploy/secrets/hypersigil-api.json'
 ```
 
-Type real values into the heredoc so they never land in shell history elsewhere. Keys must be
-valid env names (`[A-Za-z_][A-Za-z0-9_]*`); values are strings.
+For a host-sidecar tenant, skip the heredoc for `DATABASE_URL` —
+`mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api` already wrote it.
+Add other keys to that same file; `ensure` merges and will not wipe them.
 
-**2. Build a release snapshot, then boot and cut over.**
+Keys must be valid env names (`[A-Za-z_][A-Za-z0-9_]*`); values are strings.
+
+**2. Deploy.** From the app tree, authenticated `mj` (`mj login`):
 
 ```bash
-ssh root@<host> 'set -a; . /etc/mjolnir/env; set +a; \
-  /opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir rpc "
-    creds = \"/var/lib/mjolnir/<app>-secrets.json\" |> File.read!() |> Jason.decode!()
-    {:ok, plan} = Mjolnir.Deploy.Detector.detect(\"/path/to/app\")
-    {:ok, b}    = Mjolnir.Deploy.Builder.build(\"ubuntu-24.04\", plan.steps, [])
-    {:ok, res}  = Mjolnir.Deploy.Runtime.start(
-      \"<app>\", b.release_snapshot, plan,
-      spawn_opts: %{secrets_mode: :managed, secrets: creds}
-    )
-    IO.puts(res.url)
-  "'
+mj deploy --name hypersigil-api --domain shop.example
 ```
 
-Note the discipline the API enforces: `creds` go to `Runtime.start`, **not** to `Builder.build`.
+`--name` is required for the secrets file to match unless the directory *is*
+already named `hypersigil-api`. `--domain` is optional (`X-Domain`). The CLI
+tars the tree (honoring `.gitignore`), `POST`s `/api/deploy`, and prints the
+URL. The server reads the secrets file, builds, boots with `secrets_mode:
+:managed`, and cuts over.
 
-**3. Give it a domain.** Set `custom_domain` on the registry entry; the reconciler emits the
-gateway route and the cert SAN follows.
-
-**4. Verify — and actually verify, don't assume.**
+**3. Verify — actually verify, don't assume.**
 
 ```bash
 # the app process really sees the secret (blank means it started before injection)
-curl -s -X POST localhost:4000/api/vms/<vm_id>/exec \
-  -H 'content-type: application/json' -d '{"command":"printenv SOME_API_KEY"}'
+mj exec <vm_id> 'printenv DATABASE_URL'
 ```
 
-Then hit the URL and exercise a code path that uses the secret end to end.
+Then hit the URL and exercise a code path that uses the database end to end.
 
-**5. Update = repeat steps 2–3.** Dependency layers cache; typically only the build step reruns.
-Cutover is automatic.
+**4. Update = `mj deploy` again.** Dependency layers cache; typically only the
+build step reruns. Cutover is automatic.
 
-**6. Roll back** by calling `Runtime.start` with the *previous* `release_snapshot`. No rebuild.
+**5. Roll back** by calling `Runtime.start` with the *previous* `release_snapshot`.
+No rebuild.
+
+### Escape hatch (no CLI)
+
+If `mj deploy` is the thing that is broken, the same pipeline is still
+`Mjolnir.Deploy.Orchestrator.deploy/3` over `mjolnir rpc`. Read secrets from
+`/var/lib/mjolnir/deploy/secrets/<slug>.json`, never the old
+`/var/lib/mjolnir/<app>-secrets.json` path. Creds go to `Runtime.start`,
+**not** `Builder.build`.
 
 ### If the builder gives you trouble
 
@@ -315,5 +331,7 @@ deploy is an afternoon; CI *being* the deploy mechanism while it's unproven is a
 - [Working with Snapshots](snapshots.md) — the primitive underneath all of this.
 - [Gateway Routing](../gateway-routing.md) — how a hostname resolves to a VM.
 - [Secrets Architecture](../secrets-architecture.md) — modes, threat model, LUKS details.
+- [Host sidecar tenants](../runbooks/host-postgres-tenants.md) — `Tenants.ensure` and
+  `DATABASE_URL` for Hypersigil.
 - [`plans/initiatives/mjolnir-deploy.md`](../plans/initiatives/mjolnir-deploy.md) — the design
   this implements and the roadmap beyond it.

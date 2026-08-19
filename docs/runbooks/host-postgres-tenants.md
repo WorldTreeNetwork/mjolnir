@@ -10,7 +10,13 @@ mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api
 ```
 
 Writes `/var/lib/mjolnir/deploy/secrets/hypersigil-api.json` with
-`DATABASE_URL`. `mj deploy --name hypersigil-api` reads that file.
+`DATABASE_URL` (merges; does not wipe other keys).
+
+`mj deploy --name hypersigil-api` reads that file. The name is slugged
+(lowercase; anything outside `[a-z0-9_-]` → `_`) and looked up as
+`<deploy_secrets_dir>/<slug>.json`. `--name hypersigil` looks for
+`hypersigil.json` and misses. See
+[`../guide/deploying-an-app.md`](../guide/deploying-an-app.md).
 
 ## Exit dump (tenant URL)
 

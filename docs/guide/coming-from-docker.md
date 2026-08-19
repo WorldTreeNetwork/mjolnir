@@ -206,10 +206,10 @@ expose. The orchestration on top is **written and shipped in the prod release**:
 `Deploy.Detector` (zero-config build plans), `Deploy.CacheKey` + `Deploy.Builder`
 (content-addressed snapshot layers), `Deploy.Runtime` (boot + cutover), `Deploy.Registry`.
 
-Two honest caveats: there is **no `mj deploy` CLI verb yet** — the layer is driven over
-`mjolnir rpc` — and the pipeline has **not yet been run end to end on the production host**. The
-foundation is real, the machinery exists, and the first real customer is still pending. See
-[Deploying a Web App](deploying-an-app.md) for the current status table and the manual path.
+`mj deploy [PATH] --name <app>` exists (`POST /api/deploy`). Secrets are picked up from
+`/var/lib/mjolnir/deploy/secrets/<slug>.json` when that file is present — see
+[Deploying a Web App](deploying-an-app.md). Detector is still SvelteKit/`adapter-node` only.
+The first Hypersigil cutover through this path is still pending.
 
 ---
 
