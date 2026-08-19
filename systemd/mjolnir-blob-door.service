@@ -5,12 +5,11 @@ Documentation=docs/runbooks/blob-door.md
 
 [Service]
 Type=exec
-User=mjolnir
-Group=mjolnir
+# Root: same as mjolnir.service. Overlay bind needs no extra caps.
+# Do not source EnvironmentFile into Taskmaster or a guest.
 WorkingDirectory=/opt/mjolnir
 ExecStart=/opt/mjolnir/bin/mjolnir-blob-door
 EnvironmentFile=/etc/mjolnir/blob-door.env
-# Keys stay in this process. Do not source this file into Taskmaster.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=true

@@ -180,15 +180,21 @@ defmodule Mjolnir.Vsock.Protocol do
 
   @doc """
   Build a configure_identity request message.
-  Guest agent will write /etc/mjolnir/vm.json with vm_id and api_url.
+  Guest agent writes /etc/mjolnir/vm.json with vm_id, api_url, and
+  optional blob_door_url (overlay origin of mjolnir-blob-door).
   """
-  def configure_identity_request(vm_id, api_url, request_id \\ nil) do
-    %{
+  def configure_identity_request(vm_id, api_url, blob_door_url \\ nil, request_id \\ nil) do
+    base = %{
       "type" => "configure_identity",
       "id" => request_id || UUID.uuid4(),
       "vm_id" => vm_id,
       "api_url" => api_url
     }
+
+    case blob_door_url do
+      url when is_binary(url) and url != "" -> Map.put(base, "blob_door_url", url)
+      _ -> base
+    end
   end
 
   @doc """

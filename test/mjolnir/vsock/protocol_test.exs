@@ -252,7 +252,19 @@ defmodule Mjolnir.Vsock.ProtocolTest do
       assert request["type"] == "configure_identity"
       assert request["vm_id"] == "vm-123"
       assert request["api_url"] == "http://api.example.com"
+      refute Map.has_key?(request, "blob_door_url")
       assert is_binary(request["id"])
+    end
+
+    test "configure_identity_request/4 includes blob_door_url" do
+      request =
+        Protocol.configure_identity_request(
+          "vm-123",
+          "http://10.200.0.1:4000",
+          "http://10.200.0.1:7222"
+        )
+
+      assert request["blob_door_url"] == "http://10.200.0.1:7222"
     end
 
     test "get_iroh_status_request/1 still works" do

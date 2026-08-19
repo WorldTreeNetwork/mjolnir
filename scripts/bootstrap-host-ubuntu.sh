@@ -990,6 +990,7 @@ setup_networking() {
 
     ensure_host_api_addr
     allow_tenant_postgres_input "$vm_subnet"
+    allow_blob_door_input "$vm_subnet"
 
     log_success "VM networking configured (subnet: $vm_subnet, egress: $ext_iface)"
 }
@@ -1022,6 +1023,21 @@ allow_tenant_postgres_input() {
     else
         if ! iptables -C INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 5432 -j ACCEPT 2>/dev/null; then
             iptables -A INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 5432 -j ACCEPT
+        fi
+    fi
+}
+
+# Guest TCP to 10.200.0.1:7222 is INPUT (TAP), not FORWARD. Same trap as 5432.
+allow_blob_door_input() {
+    local vm_subnet="$1"
+    local ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
+    if ufw_is_active; then
+        if ! ufw status | grep -q "${ip} 7222"; then
+            ufw allow proto tcp from "$vm_subnet" to "$ip" port 7222 comment 'VMs to blob door'
+        fi
+    else
+        if ! iptables -C INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 7222 -j ACCEPT 2>/dev/null; then
+            iptables -A INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 7222 -j ACCEPT
         fi
     fi
 }

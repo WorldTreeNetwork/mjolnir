@@ -43,6 +43,10 @@ pub enum VsockRequest {
         id: String,
         vm_id: String,
         api_url: String,
+        /// Overlay origin of mjolnir-blob-door. Default empty so older hosts
+        /// that omit the field still deserialize.
+        #[serde(default)]
+        blob_door_url: Option<String>,
     },
     #[cfg(feature = "iroh")]
     #[serde(rename = "configure_iroh")]
