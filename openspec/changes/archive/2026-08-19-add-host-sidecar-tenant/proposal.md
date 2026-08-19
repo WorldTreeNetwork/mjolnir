@@ -1,6 +1,9 @@
 # add-host-sidecar-tenant
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-08-19 → `openspec/specs/host-postgres/spec.md`.
+> MODIFIED living `buzz-local-client` “Host sidecar is control-plane only”.
 
 **Rigor:** architecture
 

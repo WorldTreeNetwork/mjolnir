@@ -1,10 +1,11 @@
 # ADR 0005 — Host Postgres sidecar as a tenant hotel
 
-**Status:** Proposed (2026-08-19)
-**Change:** [`add-host-sidecar-tenant`](../../openspec/changes/add-host-sidecar-tenant/proposal.md)
+**Status:** Accepted (2026-08-19)
+**Change:** [`add-host-sidecar-tenant`](../../openspec/changes/archive/2026-08-19-add-host-sidecar-tenant/proposal.md) (folded 2026-08-19)
+**Living spec:** [`openspec/specs/host-postgres/spec.md`](../../openspec/specs/host-postgres/spec.md)
 **Supersedes:** ADR 0002 item 7 only (“Host Postgres sidecar is schemas in one catalog DB, not a hotel”). Items 1–6 and 8–9 of ADR 0002 stand.
 **First consumer:** Hypersigil Medusa (`~/work/VirtueInnova/hypersigil-store-backend`, change `add-mjolnir-manifest`)
-**Full argument:** [`openspec/changes/add-host-sidecar-tenant/design.md`](../../openspec/changes/add-host-sidecar-tenant/design.md)
+**Full argument:** [`openspec/changes/archive/2026-08-19-add-host-sidecar-tenant/design.md`](../../openspec/changes/archive/2026-08-19-add-host-sidecar-tenant/design.md)
 
 ## One screen
 
@@ -18,4 +19,10 @@
 
 ## Built vs remaining
 
-Nothing of this is built. ADR 0002 item 7 and living spec `buzz-local-client` still say “catalog, not a hotel.” This ADR is the reopen. Implement from `add-host-sidecar-tenant` after advise accept.
+Built: `Tenants.ensure/1`, reserved `10.200.0.1` bind (fail closed),
+scram `pg_hba` per tenant, deploy-secrets `DATABASE_URL`, allocate_ip
+exclusion, B2 dump script + timer unit + restore runbook.
+
+Remaining operational: enable the timer on the live host; run
+`mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api` against
+prod postgres; `just deploy` so the sidecar actually listens.
