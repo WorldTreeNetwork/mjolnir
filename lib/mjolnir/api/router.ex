@@ -1702,8 +1702,14 @@ defmodule Mjolnir.API.Router do
 
   defp deploy_memory_mb(conn) do
     case get_req_header(conn, "x-memory-mb") do
-      [val | _] -> Validation.validate_integer(val, 256, 128, 32_768)
-      _ -> 256
+      [val | _] ->
+        case Integer.parse(to_string(val)) do
+          {n, ""} -> Validation.validate_integer(n, 256, 128, 32_768)
+          _ -> 256
+        end
+
+      _ ->
+        256
     end
   end
 
