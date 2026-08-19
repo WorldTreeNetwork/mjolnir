@@ -1,4 +1,4 @@
-# Host sidecar tenant databases (ADR 0004)
+# Host sidecar tenant databases (ADR 0005)
 
 Declared tenants live as `CREATE DATABASE` on the OTP Postgres sidecar.
 TCP is `10.200.0.1:5432` (scram). The BEAM still uses the Unix socket.

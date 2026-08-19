@@ -67,7 +67,7 @@ Human development VMs and CI VMs SHALL clone the same base
 single-process in-guest Postgres-compatible store (PGlite) for
 scratch. Stateful production workloads that are **not** a declared
 host-postgres tenant SHALL run real Postgres inside their own VM.
-Declared tenants (ADR 0004 / `add-host-sidecar-tenant`) MAY use the
+Declared tenants (ADR 0005 / `add-host-sidecar-tenant`) MAY use the
 host sidecar. Buzz relays SHALL NOT use the sidecar.
 
 #### Scenario: Spawn a dev box

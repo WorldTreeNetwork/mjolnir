@@ -1,6 +1,6 @@
 defmodule Mjolnir.Postgres.Tenants do
   @moduledoc """
-  Declared tenant databases on the OTP Postgres sidecar (ADR 0004).
+  Declared tenant databases on the OTP Postgres sidecar (ADR 0005).
 
   Not called from `Bootstrap`. Operator command / declared list only.
   Tenant LOGIN roles stay out of `pg_ident.conf`.
@@ -314,11 +314,4 @@ defmodule Mjolnir.Postgres.Tenants do
   end
 
   def overlay_cidr, do: @overlay_cidr
-
-  @doc "Tenant DATABASE_URL (overlay TCP, never a Unix socket)."
-  @spec database_url(String.t(), String.t(), String.t()) :: String.t()
-  def database_url(name, password, ip) do
-    userinfo = URI.encode_www_form(name) <> ":" <> URI.encode_www_form(password)
-    "postgres://#{userinfo}@#{ip}:5432/#{name}"
-  end
 end

@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Mjolnir.Pg.Tenant do
-  @shortdoc "Declare a host-sidecar tenant database (ADR 0004)"
+  @shortdoc "Declare a host-sidecar tenant database (ADR 0005)"
 
   @moduledoc """
   Provision or rotate a tenant database on the OTP Postgres sidecar.

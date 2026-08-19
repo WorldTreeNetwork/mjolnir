@@ -12,13 +12,13 @@ Hypersigil Medusa needs a durable Postgres that survives `mj deploy` cutover. Th
 
 - Add capability `host-postgres`: tenant database provision, overlay TCP listener, scram auth, DDL-capable tenant role, backup.
 - MODIFIED `buzz-local-client` requirement “Host sidecar is control-plane only” so the catalog rule stays for `mjolnir` and Buzz logs, and a declared tenant database is the exception.
-- ADR 0004 supersedes ADR 0002 item 7 only.
+- ADR 0005 supersedes ADR 0002 item 7 only.
 - First tenant: `hypersigil` (consumed by hypersigil-store-backend `add-mjolnir-manifest`).
 
 ## Impact
 
 - Capabilities: ADDED `host-postgres`; MODIFIED `buzz-local-client`
-- ADRs: `docs/decisions/0004-host-sidecar-tenant-hotel.md` (new). Pointer from `docs/architecture.md`. ADR 0002 remains; item 7 is superseded.
+- ADRs: `docs/decisions/0005-host-sidecar-tenant-hotel.md` (new). Pointer from `docs/architecture.md`. ADR 0002 remains; item 7 is superseded.
 
 ## User journey & surfaces
 

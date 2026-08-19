@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "res-add-host-sidecar-tenant",
+  "node_id": "add-host-sidecar-tenant",
+  "packet_id": "pkt-add-host-sidecar-tenant",
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok-4.6"
+    }
+  },
+  "disposition": "pass",
+  "summary": "Sidecar tenant hotel: reserved 10.200.0.1 bind, scram, Tenants.ensure, hypersigil secrets path, fail-closed listen, B2 dump timer. 27 focused unit tests green (postgres-tagged live ensure excluded).",
+  "verify_command": "mix test test/mjolnir/network_test.exs test/mjolnir/postgres/tenants_test.exs test/mjolnir/postgres/server_test.exs --exclude postgres",
+  "verify_exit": 0,
+  "commit": {
+    "sha": "d5432b7d0217af98af2134bbf418a058a6e04fe5",
+    "paths": [
+      "lib/mjolnir/network.ex",
+      "lib/mjolnir/postgres/tenants.ex",
+      "lib/mjolnir/postgres/server.ex",
+      "lib/mjolnir/postgres/config.ex",
+      "lib/mix/tasks/mjolnir.pg.tenant.ex"
+    ]
+  },
+  "changed_files": [
+    "lib/mjolnir/network.ex",
+    "lib/mjolnir/postgres/tenants.ex",
+    "lib/mjolnir/postgres/server.ex",
+    "lib/mjolnir/postgres/config.ex"
+  ],
+  "blockers": [],
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok-4.6",
+    "content_hash": "sha256:005e05bb5c9fdb29bb9eb0ad054841c84d27408f8d5e86c1bd5c6c3db44d79ec"
+  }
+}

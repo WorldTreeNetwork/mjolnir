@@ -1,6 +1,6 @@
 # Design — host sidecar as a tenant hotel
 
-Canonical ADR index: [`docs/decisions/0004-host-sidecar-tenant-hotel.md`](../../../docs/decisions/0004-host-sidecar-tenant-hotel.md).
+Canonical ADR index: [`docs/decisions/0005-host-sidecar-tenant-hotel.md`](../../../docs/decisions/0005-host-sidecar-tenant-hotel.md).
 This file is the full argument.
 
 **Status:** Proposed — awaiting advise.
