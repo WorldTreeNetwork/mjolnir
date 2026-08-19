@@ -225,6 +225,13 @@ if $BUILD_ROOTFS; then
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent sudo bash scripts/build-rootfs-${DISTRO}.sh $REMOTE_BTRFS/@base/${DISTRO}"
 fi
 
+# --- Blob door sidecar (always; does not restart Elixir) ---
+# Host process on 10.200.0.1:7222. Same rsync as everything else; cargo is
+# incremental after the first build. Never a just verb — just deploy.
+echo ""
+echo "--- Installing blob door ---"
+ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-blob-door.sh"
+
 # --- Build gateway (optional) ---
 if $BUILD_GATEWAY; then
     echo ""

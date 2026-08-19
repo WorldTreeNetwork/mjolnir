@@ -49,25 +49,20 @@ curl -sS "$url/storage/blob/b3/$hash" -o out
 
 `deliver_message` is not the large-blob path (16 MiB cap).
 
-## Install (does not restart Elixir)
+## Install
+
+Rides `just deploy` (`scripts/deploy.sh`). After rsync it builds the
+crate, installs the unit, and restarts **only** `mjolnir-blob-door` —
+not Elixir. First-time env is minted by `scripts/install-blob-door.sh`
+if `/etc/mjolnir/blob-door.env` is missing.
 
 ```bash
-# on the Mjolnir host, after rsync
-cd /opt/mjolnir/native
-cargo build -p mjolnir-blob-door --release
-install -m 0755 target/release/mjolnir-blob-door /opt/mjolnir/bin/mjolnir-blob-door
-install -m 0644 ../systemd/mjolnir-blob-door.service /etc/systemd/system/
-# copy systemd/blob-door.env.example → /etc/mjolnir/blob-door.env
-# fill B2_BUCKET / B2_KEY_ID / B2_APPLICATION_KEY (read/write, not delete)
-# enable bucket versioning out of band
-systemctl daemon-reload
-systemctl enable --now mjolnir-blob-door
-curl -sS http://10.200.0.1:7222/health
+just deploy
+curl -sS http://10.200.0.1:7222/health   # from the host
 ```
 
-Do **not** restart `mjolnir.service` for a door change. Keys stay in
-`/etc/mjolnir/blob-door.env`. Do not source that file into Taskmaster
-or a guest.
+Keys stay in `/etc/mjolnir/blob-door.env`. Do not source that file into
+Taskmaster or a guest.
 
 ## Sites
 

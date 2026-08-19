@@ -131,16 +131,6 @@ check-agent: _require-host
         cargo check --bin mjolnir-boot-agent --no-default-features --features boot \
             --target x86_64-unknown-linux-musl"
 
-# Build+install mjolnir-blob-door on the host. Does NOT restart Elixir.
-# Overlay bind 10.200.0.1:7222; mints B2 env if missing. See docs/runbooks/blob-door.md
-deploy-blob-door: _require-host
-    rsync -az native/mjolnir_blob_door/ {{host}}:/opt/mjolnir/native/mjolnir_blob_door/
-    rsync -az native/Cargo.toml native/Cargo.lock {{host}}:/opt/mjolnir/native/
-    rsync -az systemd/mjolnir-blob-door.service systemd/blob-door.env.example \
-        {{host}}:/opt/mjolnir/systemd/
-    rsync -az scripts/install-blob-door.sh {{host}}:/opt/mjolnir/scripts/
-    ssh {{host}} "cd /opt/mjolnir && sudo bash scripts/install-blob-door.sh"
-
 # Rebuild base rootfs image on server (distro: ubuntu-24.04, arch)
 deploy-rootfs distro="ubuntu-24.04": _require-host
     ssh {{host}} "cd /opt/mjolnir && \

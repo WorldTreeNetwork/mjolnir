@@ -159,7 +159,7 @@ Content-addressed blobs (ADR 0003, living spec `openspec/specs/blob-store/spec.m
 
 - Production bind: `10.200.0.1:7222` (`:host_api_ip` on `dummy-mjolnir`, same overlay as tenant Postgres). TAP guests cannot reach host loopback.
 - Guest use: `/etc/mjolnir/vm.json` `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Inject is vsock `configure_identity` (`add-blob-door-overlay`).
-- Operator runbook: `docs/runbooks/blob-door.md`. Install the unit **without** restarting Elixir.
+- Operator runbook: `docs/runbooks/blob-door.md`. Rides `just deploy` (door unit only; does not extra-bounce VMs).
 - Sites Recrypt adapter speaks the same routes; cutover is `MJOLNIR_RECRYPT_STORAGE_URL`.
 
 ### Host Setup (Linux only, requires root)
