@@ -679,8 +679,11 @@ Agents get hardware-isolated Linux environments with apt, pip, cargo — everyth
 Content-addressed blobs (living spec
 [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md)): recrypt `blob/b3/` keys,
-B2 canonical, HTTP door sidecar. Callers never hold B2 keys. We are
-not doing MinIO. iroh-blobs as working-set/transmit is later.
+B2 canonical, HTTP door sidecar on `:host_api_ip:7222` (same overlay
+as tenant Postgres). Guests PUT/GET that origin; they never hold B2
+keys. We are not doing MinIO. Overlay bind + inject is
+`add-blob-door-overlay`. iroh-blobs as working-set/transmit is later.
+Runbook: [`runbooks/blob-door.md`](runbooks/blob-door.md).
 
 The local Buzz client fabric (living spec
 [`buzz-local-client`](../openspec/specs/buzz-local-client/spec.md), ADR

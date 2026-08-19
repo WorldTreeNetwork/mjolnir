@@ -1,7 +1,7 @@
 [Unit]
 Description=Mjolnir blob door (recrypt layout on B2)
 After=network.target
-Documentation=openspec/changes/add-blob-api/design.md
+Documentation=docs/runbooks/blob-door.md
 
 [Service]
 Type=exec

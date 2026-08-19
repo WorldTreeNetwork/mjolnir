@@ -153,6 +153,15 @@ just deploy-boot                # Copy boot artifacts to /var/lib/mjolnir/boot/
 
 The full guest agent is built as part of `just deploy-full` (which runs `cargo build` on the server via `scripts/deploy.sh --agent`).
 
+### Blob door
+
+Content-addressed blobs (ADR 0003, living spec `openspec/specs/blob-store/spec.md`). Host sidecar `mjolnir-blob-door`, not a VM, not MinIO. Canonical copy is B2. Callers never hold B2 keys.
+
+- Production bind: `10.200.0.1:7222` (`:host_api_ip` on `dummy-mjolnir`, same overlay as tenant Postgres). TAP guests cannot reach host loopback.
+- Guest use: `/etc/mjolnir/vm.json` `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Inject is vsock `configure_identity` (`add-blob-door-overlay`).
+- Operator runbook: `docs/runbooks/blob-door.md`. Install the unit **without** restarting Elixir.
+- Sites Recrypt adapter speaks the same routes; cutover is `MJOLNIR_RECRYPT_STORAGE_URL`.
+
 ### Host Setup (Linux only, requires root)
 
 ```bash

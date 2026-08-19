@@ -14,14 +14,12 @@ defmodule Mjolnir.Sites.Storage do
     * `Mjolnir.Sites.Storage.Local` — the default. Writes ciphertext + outboard
       siblings as BTRFS files using the same on-disk layout as recrypt's
       `LocalFileStorage` (`blob/b3/<hash58>` + `.obao`). This is the fallback
-      that keeps the unit suite green on machines without the recrypt sidecar.
+      that keeps the unit suite green on machines without the blob door.
 
-    * `Mjolnir.Sites.Storage.Recrypt` — HTTP adapter that delegates to the
-      `recrypt-storage` crate via the `recrypt-server` sidecar. This is the
-      chosen production direction (see the design-doc decision note). It is
-      scaffolded but gated: it only runs where the sidecar is reachable
-      (currently the Mjolnir server, never macOS — recrypt's Rust build pulls
-      OpenFHE/liboqs, which do not build on Darwin).
+    * `Mjolnir.Sites.Storage.Recrypt` — HTTP adapter to `mjolnir-blob-door`
+      (`PUT/GET /storage/blob/b3/{hash}` and `.obao`). Production direction
+      once `MJOLNIR_RECRYPT_STORAGE_URL` points at the overlay door
+      (`http://10.200.0.1:7222`). See `docs/runbooks/blob-door.md`.
 
   Only the chunk (ciphertext + outboard) operations are part of this seam.
   Manifest and OTS storage remain local-only on the host filesystem (they are

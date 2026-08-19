@@ -1,7 +1,7 @@
 defmodule Mjolnir.Sites.Storage.Recrypt do
   @moduledoc """
-  HTTP adapter that delegates chunk storage to the `recrypt-storage` crate via
-  the `recrypt-server` sidecar.
+  HTTP adapter that delegates chunk storage to the blob door
+  (`mjolnir-blob-door`) on the Sites blob routes.
 
   ## Why a sidecar (and not a NIF)
 
@@ -19,43 +19,30 @@ defmodule Mjolnir.Sites.Storage.Recrypt do
       recrypt-storage — which still drags `aws-sdk-s3` + the recrypt git
       dependency into the BEAM build and **cannot build on macOS** (the whole
       recrypt workspace fails to compile on Darwin).
-    * A sidecar keeps the BEAM build clean, lets recrypt-server own the S3/B2
-      backend, and crash-isolates the storage process — consistent with how
-      Mjolnir already manages the hypervisor and the Forgejo runner as separate
-      OS processes / external services.
+    * A sidecar keeps the BEAM build clean and crash-isolates storage —
+      consistent with how Mjolnir already manages the hypervisor and the
+      Forgejo runner. The sidecar is `mjolnir-blob-door`, not recrypt-server.
 
-  ## Status: SCAFFOLD — requires sidecar routes that do not exist yet
+  ## Status: adapter ready; door install is `add-blob-door-overlay`
 
-  `recrypt-server`'s current HTTP surface is **not** sufficient for this adapter:
+  The HTTP contract is the Sites blob routes (same as the door):
 
-    * `POST /files` is multisig-auth-gated, computes the hash server-side, and
-      stores an **empty** outboard (it never accepts a precomputed `.obao`).
-      See `recrypt-server/src/routes/files.rs`.
-    * `GET /files/{hash}` returns ciphertext only (discards the outboard); there
-      is no endpoint to fetch the `.obao` sibling from recrypt-server itself
-      (the recryption flow hands out a raw `outboard_url` to object storage).
-
-  To make this adapter live, recrypt-server needs unauthenticated,
-  content-addressed chunk routes that round-trip a **precomputed** outboard,
-  e.g. (matching this adapter's expectations):
-
-      PUT    /storage/blob/b3/{hash}            body = ciphertext   (+ outboard via PUT below)
+      PUT    /storage/blob/b3/{hash}            body = ciphertext
       PUT    /storage/blob/b3/{hash}.obao       body = outboard
       GET    /storage/blob/b3/{hash}            -> ciphertext
       GET    /storage/blob/b3/{hash}.obao       -> outboard (404 = none)
 
-  These map 1:1 onto `BlobStorage::put_with_outboard` /
-  `get_with_outboard`. Until they exist, this module is exercised only by the
-  `@tag :recrypt_storage` round-trip test, which is skipped unless
-  `MJOLNIR_RECRYPT_STORAGE_URL` is set and points at a sidecar that implements
-  the routes above.
+  `mjolnir-blob-door` implements these. recrypt-server `POST /files` is a
+  multisig PRE surface and is **not** this adapter. The tagged
+  `:recrypt_storage` test is skipped unless `MJOLNIR_RECRYPT_STORAGE_URL`
+  points at a door. Operator path: `docs/runbooks/blob-door.md`.
 
   ## Configuration
 
       config :mjolnir, :sites_storage_backend, Mjolnir.Sites.Storage.Recrypt
-      config :mjolnir, :recrypt_storage_url, "http://127.0.0.1:7222"
+      config :mjolnir, :recrypt_storage_url, "http://10.200.0.1:7222"
 
-  or via env: `MJOLNIR_RECRYPT_STORAGE_URL=http://127.0.0.1:7222`.
+  or via env: `MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222`.
   """
 
   @behaviour Mjolnir.Sites.Storage

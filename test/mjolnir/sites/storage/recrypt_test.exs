@@ -1,29 +1,18 @@
 defmodule Mjolnir.Sites.Storage.RecryptTest do
   @moduledoc """
-  Round-trip test for the recrypt-storage sidecar adapter.
+  Round-trip test for the blob-door HTTP adapter.
 
   Tagged `:recrypt_storage` so it is **excluded from the default `mix test`**
-  run (keeps macOS / CI-without-sidecar green). It only runs where a
-  recrypt-server sidecar implementing the content-addressed chunk routes is
-  reachable.
+  run (keeps macOS / CI-without-door green). It only runs where
+  `mjolnir-blob-door` is reachable.
 
   ## How to run
 
-  This requires the recrypt-server sidecar — which can only be built/run on the
-  Mjolnir server (recrypt's Rust workspace pulls OpenFHE/liboqs and does NOT
-  compile on macOS). On the server:
+  On the Mjolnir host, with the door bound on the overlay (see
+  `docs/runbooks/blob-door.md`):
 
-      # 1. Build + run recrypt-server with a local storage backend that exposes
-      #    the content-addressed chunk routes (PUT/GET /storage/blob/b3/{hash}
-      #    and the .obao sibling). See Mjolnir.Sites.Storage.Recrypt moduledoc
-      #    for the exact route contract that recrypt-server must implement.
-      #
-      # 2. Point the test at it and include the tag:
-      MJOLNIR_RECRYPT_STORAGE_URL=http://127.0.0.1:7222 \
+      MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222 \\
         mix test test/mjolnir/sites/storage/recrypt_test.exs --include recrypt_storage
-
-  Until recrypt-server grows those routes, this test documents the contract and
-  is skipped.
   """
   use ExUnit.Case, async: false
 
