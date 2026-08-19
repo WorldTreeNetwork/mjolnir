@@ -124,9 +124,11 @@ else
     fi
 fi
 
-echo "=== systemd enable --now (Elixir untouched) ==="
+echo "=== systemd restart door (Elixir untouched) ==="
 systemctl daemon-reload
-systemctl enable --now mjolnir-blob-door
+systemctl enable mjolnir-blob-door
+# enable --now will not pick up a replaced binary if the unit is already active
+systemctl restart mjolnir-blob-door
 sleep 1
 curl -fsS "http://${HOST_IP}:7222/health"
 echo
