@@ -1,9 +1,12 @@
 # add-blob-door-overlay
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-08-19 → `openspec/specs/blob-store/spec.md`.
+> Sites Recrypt cutover held as `mjolnir-u8v7.4` (Blake3 stub).
 
 Activated from chat 2026-08-19 (intend: guest HTTP to the host blob
-door). Beads: `mjolnir-u8v7` and children `.1`–`.4`.
+door). Beads: `mjolnir-u8v7` and children `.1`–`.3` folded; `.4` open.
 
 **Rigor:** change
 
