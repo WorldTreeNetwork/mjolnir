@@ -65,8 +65,10 @@ in `Mjolnir.Admit` is that evaluator until the crate lands.
 Human development VMs and CI VMs SHALL clone the same base
 (`@base/dev`). That image SHALL include the guest agent and a
 single-process in-guest Postgres-compatible store (PGlite) for
-scratch. Stateful production workloads that need concurrent writers
-SHALL run real Postgres inside their own VM, not on the host sidecar.
+scratch. Stateful production workloads that are **not** a declared
+host-postgres tenant SHALL run real Postgres inside their own VM.
+Declared tenants (ADR 0004 / `add-host-sidecar-tenant`) MAY use the
+host sidecar. Buzz relays SHALL NOT use the sidecar.
 
 #### Scenario: Spawn a dev box
 

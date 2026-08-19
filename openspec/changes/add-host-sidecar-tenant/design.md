@@ -39,46 +39,62 @@ A tenant is **declared** (first: `hypersigil`). It is not “any guest that asks
 
 Buzz community event logs stay off this process. That is the part of ADR 0002 item 7 that does not move.
 
-## Decision 2 — overlay TCP, not a socket mount, not the public NIC
+## Decision 2 — reserved host-from-guest TCP, not a socket mount, not the public NIC
 
-Guests already reach the host as `10.255.255.1` (Forgejo runner URL, `systemd/forgejo-runner.service`). Tenant Postgres listens on **that same host overlay address, port 5432**.
+The tree already names one host-from-guest IP: `:host_api_ip` default `10.200.0.1` (`lib/mjolnir/vm.ex`, injected as the in-guest API URL). It is **not assigned today** (TAPs have no host IP; `allocate_ip/1` can still emit it). This change makes that one address real and exclusive.
 
-- `listen_addresses` becomes that overlay IP, not `''`, not `*`, not `45.76.77.97`.
-- `--auth-host=reject` is replaced with scram-sha-256 **for TCP**.
-- Unix socket + peer + `--auth-local=peer` stays for the BEAM.
-- Host firewall / bind must not publish 5432 on the public NIC. A probe from the internet to `45.76.77.97:5432` fails.
+- Host bootstrap (`scripts/bootstrap-host-ubuntu.sh` and the running host) assigns `10.200.0.1/32` on a dummy or `lo` interface **before** postgres starts.
+- `Network.allocate_ip/1` refuses `10.200.0.1` (and must not emit it via the `o4 == 0 → 1` rewrite).
+- Tenant Postgres `listen_addresses` is exactly that IP, port 5432. Not `''`, not `*`, not the default-route NIC.
+- If the address is missing at postgres start, boot **fails**. Never fall back to `*` / `0.0.0.0`.
+- TCP auth is scram-sha-256. Unix socket + peer + `--auth-local=peer` stays for the BEAM.
+- `pg_hba` host lines (rewritten every boot with `postgresql.conf`) are per-database, overlay CIDR `10.200.0.0/10`, scram-sha-256 — not `0.0.0.0/0`. Unprovisioned guests get no match.
+- 5432 is not listening on `0.0.0.0` or the default-route NIC.
+
+Do not cite `FORGEJO_HOST_URL=http://10.255.255.1:3000` as a guest→host bind. That is a **host unit** env var. `10.255.255.1` sits in the guest pool (`.1` is a legal last octet) and is not reserved. Do not invent a third host-from-guest address.
 
 A virtiofs mount of the Unix socket was rejected: it is exactly the `extra_mounts` path the old spec named, it shares peer-auth identity with the BEAM, and it makes every such guest an ident-mapped OS user. Overlay TCP with a dedicated password is the smaller hole.
 
-Unprovisioned guests: no secret, no `pg_hba` match that lets them in. Even if they can SYN `10.255.255.1:5432`, auth fails. Default spawn does not inject the secret.
+Default spawn does not inject the tenant secret.
 
 ## Decision 3 — tenant role is a hotel guest, not `mjolnir_sites`
 
 `mjolnir_sites` must not gain DDL. Medusa migrations need CREATE/ALTER on *their* database.
 
-Each tenant gets:
+`Mjolnir.Postgres.Tenants.ensure/1` (identifier `^[a-z_][a-z0-9_]*$`) is idempotent and is **not** called from sidecar bootstrap (`:rest_for_one` must not create shop DBs on Mjolnir boot). Invocation is an operator command **and** a declared list (first entry: `hypersigil`, slug `hypersigil-api` to match `mj deploy --name`).
 
-- `CREATE DATABASE "<name>" OWNER "<name>"`
-- `CREATE ROLE "<name>" LOGIN PASSWORD …`
-- CONNECT + full DDL/DML on that database only
-- `REVOKE CONNECT ON DATABASE mjolnir` (never granted)
-- No membership in `mjolnir_admin`
+Each ensure:
 
-Password lives in host-escrowed managed secrets (`/var/lib/mjolnir/<app>-secrets.json` / SecretStore), injected at **Runtime.start**, never at Builder.build. Rotation = rewrite the secret, redeploy the app VM. Postgres `ALTER ROLE` is the source of truth for the password; the secret file must match.
+- Generates a password if the role is new; `ALTER ROLE` if rotating.
+- `CREATE DATABASE "<name>" OWNER "<name>"` (skip if present).
+- `CREATE ROLE "<name>" LOGIN PASSWORD …` — **not** added to `pg_roles` config / `pg_ident.conf`. The BEAM must not peer-map into the shop.
+- `REVOKE CONNECT ON DATABASE mjolnir FROM PUBLIC` then re-grant `mjolnir_admin` / `mjolnir_sites`.
+- `REVOKE CONNECT ON DATABASE "<name>" FROM PUBLIC` then grant the owner. Same on every other tenant DB so LOGIN roles cannot walk the hotel.
+- Writes `DATABASE_URL` into `/var/lib/mjolnir/deploy/secrets/<slug>.json` (the path `Deploy.Orchestrator.default_read_secrets/1` actually reads). Do not invent `/var/lib/mjolnir/<app>-secrets.json`.
+- Injected at **Runtime.start**, never `Builder.build`. Rotation = `ALTER ROLE` + rewrite that JSON + redeploy the app VM.
+
+`pg_hba.conf` (clobbered every start, `server.ex`) gains, for each tenant DB:
+
+```
+host <db> <role> 10.200.0.0/10 scram-sha-256
+```
+
+No `host all all`. Unix-socket peer lines for the BEAM stay as they are.
 
 ## Decision 4 — backup is part of the hotel, not a follow-up wish
 
-Sites indexes can be rebuilt from disk. A shop catalog cannot. This change owes:
+Sites indexes can be rebuilt from disk. A shop catalog cannot. Postgres data already lives at `/var/lib/mjolnir/pg` (not a VM subvolume). “Off `@vms`” is therefore vacuous — a dump next to the data dir dies with the host disk.
 
-- `pg_dump` of each tenant database on a timer (reuse `forgejo-backup.timer` shape or a new unit)
-- Restore drill documented: drop/create database, `pg_restore`, point `DATABASE_URL` at it
-- Dump files off the BTRFS VM volume (same discipline as secrets: not in `@snapshots`)
+This change owes two dumps:
 
-Without this, cutover-safe is a lie — a host disk loss wipes the shop.
+1. **Disaster recovery (host timer).** Same shape as `systemd/forgejo-backup.service`: scheduled `pg_dump` of each tenant database to an **off-host** sink (Backblaze B2 or the existing backup bucket), not a local path on the postgres disk. Restore recreates role + database from that object, then rewrites `deploy/secrets/<slug>.json` if the password changed.
+2. **Exit (Duke leaves).** `pg_dump` over the same tenant TCP `DATABASE_URL` from a guest or a laptop on the overlay. The catalog walks with him. Capture of convenience (managed host) is allowed; capture of the rows is not.
 
-## Decision 5 — in-flight `add-buzz-local-runtime` must not re-forbid this
+Cutover-safe does not need (1). Host-disk-safe and the exit test both do.
 
-That PENDING change still ADDs: “Stateful production workloads SHALL run real Postgres inside their own VM, not on the host sidecar.” After ADR 0004 is accepted, that sentence is wrong for **declared tenants**. Buzz relays and scratch still belong in-guest (PGlite on `@base/dev`, real PG in a relay VM). Handoff: amend `add-buzz-local-runtime` when this advise accepts. Do not fold the amendment into this change’s living delta until that PENDING file is edited.
+## Decision 5 — in-flight `add-buzz-local-runtime` is amended in this change
+
+That PENDING change ADDed: “Stateful production workloads SHALL run real Postgres inside their own VM, not on the host sidecar.” Leaving it is two in-flight truths. This change **edits that sentence now**: declared host-postgres tenants MAY use the sidecar; Buzz relays and other undeclared production workloads still SHALL run Postgres inside their own VM. Scratch stays PGlite on `@base/dev`.
 
 ## What we are not deciding
 

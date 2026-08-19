@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: Host sidecar is control-plane by default
+### Requirement: Host sidecar is control-plane only
 
 The OTP-managed Postgres sidecar SHALL store derived host-service
 indexes as schemas in the existing host database `mjolnir`. It SHALL

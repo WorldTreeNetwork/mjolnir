@@ -6,7 +6,7 @@
 
 ## Why
 
-Hypersigil Medusa needs a durable Postgres that survives `mj deploy` cutover. The OTP sidecar is already the host’s supervised Postgres. ADR 0002 item 7 and living spec `buzz-local-client` forbid using it as a tenant hotel: Unix socket only, `listen_addresses=''`, `--auth-host=reject`, guests have no path, service roles cannot DDL. Duke activated the reopen: same process, separate `CREATE DATABASE` per declared tenant, overlay TCP only.
+Hypersigil Medusa needs a durable Postgres that survives `mj deploy` cutover. The OTP sidecar is already the host’s supervised Postgres. ADR 0002 item 7 and living spec `buzz-local-client` forbid using it as a tenant hotel: Unix socket only, `listen_addresses=''`, `--auth-host=reject`, guests have no path, service roles cannot DDL. Duke activated the reopen: same process, separate `CREATE DATABASE` per declared tenant, TCP on reserved `:host_api_ip`. Advise 2026-08-19 sent back the first draft (unassigned `10.255.255.1`, renamed MODIFIED requirement, vacuous backup). Spec/design amended; do not `act` until re-advise accepts.
 
 ## What
 
@@ -34,9 +34,9 @@ No new UI because the outcome already reaches `mj deploy`, managed secrets, and 
 
 ## Out of scope
 
-- Redis, object storage, Medusa file uploads — hypersigil `add-mjolnir-manifest`
+- Redis, Medusa file uploads — hypersigil `add-mjolnir-manifest`
 - `mjolnir.toml`, CI, DNS — hypersigil `add-mjolnir-manifest`, `add-ci-deploy`, `add-dns-api`, `add-forgejo-mirror`
 - Putting Buzz community events on the sidecar — remains forbidden; tracked by `add-buzz-local-runtime` (relay VM)
 - Re-opening Distributed Erlang, nsec handling, or Admit
 - Publishing Postgres on the public NIC
-- In-flight `add-buzz-local-runtime` sentence “Stateful production workloads SHALL run real Postgres inside their own VM” — handoff: amend that PENDING delta when this ADR is accepted; do not fold it here
+- A third host-from-guest IP besides `:host_api_ip` (`10.200.0.1`)
