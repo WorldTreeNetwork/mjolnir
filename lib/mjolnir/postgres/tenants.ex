@@ -146,23 +146,36 @@ defmodule Mjolnir.Postgres.Tenants do
   defp ensure_role(conn, name, password) do
     case Postgrex.query(conn, "SELECT 1 FROM pg_roles WHERE rolname = $1", [name]) do
       {:ok, %{num_rows: 0}} ->
-        sql = ~s|CREATE ROLE "#{name}" LOGIN PASSWORD $1|
-
-        case Postgrex.query(conn, sql, [password]) do
-          {:ok, _} -> :ok
-          {:error, reason} -> {:error, {:create_role, reason}}
-        end
+        exec_format(
+          conn,
+          "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
+          [name, password],
+          :create_role
+        )
 
       {:ok, _} ->
-        sql = ~s|ALTER ROLE "#{name}" LOGIN PASSWORD $1|
-
-        case Postgrex.query(conn, sql, [password]) do
-          {:ok, _} -> :ok
-          {:error, reason} -> {:error, {:alter_role, reason}}
-        end
+        exec_format(
+          conn,
+          "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text)",
+          [name, password],
+          :alter_role
+        )
 
       {:error, reason} ->
         {:error, {:check_role, reason}}
+    end
+  end
+
+  defp exec_format(conn, format_sql, params, tag) do
+    case Postgrex.query(conn, format_sql, params) do
+      {:ok, %{rows: [[sql]]}} ->
+        case Postgrex.query(conn, sql, []) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {tag, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {tag, reason}}
     end
   end
 
