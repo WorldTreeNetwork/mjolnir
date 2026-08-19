@@ -21,7 +21,7 @@ Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/desig
 6. **identikey-protocol** owns wire + validators; Mjolnir owns lifecycle.
    Fail closed. Verify ≠ custody.
 7. **Host Postgres sidecar** is schemas in one catalog DB, not a hotel.
-   **Superseded in part by [ADR 0004](0004-host-sidecar-tenant-hotel.md):**
+   **Superseded in part by [ADR 0005](0005-host-sidecar-tenant-hotel.md):**
    declared tenant apps MAY `CREATE DATABASE` in the same process;
    Buzz event logs still SHALL NOT. Item 7 as folded on 2026-08-16
    remains the living text until `add-host-sidecar-tenant` folds.

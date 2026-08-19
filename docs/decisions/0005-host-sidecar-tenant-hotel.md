@@ -1,4 +1,4 @@
-# ADR 0004 — Host Postgres sidecar as a tenant hotel
+# ADR 0005 — Host Postgres sidecar as a tenant hotel
 
 **Status:** Proposed (2026-08-19)
 **Change:** [`add-host-sidecar-tenant`](../../openspec/changes/add-host-sidecar-tenant/proposal.md)

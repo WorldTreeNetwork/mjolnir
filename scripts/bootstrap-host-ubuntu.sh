@@ -977,7 +977,42 @@ setup_networking() {
         setup_networking_iptables "$vm_subnet" "$ext_iface"
     fi
 
+    ensure_host_api_addr
+    allow_tenant_postgres_input "$vm_subnet"
+
     log_success "VM networking configured (subnet: $vm_subnet, egress: $ext_iface)"
+}
+
+# Reserved host-from-guest address for tenant Postgres and the in-guest API.
+# Dummy (not lo): TAP /32 guests ARP this via proxy-ARP; lo + rp_filter drops it.
+ensure_host_api_addr() {
+    local ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
+    if ip addr show dummy-mjolnir >/dev/null 2>&1; then
+        :
+    else
+        ip link add dummy-mjolnir type dummy || true
+    fi
+    ip link set dummy-mjolnir up
+    if ! ip addr show dummy-mjolnir | grep -q "inet ${ip}/32"; then
+        ip addr add "${ip}/32" dev dummy-mjolnir || true
+    fi
+    log_info "Host API / tenant Postgres bind: ${ip}/32 on dummy-mjolnir"
+}
+
+# Guest TCP to 10.200.0.1:5432 is INPUT (TAP), not FORWARD. Default deny incoming
+# would black-hole the hotel even with a valid secret.
+allow_tenant_postgres_input() {
+    local vm_subnet="$1"
+    local ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
+    if ufw_is_active; then
+        if ! ufw status | grep -q "${ip} 5432"; then
+            ufw allow proto tcp from "$vm_subnet" to "$ip" port 5432 comment 'VMs to sidecar tenant Postgres'
+        fi
+    else
+        if ! iptables -C INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 5432 -j ACCEPT 2>/dev/null; then
+            iptables -A INPUT -p tcp -s "$vm_subnet" -d "$ip" --dport 5432 -j ACCEPT
+        fi
+    fi
 }
 
 ufw_is_active() {
@@ -1125,6 +1160,13 @@ setup_systemd_service() {
             echo "MJOLNIR_PG_BIN_DIR=${PG_BIN_DIR}" >> /etc/mjolnir/env
         fi
         log_info "Set MJOLNIR_PG_BIN_DIR=${PG_BIN_DIR} in /etc/mjolnir/env"
+    fi
+
+    if grep -q '^MJOLNIR_PG_TENANT_LISTEN_IP=' /etc/mjolnir/env; then
+        :
+    else
+        echo "MJOLNIR_PG_TENANT_LISTEN_IP=10.200.0.1" >> /etc/mjolnir/env
+        log_info "Set MJOLNIR_PG_TENANT_LISTEN_IP=10.200.0.1 in /etc/mjolnir/env"
     fi
 
     # Reload and enable

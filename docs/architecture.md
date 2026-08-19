@@ -691,7 +691,7 @@ SecretStore blob, not a VM-record field. Remaining runtime SHALLs live in
 `add-buzz-local-runtime`. Channel mobility below is still later.
 
 Host Postgres as a **declared tenant hotel** (Hypersigil first) is ADR
-[`0004`](decisions/0004-host-sidecar-tenant-hotel.md), change
+[`0005`](decisions/0005-host-sidecar-tenant-hotel.md), change
 `add-host-sidecar-tenant`. It supersedes ADR 0002 item 7 only. The
 control-plane catalog `mjolnir` and the Buzz-log ban stay.
 
