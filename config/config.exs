@@ -167,6 +167,9 @@ config :mjolnir,
   pg_roles: ["mjolnir_admin", "mjolnir_sites"],
   pg_database: "mjolnir",
   pg_pool_size: 10,
+  pg_tenant_listen_ip: nil,
+  pg_tenants_file: "/var/lib/mjolnir/pg-tenants.json",
+  deploy_secrets_dir: "/var/lib/mjolnir/deploy/secrets",
   ecto_repos: [Mjolnir.Repo]
 
 # Allowed host paths for extra_mounts in VM spawn API. Empty = disabled.
