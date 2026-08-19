@@ -14,6 +14,10 @@ set -euo pipefail
 OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/arch}"
 AGENT_BIN="${AGENT_BIN:-}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/terminfo.sh
+source "$SCRIPT_DIR/lib/terminfo.sh"
+
 ARCH_PACKAGES="base systemd dbus curl ca-certificates gnupg git iproute2 openssh jq base-devel openssl tmux cryptsetup kmod procps-ng"
 ARCH_MIRROR="https://mirror.rackspace.com/archlinux"
 BOOTSTRAP_URL="${ARCH_MIRROR}/iso/latest/archlinux-bootstrap-x86_64.tar.zst"
@@ -183,6 +187,8 @@ EOF
 else
     echo "WARNING: No guest agent - vsock commands won't work"
 fi
+
+install_ghostty_terminfo "$OUTPUT"
 
 # Network setup script (called by guest agent)
 cat > "$OUTPUT/usr/local/bin/mjolnir-network-setup" << 'NETEOF'

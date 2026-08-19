@@ -27,6 +27,8 @@ CI_ASSETS="$SCRIPT_DIR/ci-image"
 source "$SCRIPT_DIR/lib/guest-agent.sh"
 # shellcheck source=lib/mise.sh
 source "$SCRIPT_DIR/lib/mise.sh"
+# shellcheck source=lib/terminfo.sh
+source "$SCRIPT_DIR/lib/terminfo.sh"
 
 # Toolchain baked into the CI image. Everything goes through mise — it is the one
 # tool an image needs in order to grow any other, so a job that wants a version
@@ -256,6 +258,7 @@ chroot "$R" systemctl enable mount-workspace.service
 # (mjolnir-0e8). The helper installs both and verifies them.
 
 install_guest_agent "$R"
+install_ghostty_terminfo "$R"
 
 # ── Toolchain ─────────────────────────────────────────────────────────────────
 #

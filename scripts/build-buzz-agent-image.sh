@@ -111,6 +111,8 @@ CI_ASSETS="$SCRIPT_DIR/ci-image"
 source "$SCRIPT_DIR/lib/guest-agent.sh"
 # shellcheck source=lib/mise.sh
 source "$SCRIPT_DIR/lib/mise.sh"
+# shellcheck source=lib/terminfo.sh
+source "$SCRIPT_DIR/lib/terminfo.sh"
 
 # Pinned sprig image. Tag+digest form: the tag stays human-traceable to its git
 # SHA while the digest does the pinning. Keep in sync with DEFAULT_IMAGE in
@@ -502,6 +504,7 @@ chown -R "$AGENT_UID:$AGENT_GID" "$R$AGENT_HOME" "$R/var/lib/buzz" "$R/workspace
 # before the VM counts as started, well below where ordinary services come up.
 
 install_guest_agent "$R"
+install_ghostty_terminfo "$R"
 
 # mise goes in every base image: it is how an image grows any toolchain it was
 # not built with, without a rebuild. Note this does NOT replace the node install

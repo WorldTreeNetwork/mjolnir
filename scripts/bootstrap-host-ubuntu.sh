@@ -237,7 +237,8 @@ install_base_packages() {
         socat \
         screen \
         iptables \
-        iptables-persistent
+        iptables-persistent \
+        ncurses-bin
 
     log_success "Base packages installed"
 }
@@ -858,6 +859,16 @@ build_rootfs() {
     log_success "Rootfs built: $rootfs_path ($(du -sh "$rootfs_path" | cut -f1))"
 }
 
+# Ghostty TERM=xterm-ghostty. Distro ncurses does not ship it yet, so tmux/less
+# on the host (and in guests, via the rootfs builders) need the entry compiled
+# into /etc/terminfo. Same helper the image builders use.
+install_host_ghostty_terminfo() {
+    log_section "Installing Ghostty terminfo"
+    # shellcheck source=lib/terminfo.sh
+    source "$MJOLNIR_CODE/scripts/lib/terminfo.sh"
+    install_ghostty_terminfo /
+}
+
 # =============================================================================
 # Final Setup
 # =============================================================================
@@ -1283,6 +1294,7 @@ main() {
     setup_btrfs
     download_kernel
     build_rootfs
+    install_host_ghostty_terminfo
     setup_directories
     setup_networking
 

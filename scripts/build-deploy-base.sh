@@ -76,6 +76,8 @@ CI_ASSETS="$SCRIPT_DIR/ci-image"
 source "$SCRIPT_DIR/lib/guest-agent.sh"
 # shellcheck source=lib/mise.sh
 source "$SCRIPT_DIR/lib/mise.sh"
+# shellcheck source=lib/terminfo.sh
+source "$SCRIPT_DIR/lib/terminfo.sh"
 
 # Toolchain versions baked into the image. Keep in sync with
 # lib/mjolnir/deploy/detector.ex's @runtime ("node@20").
@@ -327,6 +329,7 @@ chroot "$R" systemctl enable mount-workspace.service
 # and the clone gets no binary at all. The image has to carry both (mjolnir-0e8).
 
 install_guest_agent "$R"
+install_ghostty_terminfo "$R"
 
 # ── Network setup script ──────────────────────────────────────────────────────
 #

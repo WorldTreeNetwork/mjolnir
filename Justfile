@@ -137,6 +137,21 @@ deploy-rootfs distro="ubuntu-24.04": _require-host
         AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent \
         bash scripts/build-rootfs-{{distro}}.sh /var/lib/mjolnir/btrfs/@base/{{distro}}"
 
+# Compile Ghostty's xterm-ghostty terminfo into /etc/terminfo on the host
+# and every @base image. New VM clones pick it up without a full rootfs
+# rebuild. Running guests do not — they cloned @base at spawn; respawn
+# or tic into that VM's rootfs if you need it live.
+install-ghostty-terminfo: _require-host
+    rsync -az scripts/lib/terminfo.sh scripts/lib/xterm-ghostty.terminfo \
+        {{host}}:/opt/mjolnir/scripts/lib/
+    ssh {{host}} 'set -euo pipefail; \
+        source /opt/mjolnir/scripts/lib/terminfo.sh; \
+        install_ghostty_terminfo /; \
+        for d in /var/lib/mjolnir/btrfs/@base/*; do \
+            [ -d "$d" ] || continue; \
+            install_ghostty_terminfo "$d"; \
+        done'
+
 # Build CI base image on the server (@base/ci-ubuntu-24.04)
 build-ci-image: _require-host
     ssh {{host}} "cd /opt/mjolnir && sudo bash scripts/build-ci-image.sh /var/lib/mjolnir/btrfs/@base/ci-ubuntu-24.04"

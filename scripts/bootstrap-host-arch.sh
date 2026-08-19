@@ -555,6 +555,13 @@ build_rootfs() {
     log_success "Rootfs built: $rootfs_path ($(du -sh "$rootfs_path" | cut -f1))"
 }
 
+install_host_ghostty_terminfo() {
+    log_section "Installing Ghostty terminfo"
+    # shellcheck source=lib/terminfo.sh
+    source "$MJOLNIR_CODE/scripts/lib/terminfo.sh"
+    install_ghostty_terminfo /
+}
+
 # =============================================================================
 # Networking
 # =============================================================================
@@ -838,6 +845,7 @@ main() {
     setup_btrfs
     build_ch_kernel
     build_rootfs
+    install_host_ghostty_terminfo
     setup_directories
     setup_networking
 

@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/guest-agent.sh"
 # shellcheck source=lib/mise.sh
 source "$SCRIPT_DIR/lib/mise.sh"
+# shellcheck source=lib/terminfo.sh
+source "$SCRIPT_DIR/lib/terminfo.sh"
 
 # Find agent binary
 if [[ -z "$AGENT_BIN" ]]; then
@@ -98,6 +100,7 @@ chroot "$MOUNT_DIR" passwd -l root
 # emitted an image that boots but fails every spawn on :boot_timeout. The helper
 # fails instead; set ALLOW_NO_AGENT=1 to deliberately build one without.
 install_guest_agent "$MOUNT_DIR"
+install_ghostty_terminfo "$MOUNT_DIR"
 
 # Network setup script (called by guest agent)
 echo "Installing network setup script..."
