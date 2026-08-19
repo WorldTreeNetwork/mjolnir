@@ -1,13 +1,13 @@
 # Tasks
 
 - [x] ADR 0004 filed; ADR 0002 item 7 marked superseded; pointer from `docs/architecture.md`
-- [ ] Overlay TCP listener on reserved `:host_api_ip` (`10.200.0.1:5432`), not `''`, not `0.0.0.0`, not the public NIC
-- [ ] scram-sha-256 for host/TCP; Unix-socket peer auth unchanged for the BEAM
-- [ ] `Mjolnir.Postgres.Tenants.ensure/1` as specified in design Decision 3
-- [ ] First tenant `hypersigil` (slug `hypersigil-api`); password in `deploy/secrets/hypersigil-api.json`
-- [ ] Unprovisioned guest still cannot authenticate to sidecar Postgres
-- [ ] Off-host tenant dump timer (B2 / forgejo-backup shape) + restore notes + tenant-URL `pg_dump` exit
-- [ ] Tests: bootstrap still creates `mjolnir` + `mjolnir_sites` without DDL; tenant migrate-class DDL works on the tenant DB; not listening on `0.0.0.0:5432`; allocate_ip never returns `10.200.0.1`
+- [x] Overlay TCP listener on reserved `:host_api_ip` (`10.200.0.1:5432`), not `''`, not `0.0.0.0`, not the public NIC
+- [x] scram-sha-256 for host/TCP; Unix-socket peer auth unchanged for the BEAM
+- [x] `Mjolnir.Postgres.Tenants.ensure/1` as specified in design Decision 3
+- [x] First tenant `hypersigil` (slug `hypersigil-api`); password in `deploy/secrets/hypersigil-api.json`
+- [x] Unprovisioned guest still cannot authenticate to sidecar Postgres
+- [x] Off-host tenant dump timer (B2 / forgejo-backup shape) + restore notes + tenant-URL `pg_dump` exit
+- [x] Tests: bootstrap still creates `mjolnir` + `mjolnir_sites` without DDL; tenant migrate-class DDL works on the tenant DB; not listening on `0.0.0.0:5432`; allocate_ip never returns `10.200.0.1`
 - [x] Amend PENDING `add-buzz-local-runtime` so declared tenants are not re-forbidden
 
 ## Owed before re-advise (2026-08-19)

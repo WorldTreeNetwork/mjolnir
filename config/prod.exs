@@ -25,4 +25,6 @@ config :mjolnir,
   pg_run_as: "mjolnir_pg",
   pg_data_dir: "/var/lib/mjolnir/pg",
   pg_socket_dir: "/var/run/mjolnir",
-  pg_log_dir: "/var/log/mjolnir/pg"
+  pg_log_dir: "/var/log/mjolnir/pg",
+  pg_tenant_listen_ip: "10.200.0.1",
+  pg_tenants_file: "/var/lib/mjolnir/pg-tenants.json"

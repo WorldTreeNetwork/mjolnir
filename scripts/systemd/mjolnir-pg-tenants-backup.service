@@ -1,0 +1,14 @@
+[Unit]
+Description=Dump host-sidecar tenant databases to Backblaze B2
+Documentation=file:///opt/mjolnir/docs/runbooks/host-postgres-tenants.md
+After=network-online.target mjolnir.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-pg-tenants-b2.sh
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

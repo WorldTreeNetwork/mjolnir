@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-host-sidecar-tenant",
+  "node_id": "add-host-sidecar-tenant",
+  "change_id": "add-host-sidecar-tenant",
+  "capability": "host-postgres",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-4.6" }
+  },
+  "goal": "OTP sidecar listens on reserved 10.200.0.1:5432 with scram tenants; ensure/1 provisions hypersigil; unprovisioned guests stay out; off-host dump exists.",
+  "anchors": [
+    { "symbol": "Mjolnir.Network.allocate_ip/1", "invariant": "never returns 10.200.0.1" },
+    { "symbol": "Mjolnir.Postgres.Server", "invariant": "listen_addresses is host_api_ip or fail closed" },
+    { "symbol": "Mjolnir.Postgres.Tenants.ensure/1", "invariant": "CREATE DATABASE + LOGIN + deploy secrets JSON" }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/network_test.exs test/mjolnir/postgres/tenants_test.exs test/mjolnir/postgres/server_test.exs --exclude postgres"
+  },
+  "out_of_scope": [
+    { "item": "Buzz events on sidecar", "tracked_as": "add-buzz-local-runtime" },
+    { "item": "Redis / Medusa uploads", "tracked_as": "hypersigil add-mjolnir-manifest" },
+    { "item": "Public NIC listen", "tracked_as": "out of scope" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/network.ex",
+      "lib/mjolnir/postgres/",
+      "lib/mix/tasks/mjolnir.pg.tenant.ex",
+      "config/",
+      "scripts/",
+      "test/mjolnir/network_test.exs",
+      "test/mjolnir/postgres/",
+      "docs/runbooks/",
+      "openspec/changes/add-host-sidecar-tenant/tasks.md",
+      "openspec/changes/add-buzz-local-runtime/specs/buzz-local-client/spec.md"
+    ],
+    "do_not": ["deploy"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "standard"
+}

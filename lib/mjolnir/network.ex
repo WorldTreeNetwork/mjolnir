@@ -148,26 +148,111 @@ defmodule Mjolnir.Network do
   """
   @spec allocate_ip(String.t()) :: String.t()
   def allocate_ip(vm_id) do
-    # Hash VM ID to get deterministic bytes
-    <<hash::unsigned-32, _rest::binary>> = :crypto.hash(:sha256, vm_id)
+    allocate_ip(vm_id, 0)
+  end
 
-    # 10.200.0.0/10 = 10.192.0.0 - 10.255.255.255
-    # That's 64 * 256 * 256 = 4,194,304 addresses
-    # Base: 10.192.0.0 = (10 << 24) | (192 << 16) = 180_355_072
+  defp allocate_ip(vm_id, n) when n < 32 do
+    ip = hash_to_ip(vm_id, n)
+
+    if reserved_host_ip?(ip) do
+      allocate_ip(vm_id, n + 1)
+    else
+      ip
+    end
+  end
+
+  defp allocate_ip(_vm_id, _n) do
+    raise "unable to allocate a guest IP outside reserved host addresses"
+  end
+
+  @doc """
+  Host-from-guest addresses that must never be handed to a VM.
+
+  Default is `:host_api_ip` (`10.200.0.1`). Tenant Postgres binds this.
+  """
+  @spec reserved_host_ips() :: [String.t()]
+  def reserved_host_ips do
+    [Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")]
+  end
+
+  @spec reserved_host_ip?(String.t()) :: boolean()
+  def reserved_host_ip?(ip), do: ip in reserved_host_ips()
+
+  @doc """
+  True if `ip` is assigned on a local interface (`:inet.getifaddrs/0`).
+  """
+  @spec ip_assigned?(String.t()) :: boolean()
+  def ip_assigned?(ip) when is_binary(ip) do
+    case :inet.getifaddrs() do
+      {:ok, ifs} ->
+        Enum.any?(ifs, fn {_name, opts} ->
+          Enum.any?(opts, fn
+            {:addr, addr} -> to_string(:inet.ntoa(addr)) == ip
+            _ -> false
+          end)
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Assign `:host_api_ip` on a dummy interface (Linux). Idempotent.
+
+  Prefer dummy over `lo` so TAP/`/32`/proxy-ARP guests can ARP the host
+  address. Missing `ip` is `{:error, :no_ip_cmd}`.
+  """
+  @spec ensure_host_api_addr() :: :ok | {:error, term()}
+  def ensure_host_api_addr do
+    ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+    if ip_assigned?(ip), do: :ok, else: add_dummy_addr(ip)
+  end
+
+  defp add_dummy_addr(ip) do
+    case System.find_executable("ip") do
+      nil ->
+        {:error, :no_ip_cmd}
+
+      ip_bin ->
+        _ =
+          System.cmd(ip_bin, ["link", "add", "dummy-mjolnir", "type", "dummy"],
+            stderr_to_stdout: true
+          )
+
+        _ = System.cmd(ip_bin, ["link", "set", "dummy-mjolnir", "up"], stderr_to_stdout: true)
+
+        case System.cmd(ip_bin, ["addr", "add", "#{ip}/32", "dev", "dummy-mjolnir"],
+               stderr_to_stdout: true
+             ) do
+          {_, 0} ->
+            :ok
+
+          {out, _} ->
+            if ip_assigned?(ip) or String.contains?(out, "File exists") do
+              :ok
+            else
+              {:error, {:ip_addr_add_failed, String.trim(out)}}
+            end
+        end
+    end
+  end
+
+  defp hash_to_ip(vm_id, n) do
+    material = if n == 0, do: vm_id, else: vm_id <> ":r#{n}"
+    <<hash::unsigned-32, _rest::binary>> = :crypto.hash(:sha256, material)
+
     base = 10 * 256 * 256 * 256 + 192 * 256 * 256
     range_size = 64 * 256 * 256
 
-    # Map hash to range, avoiding .0 and .255 in last octet
     offset = rem(hash, range_size)
     ip_int = base + offset
 
-    # Extract octets
     o1 = div(ip_int, 256 * 256 * 256)
     o2 = rem(div(ip_int, 256 * 256), 256)
     o3 = rem(div(ip_int, 256), 256)
     o4 = rem(ip_int, 256)
 
-    # Avoid .0 and .255 - shift to .1 or .254
     o4 =
       cond do
         o4 == 0 -> 1

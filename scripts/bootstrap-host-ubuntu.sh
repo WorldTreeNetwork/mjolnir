@@ -953,6 +953,15 @@ setup_networking() {
     fi
     log_info "External interface: $ext_iface"
 
+    # Reserved host-from-guest address (same as :host_api_ip). Tenant Postgres
+    # binds here. Dummy, not lo, so TAP guests can ARP it. Must exist before
+    # the sidecar starts; allocate_ip refuses this address.
+    local host_api_ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
+    log_info "Assigning reserved host-from-guest address ${host_api_ip}/32 on dummy-mjolnir"
+    ip link add dummy-mjolnir type dummy 2>/dev/null || true
+    ip link set dummy-mjolnir up
+    ip addr replace "${host_api_ip}/32" dev dummy-mjolnir
+
     # Enable IP forwarding, persist via /etc/sysctl.d (preferred over /etc/sysctl.conf on modern Ubuntu).
     log_info "Enabling IP forwarding..."
     echo 1 > /proc/sys/net/ipv4/ip_forward

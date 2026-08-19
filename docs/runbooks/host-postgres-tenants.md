@@ -1,0 +1,41 @@
+# Host sidecar tenant databases (ADR 0004)
+
+Declared tenants live as `CREATE DATABASE` on the OTP Postgres sidecar.
+TCP is `10.200.0.1:5432` (scram). The BEAM still uses the Unix socket.
+
+## Provision
+
+```bash
+mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api
+```
+
+Writes `/var/lib/mjolnir/deploy/secrets/hypersigil-api.json` with
+`DATABASE_URL`. `mj deploy --name hypersigil-api` reads that file.
+
+## Exit dump (tenant URL)
+
+```bash
+pg_dump "$DATABASE_URL" --no-owner --format=plain > hypersigil.sql
+```
+
+Must exit 0. That is the catalog walking out with you.
+
+## Off-host dump
+
+`scripts/backup-pg-tenants-b2.sh` → `b2:mimir-backups/mjolnir-pg-tenants/<host>/`.
+Timer: `scripts/systemd/mjolnir-pg-tenants-backup.{service,timer}`.
+
+Install:
+
+```bash
+install -m 0755 scripts/backup-pg-tenants-b2.sh /usr/local/bin/
+cp scripts/systemd/mjolnir-pg-tenants-backup.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now mjolnir-pg-tenants-backup.timer
+```
+
+## Restore
+
+1. Recreate the LOGIN role + database: `mix mjolnir.pg.tenant ensure <name> --slug <slug> --rotate` (or `CREATE ROLE` / `CREATE DATABASE` by hand).
+2. `psql "$DATABASE_URL" < dump.sql`
+3. If the password rotated, rewrite `deploy/secrets/<slug>.json` and redeploy the app VM.

@@ -117,3 +117,19 @@ end
 if pg_run_as = System.get_env("MJOLNIR_PG_RUN_AS") do
   config :mjolnir, pg_run_as: pg_run_as
 end
+
+if pg_tenant_listen_ip = System.get_env("MJOLNIR_PG_TENANT_LISTEN_IP") do
+  config :mjolnir, pg_tenant_listen_ip: pg_tenant_listen_ip
+end
+
+if pg_tenants_file = System.get_env("MJOLNIR_PG_TENANTS_FILE") do
+  config :mjolnir, pg_tenants_file: pg_tenants_file
+end
+
+if deploy_secrets_dir = System.get_env("MJOLNIR_DEPLOY_SECRETS_DIR") do
+  config :mjolnir, deploy_secrets_dir: deploy_secrets_dir
+end
+
+if pg_tenant_listen = System.get_env("MJOLNIR_PG_TENANT_LISTEN_IP") do
+  config :mjolnir, pg_tenant_listen_ip: pg_tenant_listen
+end

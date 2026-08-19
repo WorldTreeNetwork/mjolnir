@@ -1,3 +1,25 @@
+defmodule Mjolnir.NetworkReservedIpTest do
+  use ExUnit.Case, async: false
+
+  alias Mjolnir.Network
+
+  test "retries when the first hash would be the reserved address" do
+    prev = Application.get_env(:mjolnir, :host_api_ip)
+    victim = Network.allocate_ip("collide-me")
+    Application.put_env(:mjolnir, :host_api_ip, victim)
+
+    on_exit(fn ->
+      if prev,
+        do: Application.put_env(:mjolnir, :host_api_ip, prev),
+        else: Application.delete_env(:mjolnir, :host_api_ip)
+    end)
+
+    ip = Network.allocate_ip("collide-me")
+    refute ip == victim
+    assert ip =~ ~r/^10\.(19[2-9]|2[0-4]\d|25[0-5])\./
+  end
+end
+
 defmodule Mjolnir.NetworkTest do
   use ExUnit.Case, async: true
 
@@ -22,6 +44,29 @@ defmodule Mjolnir.NetworkTest do
       ip1 = Network.allocate_ip("vm-a")
       ip2 = Network.allocate_ip("vm-b")
       assert ip1 != ip2
+    end
+
+    test "never allocates the reserved host_api_ip" do
+      assert Network.reserved_host_ip?("10.200.0.1")
+
+      ips =
+        1..2000
+        |> Enum.map(&"vm-#{&1}")
+        |> Enum.map(&Network.allocate_ip/1)
+
+      refute "10.200.0.1" in ips
+    end
+
+    test "never returns the reserved host-from-guest address" do
+      reserved = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+
+      ips =
+        1..2000
+        |> Enum.map(&"vm-reserved-#{&1}")
+        |> Enum.map(&Network.allocate_ip/1)
+
+      refute reserved in ips
+      assert Enum.all?(ips, &(not Network.reserved_host_ip?(&1)))
     end
 
     test "avoids .0 and .255 in last octet" do

@@ -132,6 +132,8 @@ defmodule Mjolnir.Postgres.Server do
 
   defp start_managed(config) do
     with :ok <- check_binaries(config),
+         :ok <- maybe_assign_tenant_listen(config),
+         :ok <- check_tenant_listen(config),
          :ok <- ensure_dirs(config),
          :ok <- maybe_initdb(config),
          :ok <- write_conf_files(config),
@@ -143,6 +145,22 @@ defmodule Mjolnir.Postgres.Server do
       {:error, reason} ->
         Logger.error("Postgres.Server: failed to start (#{inspect(reason)})")
         {:stop, {:postgres_start_failed, reason}}
+    end
+  end
+
+  defp maybe_assign_tenant_listen(%Config{tenant_listen_ip: nil}), do: :ok
+
+  defp maybe_assign_tenant_listen(%Config{tenant_listen_ip: _ip}) do
+    Mjolnir.Network.ensure_host_api_addr()
+  end
+
+  defp check_tenant_listen(%Config{tenant_listen_ip: nil}), do: :ok
+
+  defp check_tenant_listen(%Config{tenant_listen_ip: ip}) do
+    if Mjolnir.Network.ip_assigned?(ip) do
+      :ok
+    else
+      {:error, {:tenant_listen_ip_missing, ip}}
     end
   end
 
@@ -235,14 +253,21 @@ defmodule Mjolnir.Postgres.Server do
   end
 
   defp postgresql_conf(config) do
+    listen =
+      case config.tenant_listen_ip do
+        nil -> "''"
+        ip -> "'#{ip}'"
+      end
+
     """
     # Managed by Mjolnir.Postgres.Server — overwritten on every boot.
-    listen_addresses = ''
+    listen_addresses = #{listen}
     unix_socket_directories = '#{config.socket_dir}'
     unix_socket_permissions = 0770
     max_connections = 100
     shared_buffers = 128MB
     dynamic_shared_memory_type = posix
+    password_encryption = scram-sha-256
     log_destination = 'stderr'
     logging_collector = off
     log_min_messages = warning
@@ -255,12 +280,20 @@ defmodule Mjolnir.Postgres.Server do
     """
   end
 
-  defp pg_hba_conf(_config) do
+  defp pg_hba_conf(config) do
+    tenant_lines =
+      config
+      |> Mjolnir.Postgres.Tenants.list()
+      |> Enum.map(fn %{name: name} ->
+        "host #{name} #{name} #{Mjolnir.Network.network_range()} scram-sha-256\n"
+      end)
+      |> IO.iodata_to_binary()
+
     """
     # Managed by Mjolnir.Postgres.Server — overwritten on every boot.
-    # Only local Unix-socket connections, authenticated by OS-user → DB-role
-    # mapping defined in pg_ident.conf.
+    # Unix-socket peer for the BEAM. Tenant TCP is overlay CIDR only.
     local all all peer map=mjolnir_map
+    #{tenant_lines}
     """
   end
 
@@ -402,6 +435,35 @@ defmodule Mjolnir.Postgres.Server do
 
       _ ->
         true
+    end
+  end
+
+  @doc """
+  Rewrite `pg_hba.conf` from the tenant registry and `pg_reload_conf()`.
+  Called after `Tenants.ensure/2`.
+  """
+  @spec reload_hba() :: :ok | {:error, term()}
+  def reload_hba do
+    config = Config.resolve()
+    path = Path.join(config.data_dir, "pg_hba.conf")
+
+    with :ok <- File.write(path, pg_hba_conf(config)),
+         {:ok, conn} <-
+           Postgrex.start_link(
+             socket_dir: config.socket_dir,
+             username: config.bootstrap_role,
+             database: config.db_name,
+             backoff_type: :stop,
+             pool_size: 1
+           ) do
+      try do
+        case Postgrex.query(conn, "SELECT pg_reload_conf()", []) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:reload_conf, reason}}
+        end
+      after
+        GenServer.stop(conn, :normal, 5_000)
+      end
     end
   end
 

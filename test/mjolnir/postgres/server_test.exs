@@ -74,6 +74,9 @@ defmodule Mjolnir.Postgres.ServerTest do
     assert pg_ident =~ "mjolnir_admin"
     assert pg_ident =~ "mjolnir_sites"
     assert postgresql =~ "listen_addresses = ''"
+    refute postgresql =~ "listen_addresses = '*'"
+    refute postgresql =~ "0.0.0.0"
+    assert postgresql =~ "password_encryption = scram-sha-256"
     assert postgresql =~ "unix_socket_directories = '#{ctx.socket_dir}'"
 
     GenServer.stop(pid, :normal, 15_000)
@@ -95,6 +98,22 @@ defmodule Mjolnir.Postgres.ServerTest do
     assert File.read!(Path.join(ctx.data_dir, "PG_VERSION")) == pg_version
 
     GenServer.stop(pid2, :normal, 15_000)
+  end
+
+  test "missing tenant listen IP fails closed and does not listen on *", ctx do
+    Application.put_env(:mjolnir, :pg_tenant_listen_ip, "203.0.113.1")
+    refute Mjolnir.Network.ip_assigned?("203.0.113.1")
+
+    assert {:error, {:postgres_start_failed, {:tenant_listen_ip_missing, "203.0.113.1"}}} =
+             Server.start_link([])
+
+    conf = Path.join(ctx.data_dir, "postgresql.conf")
+
+    if File.exists?(conf) do
+      body = File.read!(conf)
+      refute body =~ "listen_addresses = '*'"
+      refute body =~ "0.0.0.0"
+    end
   end
 
   test "Config.resolve returns expected paths", ctx do
@@ -141,7 +160,8 @@ defmodule Mjolnir.Postgres.ServerTest do
       :pg_run_as,
       :pg_bootstrap_role,
       :pg_roles,
-      :pg_ident_users
+      :pg_ident_users,
+      :pg_tenant_listen_ip
     ]
 
     for k <- keys, into: %{}, do: {k, Application.get_env(:mjolnir, k)}

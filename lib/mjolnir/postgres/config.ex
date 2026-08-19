@@ -24,7 +24,10 @@ defmodule Mjolnir.Postgres.Config do
           roles: [String.t()],
           ident_users: [String.t()],
           db_name: String.t(),
-          socket_path: String.t()
+          socket_path: String.t(),
+          tenant_listen_ip: String.t() | nil,
+          tenants_file: String.t(),
+          deploy_secrets_dir: String.t()
         }
 
   defstruct [
@@ -43,7 +46,10 @@ defmodule Mjolnir.Postgres.Config do
     :roles,
     :ident_users,
     :db_name,
-    :socket_path
+    :socket_path,
+    :tenant_listen_ip,
+    :tenants_file,
+    :deploy_secrets_dir
   ]
 
   @doc """
@@ -136,9 +142,16 @@ defmodule Mjolnir.Postgres.Config do
       roles: roles,
       ident_users: ident_users,
       db_name: get(:pg_database, "mjolnir"),
-      socket_path: Path.join(socket_dir, ".s.PGSQL.5432")
+      socket_path: Path.join(socket_dir, ".s.PGSQL.5432"),
+      tenant_listen_ip: blank_to_nil(get(:pg_tenant_listen_ip, nil)),
+      tenants_file: get(:pg_tenants_file, "/var/lib/mjolnir/pg-tenants.json"),
+      deploy_secrets_dir: get(:deploy_secrets_dir, "/var/lib/mjolnir/deploy/secrets")
     }
   end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(s) when is_binary(s), do: s
 
   defp get(key, default), do: Application.get_env(:mjolnir, key, default)
 
