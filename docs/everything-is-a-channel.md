@@ -65,3 +65,10 @@ single imagined consumer.
 
 Get a second real consumer onto the existing vocabulary first. Let the missing
 constructors be discovered rather than specified.
+
+---
+
+The retry-safe host mailbox — named send as a filesystem spool, 0MQ
+patterns composed *above* that primitive — is
+[`philosophy/mailbox-as-spool.md`](philosophy/mailbox-as-spool.md). Not
+built. Not an ADR.

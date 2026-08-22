@@ -27,6 +27,7 @@ Read in order if you're new:
 ## Related (deeper) docs
 
 - [Architecture](../architecture.md) — OTP orchestration and the module-by-module map.
+- [Philosophy](../philosophy/) — speculative architecture (mailbox as spool, channels). Not SHALLs.
 - [Storage architecture *(archived)*](../archive/storage-architecture.md) — CoW, reflinks, and
   the path toward content-addressed cross-host storage. *(Archived: its ext4-image sections
   describe the retired Firecracker era; the CoW reasoning still applies.)*

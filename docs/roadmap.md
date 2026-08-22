@@ -173,6 +173,7 @@ The multi-node and ecosystem layers are not built yet — Mjolnir is currently s
 | [orthogonal-persistence.md](orthogonal-persistence.md) | Pattern | Checkpoint/restore semantics, process-calculus mapping | Draft |
 | [everything-is-a-channel.md](everything-is-a-channel.md) | Philosophy | Channels as universal primitive | Notes |
 | [event-queue.md](event-queue.md) | Notes | Email as robust event queue, TCP/UART streams | Notes |
+| [philosophy/](philosophy/) | Philosophy | Speculative architecture; mailbox-as-spool | Notes |
 | [guide/](guide/) | User | Hands-on guides: getting started, snapshots, coming from Docker | Current |
 | [roadmap.md](roadmap.md) | Meta | This document | Active |
 

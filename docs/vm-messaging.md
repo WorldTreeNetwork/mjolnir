@@ -168,6 +168,13 @@ Mjolnir.EventBus.subscribe(:all)     # all VM events
 
 The system prioritizes **availability over exactly-once semantics**. Guest applications that need stronger guarantees should implement their own idempotency (e.g., deduplication by message ID).
 
+Agreed direction (not built): a per-actor filesystem spool so 200
+means durable accept, retries of a producer `id` are the same send,
+and running / booting / dormant share one queue. Argument, traps in
+this code, and what not to build:
+[`philosophy/mailbox-as-spool.md`](philosophy/mailbox-as-spool.md).
+Tracker `mjolnir-5le4`.
+
 ---
 
 ## Persistence Layout

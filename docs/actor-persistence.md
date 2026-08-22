@@ -134,8 +134,14 @@ The DormantRegistry's `pending_messages` queue serves double duty: it buffers me
 
 The current implementation is single-node: VMs sleep and wake on the same host. The natural extension is **distributed activation** — a cluster-wide DormantRegistry where a message can activate a VM on whichever node has capacity, with the snapshot transferred via `btrfs send | btrfs receive` or pulled over Iroh. This would make Mjolnir a true distributed virtual actor runtime, where VMs float between physical hosts based on demand.
 
+The mailbox that triggers activation should travel **with the actor**,
+not sit in a cluster-wide queue. Placement (which host owns this VM)
+is a small derived index; the ledger is `@mail/<vm_id>/` on that host.
+Argument: [`philosophy/mailbox-as-spool.md`](philosophy/mailbox-as-spool.md).
+
 See also:
 
 - `docs/vm-messaging.md` — API reference for the messaging and dormancy system
 - `docs/computational-fabric.md` — the broader vision for distributed compute
 - `docs/plans/durability.md` — crash resilience and state recovery design
+- `docs/philosophy/mailbox-as-spool.md` — retry-safe spool; not built
