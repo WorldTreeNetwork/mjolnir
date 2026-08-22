@@ -293,12 +293,14 @@ Multi-VirtioFS support (`lib/mjolnir/virtiofs.ex`) allows mounting additional ho
 
 #### Mjolnir's own CI
 
-`.forgejo/workflows/build-client.yml` builds the `mj` client inside a Mjolnir VM. The repo lives on **two remotes**, and this matters:
+`.forgejo/workflows/build-client.yml` builds the `mj` client inside a Mjolnir VM. GitHub is canonical. A host timer (`github-forgejo-mirror.timer`, every 5 min) fetches `github.com/identikey/mjolnir` and pushes into Forgejo so Actions run — you do **not** need a second `git push forgejo`.
 
 ```bash
-git push origin main    # github.com/identikey/mjolnir — builds nothing
-git push forgejo main   # mimir.worldtree.network — this is what triggers CI
+git push origin main    # github.com/identikey/mjolnir — timer mirrors to mimir; CI runs there
+# git push forgejo main  # only if you cannot wait ~5 min: just mirror-github
 ```
+
+Native Forgejo pull-mirror cannot convert an existing repo (v15 docs). The timer is a fetch + `git push --mirror` over localhost HTTP so receive-pack (and Actions) fire. Secrets: `/etc/mjolnir/github-forgejo-mirror.env` (Forgejo token) and `/etc/mjolnir/github-mjolnir-mirror` (GitHub deploy key).
 
 It publishes the binary as artifact `mj-x86_64-linux` (Forgejo stores these under `data/actions_artifacts/`; the run page links them).
 

@@ -259,6 +259,10 @@ logs-recent n="100": _require-host
 restart: _require-host
     ssh {{host}} "systemctl restart mjolnir"
 
+# Pull GitHub identikey/mjolnir into Forgejo now (normally the 5-minute timer)
+mirror-github: _require-host
+    ssh {{host}} "systemctl start github-forgejo-mirror.service && journalctl -u github-forgejo-mirror.service -n 20 --no-pager"
+
 # Attach to remote IEx shell
 remote-shell: _require-host
     ssh -t {{host}} "/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"

@@ -49,6 +49,23 @@ defmodule Forge.Declarations.MjolnirSelf do
     state :running
   end
 
+  # GitHub is canonical; Forgejo cannot convert an existing repo into a
+  # native pull-mirror. This timer fetches GitHub and git-pushes over
+  # localhost so Actions still fire. Secrets stay in
+  # /etc/mjolnir/github-forgejo-mirror.env (token) and
+  # /etc/mjolnir/github-mjolnir-mirror (deploy key) — not declared here.
+  systemd_unit "github-forgejo-mirror.service" do
+    source File.read!("systemd/github-forgejo-mirror.service")
+    enabled false
+    state :stopped
+  end
+
+  systemd_unit "github-forgejo-mirror.timer" do
+    source File.read!("systemd/github-forgejo-mirror.timer")
+    enabled true
+    state :running
+  end
+
   # ── Kernel parameters ─────────────────────────────────────────────────
 
   sysctl "net.ipv4.ip_forward" do

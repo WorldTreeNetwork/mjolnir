@@ -1,0 +1,18 @@
+[Unit]
+Description=Pull GitHub identikey/mjolnir into Forgejo (CI mirror)
+After=network-online.target forgejo.service
+Wants=network-online.target
+Requires=forgejo.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/mjolnir/github-forgejo-mirror.env
+ExecStart=/usr/local/sbin/mirror-github-to-forgejo.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Token in env; do not leak into logs via bash -x
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

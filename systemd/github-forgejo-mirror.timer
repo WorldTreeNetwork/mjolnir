@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull GitHub identikey/mjolnir into Forgejo every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
