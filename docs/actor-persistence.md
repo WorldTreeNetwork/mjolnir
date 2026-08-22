@@ -144,4 +144,4 @@ See also:
 - `docs/vm-messaging.md` — API reference for the messaging and dormancy system
 - `docs/computational-fabric.md` — the broader vision for distributed compute
 - `docs/plans/durability.md` — crash resilience and state recovery design
-- `docs/philosophy/mailbox-as-spool.md` — retry-safe spool; not built
+- `docs/philosophy/mailbox-as-spool.md` — retry-safe spool (ADR 0006, built)

@@ -100,4 +100,18 @@ defmodule Mjolnir.MailboxTest do
     assert :bounced = Mailbox.record_attempt(vm_id, "try")
     assert Mailbox.list_unacked(vm_id) == []
   end
+
+  test "unacked mail survives a dormant transition; nothing take-then-sends", %{vm_id: vm_id} do
+    :ok = Mjolnir.DormantRegistry.register(vm_id, "snap-done", %{})
+    on_exit(fn -> Mjolnir.DormantRegistry.unregister(vm_id) end)
+
+    assert {:ok, %{status: :queued}} =
+             Mailbox.accept(vm_id, "external", %{"type" => "turn"}, id: "during-done")
+
+    assert [%{"message_id" => "during-done"}] = Mailbox.list_unacked(vm_id)
+    # Restore used to take_pending_messages then vsock-cast, clearing the only
+    # copy. The spool file is the copy; DormantRegistry is not the queue.
+    assert [] = Mjolnir.DormantRegistry.take_pending_messages(vm_id)
+    assert [%{"message_id" => "during-done"}] = Mailbox.list_unacked(vm_id)
+  end
 end

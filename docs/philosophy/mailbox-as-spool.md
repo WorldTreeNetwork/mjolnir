@@ -1,16 +1,18 @@
 # Mailbox as spool
 
-**Status:** Agreed direction (2026-08-21). Not built. Not an ADR.
-**Tracker:** beads epic `mjolnir-5le4` (architecture node `mjolnir-5le4.1`).
-**Consult:** Fable 5 plan pass, same date. Memory key `mailbox-retry-safe`.
+**Status:** Folded 2026-08-22. ADR
+[`0006`](../decisions/0006-mailbox-as-spool.md). Living spec
+[`vm-mailbox`](../../openspec/specs/vm-mailbox/spec.md).
+**Tracker:** beads epic `mjolnir-5le4`.
+**Consult:** Fable 5 plan pass 2026-08-21. Memory key `mailbox-retry-safe`.
 
 This is the durable copy of the retry-safe mailbox argument: why a
 per-actor filesystem spool is the primitive, why a front-proxy VM is
 not, and how 0MQ / π-calculus patterns compose *above* that spool
 without a broker.
 
-What is built today is still the weaker contract in
-[`../vm-messaging.md`](../vm-messaging.md).
+What shipped is [`../vm-messaging.md`](../vm-messaging.md). This file
+is the argument, not the SHALL store.
 
 ---
 

@@ -1,6 +1,8 @@
 # add-mailbox-durable-accept
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-08-22 → `openspec/specs/vm-mailbox/spec.md`.
 
 Activated from intend 2026-08-21 (`nod-mailbox-durable-accept`,
 “let's roll through”). Philosophy:

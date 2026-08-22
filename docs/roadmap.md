@@ -174,6 +174,7 @@ The multi-node and ecosystem layers are not built yet — Mjolnir is currently s
 | [everything-is-a-channel.md](everything-is-a-channel.md) | Philosophy | Channels as universal primitive | Notes |
 | [event-queue.md](event-queue.md) | Notes | Email as robust event queue, TCP/UART streams | Notes |
 | [philosophy/](philosophy/) | Philosophy | Speculative architecture; mailbox-as-spool | Notes |
+| [openspec/specs/vm-mailbox/](../openspec/specs/vm-mailbox/spec.md) | Messaging | Retry-safe per-actor spool (ADR 0006) | Current |
 | [guide/](guide/) | User | Hands-on guides: getting started, snapshots, coming from Docker | Current |
 | [roadmap.md](roadmap.md) | Meta | This document | Active |
 

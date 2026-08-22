@@ -701,9 +701,10 @@ Host Postgres as a **declared tenant hotel** (Hypersigil first) is ADR
 control-plane catalog `mjolnir` and the Buzz-log ban stay.
 
 The retry-safe host mailbox (named send as a filesystem spool; 0MQ
-patterns composed above it; placement is not the queue) is sketched in
+patterns composed above it; placement is not the queue) is ADR
+[`0006`](decisions/0006-mailbox-as-spool.md), living spec
+[`vm-mailbox`](../openspec/specs/vm-mailbox/spec.md). Philosophy:
 [`philosophy/mailbox-as-spool.md`](philosophy/mailbox-as-spool.md).
-Agreed direction, not built. Tracker `mjolnir-5le4`.
 
 Inspired by pi-calculus, channels will be the universal communication primitive:
 
