@@ -9,13 +9,13 @@ subscribed.
 - [x] Write ADR index `docs/decisions/0006-mailbox-as-spool.md` as Proposed
 - [x] Delta `specs/vm-mailbox/spec.md` (ADDED)
 - [x] Advise accept (Fable) — `reviews/2026-08-22-advise.md` (accept-with-nits)
-- [ ] After accept: `act` host `Mjolnir.Mailbox` + API `id` + unify
+- [x] After accept: `act` host `Mjolnir.Mailbox` + API `id` + unify
       the three queues + startup sweep + give-up (`mjolnir-5le4.1`).
       Absorb advise nits: fsync the parent directory after rename
       (Forge.Store does not; qmail does); exclusive create on
       message_id; delivery-worker ownership; tombstone retention;
       GC `@mail/` on `mj kill`.
-- [ ] After accept: guest peek/ack (`mjolnir-5le4.2`; may weave)
+- [x] After accept: guest peek/ack (`mjolnir-5le4.2`; may weave)
 
 Handoffs (not checkboxes):
 

@@ -94,8 +94,11 @@ defmodule Mjolnir.Vsock.Connection do
   @doc """
   Deliver a message from another VM into the guest's inbox.
   """
-  def deliver_message(pid, from_vm_id, payload) do
-    GenServer.cast(pid, {:send_control_message, Protocol.deliver_message(from_vm_id, payload)})
+  def deliver_message(pid, from_vm_id, payload, message_id \\ nil) do
+    GenServer.cast(
+      pid,
+      {:send_control_message, Protocol.deliver_message(from_vm_id, payload, message_id)}
+    )
   end
 
   @doc "Open or ensure a terminal session in the guest."
@@ -573,6 +576,7 @@ defmodule Mjolnir.Vsock.Connection do
         Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           {ok, error} =
             case Mjolnir.VM.deliver_message(target, source_vm_id, payload) do
+              {:ok, _} -> {true, nil}
               :ok -> {true, nil}
               {:error, reason} -> {false, inspect(reason)}
             end
@@ -595,7 +599,20 @@ defmodule Mjolnir.Vsock.Connection do
         state
 
       {:ok, %{"type" => "deliver_message_ack", "id" => _id}} ->
-        # No-op, just confirmation the guest buffered the message
+        # Transport hint only — RAM buffer. Never tombstone host mail.
+        state
+
+      {:ok, %{"type" => "ack_messages", "id" => id, "message_ids" => ids}} when is_list(ids) ->
+        Enum.each(ids, fn mid ->
+          if is_binary(mid), do: Mjolnir.Mailbox.ack(state.vm_id, mid)
+        end)
+
+        send_message(
+          state.socket,
+          %{"type" => "ack_messages_response", "id" => id, "ok" => true},
+          0
+        )
+
         state
 
       {:ok, %{"type" => "send_message_response", "id" => id} = response} ->

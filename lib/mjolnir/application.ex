@@ -52,6 +52,14 @@ defmodule Mjolnir.Application do
           # Dormant VM registry for coroutine lifecycle
           Mjolnir.DormantRegistry,
 
+          # Per-actor durable message spool (ADR 0006)
+          Mjolnir.Mailbox,
+          %{
+            id: Mjolnir.StartupMailboxSweep,
+            start: {Task, :start_link, [&Mjolnir.Mailbox.sweep/0]},
+            restart: :temporary
+          },
+
           # Asynchronous rehydration of running-intent VMs from StateStore.
           # Spawned as a concurrent Task — NOT a blocking Mjolnir.Startup phase
           # — so the HTTP API (Bandit, below) becomes available immediately,

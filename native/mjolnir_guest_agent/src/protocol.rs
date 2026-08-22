@@ -90,8 +90,15 @@ pub enum VsockRequest {
     #[serde(rename = "deliver_message")]
     DeliverMessage {
         id: String,
+        #[serde(default)]
+        message_id: Option<String>,
         from_vm_id: String,
         payload: serde_json::Value,
+    },
+    #[serde(rename = "ack_messages")]
+    AckMessages {
+        id: String,
+        message_ids: Vec<String>,
     },
     #[serde(rename = "signal_done")]
     SignalDone { id: String },

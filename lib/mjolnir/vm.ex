@@ -785,38 +785,38 @@ defmodule Mjolnir.VM do
   Routes through the VMRegistry for running VMs, or through the
   DormantRegistry for checkpointed VMs (triggering a restore).
   """
-  @spec deliver_message(vm_id(), String.t(), term()) :: :ok | {:error, term()}
-  def deliver_message(target_vm_id, from_vm_id, payload) do
-    case Registry.lookup(Mjolnir.VMRegistry, target_vm_id) do
-      [{pid, _}] ->
-        GenServer.call(pid, {:deliver_message, from_vm_id, payload})
+  @spec deliver_message(vm_id(), String.t(), term()) :: {:ok, map()} | {:error, term()}
+  @spec deliver_message(vm_id(), String.t(), term(), keyword()) :: {:ok, map()} | {:error, term()}
+  def deliver_message(target_vm_id, from_vm_id, payload, opts \\ []) do
+    cond do
+      Registry.lookup(Mjolnir.VMRegistry, target_vm_id) != [] ->
+        accept_and_kick(target_vm_id, from_vm_id, payload, opts)
 
-      [] ->
-        # Check if the VM is dormant
-        case Mjolnir.DormantRegistry.lookup(target_vm_id) do
-          {:ok, _entry} ->
-            if Mjolnir.Admit.thaw_allowed?(target_vm_id, payload) do
-              case Mjolnir.DormantRegistry.queue_message(target_vm_id, from_vm_id, payload) do
-                :ok ->
-                  restore_dormant_vm(target_vm_id)
-
-                {:error, :restoring} ->
-                  # VM is being restored — retry delivery via VMRegistry
-                  # (it may be booting, in which case the message gets queued in the VM GenServer)
-                  retry_deliver_message(target_vm_id, from_vm_id, payload)
-
-                {:error, :not_found} ->
-                  {:error, :not_found}
-              end
-            else
-              {:error, :admission_denied}
-            end
-
-          :not_found ->
-            {:error, :not_found}
+      match?({:ok, _}, Mjolnir.DormantRegistry.lookup(target_vm_id)) ->
+        if Mjolnir.Admit.thaw_allowed?(target_vm_id, payload) do
+          accept_and_kick(target_vm_id, from_vm_id, payload, opts)
+        else
+          {:error, :admission_denied}
         end
+
+      true ->
+        {:error, :not_found}
     end
   end
+
+  defp accept_and_kick(vm_id, from_vm_id, payload, opts) do
+    case Mjolnir.Mailbox.accept(vm_id, from_vm_id, payload, opts) do
+      {:ok, result} ->
+        Mjolnir.Mailbox.kick(vm_id)
+        {:ok, result}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  def restore_for_mail(vm_id), do: restore_dormant_vm(vm_id)
 
   @doc """
   Handle a VM signaling "done" — snapshot and go dormant.
@@ -1125,19 +1125,6 @@ defmodule Mjolnir.VM do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
-  end
-
-  def handle_call({:deliver_message, from_vm_id, payload}, _from, %{state: :running} = state) do
-    Mjolnir.Vsock.Connection.deliver_message(state.vsock_conn, from_vm_id, payload)
-    {:reply, :ok, state}
-  end
-
-  def handle_call({:deliver_message, from_vm_id, payload}, _from, %{state: :booting} = state) do
-    {:reply, :ok, %{state | message_queue: state.message_queue ++ [{from_vm_id, payload}]}}
-  end
-
-  def handle_call({:deliver_message, _from_vm_id, _payload}, _from, state) do
-    {:reply, {:error, {:not_available, state.state}}, state}
   end
 
   # Persistent secrets and restart_policy: :never cannot go dormant
@@ -1630,6 +1617,25 @@ defmodule Mjolnir.VM do
   end
 
   @impl true
+  def handle_cast(:deliver_mailbox, %{state: :running, vsock_conn: conn} = state)
+      when not is_nil(conn) do
+    for rec <- Mjolnir.Mailbox.list_unacked(state.id) do
+      Mjolnir.Vsock.Connection.deliver_message(
+        conn,
+        rec["from_vm_id"],
+        rec["payload"],
+        rec["message_id"]
+      )
+
+      _ = Mjolnir.Mailbox.record_attempt(state.id, rec["message_id"])
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_cast(:deliver_mailbox, state), do: {:noreply, state}
+
+  @impl true
   def terminate(reason, state) do
     Logger.warning(
       "[vm-terminate] #{state.id} start reason=#{inspect(reason)} state=#{state.state}"
@@ -1693,6 +1699,14 @@ defmodule Mjolnir.VM do
 
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
+
+      case Mjolnir.DormantRegistry.lookup(state.id) do
+        {:ok, _} ->
+          Mjolnir.Mailbox.kick(state.id)
+
+        :not_found ->
+          _ = Mjolnir.Mailbox.drop_mailbox(state.id)
+      end
     end
 
     Logger.warning("[vm-terminate] #{state.id} done")
@@ -2606,11 +2620,6 @@ defmodule Mjolnir.VM do
     if is_reference(state.secrets_unlock_timer),
       do: Process.cancel_timer(state.secrets_unlock_timer)
 
-    # Drain any messages queued during boot
-    for {from_vm_id, payload} <- state.message_queue do
-      Mjolnir.Vsock.Connection.deliver_message(state.vsock_conn, from_vm_id, payload)
-    end
-
     running_state = %{
       state
       | state: :running,
@@ -2630,6 +2639,8 @@ defmodule Mjolnir.VM do
     # being answered by the :running clause after handle_continue returns.
     # Forgetting this reply would hang every managed spawn until its timeout.
     if state.boot_waiter, do: GenServer.reply(state.boot_waiter, {:ok, running_state})
+
+    Mjolnir.Mailbox.kick(state.id)
 
     {:noreply, running_state}
   end
@@ -3023,26 +3034,6 @@ defmodule Mjolnir.VM do
   # Dormant VM Helpers
   # ============================================================================
 
-  # Retry delivering a message when the DormantRegistry is in :restoring state.
-  # The VM should already be in VMRegistry (booting or running).
-  defp retry_deliver_message(target_vm_id, from_vm_id, payload, retries \\ 5) do
-    case Registry.lookup(Mjolnir.VMRegistry, target_vm_id) do
-      [{pid, _}] ->
-        GenServer.call(pid, {:deliver_message, from_vm_id, payload})
-
-      [] when retries > 0 ->
-        Process.sleep(200)
-        retry_deliver_message(target_vm_id, from_vm_id, payload, retries - 1)
-
-      [] ->
-        Logger.warning(
-          "Failed to deliver message to restoring VM #{target_vm_id}: not in registry"
-        )
-
-        {:error, :not_found}
-    end
-  end
-
   defp restore_config(state) do
     %{
       base_image: state.config.base_image,
@@ -3098,24 +3089,16 @@ defmodule Mjolnir.VM do
 
         case spawn_with_id(opts) do
           {:ok, _vm} ->
-            # Atomically take pending messages and unregister in one sequence.
-            # Unregister first so new deliver_message calls route via VMRegistry
-            # (the VM is already registered there after spawn_with_id).
+            # Absorb any pre-mailbox pending_messages into the spool (one-time
+            # migration for VMs that went dormant before this change).
             pending = Mjolnir.DormantRegistry.take_pending_messages(vm_id)
             Mjolnir.DormantRegistry.unregister(vm_id)
 
             for {from_vm_id, payload} <- pending do
-              # The VM is now running, deliver via registry
-              case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
-                [{pid, _}] ->
-                  GenServer.call(pid, {:deliver_message, from_vm_id, payload})
-
-                [] ->
-                  Logger.warning(
-                    "Restored VM #{vm_id} not found in registry for message delivery"
-                  )
-              end
+              _ = Mjolnir.Mailbox.accept(vm_id, from_vm_id, payload)
             end
+
+            Mjolnir.Mailbox.kick(vm_id)
 
             Mjolnir.EventBus.publish(vm_id, :vm_restored, %{from_snapshot: entry.snapshot_name})
             Logger.info("Successfully restored dormant VM #{vm_id}")

@@ -1061,7 +1061,7 @@ pub async fn cmd_message(
     if json {
         println!("{}", body);
     } else {
-        eprintln!("Delivered message to {}", id);
+        eprintln!("Accepted message for {}", id);
     }
     Ok(())
 }

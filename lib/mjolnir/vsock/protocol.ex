@@ -404,9 +404,12 @@ defmodule Mjolnir.Vsock.Protocol do
   Delivers a message from another VM into the guest's inbox.
   """
   def deliver_message(from_vm_id, payload, request_id \\ nil) do
+    id = request_id || UUID.uuid4()
+
     %{
       "type" => "deliver_message",
-      "id" => request_id || UUID.uuid4(),
+      "id" => id,
+      "message_id" => id,
       "from_vm_id" => from_vm_id,
       "payload" => payload
     }

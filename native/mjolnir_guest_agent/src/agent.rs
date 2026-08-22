@@ -237,8 +237,11 @@ fn handle_connection(
         ("GET", "/messages") => {
             runtime.block_on(handle_messages(&mut stream, message_inbox));
         }
+        ("POST", "/ack") => {
+            runtime.block_on(handle_ack(&mut stream, &request, message_inbox, bridge_holder));
+        }
         ("POST", "/done") => {
-            runtime.block_on(handle_done(&mut stream, bridge_holder));
+            runtime.block_on(handle_done(&mut stream, message_inbox, bridge_holder));
         }
         ("GET", "/health") => {
             send_http_response(&mut stream, 200, r#"{"status":"ok"}"#);
@@ -457,10 +460,11 @@ async fn handle_recv(
     let notified = message_notify.notified();
     tokio::pin!(notified);
 
-    // Check inbox first (under lock)
+    // Check inbox first (under lock). Peek only — host mail is not
+    // complete until POST /ack.
     {
-        let mut inbox = message_inbox.lock().await;
-        if let Some(msg) = inbox.pop_front() {
+        let inbox = message_inbox.lock().await;
+        if let Some(msg) = inbox.front() {
             let body = serde_json::json!({
                 "id": msg.id,
                 "from_vm_id": msg.from_vm_id,
@@ -476,8 +480,8 @@ async fn handle_recv(
     // Block waiting for a message with timeout
     let result = tokio::select! {
         _ = &mut notified => {
-            let mut inbox = message_inbox.lock().await;
-            inbox.pop_front()
+            let inbox = message_inbox.lock().await;
+            inbox.front().cloned()
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => {
             None
@@ -501,9 +505,9 @@ async fn handle_recv(
 
 async fn handle_messages(stream: &mut std::net::TcpStream, message_inbox: &MessageInbox) {
     let messages: Vec<serde_json::Value> = {
-        let mut inbox = message_inbox.lock().await;
+        let inbox = message_inbox.lock().await;
         inbox
-            .drain(..)
+            .iter()
             .map(|msg| {
                 serde_json::json!({
                     "id": msg.id,
@@ -518,7 +522,64 @@ async fn handle_messages(stream: &mut std::net::TcpStream, message_inbox: &Messa
     send_http_response(stream, 200, &body.to_string());
 }
 
-async fn handle_done(stream: &mut std::net::TcpStream, bridge_holder: &BridgeHolder) {
+async fn handle_ack(
+    stream: &mut std::net::TcpStream,
+    request: &HttpRequest,
+    message_inbox: &MessageInbox,
+    bridge_holder: &BridgeHolder,
+) {
+    let ids: Vec<String> = match serde_json::from_str::<serde_json::Value>(&request.body) {
+        Ok(v) => v
+            .get("ids")
+            .and_then(|x| x.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Err(_) => {
+            send_http_response(stream, 400, r#"{"error":"Invalid JSON"}"#);
+            return;
+        }
+    };
+
+    {
+        let mut inbox = message_inbox.lock().await;
+        inbox.retain(|msg| !ids.contains(&msg.id));
+    }
+
+    let corr = uuid::Uuid::new_v4().to_string();
+    let req = serde_json::json!({
+        "type": "ack_messages",
+        "id": corr,
+        "message_ids": ids
+    });
+
+    match send_bridge_request(bridge_holder, req).await {
+        Ok(_) => send_http_response(stream, 200, r#"{"ok":true}"#),
+        Err((status, body)) => send_http_response(stream, status, &body),
+    }
+}
+
+async fn handle_done(
+    stream: &mut std::net::TcpStream,
+    message_inbox: &MessageInbox,
+    bridge_holder: &BridgeHolder,
+) {
+    let pending = {
+        let inbox = message_inbox.lock().await;
+        inbox.len()
+    };
+    if pending > 0 {
+        let body = serde_json::json!({
+            "error": "unacked_mail",
+            "unacked": pending
+        });
+        send_http_response(stream, 409, &body.to_string());
+        return;
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let req = serde_json::json!({
         "type": "signal_done",

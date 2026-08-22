@@ -376,6 +376,7 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                             | VsockRequest::ConfigureSsh { id, .. }
                                             | VsockRequest::ConfigureIdentity { id, .. }
                                             | VsockRequest::DeliverMessage { id, .. }
+                                            | VsockRequest::AckMessages { id, .. }
                                             | VsockRequest::SignalDone { id }
                                             | VsockRequest::SignalDoneAck { id, .. }
                                             | VsockRequest::SpawnSubAgent { id, .. }
@@ -1084,18 +1085,24 @@ async fn handle_request(
         }
         VsockRequest::DeliverMessage {
             id,
+            message_id,
             from_vm_id,
             payload,
         } => {
             info!("DeliverMessage from {}", from_vm_id);
+            let producer_id = message_id.unwrap_or_else(|| id.clone());
             let msg = IncomingMessage {
-                id: id.clone(),
+                id: producer_id,
                 from_vm_id,
                 payload,
             };
             message_inbox.lock().await.push_back(msg);
             message_notify.notify_waiters();
             VsockResponse::DeliverMessageAck { id }
+        }
+        VsockRequest::AckMessages { id, .. } => {
+            // Host-bound; if it appears inbound, acknowledge so the match is exhaustive.
+            VsockResponse::EventAck { id }
         }
         #[cfg(feature = "full")]
         VsockRequest::TerminalOpen { id, session_name } => {

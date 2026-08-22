@@ -168,6 +168,10 @@ defmodule Mjolnir.MCP.Server do
       properties: %{
         vm_id: %{type: "string", description: "Target VM UUID."},
         from_vm_id: %{type: "string", description: "Source VM UUID or 'external'."},
+        id: %{
+          type: "string",
+          description: "Producer message id. Same id retried is a duplicate."
+        },
         payload: %{type: "object", description: "Arbitrary JSON payload."}
       },
       required: ["vm_id"]
@@ -362,10 +366,12 @@ defmodule Mjolnir.MCP.Server do
   def handle_tool_call("deliver_message", %{"vm_id" => id} = args, state) do
     from = Map.get(args, "from_vm_id", "external")
     payload = Map.get(args, "payload", %{})
+    opts = if args["id"], do: [id: args["id"]], else: []
 
-    case Mjolnir.VM.deliver_message(id, from, payload) do
-      :ok ->
-        {:ok, %{content: [text(~s({"ok": true}))]}, state}
+    case Mjolnir.VM.deliver_message(id, from, payload, opts) do
+      {:ok, %{message_id: mid, status: status}} ->
+        body = Jason.encode!(%{ok: true, message_id: mid, status: status})
+        {:ok, %{content: [text(body)]}, state}
 
       {:error, :not_found} ->
         {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}

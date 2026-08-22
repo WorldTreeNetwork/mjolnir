@@ -1016,6 +1016,7 @@ defmodule Mjolnir.API.Router do
       authorize_vm(conn, id, :message, fn _vm ->
         from_vm_id = conn.body_params["from_vm_id"] || "external"
         payload = conn.body_params["payload"] || %{}
+        # Plug stringifies atoms; missing id must stay nil so Mailbox generates one.
 
         # Validate from_vm_id ownership when not "external"
         authorized =
@@ -1032,12 +1033,20 @@ defmodule Mjolnir.API.Router do
           end
 
         if authorized do
-          case Mjolnir.VM.deliver_message(id, from_vm_id, payload) do
-            :ok ->
-              json(conn, 200, %{ok: true})
+          message_id = conn.body_params["id"]
+
+          case Mjolnir.VM.deliver_message(id, from_vm_id, payload, id: message_id) do
+            {:ok, %{message_id: mid, status: status}} ->
+              json(conn, 200, %{ok: true, message_id: mid, status: status})
 
             {:error, :not_found} ->
               json(conn, 404, %{error: "not_found"})
+
+            {:error, :admission_denied} ->
+              json(conn, 403, %{error: "admission_denied"})
+
+            {:error, :invalid_message_id} ->
+              json(conn, 400, %{error: "invalid_message_id"})
 
             {:error, reason} ->
               Logger.error("Message delivery failed for #{id}: #{inspect(reason)}")

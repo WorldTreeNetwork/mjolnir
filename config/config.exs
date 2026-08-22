@@ -26,6 +26,12 @@ config :mjolnir,
   # Durability: per-VM intent state (one JSON file per VM)
   state_dir: "/var/lib/mjolnir/state",
 
+  # Mailbox spool (ADR 0006). Tombstones retained 7 days so producer retries
+  # stay duplicates. Give-up TTL runs from accept, including Admit don't-thaw.
+  mailbox_max_attempts: 10,
+  mailbox_ttl_ms: 86_400_000,
+  mailbox_tombstone_seconds: 7 * 24 * 60 * 60,
+
   # secrets_mode: :managed — per-VM LUKS passphrase escrow. Lives OUTSIDE
   # btrfs_root (the data volume), so it is never captured by a VM snapshot.
   # The host re-injects the escrowed passphrase over vsock on boot + wake.

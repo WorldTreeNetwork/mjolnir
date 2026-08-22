@@ -13,6 +13,7 @@ POST /api/vms/{target_vm_id}/messages
 ```json
 {
   "from_vm_id": "sender-uuid-or-external",
+  "id": "producer-uuid",
   "payload": { "any": "json" }
 }
 ```
@@ -24,9 +25,11 @@ POST /api/vms/{target_vm_id}/messages
 
 | Status | Body | Meaning |
 |--------|------|---------|
-| 200 | `{"ok": true}` | Message accepted for delivery |
+| 200 | `{"ok": true, "message_id": "...", "status": "queued"\|"duplicate"}` | Durable accept (file fsynced). Producer may forget. |
+| 400 | `{"error": "invalid_message_id"}` | `id` contained illegal characters |
+| 403 | `{"error": "admission_denied"}` | Dormant thaw refused; no file written |
 | 404 | `{"error": "not_found"}` | Target VM doesn't exist (not running, not dormant) |
-| 500 | `{"error": "message_delivery_failed"}` | Delivery error (vsock failure, restore failure, etc.) |
+| 500 | `{"error": "message_delivery_failed"}` | Accept/delivery error |
 
 **Auth scope:** `vms:exec`
 
@@ -160,18 +163,18 @@ Mjolnir.EventBus.subscribe(:all)     # all VM events
 
 | Scenario | Guarantee |
 |----------|-----------|
-| Target is running | At-most-once (vsock send, no host-side retry) |
-| Target is booting | Queued in memory, delivered after boot (survives slow boot, lost on host crash) |
-| Target is dormant | Queued on disk, delivered after restore (survives host restart) |
+| Target is running | Fsynced accept, then vsock; redelivery until application ACK |
+| Target is booting | Fsynced accept; flushed when the VM becomes `:running` |
+| Target is dormant | Fsynced accept; unacked mail restores the VM (Admit permitting) |
 | Target doesn't exist | Immediate 404 |
-| Host crashes mid-restore | DormantRegistry reloads from disk on next startup; `:restoring` entries reset to `:dormant`, pending messages preserved |
+| Host crashes after 200 | File remains; startup sweep redelivers |
+| Same producer `id` retried | 200 `duplicate`; no second live file |
 
-The system prioritizes **availability over exactly-once semantics**. Guest applications that need stronger guarantees should implement their own idempotency (e.g., deduplication by message ID).
-
-Agreed direction (not built): a per-actor filesystem spool so 200
-means durable accept, retries of a producer `id` are the same send,
-and running / booting / dormant share one queue. Argument, traps in
-this code, and what not to build:
+**Acted (ADR 0006):** 200 is durable accept of `@mail/<vm_id>/<message_id>.json`
+(tmp + file fsync + exclusive link + directory fsync). Running / booting /
+dormant share that spool. Vsock `deliver_message_ack` is a RAM hint and
+never deletes the file. Guest HTTP `GET /messages` peeks; `POST /ack`
+tombstones. Argument:
 [`philosophy/mailbox-as-spool.md`](philosophy/mailbox-as-spool.md).
 Tracker `mjolnir-5le4`.
 

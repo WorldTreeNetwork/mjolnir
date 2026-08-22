@@ -66,6 +66,7 @@ defmodule Mjolnir.AdmitTest do
     test "unattested payload does not queue or restore", %{vm_id: vm_id} do
       assert {:error, :admission_denied} = VM.deliver_message(vm_id, "external", %{wake: true})
       assert [] = DormantRegistry.take_pending_messages(vm_id)
+      assert [] = Mjolnir.Mailbox.list_unacked(vm_id)
       assert {:ok, entry} = DormantRegistry.lookup(vm_id)
       assert entry.state == :dormant
     end
