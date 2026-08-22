@@ -20,6 +20,9 @@ Read in order if you're new:
 4. **[Deploying a Web App](deploying-an-app.md)** — turning an app into a live HTTPS URL: the
    release-snapshot model, how a Dockerfile maps onto it, secrets that never enter the
    artifact, gateway routing and cutover — plus an honest status table of what's shipped.
+5. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
+   (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres. How guests find
+   locators in `/etc/mjolnir/vm.json`.
 
 ## Related (deeper) docs
 

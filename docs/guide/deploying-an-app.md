@@ -331,6 +331,7 @@ deploy is an afternoon; CI *being* the deploy mechanism while it's unproven is a
 - [Working with Snapshots](snapshots.md) — the primitive underneath all of this.
 - [Gateway Routing](../gateway-routing.md) — how a hostname resolves to a VM.
 - [Secrets Architecture](../secrets-architecture.md) — modes, threat model, LUKS details.
+- [Host sidecars](host-sidecars.md) — overlay services every VM can reach (`10.200.0.1`)
 - [Host sidecar tenants](../runbooks/host-postgres-tenants.md) — `Tenants.ensure` and
   `DATABASE_URL` for Hypersigil.
 - [`plans/initiatives/mjolnir-deploy.md`](../plans/initiatives/mjolnir-deploy.md) — the design

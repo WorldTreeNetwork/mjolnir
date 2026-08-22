@@ -153,14 +153,13 @@ just deploy-boot                # Copy boot artifacts to /var/lib/mjolnir/boot/
 
 The full guest agent is built as part of `just deploy-full` (which runs `cargo build` on the server via `scripts/deploy.sh --agent`).
 
-### Blob door
+### Host sidecars
 
-Content-addressed blobs (ADR 0003, living spec `openspec/specs/blob-store/spec.md`). Host sidecar `mjolnir-blob-door`, not a VM, not MinIO. Canonical copy is B2. Callers never hold B2 keys.
+Universal host services on `:host_api_ip` (`10.200.0.1`, `dummy-mjolnir` — not loopback). Guests find locators in `/etc/mjolnir/vm.json`. Catalog: [`docs/guide/host-sidecars.md`](docs/guide/host-sidecars.md).
 
-- Production bind: `10.200.0.1:7222` (`:host_api_ip` on `dummy-mjolnir`, same overlay as tenant Postgres). TAP guests cannot reach host loopback.
-- Guest use: `/etc/mjolnir/vm.json` `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Inject is vsock `configure_identity` (`add-blob-door-overlay`).
-- Operator runbook: `docs/runbooks/blob-door.md`. Rides `just deploy` (door unit only; does not extra-bounce VMs).
-- Sites Recrypt adapter speaks the same routes; cutover is `MJOLNIR_RECRYPT_STORAGE_URL`.
+- **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt cutover is `mjolnir-u8v7.4` (Blake3 stub).
+- **Postgres** `:5432` — declared tenant DBs only (`DATABASE_URL` in deploy secrets). Runbook: `docs/runbooks/host-postgres-tenants.md`.
+- **API** `:4000` — `api_url`. Guests do not get the localhost auth bypass.
 
 ### Host Setup (Linux only, requires root)
 

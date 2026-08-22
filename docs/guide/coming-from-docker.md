@@ -40,6 +40,7 @@ machine, clone it while it's running, and hand someone a peer-to-peer connection
 | `docker ps` | `mj list` | — |
 | Docker registry / `push` | Iroh content-addressed transfer (emerging) | Cross-host movement is by content-addressed sync, not a central registry. See `docs/archive/storage-architecture.md` §3. |
 | Container = ephemeral, stateless by convention | VM = checkpointable, stateful by design | State is a feature, not something you engineer around with volumes. |
+| Compose sidecars (`postgres`, `minio`, …) | [Host sidecars](host-sidecars.md) on `10.200.0.1` | Host processes every VM can reach (blob door, API, opt-in Postgres). Not a compose file next to the guest. |
 
 > The CLI is `mj` (also installed as `mjolnir`). See the [README](../../README.md#use-it) for
 > install and the full command surface.

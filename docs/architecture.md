@@ -674,16 +674,18 @@ Mjolnir.VM.exec(vm.id, "claude-code --api-key $KEY 'Analyze this codebase'")
 
 Agents get hardware-isolated Linux environments with apt, pip, cargo — everything. BTRFS snapshots let you branch workspaces, checkpoint progress, and restore on failure. Iroh lets agents communicate with each other across any network topology.
 
-### Channel System (Future)
+### Host sidecars (live)
 
-Content-addressed blobs (living spec
-[`blob-store`](../openspec/specs/blob-store/spec.md), ADR
-[`0003`](decisions/0003-blob-store-mesh.md)): recrypt `blob/b3/` keys,
-B2 canonical, HTTP door sidecar on `:host_api_ip:7222` (same overlay
-as tenant Postgres). Guests PUT/GET that origin; they never hold B2
-keys. We are not doing MinIO. Overlay bind + inject folded
-(`add-blob-door-overlay`). iroh-blobs as working-set/transmit is later.
-Runbook: [`runbooks/blob-door.md`](runbooks/blob-door.md).
+Guest-facing catalog: [`guide/host-sidecars.md`](guide/host-sidecars.md).
+Reserved overlay IP `:host_api_ip` (`10.200.0.1` on `dummy-mjolnir`).
+Blob door `:7222` (`blob_door_url`), orchestrator API `:4000`
+(`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`).
+Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
+[`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
+[`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing
+MinIO. iroh-blobs as working-set/transmit is later.
+
+### Channel System (Future)
 
 The local Buzz client fabric (living spec
 [`buzz-local-client`](../openspec/specs/buzz-local-client/spec.md), ADR

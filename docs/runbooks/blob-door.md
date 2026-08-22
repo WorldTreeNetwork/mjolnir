@@ -1,9 +1,10 @@
 # Blob door (guest overlay)
 
-Content-addressed blobs. Living spec
+Content-addressed blobs. Guest how-to and sidecar catalog:
+[`guide/host-sidecars.md`](../guide/host-sidecars.md). Living spec
 [`blob-store`](../../openspec/specs/blob-store/spec.md). ADR
-[`0003`](../decisions/0003-blob-store-mesh.md). In-flight:
-[`add-blob-door-overlay`](../../openspec/changes/add-blob-door-overlay/proposal.md).
+[`0003`](../decisions/0003-blob-store-mesh.md). Folded overlay change:
+[`add-blob-door-overlay`](../../openspec/changes/archive/2026-08-19-add-blob-door-overlay/proposal.md).
 
 The door is a **host sidecar**, not a VM. Canonical copy is Backblaze
 B2. Callers (Taskmaster, Sites, guests) speak HTTP. They never hold

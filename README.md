@@ -11,6 +11,7 @@ Mjolnir is a distributed computational fabric for spawning **checkpointable Linu
 | You want to… | Go to |
 |---|---|
 | **Use a Mjolnir server** (spawn/exec/connect to VMs) | [Use it](#use-it) — the `mj` CLI |
+| **Call host services from a VM** (blob store, Postgres, API) | [Host sidecars](docs/guide/host-sidecars.md) |
 | **Operate a server you can SSH into** | [Operate it](#operate-it) — the `just` control plane |
 | **Stand up your own server** from scratch | [Run your own server](#run-your-own-server) |
 | **Understand the internals** | [Architecture](#architecture) |
@@ -57,6 +58,21 @@ mj status                        # show current auth + config
 ```
 
 Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-serve` for Claude Code integration, and `forge` for host config). The `--api`/`--token` flags (or `MJOLNIR_TOKEN` / `MJOLNIR_PROFILE` env vars) override saved config per-invocation.
+
+### Host sidecars (from inside a VM)
+
+Every guest can reach a few **host sidecars** on `10.200.0.1` (not
+`127.0.0.1` — that is the host's own loopback). Locators land in
+`/etc/mjolnir/vm.json` on boot.
+
+| Service | From the VM | Locator |
+|---|---|---|
+| Blob store (content-addressed, B2 behind a door) | `http://10.200.0.1:7222` | `blob_door_url` |
+| Orchestrator API | `http://10.200.0.1:4000` | `api_url` |
+| Postgres (declared tenant DBs only) | `10.200.0.1:5432` | `DATABASE_URL` in deploy secrets |
+
+How to PUT/GET a blob, how Postgres tenants are provisioned, and how
+to add another sidecar: **[Host sidecars](docs/guide/host-sidecars.md)**.
 
 ---
 
@@ -152,7 +168,8 @@ Mjolnir is Elixir/OTP for orchestration over a Rust guest agent inside each VM.
 - **`Mjolnir.VM`** — a GenServer per VM (spawn → boot → running → snapshot/stop). Boot = BTRFS reflink clone → inject guest agent → create TAP → launch Cloud Hypervisor → configure via its Unix-socket API → wait for the guest agent over vsock → configure network/identity/Iroh.
 - **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `btrfs subvolume snapshot`. Layout: `@base/` templates, `@vms/<uuid>/`, `@snapshots/<name>/`.
 - **Guest agent** (`native/mjolnir_guest_agent/`, Rust) — runs inside the VM on vsock, handles `exec`, networking, identity, and Iroh-backed PTY/SSH.
-- **HTTP API** — Bandit on port `4000`, JWT/OIDC-authenticated. This is what `mj` and the `just` control plane talk to.
+- **HTTP API** — Bandit on port `4000`, JWT/OIDC-authenticated. This is what `mj` and the `just` control plane talk to. Guests see it as `api_url` on `10.200.0.1`.
+- **Host sidecars** — processes on the reserved overlay IP (`10.200.0.1`): blob door `:7222`, tenant Postgres `:5432`. Catalog: [Host sidecars](docs/guide/host-sidecars.md).
 - **Forge** (`lib/mjolnir/forge/`) — a declarative host-config reconciler with three-way diff (declared/owned/observed) and a TUI (`mj forge tui`).
 
 The deepest reference is [`CLAUDE.md`](CLAUDE.md) (module-by-module map). Plans and specs live in [`docs/`](docs/).
@@ -194,9 +211,10 @@ grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualiza
 with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
 [Working with Snapshots](docs/guide/snapshots.md). If you think in containers, read
 [Coming from Docker](docs/guide/coming-from-docker.md). To put an app on a domain, see
-[Deploying a Web App](docs/guide/deploying-an-app.md).
+[Deploying a Web App](docs/guide/deploying-an-app.md). Host services
+every VM can call: [Host sidecars](docs/guide/host-sidecars.md).
 
-- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md)
+- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md) · [Host sidecars](docs/guide/host-sidecars.md)
 - [Current status / handoff notes](docs/plans/current-status.md)
 - [Roadmap](docs/roadmap.md)
 - [MicroVM Fabric Spec](docs/microvm-fabric.md)

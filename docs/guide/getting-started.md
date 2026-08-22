@@ -208,5 +208,7 @@ Run `mj --help` for the complete surface.
 ## Next steps
 
 - **[Working with Snapshots](snapshots.md)** — save a VM's state and spin up new VMs from it.
+- **[Host sidecars](host-sidecars.md)** — blob store, API, and Postgres on `10.200.0.1`;
+  locators in `/etc/mjolnir/vm.json`.
 - **[Coming from Docker](coming-from-docker.md)** — the conceptual map if you think in containers.
 - [README](../../README.md) — install, server setup, and the full CLI reference.

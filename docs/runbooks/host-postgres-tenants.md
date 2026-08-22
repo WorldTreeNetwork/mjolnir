@@ -2,6 +2,8 @@
 
 Declared tenants live as `CREATE DATABASE` on the OTP Postgres sidecar.
 TCP is `10.200.0.1:5432` (scram). The BEAM still uses the Unix socket.
+Guest catalog of all overlay sidecars:
+[`guide/host-sidecars.md`](../guide/host-sidecars.md).
 
 ## Provision
 
