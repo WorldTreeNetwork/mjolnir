@@ -622,12 +622,24 @@ pub async fn cmd_proxy(
 
 // --- SSH via Iroh tunnel ---
 
+/// Dummy SSH hostname. Must not be `mjolnir` — that matches `Host mjolnir` in
+/// a typical operator ssh_config and rewrites HostName to the hypervisor.
+pub fn ssh_dummy_host(target: &str) -> String {
+    if is_vm_id(target) {
+        format!("mj-{target}")
+    } else {
+        "mj-iroh".to_string()
+    }
+}
+
 pub fn cmd_ssh(
     ticket: &str,
     user: &str,
     relay: Option<String>,
     ips: &[String],
     ssh_args: &[String],
+    dummy_host: &str,
+    identity_file: Option<&str>,
 ) -> Result<()> {
     let self_exe = std::env::current_exe().context("Failed to get current executable path")?;
 
@@ -663,8 +675,14 @@ pub fn cmd_ssh(
         "RequestTTY=yes".to_string(),
         "-l".to_string(),
         user.to_string(),
-        "mjolnir".to_string(),
     ];
+    if let Some(id_file) = identity_file {
+        args.push("-o".to_string());
+        args.push("IdentitiesOnly=yes".to_string());
+        args.push("-i".to_string());
+        args.push(id_file.to_string());
+    }
+    args.push(dummy_host.to_string());
     args.extend_from_slice(ssh_args);
 
     // On Unix, replace this process with ssh (exec)
@@ -735,8 +753,8 @@ pub async fn cmd_shell(
     }
 }
 
-/// `mj ssh <id|ticket>` — SSH over the Iroh tunnel. Always peer-to-peer; a VM id
-/// is resolved to a ticket first.
+/// Hidden alias: exec system ssh with `mj proxy` as ProxyCommand.
+/// Prefer `mj connect` for a shell.
 pub async fn cmd_ssh_target(
     profile: &crate::config::Profile,
     api_flag: &Option<String>,
@@ -748,8 +766,17 @@ pub async fn cmd_ssh_target(
     ssh_args: &[String],
 ) -> Result<()> {
     let ticket = target_to_ticket(profile, api_flag, token, target).await?;
-    eprintln!("→ transport: peer-to-peer (Iroh QUIC)");
-    cmd_ssh(&ticket, user, relay, ips, ssh_args)
+    let host = ssh_dummy_host(target);
+    let identity = crate::config::resolve_ssh_identity_file(profile);
+    cmd_ssh(
+        &ticket,
+        user,
+        relay,
+        ips,
+        ssh_args,
+        &host,
+        identity.as_deref(),
+    )
 }
 
 /// `mj proxy <id|ticket>` — raw TCP proxy over the Iroh tunnel (used as an ssh
@@ -795,5 +822,16 @@ mod tests {
     #[test]
     fn percent_encode_query_escapes_non_ascii_bytewise() {
         assert_eq!(percent_encode_query("café"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn ssh_dummy_host_does_not_collide_with_ssh_config_mjolnir() {
+        let id = "f9eb045b-8ffa-4a53-99db-e5450660913b";
+        assert_eq!(ssh_dummy_host(id), format!("mj-{id}"));
+        assert_ne!(ssh_dummy_host(id), "mjolnir");
+        assert_eq!(
+            ssh_dummy_host("pcwdqccp6ehuf4uiqb1ksitamd5z5byo6pgrmcdxkoyrty37p1co"),
+            "mj-iroh"
+        );
     }
 }

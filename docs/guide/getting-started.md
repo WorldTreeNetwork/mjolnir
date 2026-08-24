@@ -125,7 +125,7 @@ never stopped.
 > - `mj connect <vm_id>` — over a WebSocket PTY (goes through the server's API).
 > - `mj connect <ticket>` — peer-to-peer over [Iroh](https://iroh.computer) QUIC, which
 >   traverses NATs with no port-forwarding. The *ticket* is the string `mj spawn` printed to
->   stdout. `mj ssh <ticket>` gives you a real SSH session the same way.
+>   stdout. For scp/sftp/VS Code, use `mj proxy` as an OpenSSH `ProxyCommand`.
 
 ---
 
@@ -195,7 +195,6 @@ is gone.** That's by design — VMs are cheap and disposable.
 | Interactive shell (WebSocket) | `mj connect <vm_id>` |
 | Durable, reattachable shell | `mj connect <vm_id> --session <name>` |
 | Interactive shell (P2P) | `mj connect <ticket>` |
-| SSH into the VM (P2P) | `mj ssh <ticket>` |
 | Run a one-off command | `mj exec <vm_id> "<cmd>"` |
 | Snapshot a running VM | `mj snapshot <vm_id> <name>` |
 | Spawn from a snapshot | `mj spawn --snapshot <name>` |

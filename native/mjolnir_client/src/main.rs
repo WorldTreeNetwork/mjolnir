@@ -5,7 +5,6 @@
 //!   mjolnir spawn                                      # spawn a VM, print ticket
 //!   mjolnir list                                       # list your VMs
 //!   mjolnir connect <id|ticket>                        # shell (id→gateway, ticket→P2P)
-//!   mjolnir ssh <id|ticket>                            # SSH over the Iroh tunnel
 //!   mjolnir exec <id> <cmd>                            # run a command in a VM
 //!   mjolnir server status                              # show server status
 //!   mjolnir config                                     # show config
@@ -218,7 +217,9 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
-    /// SSH into a VM over the Iroh tunnel
+    /// Hidden: exec system ssh with `mj proxy` as ProxyCommand.
+    /// Prefer `mj connect`. For scp/sftp/VS Code, use `mj proxy` as ProxyCommand.
+    #[command(hide = true)]
     Ssh {
         /// VM ID or ticket
         target: String,

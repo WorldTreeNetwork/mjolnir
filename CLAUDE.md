@@ -98,7 +98,7 @@ mj snapshot show <name>                # Snapshot metadata
 mj snapshot rm <name>                  # Delete a snapshot
 ```
 
-Add `--json` to any reporting command for the raw server response. Run `mj --help` for the full surface (`mj connect`/`mj ssh`/`mj proxy`, `mj config`, `mj forge`, `mj server`).
+Add `--json` to any reporting command for the raw server response. Run `mj --help` for the full surface (`mj connect`/`mj proxy`, `mj config`, `mj forge`, `mj server`). The shell is `mj connect`. `mj proxy` is TCP over Iroh (OpenSSH ProxyCommand).
 
 **Server Management** — SSH into the server:
 

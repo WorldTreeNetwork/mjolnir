@@ -48,7 +48,6 @@ mj info <vm_id>                  # detailed status
 mj exec <vm_id> "uname -a"       # run a one-shot command
 mj connect <vm_id>               # interactive shell (gateway WebSocket)
 mj connect <ticket>              # interactive shell (P2P over Iroh QUIC, NAT-traversing)
-mj ssh <ticket>                  # SSH into the VM over the Iroh tunnel
 mj snapshot create <vm_id> my-snap  # checkpoint a running VM
 mj snapshot list                 # list snapshots
 mj spawn --snapshot my-snap      # restore from a snapshot

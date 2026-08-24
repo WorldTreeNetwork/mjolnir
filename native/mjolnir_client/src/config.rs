@@ -305,6 +305,22 @@ pub fn read_ssh_public_key(profile: &Profile) -> Option<String> {
     std::fs::read_to_string(&path).ok()
 }
 
+/// Private key path for `ssh -i`. Profile `ssh_key` is the *public* key
+/// (`.pub`); strip that suffix when the matching private file exists.
+pub fn resolve_ssh_identity_file(profile: &Profile) -> Option<String> {
+    let pub_path = resolve_ssh_key_path_for_profile(profile)?;
+    identity_file_from_key_path(&pub_path)
+}
+
+pub fn identity_file_from_key_path(path: &str) -> Option<String> {
+    let private = path.strip_suffix(".pub").unwrap_or(path).to_string();
+    if std::path::Path::new(&private).is_file() {
+        Some(private)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +377,27 @@ mod tests {
         );
 
         std::env::remove_var("MJOLNIR_API");
+    }
+
+    #[test]
+    fn identity_file_strips_pub_when_private_exists() {
+        let dir = std::env::temp_dir().join(format!("mjolnir-id-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let private = dir.join("id_ed25519");
+        let public = dir.join("id_ed25519.pub");
+        std::fs::write(&private, b"fake-private").unwrap();
+        std::fs::write(&public, b"fake-public").unwrap();
+        assert_eq!(
+            identity_file_from_key_path(public.to_str().unwrap()).as_deref(),
+            Some(private.to_str().unwrap())
+        );
+        let _ = std::fs::remove_file(&private);
+        let _ = std::fs::remove_file(&public);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn identity_file_none_when_private_missing() {
+        assert_eq!(identity_file_from_key_path("/no/such/id_ed25519.pub"), None);
     }
 }
