@@ -369,7 +369,8 @@ fn percent_encode_query(value: &str) -> String {
 enum PtyEnd {
     /// Local stdin hit EOF — this process's tab/pipe is gone.
     LocalEof,
-    /// Peer sent a Close frame (shell `exit`, or an orderly server stop).
+    /// Peer sent a Close frame. The guest shell `exit`ed (or the server
+    /// shut the PTY down on purpose). This is a logout, not a drop.
     Closed,
     /// Transport died without a Close (reset, timeout, Cloudflare, deploy).
     Dropped(String),
@@ -498,8 +499,9 @@ fn eprint_pty(msg: &str) {
 ///
 /// After a successful first session, a dropped socket retries with jittered
 /// exponential backoff until the tab closes, the user hits Ctrl-C/Ctrl-D
-/// during the wait, or `RECONNECT_MAX` attempts fail. The first connect
-/// still fails fast (bad id, auth, VM down) so a typo does not sit in a loop.
+/// during the wait, or `RECONNECT_MAX` attempts fail. A Close frame (shell
+/// `exit`) is a logout and does not reconnect. The first connect still
+/// fails fast (bad id, auth, VM down) so a typo does not sit in a loop.
 pub async fn cmd_connect(
     profile: &crate::config::Profile,
     api_flag: &Option<String>,
@@ -548,18 +550,16 @@ pub async fn cmd_connect(
     let mut attempts: u32 = 0;
     let result = 'pty: loop {
         match run_pty_loop(ws_stream).await {
-            Ok(PtyEnd::LocalEof) => break Ok(()),
-            Ok(PtyEnd::Closed) if no_reconnect => break Ok(()),
+            Ok(PtyEnd::LocalEof) | Ok(PtyEnd::Closed) => break Ok(()),
             Ok(PtyEnd::Dropped(_)) if no_reconnect => {
                 break Err(anyhow::anyhow!("connection dropped"));
             }
             Err(e) if no_reconnect => break Err(e),
             end => {
                 let reason = match end {
-                    Ok(PtyEnd::Closed) => "connection closed".to_string(),
                     Ok(PtyEnd::Dropped(r)) => r,
                     Err(e) => e.to_string(),
-                    Ok(PtyEnd::LocalEof) => unreachable!(),
+                    Ok(PtyEnd::LocalEof) | Ok(PtyEnd::Closed) => unreachable!(),
                 };
                 if let Some(err) = reconnect_or_give_up(&mut attempts, no_reconnect, &reason).await
                 {
@@ -673,7 +673,7 @@ where
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) => return Ok(PtyEnd::Closed),
-                    None => return Ok(PtyEnd::Dropped("connection closed".into())),
+                    None => return Ok(PtyEnd::Dropped("connection dropped".into())),
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Ok(PtyEnd::Dropped(e.to_string())),
                 }
@@ -741,7 +741,7 @@ where
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) => return Ok(PtyEnd::Closed),
-                    None => return Ok(PtyEnd::Dropped("connection closed".into())),
+                    None => return Ok(PtyEnd::Dropped("connection dropped".into())),
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Ok(PtyEnd::Dropped(e.to_string())),
                 }
