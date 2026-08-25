@@ -191,18 +191,22 @@ defmodule Mjolnir.Deploy.Runtime do
          :ok <- install_unit(ops, vm_id, app_name, unit, workdir, secrets_mode) do
       url = gateway_url(ticket, port, domain)
 
-      # Preserve the app's custom_domain across the redeploy. Registry.put builds
-      # a FRESH Entry from `attrs`, so any key we omit is wiped — and a wiped
-      # custom_domain makes RouteReconciler.desired_specs (which filters on
-      # is_binary(custom_domain)) DROP the app's gateway route. An explicit
-      # :custom_domain opt (first-time set) overrides the preserved value.
-      custom_domain = custom_domain_opt || preserved_custom_domain(ops, app_name)
+      # Read the prior entry ONCE, before Registry.put. put rebuilds a fresh
+      # Entry from `attrs`, so any omitted key is wiped — and a post-put get
+      # returns the NEW service_vm_id. Cutover that re-gets after put is a
+      # no-op and leaks the previous guest (hypersigil-api, 2026-08-25).
+      prev_entry = previous_entry(ops, app_name)
 
-      # Same preservation rule as custom_domain, for the same reason: Registry.put
-      # rebuilds the Entry from attrs, so an omitted owner_id is wiped — and a
-      # wiped owner makes Policy.App treat the app as legacy/unowned, locking its
-      # real owner out of their own redeploys and domain changes (mjolnir-xuv).
-      owner_id = owner_id_opt || preserved_owner_id(ops, app_name)
+      # Preserve custom_domain across the redeploy. A wiped custom_domain makes
+      # RouteReconciler.desired_specs (which filters on is_binary(custom_domain))
+      # DROP the app's gateway route. An explicit :custom_domain opt (first-time
+      # set) overrides the preserved value.
+      custom_domain = custom_domain_opt || Map.get(prev_entry || %{}, :custom_domain)
+
+      # Same preservation rule as custom_domain: an omitted owner_id is wiped,
+      # and a wiped owner makes Policy.App treat the app as legacy/unowned,
+      # locking its real owner out of their own redeploys (mjolnir-xuv).
+      owner_id = owner_id_opt || Map.get(prev_entry || %{}, :owner_id)
 
       # `port` is recorded so the gateway local-route generator
       # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.
@@ -217,7 +221,7 @@ defmodule Mjolnir.Deploy.Runtime do
 
       case ops.registry_put.(app_name, attrs) do
         {:ok, _entry} ->
-          cutover_previous(ops, app_name, vm_id)
+          cutover_previous(ops, app_name, Map.get(prev_entry || %{}, :service_vm_id), vm_id)
 
           # Cutover spawned a new VM (new vm_id → new guest IP), so refresh the
           # gateway's local routes. Debounced + a no-op if the reconciler is off.
@@ -245,38 +249,32 @@ defmodule Mjolnir.Deploy.Runtime do
     end
   end
 
-  # Read the custom_domain recorded for the app before this redeploy, so it can
-  # be carried into the fresh registry entry. Uses the same injectable
-  # registry_get seam as cutover. Returns nil when there is no prior entry.
-  defp preserved_custom_domain(ops, app_name) do
+  # Prior registry entry, or nil on first deploy. One read: custom_domain,
+  # owner_id, and the previous service_vm_id all come from this.
+  defp previous_entry(ops, app_name) do
     case ops.registry_get.(app_name) do
-      {:ok, prev} -> Map.get(prev, :custom_domain)
-      _ -> nil
-    end
-  end
-
-  # As above, for the app's owner. An explicit :owner_id opt (first deploy) wins;
-  # otherwise the prior entry's owner is carried forward so a redeploy never
-  # silently changes who owns the app.
-  defp preserved_owner_id(ops, app_name) do
-    case ops.registry_get.(app_name) do
-      {:ok, prev} -> Map.get(prev, :owner_id)
+      {:ok, prev} when is_map(prev) -> prev
       _ -> nil
     end
   end
 
   # Stop the app's previous service VM, if any, now that the new one is registered.
-  defp cutover_previous(ops, app_name, new_vm_id) do
-    case ops.registry_get.(app_name) do
-      {:ok, %{service_vm_id: prev}} when is_binary(prev) and prev != new_vm_id ->
-        Logger.info("Deploy.Runtime: cutting over '#{app_name}', stopping previous VM #{prev}")
-        _ = ops.stop.(prev)
+  # `prev_vm_id` MUST be captured before Registry.put — a post-put get returns
+  # the new id and this clause never matches.
+  defp cutover_previous(ops, app_name, prev_vm_id, new_vm_id)
+       when is_binary(prev_vm_id) and prev_vm_id != new_vm_id do
+    Logger.info("Deploy.Runtime: cutting over '#{app_name}', stopping previous VM #{prev_vm_id}")
+
+    case ops.stop.(prev_vm_id) do
+      :ok ->
         :ok
 
-      _ ->
-        :ok
+      {:error, reason} ->
+        Logger.warning("Deploy.Runtime: cutover stop of #{prev_vm_id} failed: #{inspect(reason)}")
     end
   end
+
+  defp cutover_previous(_ops, _app_name, _prev_vm_id, _new_vm_id), do: :ok
 
   # --- ticket readiness ------------------------------------------------------
 

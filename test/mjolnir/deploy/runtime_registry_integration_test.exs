@@ -53,6 +53,37 @@ defmodule Mjolnir.Deploy.RuntimeRegistryIntegrationTest do
     dir |> Path.join("#{app}.json") |> File.read!() |> Jason.decode!()
   end
 
+  test "redeploy stops the previous service VM (real Registry)", ctx do
+    {:ok, stops} = Agent.start_link(fn -> [] end)
+
+    ops = fn vm_id ->
+      %{
+        spawn: fn _boot -> {:ok, %{id: vm_id}} end,
+        get_ticket: fn _vm -> {:ok, "zticket-#{vm_id}"} end,
+        exec: fn _vm, _cmd, _o -> {:ok, ""} end,
+        stop: fn vm ->
+          Agent.update(stops, &[vm | &1])
+          :ok
+        end,
+        registry_get: fn app -> Registry.get(ctx.registry, app) end,
+        registry_put: fn app, attrs -> Registry.put(ctx.registry, app, attrs) end
+      }
+    end
+
+    start = fn snapshot, vm_id ->
+      Runtime.start("canary-cutover", snapshot, @plan,
+        ops: ops.(vm_id),
+        gateway_domain: "vm.example.test"
+      )
+    end
+
+    assert {:ok, _} = start.("rel-1", "vm-1")
+    assert Agent.get(stops, & &1) == []
+
+    assert {:ok, _} = start.("rel-2", "vm-2")
+    assert Agent.get(stops, & &1) == ["vm-1"]
+  end
+
   test "custom_domain survives a redeploy in ETS and on disk", ctx do
     app = "canary"
 

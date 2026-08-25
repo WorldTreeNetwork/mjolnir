@@ -20,6 +20,18 @@ defmodule Mjolnir.Deploy.RuntimeTest do
 
     {:ok, counter} = Agent.start_link(fn -> 0 end)
 
+    # Model the real Registry: get after put returns the NEW entry. A stub that
+    # always yields `prev` hides the cutover bug (Runtime used to re-get after
+    # put, see prev == new, and leak the previous guest).
+    initial_entry =
+      if prev || prev_custom_domain do
+        {:ok, %{service_vm_id: prev, custom_domain: prev_custom_domain}}
+      else
+        {:error, :not_found}
+      end
+
+    {:ok, entry_box} = Agent.start_link(fn -> initial_entry end)
+
     %{
       spawn: fn boot ->
         Agent.update(agent, &[{:spawn, boot} | &1])
@@ -39,17 +51,11 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       end,
       registry_get: fn app ->
         Agent.update(agent, &[{:registry_get, app} | &1])
-
-        cond do
-          prev || prev_custom_domain ->
-            {:ok, %{service_vm_id: prev, custom_domain: prev_custom_domain}}
-
-          true ->
-            {:error, :not_found}
-        end
+        Agent.get(entry_box, & &1)
       end,
       registry_put: fn app, attrs ->
         Agent.update(agent, &[{:registry_put, app, attrs} | &1])
+        Agent.update(entry_box, fn _ -> {:ok, attrs} end)
         {:ok, attrs}
       end,
       stop: fn vm_id ->
@@ -132,6 +138,8 @@ defmodule Mjolnir.Deploy.RuntimeTest do
       put_idx = Enum.find_index(ev, &match?({:registry_put, _, _}, &1))
       stop_idx = Enum.find_index(ev, &match?({:stop, "old-svc-vm"}, &1))
       assert put_idx < stop_idx
+      # The get-after-put stub returns the new id; stop must still target the old one.
+      refute Enum.any?(ev, &match?({:stop, "svc-vm-1"}, &1))
     end
   end
 
