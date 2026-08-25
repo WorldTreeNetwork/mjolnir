@@ -469,6 +469,9 @@ where
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
             .context("Failed to register SIGWINCH handler")?;
 
+    let mut ping = tokio::time::interval(std::time::Duration::from_secs(20));
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             msg = ws_read.next() => {
@@ -478,6 +481,10 @@ where
                         stdout.write_all(&data)?;
                         stdout.flush()?;
                     }
+                    Some(Ok(Message::Ping(payload))) => {
+                        ws_write.send(Message::Pong(payload)).await?;
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e.into()),
@@ -496,6 +503,9 @@ where
                 let (rows, cols) = get_terminal_size();
                 let resize_msg = serde_json::json!({"type": "resize", "rows": rows, "cols": cols});
                 ws_write.send(Message::Text(resize_msg.to_string())).await?;
+            }
+            _ = ping.tick() => {
+                ws_write.send(Message::Ping(Vec::new())).await?;
             }
         }
     }
@@ -525,6 +535,9 @@ where
         .await
         .context("Failed to send initial resize")?;
 
+    let mut ping = tokio::time::interval(std::time::Duration::from_secs(20));
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         tokio::select! {
             // Data from server (PTY output)
@@ -535,10 +548,14 @@ where
                         stdout.write_all(&data)?;
                         stdout.flush()?;
                     }
+                    Some(Ok(Message::Ping(payload))) => {
+                        ws_write.send(Message::Pong(payload)).await?;
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Close(_))) | None => {
                         return Ok(());
                     }
-                    Some(Ok(_)) => {} // ignore text, ping, pong
+                    Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e.into()),
                 }
             }
@@ -551,6 +568,9 @@ where
                     }
                     Err(e) => return Err(e.into()),
                 }
+            }
+            _ = ping.tick() => {
+                ws_write.send(Message::Ping(Vec::new())).await?;
             }
         }
     }

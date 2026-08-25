@@ -10,6 +10,13 @@ defmodule Mjolnir.API.PtyHandler do
 
   defstruct [:vm_id, :channel, :conn_pid]
 
+  # Bandit's WebSocket idle timer is "no *client* frames". PTY output does
+  # not reset it, so a 60s timeout killed long-running commands and idle
+  # tabs. Infinity here; keepalives below keep Cloudflare/nginx from
+  # dropping a quiet socket (~100s).
+  @idle_timeout :infinity
+  @ping_ms 20_000
+
   # Called by the router to initiate WebSocket upgrade.
   # `session`, when given, is a tmux session name the PTY attaches to — several
   # sockets naming the same session share one terminal. Already validated by the
@@ -23,7 +30,7 @@ defmodule Mjolnir.API.PtyHandler do
         |> WebSockAdapter.upgrade(
           __MODULE__,
           %{vm: vm, vm_id: vm_id, session: session},
-          timeout: 60_000
+          timeout: @idle_timeout
         )
 
       {:error, :not_found} ->
@@ -66,6 +73,7 @@ defmodule Mjolnir.API.PtyHandler do
         }
 
         Logger.info("PTY WebSocket opened for VM #{vm_id}, channel #{channel_id}")
+        Process.send_after(self(), :ws_ping, @ping_ms)
         {:ok, state}
 
       {:error, reason} ->
@@ -105,6 +113,11 @@ defmodule Mjolnir.API.PtyHandler do
   def handle_info({:pty_closed, _channel}, state) do
     Logger.debug("PTY channel #{state.channel} closed by guest")
     {:stop, :normal, state}
+  end
+
+  def handle_info(:ws_ping, state) do
+    Process.send_after(self(), :ws_ping, @ping_ms)
+    {:push, {:ping, <<>>}, state}
   end
 
   def handle_info(msg, state) do
