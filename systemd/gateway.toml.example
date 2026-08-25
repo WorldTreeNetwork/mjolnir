@@ -70,8 +70,8 @@ fallthrough = "none"
 # over the Iroh decode path. Subdomain strings are lowercased at load;
 # matching is case-insensitive.
 #
-# No header rewriting: the backend sees the request byte-identical to what
-# arrived at the gateway (no X-Forwarded-*, original Host preserved).
+# Host is preserved. X-Forwarded-Proto is set to https on the TLS listener
+# (http on :80) so backends that emit Secure session cookies actually Set-Cookie.
 [[route]]
 apex      = "worldtree.network"
 subdomain = "git"

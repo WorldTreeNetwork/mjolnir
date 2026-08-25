@@ -5,7 +5,10 @@
 //!
 //! 1. **Local route**: `(apex, subdomain)` is pinned in the loaded config;
 //!    the gateway TCP-dials the backend and hands off to `run_proxy_local`.
-//!    Bytes are forwarded unmodified — no header rewriting.
+//!    Host is preserved. `X-Forwarded-Proto` is set to `https` on the TLS
+//!    listener (and `http` on :80) so backends that emit `Secure` session
+//!    cookies (Medusa, Rails, …) actually `Set-Cookie`. Client-supplied
+//!    `X-Forwarded-Proto` is overwritten so it cannot be spoofed.
 //!
 //! 2. **Iroh fallthrough**: apex declared `fallthrough = "iroh"`, no local
 //!    route hit. The subdomain is z32-decoded into a node ID and forwarded
@@ -592,6 +595,49 @@ fn host_without_port(host: &str) -> &str {
     host.split(':').next().unwrap_or(host)
 }
 
+/// Insert or replace an HTTP header in the buffered request.
+///
+/// `header_bytes` is the `read_until_headers` buffer: header block plus any
+/// body bytes that arrived in the same read. Only the header block is edited;
+/// the body is copied through unchanged.
+///
+/// Existing headers matching `name` (case-insensitive) are dropped so a client
+/// cannot spoof `X-Forwarded-Proto`.
+fn set_or_replace_header(header_bytes: &[u8], name: &str, value: &str) -> Vec<u8> {
+    let end = header_bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(header_bytes.len());
+    let headers = &header_bytes[..end];
+    let body = &header_bytes[end..];
+
+    let header_str = String::from_utf8_lossy(headers);
+    let needle = format!("{}:", name);
+    let needle_bytes = needle.as_bytes();
+    let mut out = Vec::with_capacity(header_bytes.len() + name.len() + value.len() + 4);
+
+    for line in header_str.split("\r\n") {
+        if line.is_empty() {
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(b": ");
+            out.extend_from_slice(value.as_bytes());
+            out.extend_from_slice(b"\r\n\r\n");
+            break;
+        }
+        let bytes = line.as_bytes();
+        if bytes.len() >= needle_bytes.len()
+            && bytes[..needle_bytes.len()].eq_ignore_ascii_case(needle_bytes)
+        {
+            continue;
+        }
+        out.extend_from_slice(bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(body);
+    out
+}
+
 const HTTP01_PATH: &str = "/.well-known/acme-challenge/";
 
 /// Token from `GET|HEAD /.well-known/acme-challenge/<token>`. `None` if this
@@ -989,6 +1035,15 @@ async fn handle_connection<S>(
             return;
         }
     }
+
+    // TLS terminator: the backend sees HTTP. Without this, express-session
+    // (Medusa) and friends skip Set-Cookie when cookie.secure is true.
+    let proto = if sni_hostname.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    let header_buf = set_or_replace_header(&header_buf, "X-Forwarded-Proto", proto);
 
     match classify(&table, &host) {
         Disposition::Local(apex, subdomain, backend, fallback) => {
@@ -1844,6 +1899,31 @@ mod tests {
     }
 
     #[test]
+    fn set_or_replace_header_inserts_before_body() {
+        let req = req_with_body(b"hello");
+        let out = set_or_replace_header(&req, "X-Forwarded-Proto", "https");
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("Host: api.vm.worldtree.network"));
+        assert!(text
+            .to_ascii_lowercase()
+            .contains("x-forwarded-proto: https"));
+        assert!(out.windows(5).any(|w| w == b"hello"));
+        // Header terminator still present, body untouched.
+        let end = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        assert_eq!(&out[end + 4..], b"hello");
+    }
+
+    #[test]
+    fn set_or_replace_header_overwrites_client_spoof() {
+        let req = b"GET / HTTP/1.1\r\nHost: x\r\nX-Forwarded-Proto: http\r\n\r\n";
+        let out = set_or_replace_header(req, "X-Forwarded-Proto", "https");
+        let text = String::from_utf8_lossy(&out).to_ascii_lowercase();
+        assert_eq!(text.matches("x-forwarded-proto:").count(), 1);
+        assert!(text.contains("x-forwarded-proto: https"));
+        assert!(!text.contains("x-forwarded-proto: http\r\n"));
+    }
+
+    #[test]
     fn extract_acme_http01_token_from_get() {
         let req =
             b"GET /.well-known/acme-challenge/Ab_12-x HTTP/1.1\r\nHost: taskmaster.dev\r\n\r\n";
@@ -2379,10 +2459,10 @@ mod tests {
 
     // ── Integration tests: local-backend byte pass-through ──────────────────
 
-    /// Spec AC 2: with a local route, bytes reach the stub backend unmodified —
-    /// no X-Forwarded-* injection, original Host preserved.
+    /// Spec AC 2: with a local route, Host is preserved and X-Forwarded-Proto
+    /// is injected (https on the TLS path) so Secure-cookie backends work.
     #[tokio::test]
-    async fn local_route_passes_bytes_unmodified_no_forwarded_headers() {
+    async fn local_route_preserves_host_and_injects_forwarded_proto() {
         // Start a stub TCP listener that records whatever it receives.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let backend_addr = listener.local_addr().unwrap();
@@ -2436,6 +2516,9 @@ mod tests {
             Some("git.worldtree.network")
         );
 
+        // handle_connection injects proto after Host is parsed (TLS → https).
+        let header_buf = set_or_replace_header(&header_buf, "X-Forwarded-Proto", "https");
+
         let backend_stream = dial_local(backend_addr, Duration::from_secs(2))
             .await
             .expect("dial_local should succeed");
@@ -2451,8 +2534,14 @@ mod tests {
             "original Host must reach backend, got: {:?}",
             got_str
         );
+        assert!(
+            got_str
+                .to_ascii_lowercase()
+                .contains("x-forwarded-proto: https"),
+            "TLS terminator must tell the backend the client used https, got: {:?}",
+            got_str
+        );
         assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-for"));
-        assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-proto"));
         assert!(!got_str.to_ascii_lowercase().contains("x-forwarded-host"));
         assert!(!got_str.to_ascii_lowercase().contains("x-real-ip"));
     }

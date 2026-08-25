@@ -19,7 +19,7 @@ Spec implemented against `spec.md` (committed in f363daf).
 | AC | Test |
 |----|------|
 | 1 — env-fallback preserves `vm.worldtree.network` | `config::tests::env_fallback_default_apex_is_vm_worldtree_network` |
-| 2 — local route passes bytes unmodified | `tests::local_route_passes_bytes_unmodified_no_forwarded_headers` |
+| 2 — local route preserves Host and injects X-Forwarded-Proto | `tests::local_route_preserves_host_and_injects_forwarded_proto` |
 | 3 — per-apex ACME SAN auto-derivation | `config::tests::san_derivation_*` (3 tests covering iroh, none, mixed) |
 | 4 — fallthrough=none returns 404 | `tests::fallthrough_none_returns_404_and_does_not_dial_iroh` |
 | 5 — SNI/Host mismatch → 421 | `tests::handle_connection_sni_host_mismatch_returns_421` (drives real enforcement path, not inline comparison) |

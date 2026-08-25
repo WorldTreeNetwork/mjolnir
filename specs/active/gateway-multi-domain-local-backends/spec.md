@@ -29,7 +29,7 @@ Each `[[domain]]` declares a **fallthrough mode** that controls what happens whe
 - A `(apex, subdomain) → backend` map pins specific hostnames to a local TCP endpoint (typically `127.0.0.1:<port>`).
 - Lookup order inside the proxy setup path: resolve `(apex, subdomain)`; if the pair has a local route, TCP-connect to that backend and hand off to the existing `run_proxy` byte-copy. Only if there is no local route does the gateway fall through to z32 decoding and the Iroh path.
 - Route matching uses the **raw subdomain string** (lowercased). Port-suffix splitting (`<z32>-<port>`) is an Iroh-path-only concern and must not affect local-route lookup.
-- Local path reuses `run_proxy` and the headers already buffered by `read_until_headers` — no header rewriting (no `Host`, no `X-Forwarded-*`). The backend sees the request byte-identical to what arrived at the gateway. Services needing client IP recovery will get PROXY-protocol support in a future story.
+- Local path reuses `run_proxy` and the headers already buffered by `read_until_headers`. `Host` is preserved. The gateway **sets `X-Forwarded-Proto`** to `https` on the TLS listener and `http` on :80 (overwriting any client-supplied value) so backends that emit `Secure` session cookies actually `Set-Cookie`. `X-Forwarded-For` / PROXY-protocol for client IP recovery remains a future story.
 - Connection timeout to the local backend uses `GATEWAY_CONNECT_TIMEOUT`. Failure → 502 `LocalBackendUnreachable`.
 
 ### R3 — SNI/Host enforcement
@@ -106,7 +106,7 @@ backend   = "127.0.0.1:3000"
   - TOML load: minimal valid, full valid, duplicate apex (warn), duplicate route (warn), orphan apex (warn), unparseable backend (warn), wildcard in apex suffix (fatal), empty apex list (fatal), TOML parse error (fatal).
   - SAN list auto-derivation: `iroh` mode yields `{*.<apex>, <apex>}`; `none` mode yields `{<apex>} ∪ {<sub>.<apex> | each declared route}` with no wildcard.
 - Integration tests (may use `tokio::net::TcpListener` as a stub backend):
-  - Local-route end-to-end: bytes arrive at stub unmodified (no `X-Forwarded-*` injected; original `Host` preserved).
+  - Local-route end-to-end: original `Host` is preserved; `X-Forwarded-Proto` is set (`https` on TLS, `http` on :80).
   - Fallthrough to Iroh when no route matches under `fallthrough = "iroh"` (expected `InvalidTicket` is the signal the fallthrough fired).
   - `fallthrough = "none"` on an undeclared subdomain returns 404 with no Iroh connection attempt (observable because no Iroh endpoint was dialed).
 - Existing `test_parse_subdomain_*` tests continue to pass.
@@ -145,7 +145,7 @@ These pin down the ambiguities the previous draft left open. Implementer should 
 ## Acceptance Criteria
 
 1. **Binary drop-in on production:** with no `/etc/mjolnir/gateway.toml` present, the binary uses the existing `GATEWAY_*` env vars and behaves identically to the pre-upgrade deployment. Current `vm.worldtree.network` deployment survives upgrade with zero config change.
-2. **Multi-apex + local route:** with a TOML file declaring apexes `vm.worldtree.network` + `worldtree.network` and a route `worldtree.network/git → 127.0.0.1:3000`, a GET to `https://git.worldtree.network/` reaches a stub on port 3000 with bytes unmodified (no `X-Forwarded-*` added, original `Host` preserved).
+2. **Multi-apex + local route:** with a TOML file declaring apexes `vm.worldtree.network` + `worldtree.network` and a route `worldtree.network/git → 127.0.0.1:3000`, a GET to `https://git.worldtree.network/` reaches a stub on port 3000 with original `Host` preserved and `X-Forwarded-Proto: https`.
 3. **ACME SAN list is per-apex:**
    - An apex with `fallthrough = "iroh"` yields a cert covering `{*.<apex>, <apex>}`.
    - An apex with `fallthrough = "none"` yields a cert covering `{<apex>}` plus `{<sub>.<apex>}` for each declared route under that apex. **No** wildcard is in the SAN list.
