@@ -11,6 +11,7 @@ use mjolnir_protocol::{
 use nix::sys::termios;
 use std::io::Write;
 use std::net::SocketAddr;
+#[cfg(windows)]
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -40,9 +41,40 @@ fn get_terminal_size() -> (u16, u16) {
 
 // --- Terminal raw mode (Unix) ---
 
+/// Saved tty state. `tokio::io::stdin()` parks a blocking thread on fd 0;
+/// dropping it does not cancel the read, so `mj connect` would not actually
+/// exit until the user pressed a key (the parent shell's prompt waited on
+/// that leftover read). We put stdin in O_NONBLOCK and poll it with AsyncFd
+/// instead, then restore the original fcntl flags here.
 #[cfg(unix)]
-/// Set terminal to raw mode, return the original termios for restoration.
-fn set_raw_mode() -> std::io::Result<termios::Termios> {
+#[derive(Clone)]
+struct TerminalState {
+    termios: termios::Termios,
+    fcntl_flags: i32,
+}
+
+#[cfg(unix)]
+fn stdin_fcntl_flags() -> std::io::Result<i32> {
+    let flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+    if flags < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(flags)
+    }
+}
+
+#[cfg(unix)]
+fn stdin_set_fcntl_flags(flags: i32) -> std::io::Result<()> {
+    let rc = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, flags) };
+    if rc < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn set_raw_mode() -> std::io::Result<TerminalState> {
     let stdin = std::io::stdin();
     let original = termios::tcgetattr(&stdin)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("tcgetattr: {}", e)))?;
@@ -50,13 +82,51 @@ fn set_raw_mode() -> std::io::Result<termios::Termios> {
     termios::cfmakeraw(&mut raw);
     termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, &raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("tcsetattr: {}", e)))?;
-    Ok(original)
+    let fcntl_flags = stdin_fcntl_flags()?;
+    stdin_set_fcntl_flags(fcntl_flags | libc::O_NONBLOCK)?;
+    Ok(TerminalState {
+        termios: original,
+        fcntl_flags,
+    })
 }
 
 #[cfg(unix)]
-fn restore_terminal(original: &termios::Termios) {
+fn restore_terminal(original: &TerminalState) {
     let stdin = std::io::stdin();
-    let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, original);
+    let _ = stdin_set_fcntl_flags(original.fcntl_flags);
+    let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSADRAIN, &original.termios);
+    // Cooked mode, fresh line so the parent shell's prompt is not glued to
+    // the last guest output.
+    eprint!("\r\n");
+    let _ = std::io::stderr().flush();
+}
+
+/// Poll stdin without parking a blocking worker thread on the fd.
+#[cfg(unix)]
+async fn read_tty_stdin(
+    afd: &tokio::io::unix::AsyncFd<std::io::Stdin>,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
+    loop {
+        let mut guard = afd.readable().await?;
+        match guard.try_io(|_| {
+            let n = unsafe {
+                libc::read(
+                    libc::STDIN_FILENO,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                )
+            };
+            if n < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(n as usize)
+            }
+        }) {
+            Ok(result) => return result,
+            Err(_would_block) => continue,
+        }
+    }
 }
 
 // --- Terminal raw mode (Windows) ---
@@ -241,7 +311,7 @@ async fn run_shell_loop(
     send: &mut iroh::endpoint::SendStream,
     recv: &mut iroh::endpoint::RecvStream,
 ) -> Result<i32> {
-    let mut stdin = tokio::io::stdin();
+    let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
     let mut sigwinch =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
@@ -270,7 +340,7 @@ async fn run_shell_loop(
                     }
                 }
             }
-            result = stdin.read(&mut stdin_buf) => {
+            result = read_tty_stdin(&stdin, &mut stdin_buf) => {
                 match result {
                     Ok(0) => {
                         let _ = write_frame(send, &Frame::Exit { code: 0 }).await;
@@ -406,8 +476,11 @@ enum ReconnectWait {
 /// skip the backoff.
 async fn wait_reconnect(delay: std::time::Duration) -> ReconnectWait {
     let deadline = tokio::time::Instant::now() + delay;
-    let mut stdin = tokio::io::stdin();
     let mut buf = [0u8; 64];
+    #[cfg(unix)]
+    let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).ok();
+    #[cfg(windows)]
+    let mut stdin = tokio::io::stdin();
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
@@ -415,7 +488,19 @@ async fn wait_reconnect(delay: std::time::Duration) -> ReconnectWait {
         }
         tokio::select! {
             _ = tokio::time::sleep(remaining) => return ReconnectWait::Ready,
-            result = stdin.read(&mut buf) => {
+            result = async {
+                #[cfg(unix)]
+                {
+                    match stdin.as_ref() {
+                        Some(afd) => read_tty_stdin(afd, &mut buf).await,
+                        None => std::future::pending().await,
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    stdin.read(&mut buf).await
+                }
+            } => {
                 match result {
                     Ok(0) => return ReconnectWait::Abort,
                     Ok(n) if buf[..n].contains(&0x03) || buf[..n].contains(&0x04) => {
@@ -640,7 +725,7 @@ where
         + Unpin,
 {
     let (mut ws_write, mut ws_read) = ws_stream.split();
-    let mut stdin = tokio::io::stdin();
+    let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
 
     // Send initial resize
@@ -678,7 +763,7 @@ where
                     Some(Err(e)) => return Ok(PtyEnd::Dropped(e.to_string())),
                 }
             }
-            result = stdin.read(&mut stdin_buf) => {
+            result = read_tty_stdin(&stdin, &mut stdin_buf) => {
                 match result {
                     Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
