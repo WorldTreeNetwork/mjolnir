@@ -95,10 +95,6 @@ fn restore_terminal(original: &TerminalState) {
     let stdin = std::io::stdin();
     let _ = stdin_set_fcntl_flags(original.fcntl_flags);
     let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSADRAIN, &original.termios);
-    // Cooked mode, fresh line so the parent shell's prompt is not glued to
-    // the last guest output.
-    eprint!("\r\n");
-    let _ = std::io::stderr().flush();
 }
 
 /// Poll stdin without parking a blocking worker thread on the fd.
