@@ -37,6 +37,15 @@ if [[ "${1:-}" == "--install" ]]; then
     echo "Installing to ${INSTALL_DIR}..."
 
     cp "$BINARY" "${INSTALL_DIR}/mjolnir"
+    chmod +x "${INSTALL_DIR}/mjolnir"
+
+    # macOS kills a copied adhoc/linker-signed Mach-O with
+    # SIGKILL (Code Signature Invalid). Re-sign in place so
+    # ~/.local/bin/mj actually launches. The cargo target/ copy
+    # is fine; only the install path trips AMFI.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        codesign --force --sign - "${INSTALL_DIR}/mjolnir"
+    fi
 
     # Create 'mj' symlink
     LINK="${INSTALL_DIR}/mj"
@@ -44,6 +53,11 @@ if [[ "${1:-}" == "--install" ]]; then
         rm -f "$LINK"
     fi
     ln -s mjolnir "$LINK"
+
+    if ! "${INSTALL_DIR}/mjolnir" --help >/dev/null; then
+        echo "ERROR: installed binary at ${INSTALL_DIR}/mjolnir would not run"
+        exit 1
+    fi
 
     echo "Installed: ${INSTALL_DIR}/mjolnir"
     echo "Symlink:   ${INSTALL_DIR}/mj -> mjolnir"

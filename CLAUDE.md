@@ -55,7 +55,7 @@ just test             # mix test
 just format           # mix format
 just iex              # iex -S mix
 just deps             # mix deps.get
-just build-client     # Build TypeScript client
+just build-client     # Build Rust `mj` client (macOS --install re-signs; a plain cp is SIGKILL)
 ```
 
 **Deploy** — rsync code to server, build release, restart service:
