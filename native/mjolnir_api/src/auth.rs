@@ -82,9 +82,14 @@ fn now_secs() -> u64 {
 }
 
 impl StoredToken {
+    /// Treat the token as stale 60s before `expires_at` so a reconnect after
+    /// laptop sleep does not send a JWT that dies during the handshake.
+    /// Keycloak access tokens for this client are 5 minutes.
+    const EXPIRY_SKEW_SECS: u64 = 60;
+
     pub fn is_expired(&self) -> bool {
         match self.expires_at {
-            Some(exp) => now_secs() >= exp,
+            Some(exp) => now_secs() + Self::EXPIRY_SKEW_SECS >= exp,
             None => false,
         }
     }
@@ -155,6 +160,27 @@ pub async fn resolve_token(explicit: &Option<String>) -> Option<String> {
         return explicit.clone();
     }
     load_token().await
+}
+
+/// Force a refresh of the on-disk token, ignoring local expiry.
+///
+/// Used when a WebSocket handshake comes back 401 — the access token captured
+/// at `mj connect` start is 5 minutes, so a laptop sleep always outlives it
+/// even if `expires_at` was not re-read.
+pub async fn refresh_stored_token() -> Option<String> {
+    let data = std::fs::read_to_string(token_path()).ok()?;
+    let mut stored: StoredToken = serde_json::from_str(&data).ok()?;
+    let refresh = stored.refresh_token.as_ref()?;
+    match refresh_token(&stored.issuer, refresh).await {
+        Ok(new_token) => {
+            stored.access_token = new_token.access_token;
+            stored.refresh_token = new_token.refresh_token.or(stored.refresh_token);
+            stored.expires_at = new_token.expires_in.map(|e| now_secs() + e);
+            let _ = stored.save();
+            Some(stored.access_token.clone())
+        }
+        Err(_) => None,
+    }
 }
 
 // --- Login command ---
@@ -362,4 +388,38 @@ fn generate_code_verifier() -> String {
 fn generate_code_challenge(verifier: &str) -> String {
     let hash = Sha256::digest(verifier.as_bytes());
     base64url_encode_raw(&hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token(expires_at: Option<u64>) -> StoredToken {
+        StoredToken {
+            access_token: "x".into(),
+            refresh_token: None,
+            expires_at,
+            issuer: "https://example".into(),
+        }
+    }
+
+    #[test]
+    fn unexpired_token_with_room_to_spare_is_fresh() {
+        assert!(!token(Some(now_secs() + 120)).is_expired());
+    }
+
+    #[test]
+    fn token_inside_skew_window_is_treated_expired() {
+        assert!(token(Some(now_secs() + 30)).is_expired());
+    }
+
+    #[test]
+    fn past_expiry_is_expired() {
+        assert!(token(Some(now_secs().saturating_sub(1))).is_expired());
+    }
+
+    #[test]
+    fn missing_expires_at_is_not_expired() {
+        assert!(!token(None).is_expired());
+    }
 }

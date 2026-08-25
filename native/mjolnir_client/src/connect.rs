@@ -428,12 +428,24 @@ async fn wait_reconnect(delay: std::time::Duration) -> ReconnectWait {
     }
 }
 
-async fn open_pty_ws(
-    url: &str,
-    token: &Option<String>,
-) -> Result<
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-> {
+type PtyWs =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+fn error_reason(e: &anyhow::Error) -> String {
+    format!("{e:#}").replace('\n', " ")
+}
+
+fn http_status(e: &anyhow::Error) -> Option<u16> {
+    use tokio_tungstenite::tungstenite::Error as WsError;
+    for cause in e.chain() {
+        if let Some(WsError::Http(resp)) = cause.downcast_ref::<WsError>() {
+            return Some(resp.status().as_u16());
+        }
+    }
+    None
+}
+
+async fn connect_with_token(url: &str, token: &Option<String>) -> Result<PtyWs> {
     let mut request =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url)
             .context("Failed to build WebSocket request")?;
@@ -449,6 +461,28 @@ async fn open_pty_ws(
         .await
         .context("Failed to connect WebSocket")?;
     Ok(ws_stream)
+}
+
+/// Open a PTY WebSocket, refreshing the OIDC access token first.
+///
+/// Access tokens for this client are 5 minutes. A dropped socket after
+/// laptop sleep always outlives that, so each handshake re-resolves (and
+/// on 401, force-refreshes) rather than replaying the JWT from process start.
+async fn open_pty_ws(url: &str, token_flag: &Option<String>) -> Result<PtyWs> {
+    let token = crate::auth::resolve_token(token_flag).await;
+    match connect_with_token(url, &token).await {
+        Ok(ws) => Ok(ws),
+        Err(e) if http_status(&e) == Some(401) && token_flag.is_none() => {
+            if crate::auth::refresh_stored_token().await.is_some() {
+                let token = crate::auth::resolve_token(token_flag).await;
+                return connect_with_token(url, &token)
+                    .await
+                    .context("Failed to connect WebSocket after token refresh");
+            }
+            Err(e).context("auth rejected (try `mj login`)")
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn eprint_pty(msg: &str) {
@@ -498,13 +532,11 @@ pub async fn cmd_connect(
         None => format!("{}/api/vms/{}/pty", ws_url, vm_id),
     };
 
-    let effective_token = crate::auth::resolve_token(token).await;
-
     eprintln!("Connecting to VM {}...", vm_id);
 
     // Fail fast on the first handshake (bad id, auth, VM down) before we
     // clobber the local terminal with raw mode — a typo must not sit in a loop.
-    let mut ws_stream = open_pty_ws(&url, &effective_token).await?;
+    let mut ws_stream = open_pty_ws(&url, token).await?;
     eprintln!("Connected. PTY session active.");
 
     let original_termios = set_raw_mode().context("Failed to set raw mode")?;
@@ -534,7 +566,7 @@ pub async fn cmd_connect(
                     break err;
                 }
                 loop {
-                    match open_pty_ws(&url, &effective_token).await {
+                    match open_pty_ws(&url, token).await {
                         Ok(ws) => {
                             eprint_pty("[mj] reconnected");
                             attempts = 0;
@@ -543,7 +575,7 @@ pub async fn cmd_connect(
                         }
                         Err(e) => {
                             if let Some(err) =
-                                reconnect_or_give_up(&mut attempts, no_reconnect, &e.to_string())
+                                reconnect_or_give_up(&mut attempts, no_reconnect, &error_reason(&e))
                                     .await
                             {
                                 break 'pty err;
