@@ -363,16 +363,116 @@ fn percent_encode_query(value: &str) -> String {
     out
 }
 
+/// How a PTY WebSocket session ended. Distinguishes "the tab closed" from
+/// "the socket died while the tab is still here" so we can retry the latter.
+#[derive(Debug)]
+enum PtyEnd {
+    /// Local stdin hit EOF — this process's tab/pipe is gone.
+    LocalEof,
+    /// Peer sent a Close frame (shell `exit`, or an orderly server stop).
+    Closed,
+    /// Transport died without a Close (reset, timeout, Cloudflare, deploy).
+    Dropped(String),
+}
+
+const RECONNECT_BASE_SECS: f64 = 0.5;
+const RECONNECT_CAP_SECS: f64 = 30.0;
+const RECONNECT_MAX: u32 = 64;
+
+/// Equal-jitter exponential backoff in seconds.
+///
+/// `attempt` is 0-indexed (first retry after a drop). Ceiling grows `base * 2^n`
+/// until `cap`, then flattens. `jitter` in `[0, 1]` picks a delay in
+/// `[ceiling/2, ceiling]` so a herd of clients does not retry on the same tick.
+fn reconnect_delay_secs(attempt: u32, jitter: f64) -> f64 {
+    let growth = RECONNECT_BASE_SECS * 2f64.powi(attempt.min(16) as i32);
+    let ceiling = growth.min(RECONNECT_CAP_SECS);
+    let j = jitter.clamp(0.0, 1.0);
+    ceiling * (0.5 + 0.5 * j)
+}
+
+fn reconnect_delay(attempt: u32, jitter: f64) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(reconnect_delay_secs(attempt, jitter))
+}
+
+enum ReconnectWait {
+    Ready,
+    Abort,
+}
+
+/// Sleep `delay`, but give up if the local tab goes away (stdin EOF) or the
+/// user hits Ctrl-C / Ctrl-D. Other keystrokes are discarded so they do not
+/// skip the backoff.
+async fn wait_reconnect(delay: std::time::Duration) -> ReconnectWait {
+    let deadline = tokio::time::Instant::now() + delay;
+    let mut stdin = tokio::io::stdin();
+    let mut buf = [0u8; 64];
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return ReconnectWait::Ready;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => return ReconnectWait::Ready,
+            result = stdin.read(&mut buf) => {
+                match result {
+                    Ok(0) => return ReconnectWait::Abort,
+                    Ok(n) if buf[..n].contains(&0x03) || buf[..n].contains(&0x04) => {
+                        return ReconnectWait::Abort;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => return ReconnectWait::Abort,
+                }
+            }
+        }
+    }
+}
+
+async fn open_pty_ws(
+    url: &str,
+    token: &Option<String>,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+> {
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url)
+            .context("Failed to build WebSocket request")?;
+    if let Some(t) = token {
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", t)
+                .parse()
+                .context("Invalid auth header value")?,
+        );
+    }
+    let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
+        .await
+        .context("Failed to connect WebSocket")?;
+    Ok(ws_stream)
+}
+
+fn eprint_pty(msg: &str) {
+    // Raw mode: stderr still needs CR so the status line is not staggered.
+    eprint!("\r\n{msg}\r\n");
+    let _ = std::io::stderr().flush();
+}
+
 /// Connect to a VM PTY via WebSocket.
 ///
 /// This is the renamed version of `cmd_pty` from main.rs, accepting the API flag
 /// and token as options, and the VM ID as a string.
+///
+/// After a successful first session, a dropped socket retries with jittered
+/// exponential backoff until the tab closes, the user hits Ctrl-C/Ctrl-D
+/// during the wait, or `RECONNECT_MAX` attempts fail. The first connect
+/// still fails fast (bad id, auth, VM down) so a typo does not sit in a loop.
 pub async fn cmd_connect(
     profile: &crate::config::Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     vm_id: &str,
     session: Option<String>,
+    no_reconnect: bool,
 ) -> Result<()> {
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -398,40 +498,62 @@ pub async fn cmd_connect(
         None => format!("{}/api/vms/{}/pty", ws_url, vm_id),
     };
 
-    // Build request with auth header
     let effective_token = crate::auth::resolve_token(token).await;
-    let mut request =
-        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-            url.as_str(),
-        )
-        .context("Failed to build WebSocket request")?;
-    if let Some(t) = effective_token {
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Bearer {}", t)
-                .parse()
-                .context("Invalid auth header value")?,
-        );
-    }
 
     eprintln!("Connecting to VM {}...", vm_id);
 
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .context("Failed to connect WebSocket")?;
-
+    // Fail fast on the first handshake (bad id, auth, VM down) before we
+    // clobber the local terminal with raw mode — a typo must not sit in a loop.
+    let mut ws_stream = open_pty_ws(&url, &effective_token).await?;
     eprintln!("Connected. PTY session active.");
 
-    // Set raw mode
     let original_termios = set_raw_mode().context("Failed to set raw mode")?;
     let orig_for_guard = original_termios.clone();
     let _guard = scopeguard::guard((), move |_| {
         restore_terminal(&orig_for_guard);
     });
 
-    // No session argument: the server already opened the PTY attached to the right tmux
-    // session, so this loop is a plain byte pump in both cases.
-    let result = run_pty_loop(ws_stream).await;
+    let mut attempts: u32 = 0;
+    let result = 'pty: loop {
+        match run_pty_loop(ws_stream).await {
+            Ok(PtyEnd::LocalEof) => break Ok(()),
+            Ok(PtyEnd::Closed) if no_reconnect => break Ok(()),
+            Ok(PtyEnd::Dropped(_)) if no_reconnect => {
+                break Err(anyhow::anyhow!("connection dropped"));
+            }
+            Err(e) if no_reconnect => break Err(e),
+            end => {
+                let reason = match end {
+                    Ok(PtyEnd::Closed) => "connection closed".to_string(),
+                    Ok(PtyEnd::Dropped(r)) => r,
+                    Err(e) => e.to_string(),
+                    Ok(PtyEnd::LocalEof) => unreachable!(),
+                };
+                if let Some(err) = reconnect_or_give_up(&mut attempts, no_reconnect, &reason).await
+                {
+                    break err;
+                }
+                loop {
+                    match open_pty_ws(&url, &effective_token).await {
+                        Ok(ws) => {
+                            eprint_pty("[mj] reconnected");
+                            attempts = 0;
+                            ws_stream = ws;
+                            break;
+                        }
+                        Err(e) => {
+                            if let Some(err) =
+                                reconnect_or_give_up(&mut attempts, no_reconnect, &e.to_string())
+                                    .await
+                            {
+                                break 'pty err;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     restore_terminal(&original_termios);
 
@@ -444,8 +566,41 @@ pub async fn cmd_connect(
     }
 }
 
+/// Tick the retry counter, wait with backoff, return `Some(err)` when we
+/// should stop. `None` means the caller should try `open_pty_ws` again.
+async fn reconnect_or_give_up(
+    attempts: &mut u32,
+    no_reconnect: bool,
+    reason: &str,
+) -> Option<Result<()>> {
+    if no_reconnect {
+        return Some(Err(anyhow::anyhow!("{}", reason)));
+    }
+    *attempts += 1;
+    if *attempts > RECONNECT_MAX {
+        eprint_pty(&format!(
+            "[mj] gave up after {RECONNECT_MAX} reconnect attempts ({reason})"
+        ));
+        return Some(Err(anyhow::anyhow!(
+            "gave up after {RECONNECT_MAX} reconnect attempts"
+        )));
+    }
+    let delay = reconnect_delay(*attempts - 1, rand::random::<f64>());
+    eprint_pty(&format!(
+        "[mj] disconnected ({reason}); reconnecting in {:.1}s (try {attempts}/{RECONNECT_MAX}) — Ctrl-C to stop",
+        delay.as_secs_f64()
+    ));
+    match wait_reconnect(delay).await {
+        ReconnectWait::Ready => None,
+        ReconnectWait::Abort => {
+            eprint_pty("[mj] reconnect cancelled");
+            Some(Ok(()))
+        }
+    }
+}
+
 #[cfg(unix)]
-async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S) -> Result<PtyEnd>
 where
     S: futures_util::Stream<
             Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
@@ -485,14 +640,15 @@ where
                         ws_write.send(Message::Pong(payload)).await?;
                     }
                     Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None => return Ok(()),
+                    Some(Ok(Message::Close(_))) => return Ok(PtyEnd::Closed),
+                    None => return Ok(PtyEnd::Dropped("connection closed".into())),
                     Some(Ok(_)) => {}
-                    Some(Err(e)) => return Err(e.into()),
+                    Some(Err(e)) => return Ok(PtyEnd::Dropped(e.to_string())),
                 }
             }
             result = stdin.read(&mut stdin_buf) => {
                 match result {
-                    Ok(0) => return Ok(()),
+                    Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
                         ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
                     }
@@ -512,7 +668,7 @@ where
 }
 
 #[cfg(windows)]
-async fn run_pty_loop<S>(ws_stream: S) -> Result<()>
+async fn run_pty_loop<S>(ws_stream: S) -> Result<PtyEnd>
 where
     S: futures_util::Stream<
             Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
@@ -552,17 +708,16 @@ where
                         ws_write.send(Message::Pong(payload)).await?;
                     }
                     Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | None => {
-                        return Ok(());
-                    }
+                    Some(Ok(Message::Close(_))) => return Ok(PtyEnd::Closed),
+                    None => return Ok(PtyEnd::Dropped("connection closed".into())),
                     Some(Ok(_)) => {}
-                    Some(Err(e)) => return Err(e.into()),
+                    Some(Err(e)) => return Ok(PtyEnd::Dropped(e.to_string())),
                 }
             }
             // Stdin (user typing)
             result = stdin.read(&mut stdin_buf) => {
                 match result {
-                    Ok(0) => return Ok(()), // EOF
+                    Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
                         ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
                     }
@@ -759,12 +914,13 @@ pub async fn cmd_shell(
     target: &str,
     p2p: bool,
     session: Option<String>,
+    no_reconnect: bool,
     relay: Option<String>,
     ips: &[String],
 ) -> Result<()> {
     if is_vm_id(target) && !p2p {
         eprintln!("→ transport: gateway (WebSocket)");
-        cmd_connect(profile, api_flag, token, target, session).await
+        cmd_connect(profile, api_flag, token, target, session, no_reconnect).await
     } else {
         eprintln!("→ transport: peer-to-peer (Iroh QUIC)");
         let ticket = target_to_ticket(profile, api_flag, token, target).await?;
@@ -853,5 +1009,34 @@ mod tests {
             ssh_dummy_host("pcwdqccp6ehuf4uiqb1ksitamd5z5byo6pgrmcdxkoyrty37p1co"),
             "mj-iroh"
         );
+    }
+
+    #[test]
+    fn reconnect_delay_grows_exponentially_then_caps() {
+        // jitter=1.0 → the ceiling itself (equal-jitter high end)
+        assert!((reconnect_delay_secs(0, 1.0) - 0.5).abs() < 1e-9);
+        assert!((reconnect_delay_secs(1, 1.0) - 1.0).abs() < 1e-9);
+        assert!((reconnect_delay_secs(2, 1.0) - 2.0).abs() < 1e-9);
+        assert!((reconnect_delay_secs(3, 1.0) - 4.0).abs() < 1e-9);
+        assert!((reconnect_delay_secs(5, 1.0) - 16.0).abs() < 1e-9);
+        // 0.5 * 2^6 = 32, cap 30
+        assert!((reconnect_delay_secs(6, 1.0) - 30.0).abs() < 1e-9);
+        assert!((reconnect_delay_secs(20, 1.0) - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reconnect_delay_equal_jitter_stays_in_half_to_full_ceiling() {
+        // jitter=0.0 → ceiling/2
+        assert!((reconnect_delay_secs(0, 0.0) - 0.25).abs() < 1e-9);
+        assert!((reconnect_delay_secs(2, 0.0) - 1.0).abs() < 1e-9);
+        assert!((reconnect_delay_secs(6, 0.0) - 15.0).abs() < 1e-9);
+        // jitter=0.5 → 0.75 * ceiling
+        assert!((reconnect_delay_secs(2, 0.5) - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reconnect_delay_clamps_out_of_range_jitter() {
+        assert!((reconnect_delay_secs(0, -1.0) - 0.25).abs() < 1e-9);
+        assert!((reconnect_delay_secs(0, 2.0) - 0.5).abs() < 1e-9);
     }
 }

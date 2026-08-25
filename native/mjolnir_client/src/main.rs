@@ -204,6 +204,9 @@ enum Command {
         /// Attach to a named tmux session inside the VM
         #[arg(long)]
         session: Option<String>,
+        /// Exit on WebSocket drop instead of retrying with backoff
+        #[arg(long)]
+        no_reconnect: bool,
         /// Relay URL hint (P2P only)
         #[arg(long)]
         relay: Option<String>,
@@ -858,11 +861,25 @@ async fn main() {
             target,
             p2p,
             session,
+            no_reconnect,
             relay,
             ip,
             api,
             token,
-        } => connect::cmd_shell(&profile, &api, &token, &target, p2p, session, relay, &ip).await,
+        } => {
+            connect::cmd_shell(
+                &profile,
+                &api,
+                &token,
+                &target,
+                p2p,
+                session,
+                no_reconnect,
+                relay,
+                &ip,
+            )
+            .await
+        }
         Command::Ssh {
             target,
             user,

@@ -88,7 +88,7 @@ mj exec <id> "uname -a"                # Run a command
 mj kill <id> | mj kill --all           # Destroy one VM, or all of them
 mj reboot <id> | mj restart <id>       # Restart a wedged VM (kill hypervisor → resume from rootfs)
 mj url <id>                            # Web gateway URL
-mj connect <id>                        # Interactive PTY (WebSocket)
+mj connect <id>                        # Interactive PTY (WebSocket); retries on drop (backoff + jitter). --session NAME reattaches tmux. --no-reconnect for one-shot.
 mj message <id> '{"k":"v"}'            # Send a payload in; wakes a dormant VM
 mj doctor [<id>] [--fix]               # Health probe (no id = API + host); --fix heals
 mj ticket get <id> [--wait]            # Connection ticket (--wait blocks for PTY readiness)
