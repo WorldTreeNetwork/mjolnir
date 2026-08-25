@@ -2,11 +2,10 @@
 
 > **ACTIVE BUILD**
 >
-> Activated from chat 2026-08-25 (intend: durable Redis sidecar for
-> Medusa sessions). Beads: `mjolnir-g193` and children `.1`–`.3`.
-> Architecture: advise accept required before `act`. ADR number is
-> **0007** (0006 is mailbox-as-spool). Author family is Grok — the
-> advise reader must be a different family (ADR-005).
+> Folded 2026-08-25 → `openspec/specs/host-redis/spec.md`.
+> Activated from chat 2026-08-25. Beads: `mjolnir-g193` and children
+> `.1`–`.3`. ADR **0007**. Advise send-back on live AOF copy; re-advise
+> accept-with-nits after quiesced whole-dir snapshot.
 
 **Rigor:** architecture
 

@@ -1,7 +1,6 @@
 # ADR 0007 — Host Redis sidecar (durable, not a hotel)
 
-**Status:** Proposed (2026-08-25) — awaiting advise on
-`add-host-sidecar-redis`
+**Status:** Accepted (advise accept-with-nits 2026-08-25)
 **Change:** [`add-host-sidecar-redis`](../../openspec/changes/add-host-sidecar-redis/proposal.md)
 **Living spec (after fold):** [`openspec/specs/host-redis/spec.md`](../../openspec/specs/host-redis/spec.md)
 **First consumer:** Hypersigil Medusa (`REDIS_URL` in deploy secrets)
@@ -15,7 +14,7 @@
    conf/unit/binary/password changed. Do not restart Elixir to
    install Redis. No extra just verb.
 2. **Bind `:host_api_ip:6379` only** (default `10.200.0.1` on
-   `dummy-mjolnir`). Unix socket for host backup. Never `0.0.0.0`.
+   `dummy-mjolnir`). Unix socket for host `redis-cli`. Never `0.0.0.0`.
    Fail closed if the dummy address is missing. Guest TCP is INPUT
    from `10.192.0.0/10`, not FORWARD.
 3. **Not a hotel.** One process, one `requirepass`, `databases 1`
@@ -27,19 +26,22 @@
    `vm.json`. Unprovisioned guests cannot AUTH.
 5. **Rename the guns.** Empty-string `FLUSHALL`, `FLUSHDB`, `DEBUG`,
    `CONFIG`, `SHUTDOWN`, `MODULE`, `REPLICAOF`, `SLAVEOF`. Keep
-   `BGREWRITEAOF` for backup.
+   `BGREWRITEAOF` available; the host timer does not use it.
 6. **AOF `everysec`.** Data dir `/var/lib/mjolnir/redis`. Named loss:
-   up to one second on hard crash. Redis 7 AOF is a directory —
-   backup copies the whole dir plus RDB. Off-host sink
-   `b2:mimir-backups/mjolnir-redis/<hostname>/`. Exit dump:
-   `redis-cli --rdb` over `REDIS_URL`.
+   up to one second on hard crash. Redis 7 AOF is a directory.
+   Host backup is a **quiesced whole-dir snapshot** (stop, copy dir
+   to `b2:mimir-backups/mjolnir-redis/<hostname>/`, start). Restore
+   that same dir; do not restore RDB-only onto `appendonly yes`.
+   Exit dump: `redis-cli --rdb` over `REDIS_URL` (not the timer
+   object).
 7. **App wiring is out of this repo.** Hypersigil `medusa-config.ts`
    registers Redis. Mjolnir owes the daemon, the secret, the catalog
    row, and the backup.
 
 ## Built vs remaining
 
-Built: nothing. No redis-server on the host.
+Built: systemd `mjolnir-redis` on `10.200.0.1:6379`, AUTH, AOF
+everysec, INPUT, secrets merge, quiesced B2 timer, restore runbook.
+Stock `redis-server.service` masked.
 
-Remaining: advise → install → B2 timer + restore runbook → Hypersigil
-app register (other repo).
+Remaining: Hypersigil `medusa-config.ts` Redis module (app repo).

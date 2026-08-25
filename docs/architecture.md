@@ -679,7 +679,9 @@ Agents get hardware-isolated Linux environments with apt, pip, cargo — everyth
 Guest-facing catalog: [`guide/host-sidecars.md`](guide/host-sidecars.md).
 Reserved overlay IP `:host_api_ip` (`10.200.0.1` on `dummy-mjolnir`).
 Blob door `:7222` (`blob_door_url`), orchestrator API `:4000`
-(`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`).
+(`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`),
+Redis `:6379` (provisioned `REDIS_URL`, ADR
+[`0007`](decisions/0007-host-sidecar-redis.md)).
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing

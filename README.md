@@ -69,6 +69,7 @@ Every guest can reach a few **host sidecars** on `10.200.0.1` (not
 | Blob store (content-addressed, B2 behind a door) | `http://10.200.0.1:7222` | `blob_door_url` |
 | Orchestrator API | `http://10.200.0.1:4000` | `api_url` |
 | Postgres (declared tenant DBs only) | `10.200.0.1:5432` | `DATABASE_URL` in deploy secrets |
+| Redis (sessions / cache / queues) | `10.200.0.1:6379` | `REDIS_URL` in deploy secrets |
 
 How to PUT/GET a blob, how Postgres tenants are provisioned, and how
 to add another sidecar: **[Host sidecars](docs/guide/host-sidecars.md)**.
@@ -168,7 +169,7 @@ Mjolnir is Elixir/OTP for orchestration over a Rust guest agent inside each VM.
 - **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `btrfs subvolume snapshot`. Layout: `@base/` templates, `@vms/<uuid>/`, `@snapshots/<name>/`.
 - **Guest agent** (`native/mjolnir_guest_agent/`, Rust) — runs inside the VM on vsock, handles `exec`, networking, identity, and Iroh-backed PTY/SSH.
 - **HTTP API** — Bandit on port `4000`, JWT/OIDC-authenticated. This is what `mj` and the `just` control plane talk to. Guests see it as `api_url` on `10.200.0.1`.
-- **Host sidecars** — processes on the reserved overlay IP (`10.200.0.1`): blob door `:7222`, tenant Postgres `:5432`. Catalog: [Host sidecars](docs/guide/host-sidecars.md).
+- **Host sidecars** — processes on the reserved overlay IP (`10.200.0.1`): blob door `:7222`, tenant Postgres `:5432`, Redis `:6379`. Catalog: [Host sidecars](docs/guide/host-sidecars.md).
 - **Forge** (`lib/mjolnir/forge/`) — a declarative host-config reconciler with three-way diff (declared/owned/observed) and a TUI (`mj forge tui`).
 
 The deepest reference is [`CLAUDE.md`](CLAUDE.md) (module-by-module map). Plans and specs live in [`docs/`](docs/).

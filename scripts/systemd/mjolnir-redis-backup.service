@@ -1,0 +1,14 @@
+[Unit]
+Description=Quiesced copy of host Redis data dir to Backblaze B2
+Documentation=file:///opt/mjolnir/docs/runbooks/host-redis.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-redis-b2.sh
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

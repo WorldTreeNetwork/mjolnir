@@ -117,12 +117,25 @@ restart `mjolnir-redis.service`. There SHALL NOT be a
 
 ### Requirement: Off-host backup and exit dump
 
-A host timer script SHALL copy the Redis data dir (AOF directory plus
-RDB) to `b2:mimir-backups/mjolnir-redis/<hostname>/`. A runbook SHALL
-document restore (stop unit, replace dir, start). A guest SHALL also
-be able to dump via `redis-cli --rdb` over the same `REDIS_URL`
-(exit path). Installing and enabling the timer on the live host is
-operational, not a code SHALL.
+A host timer script SHALL quiesce Redis (`systemctl stop
+mjolnir-redis`), copy the whole data dir `/var/lib/mjolnir/redis/`
+(AOF directory plus RDB from that stopped instance) to
+`b2:mimir-backups/mjolnir-redis/<hostname>/`, then start the unit.
+It SHALL NOT `rclone` a live `appendonlydir`. A runbook SHALL
+document restore as stop, replace that same dir, start — not
+RDB-only onto `appendonly yes`. A guest SHALL also be able to dump
+via `redis-cli --rdb` over the same `REDIS_URL` (exit path; not the
+host timer object). Installing and enabling the timer on the live
+host is operational, not a code SHALL.
+
+#### Scenario: Timer copy is a stopped dir
+
+- GIVEN Redis is serving keys
+- WHEN the backup timer fires
+- THEN `mjolnir-redis.service` is stopped while the data dir is copied
+- AND the unit is started afterwards
+- AND the B2 object is a copy of `/var/lib/mjolnir/redis/` from that
+  stopped instance
 
 #### Scenario: Exit dump from REDIS_URL
 
@@ -133,6 +146,6 @@ operational, not a code SHALL.
 #### Scenario: Restore returns keys
 
 - GIVEN an off-host copy of the data dir that contains key `durable`
-- WHEN an operator stops Redis, replaces `/var/lib/mjolnir/redis`,
-  and starts the unit
+- WHEN an operator stops Redis, replaces `/var/lib/mjolnir/redis`
+  with that copy, and starts the unit
 - THEN `GET durable` returns the previous value

@@ -232,6 +232,13 @@ echo ""
 echo "--- Installing blob door ---"
 ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-blob-door.sh"
 
+# --- Redis sidecar (always; does not restart Elixir) ---
+# Host process on 10.200.0.1:6379. Restart Redis only if conf/unit/binary
+# changed. Never a just verb — just deploy.
+echo ""
+echo "--- Installing redis sidecar ---"
+ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-redis.sh"
+
 # --- Build gateway (optional) ---
 if $BUILD_GATEWAY; then
     echo ""

@@ -159,6 +159,7 @@ Universal host services on `:host_api_ip` (`10.200.0.1`, `dummy-mjolnir` — not
 
 - **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt cutover is `mjolnir-u8v7.4` (Blake3 stub).
 - **Postgres** `:5432` — declared tenant DBs only (`DATABASE_URL` in deploy secrets). Runbook: `docs/runbooks/host-postgres-tenants.md`.
+- **Redis** `:6379` — AUTH, AOF everysec, systemd not OTP (`REDIS_URL` in deploy secrets). Runbook: `docs/runbooks/host-redis.md`. ADR 0007.
 - **API** `:4000` — `api_url`. Guests do not get the localhost auth bypass.
 
 ### Host Setup (Linux only, requires root)

@@ -65,7 +65,8 @@ and its clients alone. Installing or restarting Redis must not
 ## Decision 2 — one overlay IP, INPUT, fail closed
 
 - Bind `10.200.0.1:6379` only. `unixsocket` on
-  `/run/mjolnir-redis/redis.sock` (0600, redis:redis) for host backup.
+  `/run/mjolnir-redis/redis.sock` (0600, redis:redis) for host
+  `redis-cli`. Disaster copy is Decision 7 (stop the unit).
   Not `0.0.0.0`. Not `::`. Not the public/default-route NIC. Not
   `127.0.0.1` as the only bind (TAP guests cannot hit host loopback).
 - Install script fails closed if `10.200.0.1/32` is missing on
@@ -150,23 +151,37 @@ Password lives in `/etc/mjolnir/redis.pass` (host) and in that JSON
 (host). Never in a guest snapshot, never in `vm.json`, never in
 logs.
 
-## Decision 7 — off-host backup is owed, not a follow-up wish
+## Decision 7 — off-host backup is a quiesced whole-dir snapshot
 
-Same shape as `backup-pg-tenants-b2.sh`:
+Postgres’s analog is online and consistent (`pg_dump`). Redis 7 AOF
+is `appendonlydir` (base + incremental). Copying that directory
+while Redis is appending can tear an incr file. `redis-cli --rdb` is
+online-consistent **as an RDB**, but with `appendonly yes` Redis
+loads AOF on start and does not fall back to `dump.rdb`. `CONFIG` is
+renamed empty, so restore cannot `CONFIG SET appendonly no`.
 
-1. Host timer: unix-socket `BGREWRITEAOF`, wait until rewrite
-   finishes, `rclone copy` `/var/lib/mjolnir/redis/` →
+Therefore the host timer object is a **quiesced copy of the whole
+data dir**:
+
+1. `systemctl stop mjolnir-redis` (SIGTERM; AOF already `everysec`).
+   Named downtime: seconds. Medusa reconnects.
+2. `rclone copy /var/lib/mjolnir/redis/` →
    `b2:mimir-backups/mjolnir-redis/<hostname>/`. Not a path on the
    Redis disk as the only copy. Bucket is `mimir-backups` (rclone
    key is scoped there; do not invent a new bucket).
-2. Restore runbook: stop unit, replace data dir from the object,
-   start, `redis-cli PING` + a known key.
-3. Exit: from a guest holding `REDIS_URL`,
-   `redis-cli --rdb dump.rdb -u "$REDIS_URL"` walks the session
-   store off the host.
+3. `systemctl start mjolnir-redis`.
+
+Restore: stop unit, replace the **same** dir (AOF directory + RDB
+together from that snapshot), start, `AUTH` + `GET` a known key.
+Do not restore RDB-only onto a conf with `appendonly yes`.
+
+Exit (Duke leaves): from a guest holding `REDIS_URL`,
+`redis-cli --rdb dump.rdb -u "$REDIS_URL"`. That is not the host
+timer object.
 
 Timer enable on the live host is operational, same as the Postgres
-tenant timer.
+tenant timer. Unix socket remains for host `redis-cli`; the timer
+does not need `BGREWRITEAOF`.
 
 ## Tradeoff (the one we are taking)
 

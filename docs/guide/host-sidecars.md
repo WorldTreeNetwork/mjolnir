@@ -38,6 +38,7 @@ rule for that port is missing.
 | **Blob door** (content-addressed object store) | `http://10.200.0.1:7222` | Every VM | `blob_door_url` in `vm.json` |
 | **Orchestrator API** | `http://10.200.0.1:4000` | Every VM (auth required except host loopback) | `api_url` in `vm.json` |
 | **Postgres** (declared tenant DBs) | `10.200.0.1:5432` (scram) | App VMs with a provisioned tenant | `DATABASE_URL` in deploy secrets — **not** in `vm.json` |
+| **Redis** (sessions / cache / queues) | `10.200.0.1:6379` (AUTH) | App VMs with a provisioned secret | `REDIS_URL` in deploy secrets — **not** in `vm.json` |
 
 Not sidecars: MinIO (rejected — not v1, not a later cache), B2 itself
 (only the door holds those keys), the public gateway (Iroh/HTTPS in, not
@@ -83,6 +84,22 @@ from the secrets file.
 Runbook: [host-postgres-tenants](../runbooks/host-postgres-tenants.md).
 App path: [Deploying a Web App](deploying-an-app.md).
 ADR: [`0005`](../decisions/0005-host-sidecar-tenant-hotel.md).
+
+---
+
+## Redis (opt-in)
+
+systemd `mjolnir-redis` on the overlay IP, not an OTP Port — `just
+deploy` must not bounce sessions with the BEAM. AOF `everysec`. One
+password, db 0 (not a hotel). A random spawn does **not** get
+`REDIS_URL`. Provision with `mix mjolnir.redis.ensure --slug …`.
+
+```bash
+redis-cli -u "$REDIS_URL" PING
+```
+
+Runbook: [host-redis](../runbooks/host-redis.md).
+ADR: [`0007`](../decisions/0007-host-sidecar-redis.md).
 
 ---
 
