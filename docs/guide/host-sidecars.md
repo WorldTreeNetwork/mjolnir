@@ -39,8 +39,11 @@ rule for that port is missing.
 | **Orchestrator API** | `http://10.200.0.1:4000` | Every VM (auth required except host loopback) | `api_url` in `vm.json` |
 | **Postgres** (declared tenant DBs) | `10.200.0.1:5432` (scram) | App VMs with a provisioned tenant | `DATABASE_URL` in deploy secrets — **not** in `vm.json` |
 
-Not sidecars: MinIO (rejected), B2 itself (only the door holds those
-keys), the public gateway (Iroh/HTTPS in, not overlay).
+Not sidecars: MinIO (rejected — not v1, not a later cache), B2 itself
+(only the door holds those keys), the public gateway (Iroh/HTTPS in, not
+overlay). Appliances that are not Mjolnir guests (Edgebox, a Pi) should
+still speak this layout (`blob/b3/`) rather than introducing MinIO;
+`recrypt-server` sits in front for identity-gated put/get/share.
 
 ---
 
