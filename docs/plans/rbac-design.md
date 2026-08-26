@@ -1,5 +1,11 @@
 # Authorization Design for Mjolnir
 
+Protocol-tier format (Biscuit as the agency token, identity vs
+agency vs Recrypt data-access):
+[`identikey-capability-v1.md`](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md)
+in `identikey-protocol`. This file is the Mjolnir application
+profile (facts, phases, Elixir/guest wiring).
+
 ## Philosophy
 
 Mjolnir's authorization is evolving from centralized identity-based access control
