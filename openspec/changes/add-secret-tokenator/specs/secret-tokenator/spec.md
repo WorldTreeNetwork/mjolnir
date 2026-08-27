@@ -1,53 +1,64 @@
 ## ADDED Requirements
 
-### Requirement: Vault is an owner-signed Gordian envelope
+### Requirement: Vault is opaque; commitment is salted Blake3
 
 A foreign secret (GitHub PAT, API key, or equivalent) SHALL be stored
-as an assertion on a Gordian envelope signed by the owner's
-Identikey, via `SecretStore.put(identikey_fp, "secrets/<secret_id>",
-envelope)`. It SHALL NOT be stored as `put_opaque` raw bytes. At
-rest the secret assertion is present. Guests SHALL NOT write this
-keyspace. `secret_id` SHALL be path-safe (no `/`, `..`, NUL).
+as `SecretStore.put_opaque("secrets", secret_id, "value", bytes)`
+with `meta` holding owner fingerprint, salt, and commitment.
+`secret_id` SHALL be path-safe (no `/`, `..`, NUL). Guests SHALL NOT
+write this namespace. Gordian envelopes are out of v1.
+
+The public commitment SHALL be
+`Blake3("mjolnir/secret-commit/v1" || salt || secret)` with `salt`
+32 CSPRNG bytes. Salt MAY travel with the token. The secret bytes
+SHALL NOT. An unsalted hash of the secret SHALL NOT appear on the
+wire, in the Biscuit, or in logs. When Gordian envelopes are added
+later, elision of a secret assertion SHALL be salted the same way.
+
+Blake3 SHALL be real Blake3. `Sites.Crypto.blake3_hash/1` (SHA-256
+stub as of 2026-08-26) SHALL NOT be used for this commitment or for
+holder fingerprints. Holder fingerprints SHALL be auth-challenge v1
+§5 (`Blake3(dcbor({alg,key}))`), not `IdentiKey.fingerprint/1`.
 
 #### Scenario: Deposit
 
 - GIVEN an owner-authenticated request to store secret `github-pat-ci`
 - WHEN it succeeds
-- THEN `SecretStore.get(fp, "secrets/github-pat-ci")` returns an
-  envelope whose secret assertion is present
+- THEN `get_opaque("secrets", "github-pat-ci", "value")` returns the
+  bytes
+- AND `meta` contains a 32-byte salt and a 32-byte commitment
 - AND no Biscuit minted for that id contains those bytes
 
 #### Scenario: Guest cannot deposit
 
 - GIVEN a guest presenting only a redeem Biscuit
-- WHEN it attempts to write `secrets/` in any Identikey keyspace
+- WHEN it attempts to write `_opaque/secrets/`
 - THEN the write is denied
-
-### Requirement: In-flight envelope is elided; copy-out is verifiable
-
-What travels with the Biscuit SHALL be the envelope with the secret
-assertion **elided** (digest remains). Copy-out SHALL return the
-secret bytes. The recipient SHALL be able to verify that value
-against the elided digest the envelope committed to. A value that
-does not match SHALL be rejected by the recipient as not the
-token's secret.
 
 #### Scenario: Copy-out matches the token
 
-- GIVEN an elided envelope whose digest is D
-- WHEN the tokenator returns value V
-- AND Blake3/envelope digest of V equals D
-- THEN V is the secret that envelope committed to
+- GIVEN salt S and commitment C on the token
+- WHEN the tokenator returns `{value: V, salt: S}`
+- AND `Blake3("mjolnir/secret-commit/v1" || S || V) == C`
+- THEN V is the secret that token committed to
 
-#### Scenario: Wrong bytes
+#### Scenario: Unsalted hash proposed
 
-- GIVEN the same elided envelope
-- WHEN a presenter is given some other V'
-- THEN verification against D fails
+- GIVEN a change that puts `Blake3(secret)` (no salt) on the token
+  or in an elided digest
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
+
+#### Scenario: SHA-256 stub used as Blake3
+
+- GIVEN a mint or redeem path that calls `Sites.Crypto.blake3_hash/1`
+  while that function is SHA-256
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
 
 ### Requirement: Copy-out is v1; thin proxy is the more secure pattern
 
-v1 SHALL offer copy-out (return secret bytes to the named holder).
+v1 SHALL offer copy-out (return `{value, salt}` to the named holder).
 The more secure pattern SHALL be a thin proxy agent that is the
 holder, redeems, and makes the upstream call so fat agents never
 copy-out. v1 SHALL NOT require that proxy. A design that forbids
@@ -59,7 +70,7 @@ virtio-fs rootfs.
 
 - GIVEN holder Z on a general-purpose VM
 - WHEN redeem succeeds
-- THEN Z receives the secret bytes
+- THEN Z receives `{value, salt}`
 - AND a later snapshot of that VM does not contain those bytes on
   the virtio-fs rootfs unless Z wrote them there in violation
 
@@ -83,7 +94,7 @@ required of the using agent.
 
 - GIVEN `api_url` in `/etc/mjolnir/vm.json`
 - WHEN holder Z POSTs a valid Biscuit and holder proof
-- THEN the response contains the secret bytes
+- THEN the response contains `{value, salt}`
 - AND no other sidecar locator is required
 
 #### Scenario: Skip-auth redeem proposed
@@ -112,7 +123,7 @@ expired, or **reused** nonce SHALL return no secret.
 - GIVEN a Biscuit bound to Z
 - WHEN a presenter signs as Q ≠ Z
 - THEN redeem fails
-- AND the secret assertion is not returned
+- AND the secret bytes are not returned
 
 #### Scenario: Bytes only
 
@@ -129,7 +140,7 @@ expired, or **reused** nonce SHALL return no secret.
 
 ### Requirement: Secret not in logs
 
-The host SHALL NOT write secret assertion bytes to logs, journald,
+The host SHALL NOT write secret bytes to logs, journald,
 or API error bodies. It MAY log secret id, holder fingerprint,
 time, and accept/reject.
 
@@ -141,13 +152,13 @@ time, and accept/reject.
 
 ### Requirement: Recrypt data is not this vault
 
-This capability SHALL apply to foreign secrets stored as elided
-assertions on owner-signed envelopes. It SHALL NOT be the redeem
+This capability SHALL apply to foreign secrets stored as opaque
+bytes with a salted Blake3 commitment. It SHALL NOT be the redeem
 path for Recrypt-protected object ciphertext.
 
 #### Scenario: Blob or PRE object proposed as this vault
 
 - GIVEN a change that stores Recrypt-protected blob bytes in
-  `secrets/` so the tokenator can return them
+  `_opaque/secrets/` so the tokenator can return them
 - WHEN it is reviewed
 - THEN it is rejected against this requirement

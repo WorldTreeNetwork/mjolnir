@@ -9,10 +9,11 @@ Sol is not subscribed.
 - [x] Write ADR index `docs/decisions/0008-secret-tokenator.md` as Proposed
 - [x] Delta `specs/secret-tokenator/spec.md` (ADDED)
 - [x] Advise accept-with-nits (Fable) —
-      `reviews/2026-08-26-fable-advise.md`. Nits go to act
-      nodes (Gordian verify_envelope, Blake3, Auth branch
-      order, challenge presents Biscuit, salted elision).
-      Cross-family accept (ADR-005).
+      `reviews/2026-08-26-fable-advise.md`. Cross-family
+      accept (ADR-005).
+- [x] Human amend 2026-08-26: Blake3 (not SHA-256 stub) for
+      holder fp and commitments; Gordian envelopes deferred;
+      salt mandatory on any public digest of a secret
 - [x] Send-back 2026-08-26: Auth plug fourth branch, not skip_auth
 - [x] Send-back 2026-08-26: holder fingerprint encoding (protocol)
 - [x] Send-back 2026-08-26: reused nonce fails closed
@@ -30,7 +31,10 @@ Sol is not subscribed.
 
 Handoffs (not checkboxes):
 
-- `add-biscuit-runtime` (`mjolnir-axsb.1.3`) — NIF / authority key
+- `add-biscuit-runtime` (`mjolnir-axsb.1.3`) — NIF / authority
+  key / **real Blake3** (do not call `Sites.Crypto.blake3_hash/1`
+  while it is SHA-256). Sites keyspace fingerprint cutover is
+  not this vault.
 - `add-tokenator-redeem` (`mjolnir-axsb.1.4`) — challenge + POST
 - `add-capability-mint` (`mjolnir-axsb.1.5`) — deposit + mint
 - `add-capability-hop` (`mjolnir-axsb.1.6`) — signed block per hop

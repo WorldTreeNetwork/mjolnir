@@ -1,6 +1,8 @@
 # Design — holder-bound Biscuit and foreign-secret redemption
 
-**Status:** Proposed. ACTIVE BUILD. Advise not yet accepted.
+**Status:** Proposed. ACTIVE BUILD. Fable accept-with-nits
+2026-08-26. Human amend same day: salted Blake3 commitments;
+Gordian envelopes deferred.
 **Change:** `update-identikey-capability`
 **Folds into:** `identikey-protocol/docs/standards/identikey-capability-v1.md`
 **Bead:** `mjolnir-axsb.1.1`

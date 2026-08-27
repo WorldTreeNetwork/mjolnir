@@ -5,7 +5,9 @@ Canonical ADR index:
 This file is the full argument. Protocol decisions live in
 [`../update-identikey-capability/design.md`](../update-identikey-capability/design.md).
 
-**Status:** Proposed. ACTIVE BUILD. Advise not yet accepted.
+**Status:** Proposed. ACTIVE BUILD. Fable accept-with-nits
+2026-08-26. Human amend same day: Blake3, salted commitments,
+Gordian envelopes deferred.
 **Change:** `add-secret-tokenator`
 **Epic:** `mjolnir-axsb.1`
 **Bead:** `mjolnir-axsb.1.2`
@@ -24,41 +26,57 @@ Four questions after intend:
 3. How does Z prove it is the named holder?
 4. Is it honest that this service sees every redemption?
 
-## Decision 1 — Vault is an owner-signed Gordian envelope (elided in flight)
+## Decision 1 — Opaque vault; salted Blake3 commitment; Gordian later
 
-The PAT is an **assertion** on a Gordian envelope signed by the
-owner Identikey. At rest the assertion is present. In flight it is
-**elided**: the digest remains, the bytes do not travel. On
-copy-out, the recipient verifies the returned value against that
-digest. That is what elision is for (`identikey-log` already
-skips elided assertions and counts them; the envelope digest is
-elision-stable).
+v1 does **not** wait on Gordian envelopes. `SecretStore.put` still
+JSON-decodes (`verify_envelope/2` → `:bad_envelope_json` on dCBOR).
+Duke 2026-08-26: put envelopes off; keep copy-out verifiable.
 
-Store: `SecretStore.put(identikey_fp, "secrets/<secret_id>",
-envelope_bytes)` — the envelope API, keyed by owner, not
-`put_opaque`. Opaque stays for unsigned VM material (Buzz nsec).
-A PAT wrapped in a signed envelope is not unsigned.
+Store:
 
-Signature verification on SecretStore is still stubbed
-(`verify_envelope/2`). Named hole: once MultiSig is wired, deposit
-and redeem SHALL fail closed on a bad owner signature. Until then
-this vault inherits the same stub as site HEADs. Do not pretend
-it verifies today.
+```
+_opaque/secrets/<secret_id>/value   # PAT bytes, 0600
+_opaque/secrets/<secret_id>/meta    # owner fp, salt, commitment, label
+```
 
-Guests cannot write this keyspace. Owner deposits through
-authenticated host API (JWT / localhost today). `secret_id` is
-path-safe (no `/`, `..`). The vault is **per-owner** (envelope
-keyspace), not host-global opaque.
+`put_opaque/4` is the API (Buzz nsec precedent). Guests cannot
+write this namespace. `secret_id` is path-safe. Owner deposits
+through authenticated host API (JWT / localhost today).
+
+**Commitment (travels; secret does not):**
+
+```
+salt       := 32 CSPRNG bytes          # public, stored in meta, on the token
+commitment := Blake3( domain || salt || secret )
+domain     := "mjolnir/secret-commit/v1"
+```
+
+Copy-out returns `{value, salt}`. Recipient checks
+`Blake3(domain || salt || value) == commitment`. A value that
+does not match is not this token's secret.
+
+**Salt is mandatory** on any hash of a secret that leaves the
+vault (token, mailbox, log, elision digest). An unsalted hash of
+a PAT is a lookup table. When Gordian envelopes return, assertion
+elision SHALL be salted the same way — not an unsalted digest of
+the PAT bytes.
+
+**Blake3 is real Blake3**, not `Sites.Crypto.blake3_hash/1` (that
+function is SHA-256 today, `crypto.ex:24-29`). Holder fingerprints
+are auth-challenge v1 §5: `Blake3(dcbor({alg, key}))`, not
+`IdentiKey.fingerprint/1` (raw Ed25519, stub hash). Those two
+preimages stay distinct until a dedicated Sites cutover. Wiring
+the NIF is `add-biscuit-runtime`. Do not migrate existing
+SecretStore directory names in this change.
 
 Rejected as vault:
 
-- **Raw `put_opaque` without an envelope.** No digest to check the
-  copy-out against the token.
-- **Env files in the rootfs.** Visible to every process in that
-  guest, cloned by every snapshot.
+- **Gordian envelope in v1.** Right shape later; `put/3` cannot
+  hold dCBOR today. Deferred, not rejected forever.
+- **Unsalted hash of the secret on the wire.** Dictionary.
+- **Env files in the rootfs.** Cloned by every snapshot.
 - **Mailbox payload.** Then the PAT *is* what travels.
-- **Recrypt PRE of the PAT.** GitHub issued plaintext. D-5 stays
-  for *our* objects.
+- **Recrypt PRE of the PAT.** D-5 stays for *our* objects.
 
 ## Decision 2 — Redeem is on `api_url`, not a new sidecar port
 
@@ -104,11 +122,13 @@ Follow protocol Decision 3. Concrete wire (v1):
 2. Holder signs canonical bytes of `{biscuit_hash, nonce, aud}`.
 3. `POST /api/secrets/redeem` with `{biscuit, alg, public_key,
    signature, nonce}`.
-4. Host verifies signature, computes Identikey fingerprint,
-   injects `holder(<fp>)`, evaluates Biscuit, loads the owner's
-   envelope, returns the secret assertion.
-5. Recipient checks the value against the elided digest on the
-   envelope the token committed to.
+4. Host verifies signature, computes Identikey fingerprint
+   (auth-challenge §5, real Blake3), injects `holder(<fp>)`,
+   evaluates Biscuit, `get_opaque` the value, returns
+   `{value, salt}`.
+5. Recipient checks
+   `Blake3("mjolnir/secret-commit/v1" || salt || value)`
+   against the commitment on the token.
 
 Reuse identikey-auth challenge shapes where they already match
 (audience, nonce, exp). Do not put `resources` on that challenge.
@@ -129,12 +149,13 @@ authority. It applies, and we take it, **only** because the payload
 is a foreign secret. Log redemption metadata (secret id, holder
 fingerprint, time, result). Never log `value`.
 
-v1 **copy-out** returns the PAT bytes to Z (plus enough envelope
-to verify the digest). Copy-out is the **superset**: a thin-proxy
-agent can be the only holder and make the upstream call; fat
-agents never redeem. That proxy is the more secure pattern. It is
-not required to start. A v1 that forbids copy-out is rejected; a
-v1 that omits the pattern from the design is also wrong.
+v1 **copy-out** returns `{value, salt}` to Z. Z checks the
+salted Blake3 commitment on the token. Copy-out is the
+**superset**: a thin-proxy agent can be the only holder and make
+the upstream call; fat agents never redeem. That proxy is the
+more secure pattern. It is not required to start. A v1 that
+forbids copy-out is rejected; a v1 that omits the pattern from
+the design is also wrong.
 
 Copy-out into Z: keep the value in process memory or tmpfs. Do
 not write it into the virtio-fs rootfs (snapshots would clone the
@@ -177,3 +198,4 @@ living spec until the matching act has landed (learning
   Decision 2.
 - **Forbidding copy-out in v1** (proxy-only). Copy-out is the
   superset; proxy is a consumer of copy-out, not a replacement.
+- **Unsalted elision / unsalted Blake3 of the PAT.** Always salt.

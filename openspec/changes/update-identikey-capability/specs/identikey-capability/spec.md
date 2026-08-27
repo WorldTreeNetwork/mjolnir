@@ -37,9 +37,13 @@ Biscuit without a holder check is not a violation of this spec.
 A Biscuit SHALL NOT contain the bytes of a foreign secret (GitHub
 PAT, API key, or equivalent), nor a ciphertext of those bytes that
 the presenter can decrypt without the verifier. It MAY name a secret
-identifier and MAY travel with a Gordian envelope whose secret
-assertion is **elided** (digest remains). Copy-out SHALL be
-verifiable against that digest.
+identifier and SHALL, if it carries a digest of the secret, use a
+**salted** Blake3 commitment (`Blake3(domain || salt || secret)`).
+Salt MAY travel with the token. An unsalted hash of the secret
+SHALL NOT appear on the wire. Copy-out SHALL be verifiable against
+that commitment. Holder fingerprints SHALL be Blake3 per
+auth-challenge v1 §5, not a SHA-256 stub and not a raw-Ed25519
+preimage.
 
 #### Scenario: Inspect minted token
 
@@ -47,6 +51,14 @@ verifiable against that digest.
 - WHEN the token bytes are parsed
 - THEN they do not contain the PAT
 - AND they do name the secret identifier (or equivalent resource)
+- AND any digest of the secret is salted Blake3, not `Blake3(secret)`
+
+#### Scenario: Unsalted secret hash on the wire
+
+- GIVEN a change that puts an unsalted hash of a foreign secret on
+  a Biscuit, mailbox payload, or elided envelope
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
 
 ### Requirement: Hop provenance is the Biscuit block chain
 

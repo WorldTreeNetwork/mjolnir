@@ -12,18 +12,18 @@ Activated from intend 2026-08-26 (`nod-tokenator-design`,
 
 Intermediate agents must carry a Biscuit, not a GitHub PAT. The
 protocol names holder-bound redeem. Mjolnir is the first verifier:
-it already stores owner-signed Gordian envelopes (`SecretStore.put/3`)
-and a guest-reachable API on `host_api_ip`. Without this capability
-the protocol has nowhere to land. Opaque `put_opaque` stays for
-unsigned VM material (Buzz nsec), not PATs.
+it already stores opaque blobs (`SecretStore.put_opaque/4`) and a
+guest-reachable API on `host_api_ip`. Without this capability the
+protocol has nowhere to land. Gordian envelopes are deferred.
 
 ## What
 
 - Add capability `secret-tokenator`: owner deposits a foreign secret
-  as an assertion on a signed Gordian envelope (elided in flight);
-  mint a holder-bound Biscuit; `POST` redeem + holder proof
-  **copy-out**s the secret; recipient verifies the digest. Thin
-  proxy agent is the more secure pattern, not v1-required.
+  in opaque store with a **salted Blake3** commitment; mint a
+  holder-bound Biscuit (holder fp = auth-challenge §5 Blake3);
+  `POST` redeem + holder proof **copy-out**s `{value, salt}`;
+  recipient verifies the commitment. Thin proxy is the more
+  secure pattern, not v1-required. Gordian envelopes later.
 - Accept ADR 0008 (`docs/decisions/0008-secret-tokenator.md`, full
   text in `design.md`).
 - This change is the architecture write (ADR + deltas). Code is
@@ -66,5 +66,8 @@ the way:
 - Papyrus UI — `mjolnir-axsb.2`
 - Guild membership checks
 - Recrypt PRE of the PAT
-- GitHub-side proxy (v1 returns the PAT bytes)
+- Gordian envelopes (later; elision MUST be salted)
+- GitHub-side proxy (v1 copy-out; thin proxy is the pattern)
+- Migrating existing Sites SecretStore directory names off the
+  SHA-256 stub (Sites cutover, not this vault)
 - VM-exec Biscuit (rbac Phase 1)

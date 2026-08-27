@@ -13,10 +13,11 @@ Full argument:
 
 ## One screen
 
-1. **Vault is a Gordian envelope.** Owner-signed; secret assertion
-   present at rest, **elided** in flight. Copy-out is checked
-   against that digest. Envelope SecretStore keyed by owner, not
-   raw `put_opaque`.
+1. **Opaque vault + salted Blake3 commitment.** `put_opaque`
+   `_opaque/secrets/<id>/value` + `meta` (salt, commitment).
+   Commitment is `Blake3(domain || salt || secret)`. Salt travels;
+   secret does not. Unsalted hashes of the secret are forbidden.
+   Gordian envelopes deferred; when they return, elision is salted.
 2. **Redeem on `api_url`.** `POST /api/secrets/redeem`. No new
    overlay port. Auth plug: fourth branch (redeem-only), not
    `@skip_auth_paths`.
@@ -35,8 +36,9 @@ Full argument:
 
 ## Built vs remaining
 
-Built: nothing of the HTTP path. Envelope SecretStore exists
-(signature verify stubbed). Opaque remains for Buzz nsec only.
+Built: nothing of the HTTP path. Opaque `put_opaque` exists
+(Buzz nsec). Real Blake3 NIF is not wired (`Sites.Crypto.blake3_hash/1`
+is SHA-256).
 
 Remaining: advise, then the four implement landings above. Guild
 holder class and Papyrus UI are not this capability's first act.
