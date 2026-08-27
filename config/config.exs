@@ -111,6 +111,7 @@ config :mjolnir,
     "vm.worldtree.network",
     "worldtree.network",
     "identikey.io",
+    "identikey.me",
     "startupcentral.build"
   ],
   # Static routes for manually-provisioned apps not in Deploy.Registry. Each is
