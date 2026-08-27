@@ -8,9 +8,11 @@ Sol is not subscribed.
 - [x] Write `design.md` (decisions)
 - [x] Write ADR index `docs/decisions/0008-secret-tokenator.md` as Proposed
 - [x] Delta `specs/secret-tokenator/spec.md` (ADDED)
-- [ ] Advise accept (Fable) — after Grok 2026-08-26 send-back
-      amend + Duke vault call (elided envelope, copy-out
-      superset, thin proxy as secure pattern)
+- [x] Advise accept-with-nits (Fable) —
+      `reviews/2026-08-26-fable-advise.md`. Nits go to act
+      nodes (Gordian verify_envelope, Blake3, Auth branch
+      order, challenge presents Biscuit, salted elision).
+      Cross-family accept (ADR-005).
 - [x] Send-back 2026-08-26: Auth plug fourth branch, not skip_auth
 - [x] Send-back 2026-08-26: holder fingerprint encoding (protocol)
 - [x] Send-back 2026-08-26: reused nonce fails closed

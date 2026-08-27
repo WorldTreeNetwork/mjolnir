@@ -7,7 +7,9 @@ cross-family reader. Sol is not subscribed.
 
 - [x] Write `design.md` (decisions)
 - [x] Delta `specs/identikey-capability/spec.md` (ADDED)
-- [ ] Advise accept (Fable) — after Grok 2026-08-26 send-back amend
+- [x] Advise accept-with-nits (Fable) —
+      `reviews/2026-08-26-fable-advise.md`. Nits are fold/act
+      notes, not spec-text. Cross-family accept (ADR-005).
 - [x] Send-back 2026-08-26: holder SHALL scoped to secret-redemption
       profile; `holder(<fingerprint>)`
 - [x] Send-back 2026-08-26: hops optional for v1 redeem
