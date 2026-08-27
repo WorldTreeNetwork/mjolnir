@@ -8,18 +8,16 @@ Sol is not subscribed.
 - [x] Write `design.md` (decisions)
 - [x] Write ADR index `docs/decisions/0008-secret-tokenator.md` as Proposed
 - [x] Delta `specs/secret-tokenator/spec.md` (ADDED)
-- [ ] Advise accept (Fable) — `reviews/<date>-advise.md`
-- [ ] Send-back 2026-08-26: Decision 2/3 name the Auth plug
-      branch (Biscuit+holder confers redeem only). SHALL NOT
-      put `/api/secrets/*` on `@skip_auth_paths`
-- [ ] Send-back 2026-08-26: wait for
-      `update-identikey-capability` holder/pk encoding amend
-- [ ] Send-back 2026-08-26: spec scenario — reused challenge
-      nonce fails closed, no secret
-- [ ] Send-back 2026-08-26: vault is host-global (not
-      VM-scoped opaque); secret_id path-safe
-- [ ] Send-back 2026-08-26: design paragraph — redeem into
-      guest RAM/tmpfs; do not write PAT into virtio-fs rootfs
+- [ ] Advise accept (Fable) — after Grok 2026-08-26 send-back
+      amend + Duke vault call (elided envelope, copy-out
+      superset, thin proxy as secure pattern)
+- [x] Send-back 2026-08-26: Auth plug fourth branch, not skip_auth
+- [x] Send-back 2026-08-26: holder fingerprint encoding (protocol)
+- [x] Send-back 2026-08-26: reused nonce fails closed
+- [x] Send-back 2026-08-26: vault is owner envelope, not host-global
+      opaque; secret_id path-safe
+- [x] Send-back 2026-08-26: copy-out to RAM/tmpfs, not virtio-fs;
+      thin proxy named as more-secure pattern
 - [ ] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
 - [ ] After accept: fold deltas into `openspec/specs/secret-tokenator/`

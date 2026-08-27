@@ -7,17 +7,13 @@ cross-family reader. Sol is not subscribed.
 
 - [x] Write `design.md` (decisions)
 - [x] Delta `specs/identikey-capability/spec.md` (ADDED)
-- [ ] Advise accept (Fable) — `reviews/<date>-advise.md`
-- [ ] Send-back 2026-08-26: scope holder SHALL to the
-      secret-redemption profile (or explicitly bind *all*
-      agency tokens, including rbac-design VM exec)
-- [ ] Send-back 2026-08-26: hop spec vs Decision 4 — hops
-      optional for v1 redeem; when present they are blocks
-- [ ] Send-back 2026-08-26: name biscuit nextKey attenuation
-      vs Identikey third-party block; do not say “forwarding
-      agent’s key” if v1 is nextKey
-- [ ] Send-back 2026-08-26: canonical `holder($pk)` encoding
-      (`alg` + key bytes, match HTTP proof)
+- [ ] Advise accept (Fable) — after Grok 2026-08-26 send-back amend
+- [x] Send-back 2026-08-26: holder SHALL scoped to secret-redemption
+      profile; `holder(<fingerprint>)`
+- [x] Send-back 2026-08-26: hops optional for v1 redeem
+- [x] Send-back 2026-08-26: v1 hop = nextKey; Identikey = third-party
+      later
+- [x] Send-back 2026-08-26: fingerprint encoding (auth-challenge §5)
 - [ ] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`
       (new sections; keep three-layer table; point tokenator at

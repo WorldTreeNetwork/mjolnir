@@ -1,14 +1,21 @@
 ## ADDED Requirements
 
-### Requirement: Holder is proven at use
+### Requirement: Secret-redemption biscuits are holder-bound
 
-A Biscuit that authorizes an operation SHALL name the holder class
-that may perform it. v1 holder class is a single public key. A
-verifier SHALL NOT treat possession of the token bytes as sufficient.
-It SHALL verify a signature by that public key over a verifier-chosen
-nonce (and the token identity), inject the corresponding Datalog
-holder fact, then evaluate the Biscuit. A failed holder proof SHALL
-fail closed.
+A Biscuit that authorizes `redeem` of a foreign secret SHALL name the
+holder that may perform it. v1 holder class is a single Identikey
+public key. The Datalog fact SHALL be `holder(<fingerprint>)` where
+fingerprint is the Blake3 identity fingerprint from
+identikey-auth-challenge v1 §5. A verifier SHALL NOT treat possession
+of the token bytes as sufficient. It SHALL verify a signature by that
+key over a verifier-chosen nonce (and the token identity), compute
+the fingerprint from the presented `{alg, key}`, inject
+`holder(<fingerprint>)`, then evaluate the Biscuit. A failed holder
+proof SHALL fail closed.
+
+This requirement SHALL NOT apply to other agency profiles (VM exec,
+mailbox, snapshot) unless those profiles add it. A root VM-exec
+Biscuit without a holder check is not a violation of this spec.
 
 #### Scenario: Stolen token without the named key
 
@@ -30,7 +37,9 @@ fail closed.
 A Biscuit SHALL NOT contain the bytes of a foreign secret (GitHub
 PAT, API key, or equivalent), nor a ciphertext of those bytes that
 the presenter can decrypt without the verifier. It MAY name a secret
-identifier as the resource of an agency operation such as `redeem`.
+identifier and MAY travel with a Gordian envelope whose secret
+assertion is **elided** (digest remains). Copy-out SHALL be
+verifiable against that digest.
 
 #### Scenario: Inspect minted token
 
@@ -39,12 +48,25 @@ identifier as the resource of an agency operation such as `redeem`.
 - THEN they do not contain the PAT
 - AND they do name the secret identifier (or equivalent resource)
 
-### Requirement: Hop provenance is the block chain
+### Requirement: Hop provenance is the Biscuit block chain
 
-Forwarding SHALL be expressed as Biscuit blocks signed by the
-forwarding key. A separate op-log SHALL NOT be required to prove
-which agents handled the token. A hop SHALL NOT remove holder checks
-or widen rights.
+v1 redeem SHALL succeed with zero hop blocks when the issuer bound
+the holder at mint. When a hop is recorded, it SHALL be a Biscuit
+block on that token, not an `identikey-log` (or other) op. A hop
+SHALL NOT remove holder checks or widen rights.
+
+v1 hop blocks are **nextKey attenuation**: signed by the token's
+current nextKey, which the holder of the bytes has. That proves
+monotonicity, not Identikey attribution. Identikey-signed hops
+SHALL use Biscuit third-party blocks and are not v1
+(`add-capability-hop`).
+
+#### Scenario: Issuer-bound token, no hops
+
+- GIVEN a Biscuit minted with holder Z and never appended
+- WHEN Z presents a valid holder proof
+- THEN redeem may succeed
+- AND missing hop blocks are not a failure
 
 #### Scenario: Second provenance format proposed
 
@@ -52,6 +74,15 @@ or widen rights.
   another log) and not as Biscuit blocks
 - WHEN it is reviewed
 - THEN it is rejected against this requirement
+
+#### Scenario: Identikey key as biscuit nextKey
+
+- GIVEN a change that requires each hop to sign the attenuation
+  block with the forwarder's Identikey (including P-256 enclave
+  keys)
+- WHEN it is reviewed
+- THEN it is rejected against this requirement (v1 is nextKey;
+  Identikey attribution is third-party blocks, later)
 
 ### Requirement: Foreign-secret redemption is agency, not PRE
 

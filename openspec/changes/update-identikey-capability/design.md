@@ -51,17 +51,21 @@ at redeem time (Decision 3).
 
 ## Decision 3 — Holder is a public key, proven at use
 
-v1 holder class: **one Identikey / agent public key**.
+v1 holder class: **one Identikey public key**, and **only on the
+secret-redemption profile**. VM-exec / mailbox biscuits are not
+forced to carry a holder check (rbac-design Phase 1 stays valid).
 
-The authority or an attenuation block requires
-`check if holder($pk), $pk == <target>`.
+Datalog: `check if holder($fp), $fp == "<blake3-fingerprint>"`.
+Fingerprint is auth-challenge v1 §5 (Blake3 of the self-describing
+key). HTTP proof carries `{alg, key}`; the verifier computes `fp`
+and injects `holder(fp)`. Do not stuff raw key bytes into Datalog.
 
 At redeem, the verifier:
 
-1. Issues or accepts a nonce.
+1. Issues a single-use nonce (`aud` + `exp`).
 2. Verifies a signature by that public key over (biscuit hash, nonce,
    audience).
-3. Injects the Datalog fact `holder(<pk>)`.
+3. Injects `holder(<fingerprint>)`.
 4. Evaluates the Biscuit.
 
 Possession of the Biscuit bytes is not enough. This is bearer-plus-
@@ -74,18 +78,20 @@ catalog, not a claim in the token.
 
 ## Decision 4 — Hop provenance is the Biscuit block chain
 
-Each forward appends a Biscuit block signed by the forwarding agent's
-key. That chain *is* the provenance log. Do not stand up
+The Biscuit block chain *is* the provenance log. Do not stand up
 `identikey-log` for this.
 
 Hops are monotonic: a forwarder may add checks, never remove the
 holder check, never escalate.
 
-v1 does not require intermediate agents to append a block in order
-for redeem to succeed. The issuer may bind Z at mint time and pass
-the same bytes through A, B, C. Appending per hop is the
-`add-capability-hop` node. This change only *names* the chain as the
-log, so hop work does not invent a second format.
+v1 does not require intermediate agents to append a block. The
+issuer may bind Z at mint and pass the same bytes through A, B, C.
+
+When a hop *is* recorded in v1, it is **nextKey attenuation**: the
+holder of the token bytes signs with the biscuit's current nextKey.
+That is not the forwarder's Identikey. P-256 enclave keys do not
+sign Biscuit blocks (capability-v1 §3.2). Identikey attribution per
+hop is a **third-party block**, landed in `add-capability-hop`.
 
 ## Decision 5 — Guilds are a later holder class
 

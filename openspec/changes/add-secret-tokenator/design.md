@@ -24,32 +24,41 @@ Four questions after intend:
 3. How does Z prove it is the named holder?
 4. Is it honest that this service sees every redemption?
 
-## Decision 1 — SecretStore opaque is the vault
+## Decision 1 — Vault is an owner-signed Gordian envelope (elided in flight)
 
-The PAT is an unsigned blob. That is already
-`SecretStore.put_opaque/4` (Buzz nsec precedent; envelope API cannot
-hold unsigned material).
+The PAT is an **assertion** on a Gordian envelope signed by the
+owner Identikey. At rest the assertion is present. In flight it is
+**elided**: the digest remains, the bytes do not travel. On
+copy-out, the recipient verifies the returned value against that
+digest. That is what elision is for (`identikey-log` already
+skips elided assertions and counts them; the envelope digest is
+elision-stable).
 
-Layout:
+Store: `SecretStore.put(identikey_fp, "secrets/<secret_id>",
+envelope_bytes)` — the envelope API, keyed by owner, not
+`put_opaque`. Opaque stays for unsigned VM material (Buzz nsec).
+A PAT wrapped in a signed envelope is not unsigned.
 
-```
-_opaque/secrets/<secret_id>/value
-_opaque/secrets/<secret_id>/meta
-```
+Signature verification on SecretStore is still stubbed
+(`verify_envelope/2`). Named hole: once MultiSig is wired, deposit
+and redeem SHALL fail closed on a bad owner signature. Until then
+this vault inherits the same stub as site HEADs. Do not pretend
+it verifies today.
 
-`meta` is not the secret: owner identikey fingerprint, created_at,
-optional label. `value` is 0600, never logged.
-
-The owner deposits through an authenticated host API (JWT /
-localhost today). Guests cannot `put_opaque` for this namespace.
+Guests cannot write this keyspace. Owner deposits through
+authenticated host API (JWT / localhost today). `secret_id` is
+path-safe (no `/`, `..`). The vault is **per-owner** (envelope
+keyspace), not host-global opaque.
 
 Rejected as vault:
 
-- **Env files in the rootfs.** Visible to every process in the VM
-  and to anyone who cloned the snapshot.
-- **Mailbox payload.** The whole point is the PAT does not travel.
-- **Recrypt PRE of the PAT.** GitHub issued plaintext to the owner,
-  not ciphertext to a keyspace. D-5 stays for *our* objects.
+- **Raw `put_opaque` without an envelope.** No digest to check the
+  copy-out against the token.
+- **Env files in the rootfs.** Visible to every process in that
+  guest, cloned by every snapshot.
+- **Mailbox payload.** Then the PAT *is* what travels.
+- **Recrypt PRE of the PAT.** GitHub issued plaintext. D-5 stays
+  for *our* objects.
 
 ## Decision 2 — Redeem is on `api_url`, not a new sidecar port
 
@@ -77,17 +86,29 @@ unit that duplicates SecretStore.
 
 Mint/list stay on the same API, owner-authenticated.
 
+Auth plug (`Mjolnir.API.Auth`): redeem and challenge are a
+**fourth `call/2` branch**, same idea as sites tokens — presenting
+this credential confers *only* redeem (and the challenge that
+serves it). SHALL NOT add `/api/secrets/*` to `@skip_auth_paths`
+(`lib/mjolnir/api/auth.ex:34`). A skip-auth redeem is an
+unauthenticated route whose fail-closed lives only in handler
+code. Sites tokens exist so a narrow credential is not upgraded.
+
 ## Decision 3 — Holder proof is a signature at redeem time
 
 Follow protocol Decision 3. Concrete wire (v1):
 
 1. `POST /api/secrets/challenge` → `{nonce, aud, exp}` (`aud` is
-   this API).
+   this API). Nonce is single-use until `exp` (auth-challenge v1
+   nonce store). Reuse fails closed, no secret.
 2. Holder signs canonical bytes of `{biscuit_hash, nonce, aud}`.
 3. `POST /api/secrets/redeem` with `{biscuit, alg, public_key,
    signature, nonce}`.
-4. Host verifies signature, injects `holder(<pk>)`, evaluates
-   Biscuit, `get_opaque` the named secret, returns it.
+4. Host verifies signature, computes Identikey fingerprint,
+   injects `holder(<fp>)`, evaluates Biscuit, loads the owner's
+   envelope, returns the secret assertion.
+5. Recipient checks the value against the elided digest on the
+   envelope the token committed to.
 
 Reuse identikey-auth challenge shapes where they already match
 (audience, nonce, exp). Do not put `resources` on that challenge.
@@ -108,9 +129,17 @@ authority. It applies, and we take it, **only** because the payload
 is a foreign secret. Log redemption metadata (secret id, holder
 fingerprint, time, result). Never log `value`.
 
-v1 returns the PAT bytes to Z. A GitHub proxy that never copies the
-PAT into the guest is a later attenuation of this design, not a
-requirement to start.
+v1 **copy-out** returns the PAT bytes to Z (plus enough envelope
+to verify the digest). Copy-out is the **superset**: a thin-proxy
+agent can be the only holder and make the upstream call; fat
+agents never redeem. That proxy is the more secure pattern. It is
+not required to start. A v1 that forbids copy-out is rejected; a
+v1 that omits the pattern from the design is also wrong.
+
+Copy-out into Z: keep the value in process memory or tmpfs. Do
+not write it into the virtio-fs rootfs (snapshots would clone the
+PAT). The thin proxy is how you avoid that class of leak without
+giving up copy-out for ease of use.
 
 ## Decision 5 — Reuse until TTL or holder rotation; single-use is a check
 
@@ -146,3 +175,5 @@ living spec until the matching act has landed (learning
   overlay port and forbids a second vault.
 - **Putting the PAT in the Biscuit authority block.** Protocol
   Decision 2.
+- **Forbidding copy-out in v1** (proxy-only). Copy-out is the
+  superset; proxy is a consumer of copy-out, not a replacement.

@@ -12,16 +12,18 @@ Activated from intend 2026-08-26 (`nod-tokenator-design`,
 
 Intermediate agents must carry a Biscuit, not a GitHub PAT. The
 protocol names holder-bound redeem. Mjolnir is the first verifier:
-it already stores opaque secrets (`SecretStore.put_opaque`) and
-already exposes a guest-reachable API on `host_api_ip`. Without this
-capability the protocol has nowhere to land.
+it already stores owner-signed Gordian envelopes (`SecretStore.put/3`)
+and a guest-reachable API on `host_api_ip`. Without this capability
+the protocol has nowhere to land. Opaque `put_opaque` stays for
+unsigned VM material (Buzz nsec), not PATs.
 
 ## What
 
 - Add capability `secret-tokenator`: owner deposits a foreign secret
-  into SecretStore opaque; mint a holder-bound Biscuit that names it;
-  `POST` redeem with Biscuit + holder proof returns the secret to
-  that key only.
+  as an assertion on a signed Gordian envelope (elided in flight);
+  mint a holder-bound Biscuit; `POST` redeem + holder proof
+  **copy-out**s the secret; recipient verifies the digest. Thin
+  proxy agent is the more secure pattern, not v1-required.
 - Accept ADR 0008 (`docs/decisions/0008-secret-tokenator.md`, full
   text in `design.md`).
 - This change is the architecture write (ADR + deltas). Code is
