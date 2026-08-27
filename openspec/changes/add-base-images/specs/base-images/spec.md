@@ -101,6 +101,33 @@ ping when inject is a no-op.
 - THEN it exits non-zero
 - AND the subvolume is not a successful catalog image
 
+### Requirement: Declared live images match current recipes
+
+A declared `@base/<name>` on a host SHALL be the output of that
+name's current recipe, including a current guest agent. A live
+subvolume that predates the recipe SHALL be replaced. Before
+replace, the previous subvolume SHALL be snapshotted to
+`@snapshots/<name>-pre-rebuild-<date>`. `deploy-node-bun` SHALL NOT
+be rebuilt. Unmanaged names SHALL NOT be rebuilt by this
+requirement. Running `@vms/<uuid>` clones SHALL NOT be destroyed
+by a base rebuild.
+
+#### Scenario: Stale ubuntu is rebuilt
+
+- GIVEN `@base/ubuntu-24.04` last built on 2026-06-23
+- AND the current recipe and `mjolnir-agent` are newer
+- WHEN the operator rebuilds `ubuntu-24.04`
+- THEN `@snapshots/ubuntu-24.04-pre-rebuild-<date>` exists
+- AND `@base/ubuntu-24.04` contains the current agent
+- AND a spawn from that image answers vsock without inject
+
+#### Scenario: Retired image is not rebuilt
+
+- GIVEN `@base/deploy-node-bun` exists
+- WHEN declared images are rebuilt
+- THEN `deploy-node-bun` is not passed to a recipe
+- AND it remains until `remove-deploy-node-bun` deletes it
+
 ### Requirement: Flavors are independent recipes sharing helpers
 
 `ubuntu-24.04`, `ci-ubuntu-24.04`, and `buzz-agent` SHALL be built

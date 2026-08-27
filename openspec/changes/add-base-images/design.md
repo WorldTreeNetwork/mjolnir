@@ -4,13 +4,15 @@ Canonical ADR index:
 [`docs/decisions/0009-base-image-catalog.md`](../../../docs/decisions/0009-base-image-catalog.md).
 This file is the full argument.
 
-**Status:** Proposed. ACTIVE BUILD.
+**Status:** Proposed. ACTIVE BUILD. Human accepted D1–D4 2026-08-27
+and added D5 (rebuild declared live images).
 **Change:** `add-base-images`
 **Epic:** `mjolnir-b0gb`
 **Bead:** `mjolnir-b0gb.1`
 
-Grok authored. Advise reader must not be Grok (ADR-005). Fable 5 is
-the cross-family reader. Sol is not subscribed.
+Grok authored. Human accepted D1–D4 in chat 2026-08-27 (cross-check
+for those four). Fable 5 is still the cross-family reader for the
+code landings. Sol is not subscribed.
 
 ## Problem
 
@@ -170,6 +172,36 @@ Rejected:
   not deploy steps.
 - **Keep `build-deploy-base.sh` as the Node flavor.** Decision 1.
 
+## Decision 5 — Rebuild declared live images from current recipes
+
+Human 2026-08-27: the Jun 23 `ubuntu-24.04` (and the other declared
+images that predate the post-0e8 / post-xx5 recipes) are not the
+catalog. A declared name on a host SHALL be produced by the current
+recipe, with a current guest agent baked in.
+
+Operator sequence:
+
+1. Snapshot `@base/<name>` → `@snapshots/<name>-pre-rebuild-<date>`
+   (rollback; never auto-delete).
+2. Build or reuse a current `mjolnir-agent` at `AGENT_BIN`.
+3. Run the recipe (`just deploy-rootfs`, `just build-ci-image`,
+   `just build-buzz-agent-image`).
+4. Spawn from the new image; vsock ping must succeed without
+   inject. Then tear the probe VM down.
+
+Order on 45.76.77.97: `ubuntu-24.04` first (spawn + deploy default),
+then `ci-ubuntu-24.04`, `buzz-agent`, `arch`. Do **not** rebuild
+`deploy-node-bun` (D1) or `tatastu-agent` (unmanaged).
+
+Running VMs keep their `@vms/<uuid>` clones. Replacing `@base/`
+does not bounce them. New spawns get the new image.
+
+Rejected:
+
+- **Leave ubuntu as Jun 23 and rely on inject.** The prod inject
+  path has already been missing (`mjolnir-hjnz`). D3 forbids it.
+- **Rebuild `deploy-node-bun` as part of “old ones.”** D1.
+
 ## Alternatives rejected (whole)
 
 - **Rebuild `deploy-node-bun` and keep it as the deploy default.**
@@ -184,17 +216,17 @@ Rejected:
   ~30s). Subsequent deploys of the same runtime spec hit cache.
   Existing `deploy-*` layers keyed on `deploy-node-bun` as parent
   miss. Accepted.
-- `ubuntu-24.04` live image is Jun 23 (agent too old for managed
-  unlock — `mjolnir-hjnz`). Retire does not rebuild it. Injection
-  still needs a real `:guest_agent_bin` on the host. Health node
-  names that. A `just deploy-rootfs` of ubuntu is a separate
-  operator act, not this ADR.
+- Recipe rebuild of ubuntu is destructive of the `@base/` name
+  (the script deletes then recreates). Pre-rebuild snapshots in
+  `@snapshots/` are the rollback. A failed debootstrap must restore
+  from that snapshot before new spawns are attempted.
 - `@base/dev` vs leftover `ci-ubuntu-24.04` drift remains (Buzz
   design). Catalog v1 keeps the CI name so the runner labels keep
   working.
 
 ## Review
 
-Authoring pass: Grok 4.6 (this file). Same family as the intend
-reader. A second-family or human read is owed before `act` on
-retire / list / health. Do not treat this file as self-approved.
+Authoring pass: Grok 4.6 (this file). Human accepted D1–D4
+2026-08-27 and added D5. A second-family read is still owed before
+`act` on retire / list / health. D5 operator rebuild is activated
+by the same human message.

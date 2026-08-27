@@ -25,10 +25,13 @@ this repo.
   OS roots**. `@snapshots/` is frozen machines (including `deploy-*`
   layers). Toolchains are not OS roots.
 - Accept ADR 0009 (`docs/decisions/0009-base-image-catalog.md`, full
-  text in `design.md`). Four decisions, D1–D4.
+  text in `design.md`). Five decisions, D1–D5. Human accepted D1–D4
+  2026-08-27 and added D5: rebuild declared live images from current
+  recipes (`ubuntu-24.04` first).
 - This change is the architecture write (ADR + deltas). Code is
   `act` of later nodes after advise accept (`remove-deploy-node-bun`,
-  `add-base-image-list`, `add-base-image-health`).
+  `add-base-image-list`, `add-base-image-health`). Rebuild of
+  declared images is an operator landing on this change (`mjolnir-b0gb.5`).
 
 ## Impact
 
@@ -36,6 +39,7 @@ this repo.
 - ADRs: 0009 (this change). Pointer from `docs/architecture.md` after
   accept.
 - Does not rebuild or keep `deploy-node-bun`.
+- Does rebuild declared catalog images from current recipes (D5).
 - Does not add a FROM-ubuntu flavor DSL.
 
 ## User journey & surfaces
@@ -51,9 +55,9 @@ today `ssh` + `btrfs subvolume list` to discover `@base/`.
 - **Empty** — `openspec/specs/base-images/` does not exist yet.
   Correct: fold creates it.
 - **Failed (today)** — `mj deploy` defaults to `deploy-node-bun`.
-  Live image on 45.76.77.97 is an Aug 7 debootstrap with a guest
-  agent hand-copied on 2026-08-27. `ubuntu-24.04` is the maintained
-  spawn image and already has `mise`.
+  Live `ubuntu-24.04` is a Jun 23 debootstrap (agent too old for
+  managed unlock). Declared images that predate the current recipe
+  are not the catalog.
 - **Off** — Duke parks. ADR is amended in place, not deleted.
 
 ## Out of scope
