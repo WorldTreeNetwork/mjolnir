@@ -9,9 +9,12 @@ Fable 5 is still the cross-family reader for code landings.
 - [x] Write ADR index `docs/decisions/0009-base-image-catalog.md` as Proposed
 - [x] Delta `specs/base-images/spec.md` (ADDED)
 - [x] Human accept D1–D4; add D5 (rebuild declared live images)
-- [ ] Snapshot live declared `@base/` into `@snapshots/<name>-pre-rebuild-20260827`
-- [ ] Rebuild `ubuntu-24.04` from current recipe + current agent; spawn probe
-- [ ] Rebuild `ci-ubuntu-24.04`, `buzz-agent`, `arch` the same way
+- [x] Snapshot live declared `@base/` into `@snapshots/<name>-pre-rebuild-20260827`
+- [x] Rebuild `ubuntu-24.04` from current recipe + current agent; spawn probe
+      (`6be8cfa3`, vsock exec, agent md5 `8c3e7794`, mise 2026.8.14; killed)
+- [x] Rebuild `ci-ubuntu-24.04` (rustc 1.98.0, zig 0.16.0, runner uid 1000),
+      `buzz-agent` (sprig + goose), `arch` (Arch Linux, agent active).
+      Probes killed. `deploy-node-bun` and `tatastu-agent` not rebuilt.
 - [ ] Advise accept from a non-Grok reader for the *code* landings
       (retire / list / health)
 - [ ] After accept: pointer in `docs/architecture.md` Filesystem
