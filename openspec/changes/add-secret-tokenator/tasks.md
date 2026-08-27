@@ -9,6 +9,17 @@ Sol is not subscribed.
 - [x] Write ADR index `docs/decisions/0008-secret-tokenator.md` as Proposed
 - [x] Delta `specs/secret-tokenator/spec.md` (ADDED)
 - [ ] Advise accept (Fable) — `reviews/<date>-advise.md`
+- [ ] Send-back 2026-08-26: Decision 2/3 name the Auth plug
+      branch (Biscuit+holder confers redeem only). SHALL NOT
+      put `/api/secrets/*` on `@skip_auth_paths`
+- [ ] Send-back 2026-08-26: wait for
+      `update-identikey-capability` holder/pk encoding amend
+- [ ] Send-back 2026-08-26: spec scenario — reused challenge
+      nonce fails closed, no secret
+- [ ] Send-back 2026-08-26: vault is host-global (not
+      VM-scoped opaque); secret_id path-safe
+- [ ] Send-back 2026-08-26: design paragraph — redeem into
+      guest RAM/tmpfs; do not write PAT into virtio-fs rootfs
 - [ ] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
 - [ ] After accept: fold deltas into `openspec/specs/secret-tokenator/`
