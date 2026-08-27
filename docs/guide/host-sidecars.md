@@ -46,6 +46,11 @@ overlay). Appliances that are not Mjolnir guests (Edgebox, a Pi) should
 still speak this layout (`blob/b3/`) rather than introducing MinIO;
 `recrypt-server` sits in front for identity-gated put/get/share.
 
+Names (2026-08-26): this sidecar is **Blob Door** in code and in the Edgebox
+OSS insert. The business for the CAS layer is **Aeroblobs**
+([aeroblobs.dev](https://aeroblobs.dev)). Recrypt is still the process in
+front, not a rename of either.
+
 ---
 
 ## Blob door
