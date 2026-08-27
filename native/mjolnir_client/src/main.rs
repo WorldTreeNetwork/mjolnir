@@ -19,6 +19,7 @@ mod domain;
 mod forge;
 mod forge_tui;
 mod mcp;
+mod secrets;
 mod server;
 mod sites;
 
@@ -345,6 +346,12 @@ enum Command {
         #[command(subcommand)]
         action: CertAction,
     },
+    /// Host-escrowed deploy secrets (set / ls / unset). Values never printed back.
+    #[command(next_help_heading = "Apps")]
+    Secrets {
+        #[command(subcommand)]
+        action: SecretsAction,
+    },
     /// Publish static sites owned by an IdentiKey (publish / keygen)
     #[command(next_help_heading = "Apps")]
     Sites {
@@ -546,6 +553,50 @@ enum DomainAction {
     },
     /// List apps with their URLs, custom domains, and backends
     Ls {
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretsAction {
+    /// Merge a secret into the app's host-escrowed file
+    Set {
+        /// Deployed app name (e.g. hypersigil-api)
+        app: String,
+        /// KEY or KEY=VALUE
+        spec: String,
+        /// Read the value from stdin (no echo, no argv)
+        #[arg(long)]
+        stdin: bool,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// List secret *names* for an app (never values)
+    Ls {
+        /// Deployed app name
+        app: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Remove one key from the app's secrets file
+    Unset {
+        /// Deployed app name
+        app: String,
+        /// Env key to delete
+        key: String,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -1005,6 +1056,24 @@ async fn main() {
             DomainAction::Ls { api, token } => {
                 domain::cmd_domain_ls(&profile, &api, &token, json).await
             }
+        },
+        Command::Secrets { action } => match action {
+            SecretsAction::Set {
+                app,
+                spec,
+                stdin,
+                api,
+                token,
+            } => secrets::cmd_secrets_set(&profile, &api, &token, &app, &spec, stdin, json).await,
+            SecretsAction::Ls { app, api, token } => {
+                secrets::cmd_secrets_ls(&profile, &api, &token, &app, json).await
+            }
+            SecretsAction::Unset {
+                app,
+                key,
+                api,
+                token,
+            } => secrets::cmd_secrets_unset(&profile, &api, &token, &app, &key, json).await,
         },
         Command::Cert { action } => match action {
             CertAction::Issue { fqdn, api, token } => {

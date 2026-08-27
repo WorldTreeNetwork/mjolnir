@@ -55,6 +55,25 @@ defmodule Mjolnir.API.Router do
       fqdn's apex is currently in `:gateway_apexes` (`false` means the
       gateway route is silently dropped, mjolnir-1pk).
 
+  ### `PUT /api/apps/:app/secrets`
+
+    * **Body**: `{"key": "STRIPE_API_KEY", "value": "sk_live_…"}` or
+      `{"entries": {"STRIPE_API_KEY": "sk_live_…"}}`. Merges into the
+      existing deploy-secrets JSON. Never replace the whole file.
+    * **Response**: `200` `{"app", "slug", "set": ["STRIPE_API_KEY"],
+      "keys": […]}`. Values are never returned. `404` if the app is not
+      deployed (or the caller does not own it).
+
+  ### `GET /api/apps/:app/secrets`
+
+    * **Response**: `200` `{"app", "slug", "keys": ["DATABASE_URL", …]}`.
+      Names only.
+
+  ### `DELETE /api/apps/:app/secrets/:key`
+
+    * **Response**: `200` `{"app", "slug", "unset", "keys"}`. `404`
+      `secret_not_found` if that key is absent.
+
   ### `POST /api/certs/issue`
 
     * **Body**: `{"fqdn": "taskmaster.dev"}`. Wildcards (`*.`) are refused
@@ -1460,6 +1479,58 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Host-escrowed deploy secrets. Merge only; responses never include values.
+  put "/api/apps/:app/secrets" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      authorize_app(conn, app, :set_secrets, fn _entry ->
+        case parse_secret_entries(conn.body_params) do
+          {:ok, entries} ->
+            case Mjolnir.Deploy.Secrets.put(app, entries) do
+              {:ok, result} -> json(conn, 200, result)
+              {:error, reason} -> secret_error(conn, reason)
+            end
+
+          :error ->
+            json(conn, 400, %{error: "entries_required"})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  get "/api/apps/:app/secrets" do
+    conn = require_scope(conn, "vms:read")
+
+    unless conn.halted do
+      authorize_app(conn, app, :read, fn _entry ->
+        case Mjolnir.Deploy.Secrets.list_keys(app) do
+          {:ok, result} -> json(conn, 200, result)
+          {:error, reason} -> secret_error(conn, reason)
+        end
+      end)
+    else
+      conn
+    end
+  end
+
+  delete "/api/apps/:app/secrets/:key" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      authorize_app(conn, app, :unset_secrets, fn _entry ->
+        case Mjolnir.Deploy.Secrets.delete(app, key) do
+          {:ok, result} -> json(conn, 200, result)
+          {:error, reason} -> secret_error(conn, reason)
+        end
+      end)
+    else
+      conn
+    end
+  end
+
   # Issue a public HTTP-01 cert for a CNAME'd custom domain (mjolnir-r7b3.3).
   # Issuance runs on the host; the client never sees PEMs. Wildcard refuse
   # happens before the app lookup so a `*.` name is never confused with
@@ -1578,6 +1649,45 @@ defmodule Mjolnir.API.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(body))
+  end
+
+  defp parse_secret_entries(%{"entries" => entries})
+       when is_map(entries) and map_size(entries) > 0 do
+    {:ok, entries}
+  end
+
+  defp parse_secret_entries(%{"key" => key, "value" => value})
+       when is_binary(key) and is_binary(value) do
+    {:ok, %{key => value}}
+  end
+
+  defp parse_secret_entries(_), do: :error
+
+  defp secret_error(conn, :empty), do: json(conn, 400, %{error: "entries_required"})
+  defp secret_error(conn, :not_found), do: json(conn, 404, %{error: "secret_not_found"})
+  defp secret_error(conn, :invalid_file), do: json(conn, 500, %{error: "secrets_file_invalid"})
+
+  defp secret_error(conn, {:invalid_key, key}) do
+    json(conn, 400, %{error: "invalid_key", key: key})
+  end
+
+  defp secret_error(conn, {:invalid_value, key}) do
+    json(conn, 400, %{error: "invalid_value", key: key})
+  end
+
+  defp secret_error(conn, {:write_failed, reason}) do
+    Logger.error("Deploy secrets write failed: #{inspect(reason)}")
+    json(conn, 500, %{error: "secrets_write_failed"})
+  end
+
+  defp secret_error(conn, {:read_failed, reason}) do
+    Logger.error("Deploy secrets read failed: #{inspect(reason)}")
+    json(conn, 500, %{error: "secrets_read_failed"})
+  end
+
+  defp secret_error(conn, reason) do
+    Logger.error("Deploy secrets failed: #{inspect(reason)}")
+    json(conn, 500, %{error: "secrets_failed"})
   end
 
   defp app_for_domain(fqdn) do

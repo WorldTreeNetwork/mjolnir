@@ -27,7 +27,15 @@ defmodule Mjolnir.Policy.App do
   """
 
   @type action ::
-          :deploy_new | :list | :read | :deploy | :set_domain | :remove_domain | :issue_cert
+          :deploy_new
+          | :list
+          | :read
+          | :deploy
+          | :set_domain
+          | :remove_domain
+          | :issue_cert
+          | :set_secrets
+          | :unset_secrets
   @type user :: %{user_id: String.t()} | nil
   @type resource :: %{owner_id: String.t() | nil} | nil
 
@@ -52,7 +60,15 @@ defmodule Mjolnir.Policy.App do
 
   # Resource actions: owner only
   def authorize(action, %{user_id: uid}, %{owner_id: oid})
-      when action in [:read, :deploy, :set_domain, :remove_domain, :issue_cert] do
+      when action in [
+             :read,
+             :deploy,
+             :set_domain,
+             :remove_domain,
+             :issue_cert,
+             :set_secrets,
+             :unset_secrets
+           ] do
     if uid == oid, do: :ok, else: :error
   end
 

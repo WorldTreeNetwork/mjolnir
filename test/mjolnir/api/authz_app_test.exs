@@ -51,7 +51,7 @@ defmodule Mjolnir.API.AuthzAppTest do
 
     test "denies a non-owner with 404 and never runs the callback", %{app: app} do
       conn =
-        Authz.authorize_app(conn_as("mallory"), app, :set_domain, fn _e ->
+        Authz.authorize_app(conn_as("mallory"), app, :set_secrets, fn _e ->
           Process.put(:cb2, true)
           raise "callback must not run for a non-owner"
         end)

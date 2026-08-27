@@ -233,19 +233,24 @@ completed run. Expect to debug the first cutover.
 
 **1. Escrow secrets (once), if the app needs any.**
 
+After the app exists in the deploy registry:
+
 ```bash
-# slug = deploy name (see Secrets above)
-ssh root@<host> 'umask 077; cat > /var/lib/mjolnir/deploy/secrets/hypersigil-api.json' <<'JSON'
-{ "SOME_API_KEY": "…" }
-JSON
-ssh root@<host> 'chmod 600 /var/lib/mjolnir/deploy/secrets/hypersigil-api.json'
+# Hidden prompt (preferred — value stays out of argv / history)
+mj secrets set hypersigil-api STRIPE_API_KEY
+printf '%s' "$STRIPE_WEBHOOK_SECRET" | mj secrets set hypersigil-api STRIPE_WEBHOOK_SECRET --stdin
+mj secrets ls hypersigil-api
 ```
 
-For a host-sidecar tenant, skip the heredoc for `DATABASE_URL` —
-`mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api` already wrote it.
-Add other keys to that same file; `ensure` merges and will not wipe them.
+That merges into `/var/lib/mjolnir/deploy/secrets/<slug>.json`. It does not
+replace the file, so `DATABASE_URL` / `REDIS_URL` from sidecar `ensure`
+survive. Then **redeploy** the app so spawn injects the new env.
 
 Keys must be valid env names (`[A-Za-z_][A-Za-z0-9_]*`); values are strings.
+`mj secrets ls` prints names only.
+
+For a host-sidecar tenant, skip setting `DATABASE_URL` by hand —
+`mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api` already wrote it.
 
 **2. Deploy.** From the app tree, authenticated `mj` (`mj login`):
 
