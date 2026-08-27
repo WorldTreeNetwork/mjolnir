@@ -56,6 +56,25 @@ mj doctor <vm_id>                # health probe (--fix to repair); no id checks 
 mj status                        # show current auth + config
 ```
 
+### Put a web app on a URL
+
+`mj spawn` is a throwaway shell. A store, API, or site is `mj deploy`: build an
+immutable release snapshot, spawn a **service VM**, cut the gateway over.
+Secrets are injected at that spawn from a host file — they never enter the
+snapshot. Merge keys with `mj secrets` (names only on list; then **redeploy**).
+
+```bash
+mj secrets set my-app STRIPE_API_KEY          # hidden prompt; merges, does not replace
+mj secrets ls my-app                          # key names only
+mj deploy . --name my-app --memory 4096       # reads the secrets file at spawn
+mj domain set my-app shop.example
+mj cert issue shop.example
+```
+
+Walkthrough: **[Deploying a Web App](docs/guide/deploying-an-app.md)**. Sidecars
+(`DATABASE_URL` / `REDIS_URL` on `10.200.0.1`) are provisioned separately, then
+the same file: [Host sidecars](docs/guide/host-sidecars.md).
+
 Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-serve` for Claude Code integration, and `forge` for host config). The `--api`/`--token` flags (or `MJOLNIR_TOKEN` / `MJOLNIR_PROFILE` env vars) override saved config per-invocation.
 
 ### Host sidecars (from inside a VM)
@@ -68,8 +87,8 @@ Every guest can reach a few **host sidecars** on `10.200.0.1` (not
 |---|---|---|
 | Blob store (content-addressed, B2 behind a door) | `http://10.200.0.1:7222` | `blob_door_url` |
 | Orchestrator API | `http://10.200.0.1:4000` | `api_url` |
-| Postgres (declared tenant DBs only) | `10.200.0.1:5432` | `DATABASE_URL` in deploy secrets |
-| Redis (sessions / cache / queues) | `10.200.0.1:6379` | `REDIS_URL` in deploy secrets |
+| Postgres (declared tenant DBs only) | `10.200.0.1:5432` | `DATABASE_URL` in deploy secrets (`mj secrets ls`) |
+| Redis (sessions / cache / queues) | `10.200.0.1:6379` | `REDIS_URL` in deploy secrets (`mj secrets ls`) |
 
 How to PUT/GET a blob, how Postgres tenants are provisioned, and how
 to add another sidecar: **[Host sidecars](docs/guide/host-sidecars.md)**.
@@ -211,8 +230,8 @@ grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualiza
 with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
 [Working with Snapshots](docs/guide/snapshots.md). If you think in containers, read
 [Coming from Docker](docs/guide/coming-from-docker.md). To put an app on a domain, see
-[Deploying a Web App](docs/guide/deploying-an-app.md). Host services
-every VM can call: [Host sidecars](docs/guide/host-sidecars.md).
+[Deploying a Web App](docs/guide/deploying-an-app.md) (`mj deploy`, `mj secrets`,
+`mj domain`). Host services every VM can call: [Host sidecars](docs/guide/host-sidecars.md).
 
 - [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md) · [Host sidecars](docs/guide/host-sidecars.md)
 - [Current status / handoff notes](docs/plans/current-status.md)

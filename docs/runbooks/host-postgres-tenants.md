@@ -12,7 +12,14 @@ mix mjolnir.pg.tenant ensure hypersigil --slug hypersigil-api
 ```
 
 Writes `/var/lib/mjolnir/deploy/secrets/hypersigil-api.json` with
-`DATABASE_URL` (merges; does not wipe other keys).
+`DATABASE_URL` (merges; does not wipe other keys). App keys that are
+not the tenant URL go in the same file via
+[`mj secrets set`](../guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot):
+
+```bash
+mj secrets set hypersigil-api JWT_SECRET
+mj secrets ls hypersigil-api
+```
 
 `mj deploy --name hypersigil-api` reads that file. The name is slugged
 (lowercase; anything outside `[a-z0-9_-]` → `_`) and looked up as
@@ -46,4 +53,5 @@ systemctl enable --now mjolnir-pg-tenants-backup.timer
 
 1. Recreate the LOGIN role + database: `mix mjolnir.pg.tenant ensure <name> --slug <slug> --rotate` (or `CREATE ROLE` / `CREATE DATABASE` by hand).
 2. `psql "$DATABASE_URL" < dump.sql`
-3. If the password rotated, rewrite `deploy/secrets/<slug>.json` and redeploy the app VM.
+3. If the password rotated, `ensure --rotate` rewrites `DATABASE_URL` in
+   the secrets file (merge). Redeploy the app VM so the guest sees it.

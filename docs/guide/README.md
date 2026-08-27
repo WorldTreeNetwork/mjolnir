@@ -17,9 +17,9 @@ Read in order if you're new:
 3. **[Coming from Docker](coming-from-docker.md)** — if you think in containers, images, and
    `docker build` layer caches, this maps those concepts onto Mjolnir's microVMs, BTRFS
    subvolumes, and copy-on-write snapshots, and explains where Mjolnir is genuinely better.
-4. **[Deploying a Web App](deploying-an-app.md)** — turning an app into a live HTTPS URL: the
-   release-snapshot model, how a Dockerfile maps onto it, secrets that never enter the
-   artifact, gateway routing and cutover — plus an honest status table of what's shipped.
+4. **[Deploying a Web App](deploying-an-app.md)** — turning an app into a live HTTPS URL:
+   `mj deploy`, `mj secrets set` (host-escrowed env injected at service-VM spawn),
+   `mj domain` / `mj cert`. Secrets never enter the snapshot.
 5. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
    (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres. How guests find
    locators in `/etc/mjolnir/vm.json`.

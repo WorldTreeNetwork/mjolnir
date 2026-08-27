@@ -199,14 +199,22 @@ is gone.** That's by design — VMs are cheap and disposable.
 | Snapshot a running VM | `mj snapshot <vm_id> <name>` |
 | Spawn from a snapshot | `mj spawn --snapshot <name>` |
 | Destroy a VM | `mj kill <vm_id>` |
+| Deploy a web app (service VM) | `mj deploy . --name <app>` — [guide](deploying-an-app.md) |
+| Merge host-escrowed env (then redeploy) | `mj secrets set <app> KEY` |
 
 Run `mj --help` for the complete surface.
+
+`mj spawn` is a throwaway shell. It does **not** read the deploy-secrets file.
+A store or API that needs `DATABASE_URL` / Stripe / SES is a different spawn:
+`mj deploy` boots a **service VM** and injects host-escrowed env at start.
+Set those keys with `mj secrets`, then deploy — **[Deploying a Web App](deploying-an-app.md)**.
 
 ---
 
 ## Next steps
 
 - **[Working with Snapshots](snapshots.md)** — save a VM's state and spin up new VMs from it.
+- **[Deploying a Web App](deploying-an-app.md)** — `mj deploy`, `mj secrets`, `mj domain`.
 - **[Host sidecars](host-sidecars.md)** — blob store, API, and Postgres on `10.200.0.1`;
   locators in `/etc/mjolnir/vm.json`.
 - **[Coming from Docker](coming-from-docker.md)** — the conceptual map if you think in containers.

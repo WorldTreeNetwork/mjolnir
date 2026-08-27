@@ -36,7 +36,8 @@ machine, clone it while it's running, and hand someone a peer-to-peer connection
 | `docker run my-commit` | `mj spawn --snapshot <name>` | Restores from a snapshot via an instant CoW clone. A snapshot *is* a spawnable base. |
 | Image layer cache | BTRFS subvolume snapshots | CoW at the *filesystem* level, applied to live machine state — see below. |
 | `docker rm -f` | `mj kill <vm>` | Stops the microVM and deletes its CoW subvolume. |
-| Dockerfile | `Deploy.Detector` build plan | No build *file* — the plan is detected from the repo (zero-config), then each step becomes a cached snapshot layer. See [Deploying a Web App](deploying-an-app.md). |
+| Dockerfile | `Deploy.Detector` / `mjolnir.toml` | Zero-config for SvelteKit; other apps ship a manifest. Each step is a cached snapshot layer. See [Deploying a Web App](deploying-an-app.md). |
+| `docker run -e SECRET=…` | `mj secrets set <app> KEY` then `mj deploy` | Host-escrowed JSON, injected at **service-VM spawn**, never in the snapshot. `mj spawn` is a throwaway shell and does not read that file. |
 | `docker ps` | `mj list` | — |
 | Docker registry / `push` | Iroh content-addressed transfer (emerging) | Cross-host movement is by content-addressed sync, not a central registry. See `docs/archive/storage-architecture.md` §3. |
 | Container = ephemeral, stateless by convention | VM = checkpointable, stateful by design | State is a feature, not something you engineer around with volumes. |
@@ -207,10 +208,11 @@ expose. The orchestration on top is **written and shipped in the prod release**:
 `Deploy.Detector` (zero-config build plans), `Deploy.CacheKey` + `Deploy.Builder`
 (content-addressed snapshot layers), `Deploy.Runtime` (boot + cutover), `Deploy.Registry`.
 
-`mj deploy [PATH] --name <app>` exists (`POST /api/deploy`). Secrets are picked up from
-`/var/lib/mjolnir/deploy/secrets/<slug>.json` when that file is present — see
-[Deploying a Web App](deploying-an-app.md). Detector is still SvelteKit/`adapter-node` only.
-The first Hypersigil cutover through this path is still pending.
+`mj deploy [PATH] --name <app>` exists (`POST /api/deploy`). Merge app secrets
+with `mj secrets set <app> KEY` (then redeploy). The orchestrator reads
+`/var/lib/mjolnir/deploy/secrets/<slug>.json` at service-VM spawn — see
+[Deploying a Web App](deploying-an-app.md). Detector is SvelteKit/`adapter-node`
+or an explicit `mjolnir.toml`.
 
 ---
 

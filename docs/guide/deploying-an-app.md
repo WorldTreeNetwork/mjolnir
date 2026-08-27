@@ -59,7 +59,8 @@ Three rules follow from this, and they are the whole discipline:
 
 - **Build produces a snapshot. Running consumes one.** The build never touches production; the
   runtime never builds.
-- **Secrets are injected at spawn, never baked at build.** See [Secrets](#secrets-stay-out-of-the-snapshot).
+- **Secrets are injected at spawn, never baked at build.** Operators merge
+  them with `mj secrets set` (see [Secrets](#secrets-stay-out-of-the-snapshot)).
 - **Updates are cutover, not mutation.** There is no "just rsync this one file" fast path, and
   you should not add one — the layer cache already makes the honest path fast.
 
@@ -169,6 +170,24 @@ being a new VM — lands on a new IP. Route regeneration is load-bearing, not co
 Use `secrets_mode: :managed` (host-escrowed). `mj deploy` enrolls that mode **automatically**
 when a secrets file exists for the app name.
 
+This is **not** `mj spawn`. A one-shot shell has no deploy-secrets file. A
+service VM (store API, site) is spawned by `mj deploy`; that spawn reads the
+file and injects env into tmpfs. After you change a key, **redeploy** — editing
+the file does not patch a running guest.
+
+**Operator path** (laptop, authenticated `mj`):
+
+```bash
+mj secrets set hypersigil-api STRIPE_API_KEY                 # hidden prompt
+printf '%s' "$WHSEC" | mj secrets set hypersigil-api STRIPE_WEBHOOK_SECRET --stdin
+mj secrets ls hypersigil-api                                 # names only
+mj deploy . --name hypersigil-api --memory 4096
+```
+
+`set` **merges**. It will not wipe `DATABASE_URL` / `REDIS_URL` written by
+sidecar `ensure`. Do not `cat >` the JSON over SSH unless you are creating the
+file for the first time and know every key.
+
 **Path the orchestrator actually reads:**
 
 ```
@@ -209,23 +228,25 @@ opaque snapshots, and transparent dormancy/wake — not survival of a host compr
 
 ## Status: what actually works today
 
-**Updated 2026-08-19.** The July write-up is stale on the CLI and the secrets path.
+**Updated 2026-08-27.**
 
 | Piece | Status |
 |---|---|
 | Base images (`ubuntu-24.04`, `ci-ubuntu-24.04`, `arch`) | ✅ present |
 | BTRFS clone / snapshot / spawn-from-snapshot | ✅ shipped, exercised daily |
 | `Deploy.Detector` / `BuildPlan` / `CacheKey` / `Builder` / `Runtime` / `Registry` | ✅ in the prod release |
-| Gateway route generation + reconciler + DNS-01 TLS | ✅ shipped |
+| Gateway route generation + reconciler + HTTP-01 custom certs | ✅ shipped |
 | `mj deploy` CLI | ✅ `mj deploy [PATH] --name <app>` → `POST /api/deploy` |
+| `mj secrets set` / `ls` / `unset` | ✅ merge into the host file; names only on list; then redeploy |
 | Secrets file | ✅ `/var/lib/mjolnir/deploy/secrets/<slug>.json` auto-read on deploy |
-| Host-sidecar tenant `hypersigil` | ✅ provisioned; `DATABASE_URL` is in `hypersigil-api.json` |
-| Detector scope | SvelteKit + `adapter-node` only; anything else is `:unsupported_app` |
+| Host-sidecar tenant `hypersigil` | ✅ provisioned; `DATABASE_URL` / `REDIS_URL` in `hypersigil-api.json` |
+| Detector scope | SvelteKit + `adapter-node`, or an explicit `mjolnir.toml` (Medusa, etc.) |
 | Zine | still **hand-provisioned** (`secrets_mode: none`). Not an example to copy. |
 | IdentiKey Sites | Recrypt path incomplete |
 
-The first Hypersigil app deploy through this path is still the thing to do, not a
-completed run. Expect to debug the first cutover.
+Hypersigil API (`https://api.hypersigil.world`) deploys through this path. Extra
+app keys (SES, Stripe) go in with `mj secrets set hypersigil-api KEY`, then a
+redeploy.
 
 ---
 

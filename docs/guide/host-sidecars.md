@@ -83,8 +83,9 @@ ADR: [`0003`](../decisions/0003-blob-store-mesh.md).
 The OTP Postgres process is the host catalog **and**, for declared
 tenants, a hotel: `CREATE DATABASE` per app, TCP on the same overlay
 IP. A random spawn does **not** get a database. Provision with
-`mix mjolnir.pg.tenant ensure`, then `mj deploy` reads `DATABASE_URL`
-from the secrets file.
+`mix mjolnir.pg.tenant ensure`, which **merges** `DATABASE_URL` into the
+deploy-secrets file. Extra keys (JWT, Stripe, SES) are `mj secrets set`
+— same file, then `mj deploy`. `mj secrets ls <app>` lists names.
 
 Runbook: [host-postgres-tenants](../runbooks/host-postgres-tenants.md).
 App path: [Deploying a Web App](deploying-an-app.md).
@@ -97,7 +98,8 @@ ADR: [`0005`](../decisions/0005-host-sidecar-tenant-hotel.md).
 systemd `mjolnir-redis` on the overlay IP, not an OTP Port — `just
 deploy` must not bounce sessions with the BEAM. AOF `everysec`. One
 password, db 0 (not a hotel). A random spawn does **not** get
-`REDIS_URL`. Provision with `mix mjolnir.redis.ensure --slug …`.
+`REDIS_URL`. Provision with `mix mjolnir.redis.ensure --slug …`
+(merges). Confirm with `mj secrets ls <app>`.
 
 ```bash
 redis-cli -u "$REDIS_URL" PING

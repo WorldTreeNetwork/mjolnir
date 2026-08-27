@@ -1,5 +1,11 @@
 # User Story: VM with Secrets
 
+> **Web app / `mj deploy`?** You want [Deploying a Web App](../guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot):
+> `mj secrets set <app> KEY` merges host-escrowed env; the **service VM**
+> spawn injects it. This page is the host-blind LUKS path on a single VM
+> (`secrets_mode: persistent`), which is a different CLI surface and is
+> not how Hypersigil-api or other gateway apps get `DATABASE_URL`.
+
 ## As a developer, I want to spawn a VM and securely inject secrets so my application can access API keys and database credentials as environment variables — without managing encryption details myself.
 
 ---

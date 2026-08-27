@@ -390,9 +390,19 @@ The rootfs must include `cryptsetup-bin` and `kmod` packages.
 
 ---
 
+## Deploy secrets (web apps)
+
+Host-escrowed env for `mj deploy` is a different file from the per-VM LUKS
+volume above: `/var/lib/mjolnir/deploy/secrets/<slug>.json`, injected at
+**service-VM spawn**. Operators merge with `mj secrets set` / `ls` / `unset`.
+Walkthrough: [Deploying a Web App](guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot).
+`mj spawn` (throwaway shell) does not read that file.
+
 ## Future Work
 
-- **CLI `secrets` commands**: `mjolnir secrets init`, `secrets set`, `secrets push`, `secrets list`, `secrets status`
+- **CLI for LUKS inject**: `mj secrets init` / `push` / `status` against a VM
+  id (Iroh ALPN, host-blind). Do not confuse with `mj secrets set <app> KEY`,
+  which is the shipped deploy-secrets merge.
 - **IdentiKey S3 sync**: Sync encrypted LUKS files to S3 for backup/restore across VM instances
 - **Secret rotation**: Re-encrypt with a new passphrase without unmounting
 - **Audit logging**: Log injection attempts (success/failure) with peer identity

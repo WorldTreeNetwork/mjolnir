@@ -16,8 +16,9 @@ mix mjolnir.redis.ensure --slug hypersigil-api
 ```
 
 Merges `REDIS_URL` into `/var/lib/mjolnir/deploy/secrets/<slug>.json`
-without wiping `DATABASE_URL`. `mj deploy --name hypersigil-api` reads
-that file.
+without wiping `DATABASE_URL`. Other keys: `mj secrets set <app> KEY`
+([deploying-an-app](../guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot)).
+`mj deploy --name hypersigil-api` reads that file.
 
 ## Proof
 

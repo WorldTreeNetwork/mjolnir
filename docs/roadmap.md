@@ -83,7 +83,11 @@ These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
   `--session` (tmux) sessions.
 
 ### Secrets
-- **LUKS2-encrypted secrets volumes** inside the guest, with passphrases delivered over a
+- **Deploy secrets (web apps):** `mj secrets set <app> KEY` merges
+  `/var/lib/mjolnir/deploy/secrets/<slug>.json`. `mj deploy` injects that map
+  at service-VM spawn (`secrets_mode: :managed`). Names only on `mj secrets ls`.
+  See [Deploying a Web App](guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot).
+- **LUKS2-encrypted volumes** inside the guest, with passphrases delivered over a
   dedicated Iroh ALPN that bypasses the host. Authorized inject peers validated by node ID.
   Every `exec` auto-sources `/run/mjolnir/secrets.env` (tmpfs — plaintext never hits the rootfs).
 
