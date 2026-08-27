@@ -103,14 +103,15 @@ ping when inject is a no-op.
 
 ### Requirement: Declared live images match current recipes
 
-A declared `@base/<name>` on a host SHALL be the output of that
-name's current recipe, including a current guest agent. A live
-subvolume that predates the recipe SHALL be replaced. Before
-replace, the previous subvolume SHALL be snapshotted to
-`@snapshots/<name>-pre-rebuild-<date>`. `deploy-node-bun` SHALL NOT
-be rebuilt. Unmanaged names SHALL NOT be rebuilt by this
-requirement. Running `@vms/<uuid>` clones SHALL NOT be destroyed
-by a base rebuild.
+A declared alias on a host SHALL point at the output of that
+name's current recipe, including a current guest agent. **v0**
+(single tenant): the alias subvolume MAY be replaced in place
+after snapshotting the previous tree to
+`@snapshots/<name>-pre-rebuild-<date>`. **v1** (D6): the recipe
+writes a new pin and retargets the alias; it SHALL NOT overwrite
+the previous pin. `deploy-node-bun` SHALL NOT be rebuilt.
+Unmanaged names SHALL NOT be rebuilt by this requirement. Running
+`@vms/<uuid>` clones SHALL NOT be destroyed by a base rebuild.
 
 #### Scenario: Stale ubuntu is rebuilt
 
@@ -127,6 +128,51 @@ by a base rebuild.
 - WHEN declared images are rebuilt
 - THEN `deploy-node-bun` is not passed to a recipe
 - AND it remains until `remove-deploy-node-bun` deletes it
+
+### Requirement: Pins are immutable; aliases move
+
+A catalog name is either an **alias** (channel: `ubuntu-24.04`,
+`ubuntu-latest`) or a **pin** (identity: `ubuntu-24.04-20260827`).
+A recipe SHALL produce a pin and SHALL NOT overwrite an existing
+pin. Rebuilding SHALL retarget the alias at the new pin. Spawn and
+deploy SHALL resolve an alias to a pin at clone time and record
+that pin on the VM, the release, and as the deploy cache parent
+(`base_layer_id`). Redeploy of an existing app SHALL clone the
+recorded pin. Following the alias on redeploy SHALL be explicit.
+`node-latest` is this alias pattern; it SHALL NOT be a declared
+OS-root (toolchains remain mise layers). v0 MAY keep in-place
+alias rebuilds until `add-base-image-pins` lands. Pins SHALL live
+under `@base/`, not only `@snapshots/`.
+
+#### Scenario: Redeploy keeps the pin
+
+- GIVEN app `identikey` last deployed from pin `ubuntu-24.04-20260827`
+- AND alias `ubuntu-24.04` now resolves to `ubuntu-24.04-20260915`
+- WHEN `mj deploy` runs without a pull-base flag
+- THEN the build VM is cloned from `ubuntu-24.04-20260827`
+- AND the cache parent is that pin, not the alias string
+
+#### Scenario: New app follows the alias
+
+- GIVEN alias `ubuntu-24.04` resolves to pin `ubuntu-24.04-20260915`
+- AND the app has no recorded pin
+- WHEN it is deployed for the first time with `base_image = "ubuntu-24.04"`
+- THEN the clone is `ubuntu-24.04-20260915`
+- AND that pin is recorded on the release
+
+#### Scenario: Cache parent is not the alias
+
+- GIVEN two pins of `ubuntu-24.04` with different filesystems
+- WHEN deploy hashes the first layer
+- THEN `parent_layer_id` is the pin name
+- AND the two pins do not share a cache key
+
+#### Scenario: node-latest as an OS root proposed
+
+- GIVEN a change that adds `@base/node-latest` as a declared image
+- WHEN it is reviewed
+- THEN it is rejected against this requirement and against
+  "Toolchains are not OS roots"
 
 ### Requirement: Flavors are independent recipes sharing helpers
 

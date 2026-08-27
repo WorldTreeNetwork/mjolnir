@@ -25,9 +25,9 @@ this repo.
   OS roots**. `@snapshots/` is frozen machines (including `deploy-*`
   layers). Toolchains are not OS roots.
 - Accept ADR 0009 (`docs/decisions/0009-base-image-catalog.md`, full
-  text in `design.md`). Five decisions, D1–D5. Human accepted D1–D4
-  2026-08-27 and added D5: rebuild declared live images from current
-  recipes (`ubuntu-24.04` first).
+  text in `design.md`). Six decisions, D1–D6. Human accepted D1–D4
+  2026-08-27, added D5 (rebuild declared live images) and D6 (pins
+  immutable, aliases move; v1 before a second tenant).
 - This change is the architecture write (ADR + deltas). Code is
   `act` of later nodes after advise accept (`remove-deploy-node-bun`,
   `add-base-image-list`, `add-base-image-health`). Rebuild of
@@ -39,7 +39,9 @@ this repo.
 - ADRs: 0009 (this change). Pointer from `docs/architecture.md` after
   accept.
 - Does not rebuild or keep `deploy-node-bun`.
-- Does rebuild declared catalog images from current recipes (D5).
+- Does rebuild declared catalog images from current recipes (D5, v0
+  in-place).
+- Does not implement pin/alias resolution (D6, `mjolnir-b0gb.6`).
 - Does not add a FROM-ubuntu flavor DSL.
 
 ## User journey & surfaces
@@ -76,3 +78,6 @@ today `ssh` + `btrfs subvolume list` to discover `@base/`.
 - Cross-host image distribution
 - Unifying the remaining debootstrap scripts into one recipe DSL
 - Auto-deleting unmanaged `@base/` entries (`tatastu-agent`)
+- Pin/alias resolver, recording the pin on deploy, alias pull flag —
+  `add-base-image-pins` (`mjolnir-b0gb.6`). v0 in-place rebuild
+  stands until then.

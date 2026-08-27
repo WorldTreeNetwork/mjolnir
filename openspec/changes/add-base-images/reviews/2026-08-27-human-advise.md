@@ -30,7 +30,10 @@ mise), not VM downtime.
 
 ## Findings
 
-None on D1–D4. D5 is the only amend.
+None on D1–D4. D5 (rebuild) then D6 (pins + aliases) are amends
+the same day. D6 answers the steelman: in-place rebuild of the
+alias is v0-only; a second tenant needs pins so a redeploy does
+not follow a moved name.
 
 ## Implementer gaps
 

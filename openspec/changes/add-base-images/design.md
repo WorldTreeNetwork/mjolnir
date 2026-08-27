@@ -202,6 +202,67 @@ Rejected:
   path has already been missing (`mjolnir-hjnz`). D3 forbids it.
 - **Rebuild `deploy-node-bun` as part of “old ones.”** D1.
 
+## Decision 6 — Pins are immutable; aliases move
+
+Human 2026-08-27: in-place rebuild of `@base/ubuntu-24.04` is
+acceptable **v0** while we are the only tenant. It is the wrong
+contract once other people's apps live here for years. A redeploy
+that cache-misses the first layer (or that is a first deploy of a
+new app) currently clones whatever that *name* is today. The name
+moved; the app did not ask it to.
+
+Two names, Docker-shaped:
+
+| Kind | Example | Mutates? |
+|---|---|---|
+| **Alias** (channel) | `ubuntu-24.04`, `ubuntu-latest` | Yes — retargeted at rebuild |
+| **Pin** (identity) | `ubuntu-24.04-20260827` | No — recipe output, archived |
+
+`node-latest` in the request is this **alias pattern**, not a Node
+OS-root. D1 still holds: language runtimes are mise layers. The
+same pin/alias split applies there: Detector's `node@20` is a
+channel; `node@20.20.2` is a pin. Do not grow `@base/node-latest`.
+
+**Rebuild** produces a new pin, then retargets the alias. It does
+not delete the previous pin. v0 D5 snapshots to
+`@snapshots/<name>-pre-rebuild-<date>` are a rollback hatch in the
+wrong namespace (`mj spawn --snapshot`, not `--base`). v1 pins live
+in `@base/` so they stay catalog entries.
+
+**Spawn / deploy** resolve an alias to a pin at the moment of
+clone. The **pin** is what gets recorded:
+
+- on the VM / release (so `mj info` names the identity, not only
+  the channel)
+- as `base_layer_id` in deploy cache keys (`CacheKey` parent).
+  Hashing the alias string is cache poison: two different
+  filesystems would share a key.
+
+**Redeploy** of an existing app uses the recorded pin. Following
+the alias is explicit (`mj deploy --pull-base` or a manifest
+`base_image = "ubuntu-24.04"` with a pull flag — bikeshed at
+implement). A first deploy of a new app may follow the alias.
+
+**GC** of unreferenced pins is later. A pin that any app, release
+snapshot, deploy layer, or running VM still names is not garbage.
+Unmanaged names stay unmanaged (D2).
+
+v0 (now): keep D5's in-place rebuild; we own every app. v1 is
+`add-base-image-pins` (`mjolnir-b0gb.6`), after list/health, before
+we take a second tenant. Do not redo tonight's rebuilds as pins.
+
+Rejected:
+
+- **Pins only as `@snapshots/`.** Repeats mjolnir-97c (`--base` vs
+  `--snapshot`). Archive is still a catalog OS root.
+- **Content-address `@base/b3/<hash>` in v1.** Right shape for a
+  registry; overkill while pins are dated recipe outputs on one
+  host. Revisit when bases move across hosts.
+- **Always follow the alias on redeploy.** That is the bug D6
+  exists to stop.
+- **Never have aliases.** Then every app pins a date and nobody
+  gets the new agent without editing a manifest.
+
 ## Alternatives rejected (whole)
 
 - **Rebuild `deploy-node-bun` and keep it as the deploy default.**
@@ -217,9 +278,10 @@ Rejected:
   Existing `deploy-*` layers keyed on `deploy-node-bun` as parent
   miss. Accepted.
 - Recipe rebuild of ubuntu is destructive of the `@base/` name
-  (the script deletes then recreates). Pre-rebuild snapshots in
-  `@snapshots/` are the rollback. A failed debootstrap must restore
-  from that snapshot before new spawns are attempted.
+  under v0 (the script deletes then recreates). Pre-rebuild
+  snapshots in `@snapshots/` are the rollback. D6 is the durable
+  fix (new pin, retarget alias). A failed debootstrap must restore
+  from the snapshot before new spawns are attempted.
 - `@base/dev` vs leftover `ci-ubuntu-24.04` drift remains (Buzz
   design). Catalog v1 keeps the CI name so the runner labels keep
   working.
@@ -227,6 +289,6 @@ Rejected:
 ## Review
 
 Authoring pass: Grok 4.6 (this file). Human accepted D1–D4
-2026-08-27 and added D5. A second-family read is still owed before
-`act` on retire / list / health. D5 operator rebuild is activated
-by the same human message.
+2026-08-27 and added D5 (rebuild) then D6 (pins + aliases). A
+second-family read is still owed before `act` on retire / list /
+health. D6 is plan-only until `mjolnir-b0gb.6`.
