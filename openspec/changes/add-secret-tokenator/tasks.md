@@ -14,6 +14,7 @@ Sol is not subscribed.
 - [x] Human amend 2026-08-26: Blake3 (not SHA-256 stub) for
       holder fp and commitments; Gordian envelopes deferred;
       salt mandatory on any public digest of a secret
+- [x] Human 2026-08-26: tokenator stays in the BEAM (option A)
 - [x] Send-back 2026-08-26: Auth plug fourth branch, not skip_auth
 - [x] Send-back 2026-08-26: holder fingerprint encoding (protocol)
 - [x] Send-back 2026-08-26: reused nonce fails closed

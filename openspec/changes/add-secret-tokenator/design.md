@@ -102,6 +102,13 @@ Installing this feature **does** restart Elixir (`just deploy`).
 That is accepted. Do not invent a just verb. Do not make a systemd
 unit that duplicates SecretStore.
 
+**Closed 2026-08-26 (Duke).** Overlay sidecar, localhost sidecar, and
+Elixir-write/sidecar-read were compared (trust boundary, deploy
+bounce, one writer, native crypto). **A — redeem in the BEAM — is
+v1.** Revisit this ADR if redeem volume grows past “fetch a PAT at
+task start”; do not quietly grow a second vault. Fable’s coupling
+note stands: every `just deploy` is a tokenator outage. Accepted.
+
 Mint/list stay on the same API, owner-authenticated.
 
 Auth plug (`Mjolnir.API.Auth`): redeem and challenge are a

@@ -18,9 +18,10 @@ Full argument:
    Commitment is `Blake3(domain || salt || secret)`. Salt travels;
    secret does not. Unsalted hashes of the secret are forbidden.
    Gordian envelopes deferred; when they return, elision is salted.
-2. **Redeem on `api_url`.** `POST /api/secrets/redeem`. No new
-   overlay port. Auth plug: fourth branch (redeem-only), not
-   `@skip_auth_paths`.
+2. **Redeem on `api_url` (in the BEAM).** `POST /api/secrets/redeem`.
+   No new overlay port. Auth plug: fourth branch (redeem-only), not
+   `@skip_auth_paths`. Sidecar variants compared 2026-08-26; **A
+   is v1.** Revisit if redeem is no longer “once per job.”
 3. **Holder-plus-bearer.** Signature by the named key; Datalog
    `holder(<fingerprint>)`. Stolen Biscuit bytes do not redeem.
    Challenge nonce is single-use.
