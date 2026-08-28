@@ -19,7 +19,7 @@ Fable 5 is still the cross-family reader for code landings.
       Probes killed. `deploy-node-bun` and `tatastu-agent` not rebuilt.
 - [ ] Advise accept from a non-Grok reader for the *code* landings
       (retire / list / health)
-- [ ] After accept: pointer in `docs/architecture.md` Filesystem
+- [x] After accept: pointer in `docs/architecture.md` Filesystem
       section (do not delete prior layout text)
 - [ ] Fold deltas into `openspec/specs/base-images/` only when the
       first implementing act has landed (retire), or fold
