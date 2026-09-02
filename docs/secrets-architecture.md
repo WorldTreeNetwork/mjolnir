@@ -1,6 +1,6 @@
 # Mjolnir Secrets Architecture
 
-> **See also:** `docs/encryption-and-security.md` for how secrets fit into the broader security model — three-tier storage (secrets are Tier 3), four encryption layers, and the full threat model.
+> **See also:** `docs/encryption-and-security.md` for how secrets fit into the broader security model — three-tier storage (secrets are Tier 3), four encryption layers, and the full threat model. For consumption and lifecycle (delivery modes, expiry, pruning — lessons from Tatastu's `CredentialSource`), see [`secrets-consumption-and-lifecycle.md`](secrets-consumption-and-lifecycle.md).
 
 ## Overview
 
