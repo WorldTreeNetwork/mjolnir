@@ -190,6 +190,10 @@ pub enum Fallthrough {
     Iroh,
     /// Reject unmatched subdomains with 404.
     None,
+    /// Serve the berth page for unmatched (and empty) subdomains. Binding a
+    /// name is writing an `[[alias]]` to an Iroh node ID; local `[[route]]`
+    /// still wins when the VM is on this host.
+    Parked,
 }
 
 /// A single configured apex (normalized: lowercased).
@@ -399,8 +403,9 @@ fn parse_fallthrough(s: Option<&str>) -> Result<Fallthrough, ConfigError> {
         None => Ok(Fallthrough::Iroh),
         Some("iroh") => Ok(Fallthrough::Iroh),
         Some("none") => Ok(Fallthrough::None),
+        Some("parked") => Ok(Fallthrough::Parked),
         Some(other) => Err(ConfigError::Invalid(format!(
-            "invalid fallthrough value {:?}; must be \"iroh\" or \"none\"",
+            "invalid fallthrough value {:?}; must be \"iroh\", \"none\", or \"parked\"",
             other
         ))),
     }
@@ -436,7 +441,7 @@ pub fn derive_san_list(apexes: &[Apex], routes: &[Route], aliases: &[Alias]) -> 
 
     for apex in apexes {
         match apex.fallthrough {
-            Fallthrough::Iroh => {
+            Fallthrough::Iroh | Fallthrough::Parked => {
                 push_unique(&mut out, format!("*.{}", apex.suffix));
                 push_unique(&mut out, apex.suffix.clone());
             }
@@ -1301,6 +1306,19 @@ mod tests {
     }
 
     #[test]
+    fn toml_parked_fallthrough_parses() {
+        let text = r#"
+            [[domain]]
+            suffix = "identikey.me"
+            fallthrough = "parked"
+        "#;
+        let cfg = load_from_toml_str(text).expect("parse");
+        assert_eq!(cfg.apexes.len(), 1);
+        assert_eq!(cfg.apexes[0].suffix, "identikey.me");
+        assert_eq!(cfg.apexes[0].fallthrough, Fallthrough::Parked);
+    }
+
+    #[test]
     fn toml_non_ascii_apex_fatal() {
         let text = r#"
             [[domain]]
@@ -1382,6 +1400,16 @@ mod tests {
         }];
         let sans = derive_san_list(&apexes, &[], &[]);
         assert_eq!(sans, vec!["*.vm.worldtree.network", "vm.worldtree.network"]);
+    }
+
+    #[test]
+    fn san_derivation_parked_mode_wildcard_plus_apex() {
+        let apexes = vec![Apex {
+            suffix: "identikey.me".into(),
+            fallthrough: Fallthrough::Parked,
+        }];
+        let sans = derive_san_list(&apexes, &[], &[]);
+        assert_eq!(sans, vec!["*.identikey.me", "identikey.me"]);
     }
 
     #[test]

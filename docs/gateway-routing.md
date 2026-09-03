@@ -14,8 +14,9 @@ Browser ──TLS(SNI=zine.identikey.io)──> mjolnir-gateway  (:443 on the ho
    │  classify(Host) → match apex → subdomain
    │    1. lookup_local(apex, sub)  → [[route]] → Disposition::Local(SocketAddr)   [TCP]
    │    2. lookup_alias(apex, sub)  → [[alias]] → Disposition::Iroh(node z32)      [Iroh]
-   │    3. apex.fallthrough = iroh  → decode sub as z32 node                       [Iroh]
-   │       apex.fallthrough = none  → 404
+   │    3. apex.fallthrough = iroh    → decode sub as z32 node                     [Iroh]
+   │       apex.fallthrough = none    → 404
+   │       apex.fallthrough = parked  → berth page (name exists, no machine yet)
    │    (on apex MISMATCH) → sites_resolver → Mjolnir Sites backend               [TCP]
    ▼
  backend: VM app (e.g. SvelteKit :3000) reached over local TCP or Iroh QUIC
@@ -103,3 +104,52 @@ hand-edited config. Remaining gaps:
 
 The automation gap is closed: gateway routes are rendered from the binding + live VM state,
 not hand-edited. See [`plans/gateway-local-routing.md`](plans/gateway-local-routing.md).
+
+## Parked names (`fallthrough = "parked"`)
+
+A parking apex (today: `identikey.me`) is a namespace of names that exist before a
+machine does. Unmatched subdomains — and the bare apex — serve the gateway's berth
+page. Binding a name does **not** invent a new registry: it writes the same
+`[[alias]]` the rest of the gateway already understands.
+
+### How to point a name
+
+```
+park.identikey.me.   CNAME   vm.worldtree.network.
+*.identikey.me.      CNAME   vm.worldtree.network.
+identikey.me.        A       45.76.77.97
+```
+
+`identikey.me` is not in the worldtree ACME zone, so TLS is Origin-CA / BYO
+(`[[cert]]`), same as `zine.identikey.io`. A wildcard Origin cert covering
+`*.identikey.me` + `identikey.me` is what makes the namespace work; a single-host
+cert covers only the seed name.
+
+### How to reference the service
+
+| Identity | What it is | Use |
+|---|---|---|
+| **Vanity name** (`park.identikey.me`) | DNS label humans type | The registry key. Not a network address. |
+| **Iroh node ID** (z32) | Ed25519 pubkey of the guest endpoint | **The service pointer.** Reachable through NAT via relay/holepunch. Survives respawn if the guest keeps the key. This is `[[alias]] node=`. |
+| **XID / Identikey fingerprint** | Owner / actor identity | Who is allowed to bind the name. Not something the gateway can dial. |
+| **VM UUID** | Host-local process id | Changes on redeploy. Do not put this in DNS or the alias table. |
+| **TAP IP** (`10.200.x.x`) | Host-local L2 address | Fast path only, and only when the VM is on *this* host. `Mjolnir.Gateway.Routes` already writes `[[route]]` for that. |
+
+Iroh magicsock does cache paths (direct / holepunch / relay). That is **not** a
+substitute for the TAP `[[route]]`: a cold Iroh dial on a co-located VM was ~7s;
+host→guest TCP was 5.5ms. Keep using the existing local-route overlay. Do not
+build a third cache table until a name actually serves over Iroh from another
+host.
+
+The durable record is:
+
+```toml
+[[alias]]
+apex      = "identikey.me"
+subdomain = "park"
+node      = "<z32 iroh node id>"
+port      = 3000
+```
+
+Local `[[route]]` (TAP IP) is derived later, when the VM is observed running here.
+If the local dial fails, the gateway already fails over to the retained Iroh alias.

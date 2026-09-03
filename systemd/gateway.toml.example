@@ -65,6 +65,14 @@ fallthrough = "iroh"    # optional; this is the default
 suffix      = "worldtree.network"
 fallthrough = "none"
 
+# Parking apex: unmatched names (and the bare apex) serve the berth page.
+# Binding a name is an [[alias]] to the VM's Iroh node ID — NAT-reachable,
+# and the local [[route]] generator still overlays TAP-IP when the VM is
+# on this host. Cert SAN auto-derives to {*.identikey.me, identikey.me}.
+[[domain]]
+suffix      = "identikey.me"
+fallthrough = "parked"
+
 # ── Local-backend routes ──────────────────────────────────────────────────────
 # Pin a (apex, subdomain) pair to a local TCP endpoint. Takes precedence
 # over the Iroh decode path. Subdomain strings are lowercased at load;

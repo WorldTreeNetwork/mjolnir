@@ -15,7 +15,8 @@
 //!    via the TCP_FWD ALPN over Iroh QUIC.
 //!
 //! Apexes declared `fallthrough = "none"` never consult Iroh and return 404
-//! for any unmatched subdomain.
+//! for any unmatched subdomain. `fallthrough = "parked"` serves the berth
+//! page instead — the name exists, no machine is bound yet.
 
 use arc_swap::ArcSwap;
 use clap::{Parser, Subcommand};
@@ -25,6 +26,7 @@ use iroh::{EndpointAddr, PublicKey};
 use mjolnir_gateway::acme::{AcmeConfig, IssuedCert};
 use mjolnir_gateway::cloudflare::CloudflareClient;
 use mjolnir_gateway::config::{self, Apex, Fallthrough, SitesResolver};
+use mjolnir_gateway::parked;
 use mjolnir_gateway::route::RouteTable;
 use mjolnir_gateway::sites::{self as sites_mod, LookupResult};
 use mjolnir_gateway::sites_serve;
@@ -708,6 +710,9 @@ enum Disposition<'a> {
     /// used for self-healing failover if the local dial fails (Phase 3).
     Local(&'a Apex, String, SocketAddr, Option<String>),
     Iroh(&'a Apex, String),
+    /// Unbound name on a `fallthrough = "parked"` apex. Serve the berth page
+    /// (after Sites lookup, which still wins).
+    Parked(&'a Apex, String),
     Reject(ProxyError),
 }
 
@@ -720,10 +725,14 @@ fn classify<'a>(table: &'a RouteTable, host: &str) -> Disposition<'a> {
         // Bare apex host (Host == apex). A local [[route]] declared with an
         // empty subdomain serves the apex directly, exactly like a subdomain
         // route; only if no such route exists is the bare apex out of scope
-        // (the Iroh/alias paths require a non-empty subdomain).
+        // (the Iroh/alias paths require a non-empty subdomain). A parked apex
+        // is the exception: the apex itself is a berth.
         if let Some(backend) = table.lookup_local(apex, &subdomain) {
             let fallback = table.lookup_local_fallback(apex, &subdomain);
             return Disposition::Local(apex, subdomain, backend, fallback);
+        }
+        if apex.fallthrough == Fallthrough::Parked {
+            return Disposition::Parked(apex, subdomain);
         }
         return Disposition::Reject(ProxyError::EmptySubdomain);
     }
@@ -741,6 +750,7 @@ fn classify<'a>(table: &'a RouteTable, host: &str) -> Disposition<'a> {
     match apex.fallthrough {
         Fallthrough::Iroh => Disposition::Iroh(apex, subdomain),
         Fallthrough::None => Disposition::Reject(ProxyError::NotFound),
+        Fallthrough::Parked => Disposition::Parked(apex, subdomain),
     }
 }
 
@@ -1094,6 +1104,59 @@ async fn handle_connection<S>(
                 "proxy decision"
             );
             handle_iroh_connection(stream, peer, ctx.clone(), subdomain, header_buf).await;
+        }
+        Disposition::Parked(apex, subdomain) => {
+            let host_bare_owned = host_without_port(&host).to_ascii_lowercase();
+            let host_bare = host_bare_owned.as_str();
+            info!(
+                peer = %peer,
+                apex = %apex.suffix,
+                subdomain = %subdomain,
+                route = "parked",
+                "proxy decision"
+            );
+            if let Some(ref resolver) = ctx.sites_resolver {
+                match sites_mod::lookup(resolver, host_bare).await {
+                    LookupResult::Hit(backend, site) => {
+                        let current = site.current_dir(&resolver.sites_root);
+                        if let Some(dir) =
+                            sites_serve::resolve_snapshot_dir(&resolver.sites_root, &current).await
+                        {
+                            info!(
+                                peer = %peer,
+                                host = %host_bare,
+                                route = "sites-static",
+                                dir = %dir.display(),
+                                "sites alias hit — serving materialized snapshot"
+                            );
+                            sites_serve::serve_connection(
+                                stream,
+                                header_buf,
+                                dir,
+                                host_bare.to_owned(),
+                            )
+                            .await;
+                            return;
+                        }
+                        let connect_timeout = ctx.iroh_cfg.connect_timeout;
+                        match dial_local(backend, connect_timeout).await {
+                            Ok(backend_stream) => {
+                                run_proxy_local(stream, backend_stream, header_buf).await;
+                            }
+                            Err(dial_err) => {
+                                warn!("{}: sites backend unreachable: {}", peer, dial_err);
+                                write_error_and_shutdown(&mut stream, &dial_err).await;
+                            }
+                        }
+                        return;
+                    }
+                    LookupResult::Miss | LookupResult::Error => {}
+                }
+            }
+            let _ = stream
+                .write_all(&parked::http_response(host_bare, &subdomain))
+                .await;
+            let _ = stream.shutdown().await;
         }
         Disposition::Reject(
             ref
@@ -2394,6 +2457,42 @@ mod tests {
     }
 
     #[test]
+    fn fallthrough_parked_serves_unmatched_and_bare_apex() {
+        const NODE: &str = "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u";
+        let mut cfg = loaded_with(
+            vec![apex("identikey.me", Fallthrough::Parked)],
+            vec![route("identikey.me", "live", "10.0.0.5:3000")],
+        );
+        cfg.aliases = vec![Alias {
+            apex: "identikey.me".into(),
+            subdomain: "bound".into(),
+            node_z32: NODE.into(),
+            port: Some(3000),
+        }];
+        let table = RouteTable::from_config(&cfg);
+
+        assert!(matches!(
+            classify(&table, "park.identikey.me"),
+            Disposition::Parked(_, ref sub) if sub == "park"
+        ));
+        assert!(matches!(
+            classify(&table, "identikey.me"),
+            Disposition::Parked(_, ref sub) if sub.is_empty()
+        ));
+        assert!(matches!(
+            classify(&table, "live.identikey.me"),
+            Disposition::Local(_, _, _, _)
+        ));
+        match classify(&table, "bound.identikey.me") {
+            Disposition::Iroh(a, sub) => {
+                assert_eq!(a.suffix, "identikey.me");
+                assert_eq!(sub, format!("{NODE}-3000"));
+            }
+            _ => panic!("bound name must stay an Iroh alias"),
+        }
+    }
+
+    #[test]
     fn bare_apex_with_apex_route_classifies_local() {
         // A bare apex host served by a matching apex-level route (subdomain="")
         // classifies as Local → its backend, exactly like a subdomain route.
@@ -2563,6 +2662,7 @@ mod tests {
                 match other {
                     Disposition::Local(_, _, _, _) => "Local",
                     Disposition::Iroh(_, _) => "Iroh",
+                    Disposition::Parked(_, _) => "Parked",
                     Disposition::Reject(_) => "Reject(other)",
                 }
             ),
