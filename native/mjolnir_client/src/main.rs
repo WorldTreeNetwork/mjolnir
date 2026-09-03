@@ -1115,7 +1115,14 @@ async fn main() {
                     eprintln!("Warning: failed to save API config: {}", e);
                 }
             }
-            auth::login(issuer).await
+            match auth::login(issuer).await {
+                Ok(()) => {
+                    eprintln!();
+                    config::show();
+                    auth::status()
+                }
+                Err(e) => Err(e),
+            }
         }
         Command::Logout => auth::logout(),
         Command::Status => {
