@@ -179,6 +179,32 @@ defmodule Mjolnir.MemorySnapshotTest do
       File.mkdir_p!(Path.join([ctx.root, "@snapshots", "half-written.mem"]))
       refute MemorySnapshot.memory_snapshot?("half-written")
     end
+
+    test "kind/1 and annotate/1 follow the artifacts, not a sidecar claim", ctx do
+      File.mkdir_p!(Path.join([ctx.root, "@snapshots", "frozen.mem"]))
+      File.write!(Path.join([ctx.root, "@snapshots", "frozen.mem", "state.json"]), "{}")
+
+      assert MemorySnapshot.kind("frozen") == "memory"
+      assert MemorySnapshot.kind("ghost") == "filesystem"
+
+      annotated =
+        MemorySnapshot.annotate(%{name: "frozen", kind: "filesystem", owner_id: "u"})
+
+      assert annotated.kind == "memory"
+    end
+
+    test "delete_snapshot/1 removes the .mem sibling", ctx do
+      snap = Path.join([ctx.root, "@snapshots", "frozen"])
+      mem = Path.join([ctx.root, "@snapshots", "frozen.mem"])
+      File.mkdir_p!(snap)
+      File.mkdir_p!(mem)
+      File.write!(Path.join(mem, "state.json"), "{}")
+      File.write!(Path.join([ctx.root, "@snapshots", "frozen.json"]), ~s({"name":"frozen"}))
+
+      assert :ok = Mjolnir.BTRFS.delete_snapshot("frozen")
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "frozen.json"]))
+      refute File.exists?(mem)
+    end
   end
 
   describe "freeze/3 does not pretend the source survives" do

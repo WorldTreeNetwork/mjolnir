@@ -114,6 +114,31 @@ defmodule Mjolnir.MemorySnapshot do
   end
 
   @doc """
+  `"memory"` when RAM artifacts exist for `name`, otherwise `"filesystem"`.
+
+  Callers that show snapshots to humans use this, not a metadata claim, so a
+  half-written freeze cannot advertise itself as restorable RAM.
+  """
+  @spec kind(String.t()) :: String.t()
+  def kind(name) when is_binary(name) do
+    if memory_snapshot?(name), do: "memory", else: "filesystem"
+  end
+
+  @doc """
+  Put `:kind` on snapshot metadata. Missing or stale `kind` in the sidecar
+  is overwritten from disk so list/show cannot lie.
+  """
+  @spec annotate(map()) :: map()
+  def annotate(meta) when is_map(meta) do
+    name = meta[:name] || meta["name"]
+    kind = if is_binary(name), do: kind(name), else: "filesystem"
+
+    meta
+    |> Map.delete("kind")
+    |> Map.put(:kind, kind)
+  end
+
+  @doc """
   Freeze a running VM: capture filesystem and guest RAM as one artifact.
 
   `vm` must carry `:id` and `:socket_path` (the CH API socket).

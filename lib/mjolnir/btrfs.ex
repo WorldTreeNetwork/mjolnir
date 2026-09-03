@@ -372,12 +372,54 @@ defmodule Mjolnir.BTRFS do
     if File.dir?(subvol_path) or File.exists?(meta_path) do
       _ = delete_subvolume(subvol_path)
       _ = File.rm(meta_path)
+      # Memory artifacts are a regular directory beside the subvolume, not a
+      # subvolume themselves. Leaving them behind would keep `kind=memory`
+      # after the filesystem snapshot was gone.
+      _ = File.rm_rf(Mjolnir.MemorySnapshot.memory_dir(name))
+      _ = File.rm_rf(Path.join(snapshot_dir, "#{name}.mem.forks"))
       Logger.info("Deleted snapshot '#{name}'")
       :ok
     else
       {:error, {:snapshot_not_found, name}}
     end
   end
+
+  @doc """
+  Merge `extra` into an existing snapshot sidecar and rewrite it.
+
+  Used to stamp freeze-only fields (`kind`, `restore_config`, `source_terminal`)
+  after `create_snapshot/3` has already written the filesystem metadata.
+  """
+  @spec update_snapshot_metadata(String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def update_snapshot_metadata(name, extra) when is_map(extra) do
+    validate_path_component!(name, "snapshot name")
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    meta_path = Path.join([btrfs_root, "@snapshots", "#{name}.json"])
+
+    with {:ok, content} <- File.read(meta_path),
+         {:ok, metadata} <- Jason.decode(content) do
+      merged = Map.merge(metadata, stringify_metadata(extra))
+      File.write!(meta_path, Jason.encode!(merged, pretty: true))
+      {:ok, atomize_metadata(merged)}
+    else
+      {:error, :enoent} -> {:error, {:snapshot_not_found, name}}
+      {:error, %Jason.DecodeError{} = reason} -> {:error, {:read_snapshot_failed, reason}}
+      {:error, reason} -> {:error, {:read_snapshot_failed, reason}}
+    end
+  end
+
+  defp stringify_metadata(map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), stringify_metadata_value(v)}
+      {k, v} -> {k, stringify_metadata_value(v)}
+    end)
+  end
+
+  defp stringify_metadata_value(v) when is_map(v), do: stringify_metadata(v)
+  defp stringify_metadata_value(v) when is_boolean(v), do: v
+  defp stringify_metadata_value(nil), do: nil
+  defp stringify_metadata_value(v) when is_atom(v), do: Atom.to_string(v)
+  defp stringify_metadata_value(v), do: v
 
   @doc """
   Delete the iroh key from a rootfs directory to force new key generation.
@@ -826,7 +868,7 @@ defmodule Mjolnir.BTRFS do
   # `metadata[:gen_at_creation]` as nil on every snapshot loaded from disk and
   # degrades to "cannot prove it" — which for memory restore is a refusal, so
   # the failure would be loud but wrong.
-  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation gen_at_creation readonly)
+  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation gen_at_creation readonly kind source_terminal memory_bytes memory_dir restore_config)
 
   defp atomize_metadata(metadata) when is_map(metadata) do
     Map.new(metadata, fn

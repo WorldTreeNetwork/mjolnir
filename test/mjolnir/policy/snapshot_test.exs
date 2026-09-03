@@ -12,7 +12,7 @@ defmodule Mjolnir.Policy.SnapshotTest do
 
   describe "localhost bypass" do
     test "localhost can perform any action on any snapshot" do
-      for action <- [:list, :read, :create, :delete] do
+      for action <- [:list, :read, :create, :delete, :thaw] do
         assert :ok = Snapshot.authorize(action, @localhost, @owned_snapshot)
         assert :ok = Snapshot.authorize(action, @localhost, @other_snapshot)
         assert :ok = Snapshot.authorize(action, @localhost, @legacy_snapshot)
@@ -41,6 +41,10 @@ defmodule Mjolnir.Policy.SnapshotTest do
     test "owner can delete their snapshot" do
       assert :ok = Snapshot.authorize(:delete, @owner_user, @owned_snapshot)
     end
+
+    test "owner can thaw their snapshot" do
+      assert :ok = Snapshot.authorize(:thaw, @owner_user, @owned_snapshot)
+    end
   end
 
   describe "resource actions - non-owner denied" do
@@ -50,6 +54,10 @@ defmodule Mjolnir.Policy.SnapshotTest do
 
     test "non-owner denied delete" do
       assert :error = Snapshot.authorize(:delete, @other_user, @owned_snapshot)
+    end
+
+    test "non-owner denied thaw" do
+      assert :error = Snapshot.authorize(:thaw, @other_user, @owned_snapshot)
     end
   end
 
@@ -65,7 +73,7 @@ defmodule Mjolnir.Policy.SnapshotTest do
 
   describe "unauthenticated (nil user)" do
     test "nil user denied all actions" do
-      for action <- [:list, :read, :create, :delete] do
+      for action <- [:list, :read, :create, :delete, :thaw] do
         assert :error = Snapshot.authorize(action, nil, @owned_snapshot)
       end
     end

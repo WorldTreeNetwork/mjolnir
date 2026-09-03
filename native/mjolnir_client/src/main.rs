@@ -163,6 +163,32 @@ enum Command {
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
     },
+    /// Park a running VM to a named memory snapshot. The VM STOPS — this is
+    /// not a checkpoint of a VM that keeps serving. Use `snapshot create` for
+    /// a filesystem snapshot that leaves the VM running.
+    Freeze {
+        /// VM ID or ticket
+        id: String,
+        /// Snapshot name
+        name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
+    /// Restore a parked VM from a memory snapshot (same VM id)
+    Thaw {
+        /// Memory snapshot name
+        name: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+    },
     /// Send a JSON payload into a VM (wakes a dormant VM)
     Message {
         /// VM ID or ticket
@@ -411,7 +437,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum SnapshotAction {
-    /// Checkpoint a running VM
+    /// Filesystem snapshot of a running VM (the VM keeps serving)
     Create {
         /// VM ID or ticket
         id: String,
@@ -884,6 +910,15 @@ async fn main() {
         Command::Revive { id, api, token } => api::cmd_revive(&profile, &api, &token, &id).await,
         Command::Reboot { id, api, token } => api::cmd_reboot(&profile, &api, &token, &id).await,
         Command::Forget { id, api, token } => api::cmd_forget(&profile, &api, &token, &id).await,
+        Command::Freeze {
+            id,
+            name,
+            api,
+            token,
+        } => api::cmd_freeze(&profile, &api, &token, &id, &name, json).await,
+        Command::Thaw { name, api, token } => {
+            api::cmd_thaw(&profile, &api, &token, &name, json).await
+        }
         Command::Message {
             id,
             payload,

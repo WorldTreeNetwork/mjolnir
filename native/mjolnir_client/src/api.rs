@@ -707,15 +707,16 @@ pub async fn cmd_snapshots(
 
     // Header
     println!(
-        "{:<30} {:<38} {:<28} {:>12}",
-        "NAME", "SOURCE VM", "CREATED AT", "SIZE"
+        "{:<30} {:<12} {:<38} {:<28} {:>12}",
+        "NAME", "KIND", "SOURCE VM", "CREATED AT", "SIZE"
     );
 
     for snap in &resp.snapshots {
         let size_mb = snap.size_bytes / 1024 / 1024;
+        let kind = snap.kind.as_deref().unwrap_or("filesystem");
         println!(
-            "{:<30} {:<38} {:<28} {:>9} MB",
-            snap.name, snap.source_vm_id, snap.created_at, size_mb
+            "{:<30} {:<12} {:<38} {:<28} {:>9} MB",
+            snap.name, kind, snap.source_vm_id, snap.created_at, size_mb
         );
     }
 
@@ -748,9 +749,81 @@ pub async fn cmd_snapshot_show(
     println!("Snapshot");
     println!("═══════════════════════════════════════════════════════");
     println!("Name:         {}", m.name);
+    println!("Kind:         {}", m.kind.as_deref().unwrap_or("filesystem"));
     println!("Source VM:    {}", m.source_vm_id);
     println!("Created At:    {}", m.created_at);
     println!("Size:         {} MB", size_mb);
+    Ok(())
+}
+
+pub async fn cmd_freeze(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    id_or_ticket: &str,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+
+    eprintln!(
+        "Parking VM {} as memory snapshot '{}' — the VM will STOP.",
+        id, name
+    );
+
+    let body = serde_json::json!({ "name": name });
+    let resp_body = send_text(
+        client
+            .post(format!("{}/api/vms/{}/freeze", base, &id))
+            .json(&body),
+        "freeze",
+    )
+    .await?;
+    if json {
+        println!("{}", resp_body);
+        return Ok(());
+    }
+    let resp: SnapshotCreateResponse =
+        serde_json::from_str(&resp_body).context("failed to parse freeze response")?;
+
+    eprintln!("Parked VM {} as '{}'.", id, resp.name);
+    eprintln!("The VM has stopped. Restore with: mj thaw {}", resp.name);
+    Ok(())
+}
+
+pub async fn cmd_thaw(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    name: &str,
+    json: bool,
+) -> Result<()> {
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+
+    eprintln!("Thawing memory snapshot '{}' (same VM id)...", name);
+
+    let resp_body = send_text(
+        client.post(format!("{}/api/snapshots/{}/thaw", base, name)),
+        "thaw",
+    )
+    .await?;
+    if json {
+        println!("{}", resp_body);
+        return Ok(());
+    }
+    let resp: SpawnResponse =
+        serde_json::from_str(&resp_body).context("failed to parse thaw response")?;
+
+    eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+    if let Some(ticket) = resp.ticket.as_deref() {
+        println!("{}", ticket);
+    }
     Ok(())
 }
 

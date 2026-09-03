@@ -5,6 +5,24 @@ defmodule Mjolnir.VMUnitTest do
   """
   use ExUnit.Case, async: true
 
+  describe "spawn refuses memory snapshots" do
+    test "returns memory_snapshot_requires_thaw without starting a VM" do
+      tmp = Path.join(System.tmp_dir!(), "vm-freeze-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(tmp, "@snapshots/parked.mem"))
+      File.write!(Path.join(tmp, "@snapshots/parked.mem/state.json"), "{}")
+      prev = Application.get_env(:mjolnir, :btrfs_root)
+      Application.put_env(:mjolnir, :btrfs_root, tmp)
+
+      on_exit(fn ->
+        File.rm_rf!(tmp)
+        if prev, do: Application.put_env(:mjolnir, :btrfs_root, prev)
+      end)
+
+      assert {:error, {:memory_snapshot_requires_thaw, "parked"}} =
+               Mjolnir.VM.spawn(%{snapshot: "parked"})
+    end
+  end
+
   describe "vsock CID generation" do
     test "different UUIDs produce different CIDs" do
       uuid1 = "550e8400-e29b-41d4-a716-446655440000"

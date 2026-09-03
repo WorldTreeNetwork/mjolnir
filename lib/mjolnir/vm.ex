@@ -121,7 +121,10 @@ defmodule Mjolnir.VM do
     # answered — dead code only because the inline boot never opened the
     # mailbox. Deferring the unlock makes that path live, so it is a real
     # field now and spawn/1 depends on the reply.
-    boot_waiter: nil
+    boot_waiter: nil,
+    # Named memory snapshot this GenServer is thawing from (`nil` on a
+    # normal spawn). Set by `thaw/1` via spawn_with_id.
+    thaw_name: nil
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
@@ -169,7 +172,9 @@ defmodule Mjolnir.VM do
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
           optional(:identity) => Mjolnir.Identity.t(),
           optional(:restart_policy) => :always | :never,
-          optional(:await_boot_timeout) => timeout()
+          optional(:await_boot_timeout) => timeout(),
+          optional(:id) => vm_id(),
+          optional(:thaw) => String.t()
         }
 
   # ============================================================================
@@ -211,7 +216,13 @@ defmodule Mjolnir.VM do
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
-    vm_id = UUID.uuid4()
+    with :ok <- reject_memory_snapshot_spawn(opts) do
+      do_spawn(Map.put(opts, :id, UUID.uuid4()))
+    end
+  end
+
+  defp do_spawn(opts) do
+    vm_id = opts.id
 
     case DynamicSupervisor.start_child(
            Mjolnir.VMSupervisor,
@@ -237,6 +248,7 @@ defmodule Mjolnir.VM do
     cond do
       is_integer(opts[:await_boot_timeout]) -> opts[:await_boot_timeout]
       opts[:await_boot_timeout] == :infinity -> :infinity
+      is_binary(opts[:thaw]) -> max(180_000, @managed_await_boot_timeout)
       opts[:secrets_mode] == :managed -> @managed_await_boot_timeout
       true -> @default_await_boot_timeout
     end
@@ -364,6 +376,98 @@ defmodule Mjolnir.VM do
   @spec snapshot(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(vm_id, name, opts \\ []) do
     GenServer.call(via_tuple(vm_id), {:snapshot, name, opts}, 60_000)
+  end
+
+  @doc """
+  Park a running VM: capture RAM + filesystem as `name`, then stop the source.
+
+  This is a one-way park. The VM does not keep serving. Restore with `thaw/1`.
+  """
+  @spec freeze(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def freeze(vm_id, name, opts \\ []) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [{pid, _}] ->
+        GenServer.call(pid, {:freeze, name, opts}, 300_000)
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Restore a memory snapshot into the original VM id recorded at freeze.
+  """
+  @spec thaw(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def thaw(name, opts \\ []) do
+    with {:ok, %{metadata: meta}} <- BTRFS.get_snapshot(name),
+         :ok <- ensure_memory_snapshot(name),
+         vm_id when is_binary(vm_id) <-
+           meta[:source_vm_id] || {:error, :missing_source_vm_id},
+         :ok <- ensure_id_free(vm_id) do
+      spawn_opts = thaw_spawn_opts(meta, vm_id, name, opts)
+
+      try do
+        spawn_with_id(spawn_opts)
+      catch
+        :exit, reason -> {:error, {:thaw_failed, reason}}
+      end
+    end
+  end
+
+  defp ensure_memory_snapshot(name) do
+    if Mjolnir.MemorySnapshot.memory_snapshot?(name) do
+      :ok
+    else
+      {:error, :not_a_memory_snapshot}
+    end
+  end
+
+  defp ensure_id_free(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [] -> :ok
+      _ -> {:error, {:vm_running, vm_id, :registered}}
+    end
+  end
+
+  defp thaw_spawn_opts(meta, vm_id, name, opts) do
+    cfg = meta[:restore_config] || meta["restore_config"] || %{}
+
+    %{
+      id: vm_id,
+      thaw: name,
+      owner_id: Keyword.get(opts, :owner_id, meta[:owner_id]),
+      base_image: cfg_get(cfg, :base_image),
+      vcpus: cfg_get(cfg, :vcpus),
+      memory_mb: cfg_get(cfg, :memory_mb),
+      enable_iroh: cfg_get(cfg, :enable_iroh),
+      ssh_public_key: cfg_get(cfg, :ssh_public_key),
+      secrets_mode: normalize_secrets_mode(cfg_get(cfg, :secrets_mode)),
+      restart_policy: normalize_restart_policy(cfg_get(cfg, :restart_policy))
+    }
+  end
+
+  defp cfg_get(cfg, key) when is_atom(key) do
+    Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+  end
+
+  defp normalize_secrets_mode(mode) when mode in [:none, :ephemeral, :persistent, :managed],
+    do: mode
+
+  defp normalize_secrets_mode("managed"), do: :managed
+  defp normalize_secrets_mode("persistent"), do: :persistent
+  defp normalize_secrets_mode("ephemeral"), do: :ephemeral
+  defp normalize_secrets_mode(_), do: :none
+
+  defp reject_memory_snapshot_spawn(%{thaw: name}) when is_binary(name), do: :ok
+
+  defp reject_memory_snapshot_spawn(opts) do
+    name = opts[:snapshot] || opts["snapshot"]
+
+    if is_binary(name) and Mjolnir.MemorySnapshot.memory_snapshot?(name) do
+      {:error, {:memory_snapshot_requires_thaw, name}}
+    else
+      :ok
+    end
   end
 
   @doc """
@@ -937,18 +1041,8 @@ defmodule Mjolnir.VM do
   def spawn_with_id(opts) do
     vm_id = opts[:id] || raise ArgumentError, ":id is required for spawn_with_id"
 
-    case DynamicSupervisor.start_child(
-           Mjolnir.VMSupervisor,
-           {__MODULE__, Map.put(opts, :id, vm_id)}
-         ) do
-      {:ok, pid} ->
-        case GenServer.call(pid, :await_boot, await_boot_timeout(opts)) do
-          {:ok, vm} -> {:ok, vm}
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    with :ok <- reject_memory_snapshot_spawn(opts) do
+      do_spawn(Map.put(opts, :id, vm_id))
     end
   end
 
@@ -1085,13 +1179,31 @@ defmodule Mjolnir.VM do
       # The string form is accepted too: the dormant-restore path round-trips
       # its config through JSON, so a policy that only matched the atom would be
       # silently downgraded to :always on the way back.
-      restart_policy: normalize_restart_policy(opts[:restart_policy])
+      restart_policy: normalize_restart_policy(opts[:restart_policy]),
+      thaw_name: opts[:thaw]
     }
 
-    {:ok, state, {:continue, :boot}}
+    continue = if is_binary(opts[:thaw]), do: :thaw, else: :boot
+    {:ok, state, {:continue, continue}}
   end
 
   @impl true
+  def handle_continue(:thaw, state) do
+    case do_thaw(state) do
+      {:ok, new_state} ->
+        start_secrets_unlock(new_state)
+
+      {:error, reason} ->
+        Logger.error("VM #{state.id} failed to thaw: #{inspect(reason)}")
+
+        if state.boot_waiter do
+          GenServer.reply(state.boot_waiter, {:error, reason})
+        end
+
+        {:stop, :normal, %{state | state: :failed}}
+    end
+  end
+
   def handle_continue(:boot, state) do
     case do_boot(state) do
       {:ok, new_state} ->
@@ -1325,6 +1437,38 @@ defmodule Mjolnir.VM do
     case do_snapshot(state, name, opts) do
       {:ok, metadata} -> verify_after_snapshot(state, name, metadata, opts)
       {:error, _reason} = err -> {:reply, err, state}
+    end
+  end
+
+  def handle_call({:freeze, _name, _opts}, _from, %{state: state_name} = state)
+      when state_name != :running do
+    {:reply, {:error, {:not_running, state_name}}, state}
+  end
+
+  def handle_call({:freeze, name, opts}, _from, state) do
+    vm = %{
+      id: state.id,
+      socket_path: state.socket_path,
+      vsock_path: state.vsock_path,
+      secrets_mode: state.secrets_mode
+    }
+
+    freeze_opts =
+      opts
+      |> Keyword.put(:owner_id, opts[:owner_id] || state.owner_id)
+      |> Keyword.put(:secrets_mode, state.secrets_mode)
+
+    case Mjolnir.MemorySnapshot.freeze(vm, name, freeze_opts) do
+      {:ok, metadata} ->
+        _ = stamp_freeze_metadata(name, state, metadata)
+        # Same as handle_done: drop running intent so Reconcile does not
+        # cold-boot the live subvolume after we tear the VMM down.
+        _ = Mjolnir.StateStore.delete(state.id)
+        Mjolnir.EventBus.publish(state.id, :vm_frozen, %{snapshot: name})
+        {:stop, :normal, {:ok, Mjolnir.MemorySnapshot.annotate(metadata)}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -2096,6 +2240,104 @@ defmodule Mjolnir.VM do
     e ->
       Logger.warning("Guest agent injection failed: #{inspect(e)}")
       :ok
+  end
+
+  defp stamp_freeze_metadata(name, state, metadata) do
+    extra = %{
+      kind: "memory",
+      source_terminal: true,
+      memory_bytes: metadata[:memory_bytes],
+      memory_dir: metadata[:memory_dir],
+      restore_config: jsonable_restore_config(state)
+    }
+
+    BTRFS.update_snapshot_metadata(name, extra)
+  end
+
+  defp jsonable_restore_config(state) do
+    state
+    |> restore_config()
+    |> Map.new(fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), jsonable_restore_value(v)}
+      {k, v} -> {k, jsonable_restore_value(v)}
+    end)
+  end
+
+  defp jsonable_restore_value(v) when is_atom(v), do: Atom.to_string(v)
+  defp jsonable_restore_value(v), do: v
+
+  defp do_thaw(state) do
+    name = state.thaw_name
+    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+    vsock_path = state.hypervisor.vsock_path(socket_dir, state.id)
+
+    case Mjolnir.MemorySnapshot.thaw(name, state.id) do
+      {:ok, thawed} ->
+        case attach_thawed(state, thawed, vsock_path) do
+          {:ok, _} = ok ->
+            ok
+
+          {:error, reason} ->
+            abandon_thaw(state, thawed)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_thawed(state, thawed, vsock_path) do
+    guest_vsock = thawed.vsock_socket || vsock_path
+
+    with :ok <- wait_for_boot(guest_vsock, state),
+         {:ok, vsock_conn} <-
+           Mjolnir.Vsock.Connection.start_link(%{
+             vm_id: state.id,
+             socket_path: guest_vsock
+           }),
+         :ok <- Mjolnir.Entropy.reseed(vsock_conn) do
+      iroh_info =
+        if state.enable_iroh do
+          await_iroh_ready(guest_vsock, 5_000)
+        else
+          nil
+        end
+
+      {:ok,
+       %{
+         state
+         | socket_path: thawed.api_socket,
+           vsock_path: guest_vsock,
+           vsock_conn: vsock_conn,
+           rootfs_path: thawed.rootfs_path,
+           net_config: thawed.net,
+           hypervisor_port: thawed.hypervisor_port,
+           virtiofsd_port: thawed.virtiofsd_port,
+           extra_virtiofsd_ports: [],
+           iroh_node_id: iroh_info[:node_id],
+           iroh_json: iroh_info[:ticket],
+           ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
+           pty_ready: iroh_info != nil
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
+    end
+  end
+
+  defp abandon_thaw(state, thawed) do
+    partial = %{
+      state
+      | hypervisor_port: thawed.hypervisor_port,
+        virtiofsd_port: thawed.virtiofsd_port,
+        net_config: thawed.net,
+        rootfs_path: thawed.rootfs_path,
+        socket_path: thawed.api_socket,
+        vsock_path: thawed.vsock_socket
+    }
+
+    cleanup(partial, preserve_rootfs: false)
   end
 
   defp clone_rootfs(vm_id, base_image, config) do

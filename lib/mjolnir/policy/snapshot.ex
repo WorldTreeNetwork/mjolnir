@@ -6,7 +6,7 @@ defmodule Mjolnir.Policy.Snapshot do
   then default deny.
   """
 
-  @type action :: :list | :read | :create | :delete
+  @type action :: :list | :read | :create | :delete | :thaw
   @type user :: %{user_id: String.t()} | nil
   @type resource :: %{atom() => any()} | nil
 
@@ -33,7 +33,7 @@ defmodule Mjolnir.Policy.Snapshot do
 
   # Resource actions: owner only
   def authorize(action, %{user_id: uid}, %{owner_id: oid})
-      when action in [:read, :delete] do
+      when action in [:read, :delete, :thaw] do
     if uid == oid, do: :ok, else: :error
   end
 

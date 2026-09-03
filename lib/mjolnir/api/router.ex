@@ -411,7 +411,14 @@ defmodule Mjolnir.API.Router do
         opts = Map.delete(opts, :_validation_error)
 
         try do
-          case Mjolnir.VM.spawn(opts) do
+          case spawn_rejecting_memory_snapshot(opts) do
+            {:error, {:memory_snapshot_requires_thaw, name}} ->
+              json(conn, 400, %{
+                error: "memory_snapshot_requires_thaw",
+                snapshot: name,
+                hint: "mj thaw #{name}"
+              })
+
             {:ok, vm} ->
               json(conn, 201, Views.render_vm(vm))
 
@@ -1209,7 +1216,7 @@ defmodule Mjolnir.API.Router do
           authorize_vm(conn, id, :snapshot, fn vm ->
             case Mjolnir.VM.snapshot(id, name, owner_id: vm.owner_id) do
               {:ok, metadata} ->
-                json(conn, 201, metadata)
+                json(conn, 201, Mjolnir.MemorySnapshot.annotate(metadata))
 
               {:error, {:snapshot_exists, _}} ->
                 json(conn, 409, %{error: "name unavailable"})
@@ -1248,6 +1255,44 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Park a running VM (memory snapshot). The source VMM is torn down.
+  post "/api/vms/:id/freeze" do
+    conn = require_scope(conn, "snapshots:create")
+
+    unless conn.halted do
+      case Validation.validate_safe_name(conn.body_params["name"], "name") do
+        {:ok, name} ->
+          authorize_vm(conn, id, :snapshot, fn vm ->
+            case Mjolnir.VM.freeze(id, name, owner_id: vm.owner_id) do
+              {:ok, metadata} ->
+                json(conn, 201, Map.put(metadata, :parked, true))
+
+              {:error, {:snapshot_exists, _}} ->
+                json(conn, 409, %{error: "name unavailable"})
+
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "vm not_found"})
+
+              {:error, {:not_running, state}} ->
+                json(conn, 409, %{error: "not_running", state: state})
+
+              {:error, {:secrets_quiesce_required, mode}} ->
+                json(conn, 409, %{error: "secrets_quiesce_required", secrets_mode: mode})
+
+              {:error, reason} ->
+                Logger.error("Freeze failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "freeze_failed"})
+            end
+          end)
+
+        {:error, msg} ->
+          json(conn, 400, %{error: msg})
+      end
+    else
+      conn
+    end
+  end
+
   # List all snapshots
   get "/api/snapshots" do
     conn = require_scope(conn, "snapshots:read")
@@ -1258,9 +1303,11 @@ defmodule Mjolnir.API.Router do
           user_id = conn.assigns[:user_id]
 
           filtered =
-            Enum.filter(snapshots, fn meta ->
+            snapshots
+            |> Enum.filter(fn meta ->
               user_id == "localhost" or meta[:owner_id] == user_id
             end)
+            |> Enum.map(&Mjolnir.MemorySnapshot.annotate/1)
 
           json(conn, 200, %{snapshots: filtered})
 
@@ -1285,7 +1332,7 @@ defmodule Mjolnir.API.Router do
               user = %{user_id: conn.assigns[:user_id]}
 
               case Mjolnir.Policy.Snapshot.authorize(:read, user, metadata) do
-                :ok -> json(conn, 200, metadata)
+                :ok -> json(conn, 200, Mjolnir.MemorySnapshot.annotate(metadata))
                 :error -> json(conn, 404, %{error: "not_found"})
               end
 
@@ -1295,6 +1342,61 @@ defmodule Mjolnir.API.Router do
             {:error, reason} ->
               Logger.error("Snapshot get failed for '#{validated_name}': #{inspect(reason)}")
               json(conn, 500, %{error: "snapshot_get_failed"})
+          end
+
+        {:error, msg} ->
+          json(conn, 400, %{error: msg})
+      end
+    else
+      conn
+    end
+  end
+
+  # Restore a parked VM from a memory snapshot (same VM id).
+  post "/api/snapshots/:name/thaw" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      case Validation.validate_safe_name(name, "snapshot name") do
+        {:ok, validated_name} ->
+          case Mjolnir.BTRFS.get_snapshot(validated_name) do
+            {:ok, %{metadata: metadata}} ->
+              user = %{user_id: conn.assigns[:user_id]}
+
+              case Mjolnir.Policy.Snapshot.authorize(:thaw, user, metadata) do
+                :ok ->
+                  case Mjolnir.VM.thaw(validated_name, owner_id: metadata[:owner_id]) do
+                    {:ok, vm} ->
+                      json(conn, 201, Views.render_vm(vm))
+
+                    {:error, :not_a_memory_snapshot} ->
+                      json(conn, 400, %{
+                        error: "not_a_memory_snapshot",
+                        hint: "mj spawn --snapshot #{validated_name}"
+                      })
+
+                    {:error, {:vm_running, vm_id, _}} ->
+                      json(conn, 409, %{error: "vm_running", vm_id: vm_id})
+
+                    {:error, {:snapshot_not_found, _}} ->
+                      json(conn, 404, %{error: "not_found"})
+
+                    {:error, reason} ->
+                      Logger.error("Thaw failed for '#{validated_name}': #{inspect(reason)}")
+
+                      json(conn, 500, %{error: "thaw_failed"})
+                  end
+
+                :error ->
+                  json(conn, 404, %{error: "not_found"})
+              end
+
+            {:error, {:snapshot_not_found, _}} ->
+              json(conn, 404, %{error: "not_found"})
+
+            {:error, reason} ->
+              Logger.error("Snapshot lookup failed for '#{validated_name}': #{inspect(reason)}")
+              json(conn, 500, %{error: "snapshot_lookup_failed"})
           end
 
         {:error, msg} ->
@@ -1644,6 +1746,16 @@ defmodule Mjolnir.API.Router do
   # bytes arrive intact for erl_tar to decompress+extract.
   defp maybe_parse_body(%{path_info: ["api", "deploy"]} = conn, _opts), do: conn
   defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
+
+  defp spawn_rejecting_memory_snapshot(opts) do
+    name = opts[:snapshot]
+
+    if is_binary(name) and Mjolnir.MemorySnapshot.memory_snapshot?(name) do
+      {:error, {:memory_snapshot_requires_thaw, name}}
+    else
+      Mjolnir.VM.spawn(opts)
+    end
+  end
 
   defp json(conn, status, body) do
     conn

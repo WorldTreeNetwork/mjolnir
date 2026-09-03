@@ -25,6 +25,34 @@ defmodule Mjolnir.BTRFSTest do
       File.rm_rf!(tmp)
     end
 
+    test "update_snapshot_metadata/2 merges extra fields" do
+      tmp = Path.join(System.tmp_dir!(), "btrfs-meta-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(tmp, "@snapshots"))
+      prev = Application.get_env(:mjolnir, :btrfs_root)
+      Application.put_env(:mjolnir, :btrfs_root, tmp)
+
+      on_exit(fn ->
+        File.rm_rf!(tmp)
+        if prev, do: Application.put_env(:mjolnir, :btrfs_root, prev)
+      end)
+
+      File.write!(
+        Path.join([tmp, "@snapshots", "n.json"]),
+        Jason.encode!(%{"name" => "n", "source_vm_id" => "vm-1"})
+      )
+
+      assert {:ok, meta} =
+               Mjolnir.BTRFS.update_snapshot_metadata("n", %{
+                 kind: "memory",
+                 source_terminal: true,
+                 restore_config: %{secrets_mode: :managed}
+               })
+
+      assert meta.kind == "memory"
+      assert meta.source_terminal == true
+      assert meta.restore_config["secrets_mode"] == "managed"
+    end
+
     test "delete_iroh_key/1 succeeds when key doesn't exist" do
       tmp = Path.join(System.tmp_dir!(), "btrfs-test-#{System.unique_integer([:positive])}")
       File.mkdir_p!(tmp)

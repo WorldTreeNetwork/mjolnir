@@ -84,6 +84,12 @@ pub struct SnapshotMetadata {
     pub source_vm_id: String,
     pub created_at: String,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub parked: Option<bool>,
+    #[serde(default)]
+    pub source_terminal: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +103,12 @@ pub struct SnapshotCreateResponse {
     pub source_vm_id: String,
     pub created_at: String,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub parked: Option<bool>,
+    #[serde(default)]
+    pub source_terminal: Option<bool>,
 }
 
 #[derive(Deserialize)]
