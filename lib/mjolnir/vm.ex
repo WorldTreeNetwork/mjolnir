@@ -1762,7 +1762,7 @@ defmodule Mjolnir.VM do
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
-      vsock_cid: generate_vsock_cid(opts.id),
+      vsock_cid: Mjolnir.Vsock.cid(opts.id),
       snapshot: opts[:snapshot],
       preserve_iroh_key: opts[:preserve_iroh_key] || false,
       resume: opts[:resume] || false,
@@ -1772,16 +1772,6 @@ defmodule Mjolnir.VM do
       # :extra_mounts passed to spawn/1 was silently dropped (gge.1.9).
       extra_mounts: opts[:extra_mounts] || []
     }
-  end
-
-  # Generate a unique vsock CID from the VM's UUID.
-  # CIDs 0-2 are reserved by the kernel, so we map into the range [3, 0xFFFFFFFF).
-  # Uses the first 4 bytes of the UUID's MD5 hash to produce a deterministic,
-  # collision-resistant 32-bit CID.
-  defp generate_vsock_cid(vm_id) do
-    <<cid_raw::unsigned-32, _rest::binary>> = :crypto.hash(:md5, vm_id)
-    # Ensure CID >= 3 (0-2 are reserved) and avoid 0xFFFFFFFF (VMADDR_CID_ANY)
-    rem(cid_raw, 0xFFFFFFFF - 3) + 3
   end
 
   defp do_boot(state) do

@@ -404,19 +404,206 @@ defmodule Mjolnir.MemorySnapshot do
   end
 
   @doc """
+  Directory holding a remapped copy of a named memory snapshot, for one thaw
+  identity.
+
+  Sibling of `@snapshots/<name>.mem` rather than a subdirectory of it: CH
+  restore reads `config.json` / `state.json` / `memory-ranges` from a directory
+  and extra entries in the original artifact must not be confused with those.
+  """
+  @spec fork_dir(String.t(), String.t()) :: String.t()
+  def fork_dir(name, new_vm_id) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    Path.join([btrfs_root, "@snapshots", "#{name}.mem.forks", new_vm_id])
+  end
+
+  @doc """
+  Rewrite a CH `config.json` so a thaw can run under a new identity.
+
+  The original snapshot records absolute virtiofsd/vsock socket paths and a
+  vsock CID. Two thaws of that file collide — the second attaches to the
+  first VM's virtiofsd. Proven on CH v53 (mjolnir-8m3): restore accepts a
+  rewritten config with a different socket path *and* a different CID while
+  `state.json` still describes the original devices.
+
+  What this changes:
+
+    - `fs[].socket` — per-identity virtiofsd path (`VirtioFS.socket_path/2,3`)
+    - `vsock.socket` / `vsock.cid` — per-identity vsock
+    - `net[].tap` — per-identity TAP name, **MAC kept** (guest-visible, in RAM)
+
+  What this does not change: guest IP, hostname, machine-id, Iroh key. Those
+  are `mjolnir-8m3`. Exec over vsock does not need them, which is why the
+  entropy probe can run without a full fork.
+  """
+  @spec remap_config(map(), String.t(), String.t()) :: map()
+  def remap_config(config, new_vm_id, socket_dir)
+      when is_map(config) and is_binary(new_vm_id) and is_binary(socket_dir) do
+    config
+    |> remap_fs(new_vm_id, socket_dir)
+    |> remap_vsock(new_vm_id, socket_dir)
+    |> remap_tap(new_vm_id)
+  end
+
+  defp remap_fs(config, vm_id, socket_dir) do
+    case config["fs"] do
+      fs when is_list(fs) ->
+        remapped =
+          fs
+          |> Enum.with_index()
+          |> Enum.map(fn
+            {entry, 0} ->
+              Map.put(entry, "socket", Mjolnir.VirtioFS.socket_path(socket_dir, vm_id))
+
+            {entry, _} ->
+              tag = entry["tag"] || entry["id"] || "fs"
+              Map.put(entry, "socket", Mjolnir.VirtioFS.socket_path(socket_dir, vm_id, tag))
+          end)
+
+        Map.put(config, "fs", remapped)
+
+      _ ->
+        config
+    end
+  end
+
+  defp remap_vsock(config, vm_id, socket_dir) do
+    case config["vsock"] do
+      vsock when is_map(vsock) ->
+        Map.put(
+          config,
+          "vsock",
+          vsock
+          |> Map.put("cid", Mjolnir.Vsock.cid(vm_id))
+          |> Map.put("socket", Mjolnir.Hypervisor.CloudHypervisor.vsock_path(socket_dir, vm_id))
+        )
+
+      _ ->
+        config
+    end
+  end
+
+  defp remap_tap(config, vm_id) do
+    case config["net"] do
+      nets when is_list(nets) ->
+        tap = Mjolnir.Network.tap_name(vm_id)
+
+        remapped =
+          Enum.map(nets, fn
+            %{"tap" => _} = entry -> Map.put(entry, "tap", tap)
+            entry -> entry
+          end)
+
+        Map.put(config, "net", remapped)
+
+      _ ->
+        config
+    end
+  end
+
+  @doc """
+  Copy a memory snapshot into a per-identity directory and rewrite `config.json`.
+
+  `memory-ranges` is reflinked when the filesystem supports it (`cp --reflink=auto`),
+  so two staged forks of a 2 GiB image cost ~zero extra bytes. `state.json` is
+  copied whole — it is small, and restore reads it.
+
+  ## Options
+
+    - `:source` — snapshot memory dir (default `memory_dir(name)`)
+    - `:dest` — staging dir (default `fork_dir(name, new_vm_id)`)
+    - `:socket_dir` — host socket directory used in the rewrite
+  """
+  @spec stage_fork(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def stage_fork(name, new_vm_id, opts \\ []) do
+    src = Keyword.get(opts, :source, memory_dir(name))
+    dest = Keyword.get(opts, :dest, fork_dir(name, new_vm_id))
+    socket_dir = Keyword.get(opts, :socket_dir, Application.get_env(:mjolnir, :socket_dir))
+
+    cond do
+      File.exists?(Path.join(dest, "config.json")) ->
+        {:error, {:fork_exists, dest}}
+
+      true ->
+        with :ok <- ensure_memory_artifacts(name, src),
+             :ok <- File.mkdir_p(dest),
+             :ok <- copy_artifacts(src, dest),
+             {:ok, config} <- read_snapshot_config(dest),
+             remapped = remap_config(config, new_vm_id, socket_dir),
+             :ok <- write_json(Path.join(dest, "config.json"), remapped) do
+          {:ok, %{memory_dir: dest, config: remapped}}
+        else
+          {:error, reason} ->
+            _ = File.rm_rf(dest)
+            {:error, reason}
+        end
+    end
+  end
+
+  defp copy_artifacts(src, dest) do
+    case File.ls(src) do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, :ok, fn entry, :ok ->
+          s = Path.join(src, entry)
+          d = Path.join(dest, entry)
+
+          cond do
+            File.dir?(s) ->
+              {:cont, :ok}
+
+            true ->
+              case copy_file(s, d) do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, {:memory_dir_unreadable, src, reason}}
+    end
+  end
+
+  defp copy_file(src, dest) do
+    case System.cmd("cp", ["-f", "--reflink=auto", src, dest], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      _ ->
+        case File.cp(src, dest) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:copy_failed, src, dest, reason}}
+        end
+    end
+  end
+
+  defp write_json(path, term) do
+    tmp = path <> ".tmp"
+
+    with {:ok, body} <- Jason.encode(term),
+         :ok <- File.write(tmp, body),
+         :ok <- File.rename(tmp, path) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, {:config_write_failed, path, reason}}
+    end
+  end
+
+  @doc """
   Refuse a thaw whose backends would collide with something already running.
 
-  Two thaws from one snapshot want the *same* virtiofsd socket path and the
-  *same* vsock CID, because both are baked into `config.json`. Without this
-  check the second thaw silently attaches to the first VM's virtiofsd — one
-  daemon serving two guests that each believe they own the filesystem — which
-  is a data-corruption path, not a startup error.
+  Two *un-remapped* thaws from one snapshot want the same virtiofsd socket
+  and the same vsock CID, because both are baked into `config.json`. Without
+  this check the second thaw silently attaches to the first VM's virtiofsd —
+  one daemon serving two guests that each believe they own the filesystem —
+  which is a data-corruption path, not a startup error.
 
-  So forking N VMs from one memory image is **not supported yet** and is
-  refused here rather than half-working. Making it work needs per-thaw
-  rewriting of `config.json` (and a CID reallocation whose interaction with the
-  vsock device state in `state.json` is unproven), which is its own piece of
-  work.
+  `thaw/3` with `remap: true` rewrites those paths first, so two remapped
+  thaws of one snapshot pass this check. That is the slice that makes the
+  entropy key probe runnable. Full fork (guest IP, machine-id, net_fds)
+  remains `mjolnir-8m3`.
 
   A stale socket *file* with nothing listening is not a collision — that is the
   normal aftermath of a killed VMM — so this probes for a live listener rather
@@ -535,24 +722,28 @@ defmodule Mjolnir.MemorySnapshot do
   defp restore_tap(%{tap: nil}, _prep, _tap_create), do: {:ok, nil}
 
   defp restore_tap(%{tap: expected_tap} = req, prep, tap_create) do
-    # The guest woke believing it has a specific MAC and IP. Those are
-    # hash-deterministic from the VM id, so recreating them means recreating
-    # them for the vm that was FROZEN — not for the new id the clone lives
-    # under. Getting this backwards yields a VM that boots fine and has no
-    # working network, which is a much worse failure than refusing.
-    source_vm_id = prep.metadata[:source_vm_id]
+    # Preserve (default): TAP/MAC/IP are hash-derived from the frozen VM id
+    # and the guest holds those values in RAM. Remap (`thaw/3` `:remap`):
+    # config.json's tap name is rewritten to the new identity so two thaws
+    # do not collide; the guest MAC is kept (it is guest-visible) and is
+    # therefore *not* what `Network.generate_mac(new_id)` would produce.
+    tap_vm_id = Map.get(prep, :tap_vm_id) || prep.metadata[:source_vm_id]
+    verify_mac? = Map.get(prep, :verify_guest_mac, true)
 
     cond do
-      is_nil(source_vm_id) ->
+      is_nil(tap_vm_id) ->
         {:error, {:snapshot_missing_source_vm_id, prep.metadata[:name]}}
 
-      Mjolnir.Network.tap_name(source_vm_id) != expected_tap ->
-        {:error, {:tap_name_mismatch, expected_tap, Mjolnir.Network.tap_name(source_vm_id)}}
+      Mjolnir.Network.tap_name(tap_vm_id) != expected_tap ->
+        {:error, {:tap_name_mismatch, expected_tap, Mjolnir.Network.tap_name(tap_vm_id)}}
 
       true ->
-        case tap_create.(source_vm_id) do
-          {:ok, net} -> verify_mac(net, req, expected_tap)
-          {:error, reason} -> {:error, {:tap_setup_failed, expected_tap, reason}}
+        case tap_create.(tap_vm_id) do
+          {:ok, net} ->
+            if verify_mac?, do: verify_mac(net, req, expected_tap), else: {:ok, net}
+
+          {:error, reason} ->
+            {:error, {:tap_setup_failed, expected_tap, reason}}
         end
     end
   end
@@ -594,14 +785,23 @@ defmodule Mjolnir.MemorySnapshot do
     - `:api_socket` — override the fresh VMM's API socket path
     - `:hypervisor` — module implementing `start_vm/1` (default from config)
     - `:virtiofs_start`, `:tap_create` — as `prepare_backends/3`
+    - `:remap` — rewrite `config.json` onto a per-identity copy so two thaws
+      of one snapshot do not collide on virtiofsd/vsock (default `false`,
+      which is the proven one-at-a-time path). Required for
+      `Mjolnir.Entropy.Probe`.
+    - `:socket_dir` — host socket directory used when remapping
   """
   @spec thaw(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def thaw(name, new_vm_id, opts \\ []) do
-    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+    socket_dir = Keyword.get(opts, :socket_dir, Application.get_env(:mjolnir, :socket_dir))
     hypervisor = Keyword.get(opts, :hypervisor, Application.get_env(:mjolnir, :hypervisor))
     api_socket = Keyword.get(opts, :api_socket, Path.join(socket_dir, "#{new_vm_id}.sock"))
+    remap? = Keyword.get(opts, :remap, false)
+    opts = Keyword.put_new(opts, :socket_dir, socket_dir)
 
     with {:ok, prep} <- prepare_thaw(name, new_vm_id),
+         {:ok, prep} <-
+           discard_clone_on_error(prep, maybe_remap(prep, name, new_vm_id, remap?, opts)),
          {:ok, config} <- read_snapshot_config(prep.memory_dir),
          {:ok, req} <- required_backends(config),
          # Once the clone exists, EVERY later failure has to remove it or the
@@ -632,16 +832,19 @@ defmodule Mjolnir.MemorySnapshot do
                  hypervisor_port: hv_port,
                  vsock_socket: req.vsock_socket,
                  vsock_cid: req.vsock_cid,
+                 fs_socket: req.fs_socket,
+                 extra_fs_sockets: req.extra_fs_sockets,
+                 staged: Map.get(prep, :staged, false),
                  metadata: prep.metadata
                }}
 
             {:error, reason} ->
-              unwind(backends, req, prep, hv_port)
+              unwind(backends, req, prep, hv_port, :failed)
               {:error, reason}
           end
 
         {:error, reason} ->
-          unwind(backends, req, prep, nil)
+          unwind(backends, req, prep, nil, :failed)
           {:error, {:vmm_start_failed, reason}}
       end
     end
@@ -650,11 +853,62 @@ defmodule Mjolnir.MemorySnapshot do
   # The clone is disposable by construction: the pinned read-only snapshot it
   # came from is untouched, so discarding it costs nothing and keeps a failed
   # thaw retryable.
+  defp maybe_remap(prep, _name, _id, false, _opts), do: {:ok, prep}
+
+  defp maybe_remap(prep, name, new_vm_id, true, opts) do
+    stage_opts =
+      opts
+      |> Keyword.take([:dest, :socket_dir])
+      |> Keyword.put(:source, prep.memory_dir)
+
+    case stage_fork(name, new_vm_id, stage_opts) do
+      {:ok, %{memory_dir: staged}} ->
+        {:ok,
+         prep
+         |> Map.put(:memory_dir, staged)
+         |> Map.put(:tap_vm_id, new_vm_id)
+         |> Map.put(:verify_guest_mac, false)
+         |> Map.put(:staged, true)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp discard_clone_on_error(_prep, {:ok, _} = ok), do: ok
 
   defp discard_clone_on_error(prep, {:error, reason}) do
     _ = BTRFS.delete_subvolume(prep.rootfs_path)
+    drop_staged(prep)
     {:error, reason}
+  end
+
+  @doc """
+  Tear down a successful thaw: hypervisor, virtiofsd, TAP, clone, staged fork.
+
+  `thaw/3` already unwinds on failure. Callers that got `{:ok, thawed}` —
+  including `Mjolnir.Entropy.Probe` — must call this when they are done, or
+  the sockets the next thaw needs stay held.
+  """
+  @spec teardown(map()) :: :ok
+  def teardown(thawed) when is_map(thawed) do
+    req = %{
+      fs_socket: Map.get(thawed, :fs_socket),
+      extra_fs_sockets: Map.get(thawed, :extra_fs_sockets, [])
+    }
+
+    backends = %{
+      virtiofsd_port: Map.get(thawed, :virtiofsd_port),
+      net: Map.get(thawed, :net)
+    }
+
+    prep = %{
+      rootfs_path: Map.get(thawed, :rootfs_path),
+      memory_dir: Map.get(thawed, :memory_dir),
+      staged: Map.get(thawed, :staged, false)
+    }
+
+    unwind(backends, req, prep, Map.get(thawed, :hypervisor_port), :teardown)
   end
 
   defp start_vmm(hypervisor, api_socket) do
@@ -681,12 +935,20 @@ defmodule Mjolnir.MemorySnapshot do
   # the TAP are precisely what a retry needs, so leaving them held converts one
   # failure into a permanently un-retryable one — the next attempt would hit
   # {:virtiofsd_socket_in_use, _} forever.
-  defp unwind(backends, req, prep, hv_port) do
-    Logger.warning("Thaw onto #{prep.rootfs_path} failed; unwinding host resources")
+  defp unwind(backends, req, prep, hv_port, reason) do
+    if reason == :failed do
+      Logger.warning("Thaw onto #{prep.rootfs_path} failed; unwinding host resources")
+    end
 
     if is_port(hv_port), do: safe_close(hv_port)
-    if backends[:virtiofsd_port], do: Mjolnir.VirtioFS.stop(backends.virtiofsd_port)
-    _ = Mjolnir.VirtioFS.cleanup(req.fs_socket)
+
+    if backends[:virtiofsd_port] do
+      _ = Mjolnir.VirtioFS.stop(backends.virtiofsd_port)
+    end
+
+    if is_binary(req[:fs_socket]) do
+      _ = Mjolnir.VirtioFS.cleanup(req.fs_socket)
+    end
 
     if backends[:net] do
       _ = Mjolnir.Network.delete_tap(backends.net.tap_name, backends.net.guest_ip)
@@ -695,9 +957,18 @@ defmodule Mjolnir.MemorySnapshot do
     # The clone is disposable by construction — the pinned read-only snapshot it
     # came from is untouched — so removing it costs nothing and leaves no
     # half-thawed subvolume for a later thaw to trip over.
-    _ = BTRFS.delete_subvolume(prep.rootfs_path)
+    if prep[:rootfs_path], do: BTRFS.delete_subvolume(prep.rootfs_path)
+    drop_staged(prep)
     :ok
   end
+
+  defp drop_staged(%{staged: true, memory_dir: dir}) when is_binary(dir) do
+    # Never the original `@snapshots/<name>.mem` — only a staged fork.
+    _ = File.rm_rf(dir)
+    :ok
+  end
+
+  defp drop_staged(_), do: :ok
 
   defp safe_close(port) do
     Port.close(port)

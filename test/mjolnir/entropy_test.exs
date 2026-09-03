@@ -7,9 +7,10 @@ defmodule Mjolnir.EntropyTest do
 
   Everything here guards the *gate*: `interpret/1` decides whether a restored
   VM becomes reachable, so every ambiguous answer must resolve to "no". The
-  ioctl itself is covered on the guest side (`native/.../entropy.rs`) and the
-  end-to-end property — two thaws, two different keys — needs a real VM and
-  lives in the integration suite.
+  ioctl itself is covered on the guest side (`native/.../entropy.rs`). The
+  end-to-end property — two thaws, two different keys — is
+  `Mjolnir.Entropy.Probe` (control flow in `entropy_probe_test.exs`; live
+  sample needs KVM).
   """
   use ExUnit.Case, async: true
 
