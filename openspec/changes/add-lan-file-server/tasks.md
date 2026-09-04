@@ -20,6 +20,21 @@ accept. Grok authored; advise reader must not be Grok (ADR-005).
       persistence default memory). Design "may run recrypt-server"
       must not license a drop-in. Name the four guest-HTTP deltas
       or a custom guest. (`reviews/2026-09-04-advise.md`)
+- [ ] Send-back 2026-09-04 (fable): publish targets are link state,
+      not host facts. Observed: Ethernet DOWN, wifi `192.168.0.19`
+      on a home AP, no `fd01:d28c:7e4a` address or route. Pin in
+      `design.md`: publish binds by interface, never falls back to
+      `0.0.0.0` / `::` / the GUA when the address is absent; name
+      the ULA address (stable-privacy or `ipv6.token`), not the
+      /48 prefix. Spec gains an "Ethernet unplugged" scenario
+      mirroring the door's "Dummy address missing".
+      (`reviews/2026-09-04-fable-advise.md`)
+- [ ] Send-back 2026-09-04 (fable): `aud` is one fixed service id
+      across LAN v4, ULA, and `.mesh` name; never derived from
+      `Host`, bound address, or port (identikey-auth §`aud` :98,
+      :170). One sentence in `design.md`; spec scenario "Claimant
+      holds the key" gains the path-independence clause.
+      (`reviews/2026-09-04-fable-advise.md`)
 - [ ] After accept: pointer in `docs/architecture.md` (do not delete
       prior sidecar text)
 
