@@ -697,6 +697,12 @@ Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing
 MinIO. iroh-blobs as working-set/transmit is later.
 
+A LAN-reachable Recrypt share (change `add-lan-file-server`,
+capability `lan-files`) is a guest HTTP surface, not a new sidecar
+and not a blob-door bind on the public NIC. Identity is
+`identikey-auth`; data caps are `recrypt-storage-auth` on Blake3
+File subjects; bytes stay on the door. In-flight until fold.
+
 ### Channel System (Future)
 
 The local Buzz client fabric (living spec
