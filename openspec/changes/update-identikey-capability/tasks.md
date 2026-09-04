@@ -18,6 +18,9 @@ cross-family reader. Sol is not subscribed.
 - [x] Send-back 2026-08-26: fingerprint encoding (auth-challenge §5)
 - [x] Human amend 2026-08-26: salted Blake3 commitments; unsalted
       secret hashes forbidden; Gordian elision deferred
+- [ ] ASK: second-family advise — Fable 5.1 infra-red (Claude Code
+      too old for claude-fable-5-1); opus-4.8 infra-red (Claude credit
+      too low); Sol OpenAI HTTP cannot read the repo. PUNT 2026-09-04.
 - [ ] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`
       (new sections; keep three-layer table; point tokenator at
