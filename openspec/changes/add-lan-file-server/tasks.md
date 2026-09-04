@@ -8,7 +8,8 @@ accept. Grok authored; advise reader must not be Grok (ADR-005).
 - [x] Write `design.md` (this change)
 - [x] Write `steer.md` (this change)
 - [x] Delta `specs/lan-files/spec.md` (ADDED)
-- [ ] Advise accept from a non-Grok reader with `READER:` banner
+- [x] Advise accept from a non-Grok reader with `READER:` banner
+      (fable-5.1-arch-review, `reviews/2026-09-04-reread2-advise.md`)
 - [x] Send-back 2026-09-04: pin fingerprint join — identikey-auth §5
       (`Blake3(dcbor(PublicKey))`) vs recrypt-storage-auth
       `granted_to` (`Blake3(raw Ed25519)`). Spec scenario "Cap
@@ -45,7 +46,7 @@ accept. Grok authored; advise reader must not be Grok (ADR-005).
       auth time keyed by `g`. Spec gains "AND root issuer is the
       recorded owner" plus scenario "Cap issued by non-owner" →
       refused. (`reviews/2026-09-04-reread-advise.md`)
-- [ ] After accept: pointer in `docs/architecture.md` (do not delete
+- [x] After accept: pointer in `docs/architecture.md` (do not delete
       prior sidecar text)
 
 Handoffs (not checkboxes):
