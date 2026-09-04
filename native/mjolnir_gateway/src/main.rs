@@ -3123,7 +3123,7 @@ mod tests {
         _m.assert_async().await; // resolver never consulted
     }
 
-    /// A Sites miss on an unknown host 302s to the canonical berth, carrying
+    /// A Sites miss on an unknown host 307s to the canonical berth, carrying
     /// the original Host as `?from=`.
     #[tokio::test(flavor = "multi_thread")]
     async fn resolver_miss_redirects_to_park() {
@@ -3154,7 +3154,7 @@ mod tests {
         )
         .await;
         assert!(
-            resp.starts_with("HTTP/1.1 302 Found")
+            resp.starts_with("HTTP/1.1 307 Temporary Redirect")
                 && resp.contains("Location: https://park.worldtree.network/?from=worldtree.network"),
             "a Sites miss must redirect to the berth: {resp}"
         );

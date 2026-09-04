@@ -4,7 +4,7 @@
 //! tied to it yet. Binding the name is writing an `[[alias]]` (Iroh node ID)
 //! — the page goes away the moment classify hits the alias.
 //!
-//! Unknown incoming names (unbound parked hosts, Sites misses) 302 to
+//! Unknown incoming names (unbound parked hosts, Sites misses) 307 to
 //! [`CANONICAL_HOST`]. The berth page may mention the original host as an
 //! aside, from `?from=` or the Referer.
 
@@ -58,14 +58,14 @@ Connection: close\r\n\
     .into_bytes()
 }
 
-/// 302 to the canonical berth, carrying the original host as `?from=`.
+/// Temporary redirect to the canonical berth, carrying the original host as `?from=`.
 pub fn redirect_to_canonical(from_host: &str) -> Vec<u8> {
     let location = match sanitize_hostname(from_host).filter(|h| !is_canonical_host(h)) {
         Some(h) => format!("https://{CANONICAL_HOST}/?from={h}"),
         None => format!("https://{CANONICAL_HOST}/"),
     };
     format!(
-        "HTTP/1.1 302 Found\r\n\
+        "HTTP/1.1 307 Temporary Redirect\r\n\
 Location: {location}\r\n\
 Cache-Control: no-store\r\n\
 Content-Length: 0\r\n\
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn redirect_carries_from_query() {
         let raw = String::from_utf8(redirect_to_canonical("Foo.IdentiKey.me")).unwrap();
-        assert!(raw.starts_with("HTTP/1.1 302 Found"));
+        assert!(raw.starts_with("HTTP/1.1 307 Temporary Redirect"));
         assert!(raw.contains("Location: https://park.worldtree.network/?from=foo.identikey.me"));
     }
 

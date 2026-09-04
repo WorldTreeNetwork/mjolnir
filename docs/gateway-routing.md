@@ -16,9 +16,9 @@ Browser ──TLS(SNI=zine.identikey.io)──> mjolnir-gateway  (:443 on the ho
    │    2. lookup_alias(apex, sub)  → [[alias]] → Disposition::Iroh(node z32)      [Iroh]
    │    3. apex.fallthrough = iroh    → decode sub as z32 node                     [Iroh]
    │       apex.fallthrough = none    → 404
-   │       apex.fallthrough = parked  → 302 to park.worldtree.network (?from=)
+   │       apex.fallthrough = parked  → 307 to park.worldtree.network (?from=)
    │                                    (the berth page itself is served there)
-   │    (on apex MISMATCH) → sites_resolver → site or 302 to berth
+   │    (on apex MISMATCH) → sites_resolver → site or 307 to berth
    ▼
  backend: VM app (e.g. SvelteKit :3000) reached over local TCP or Iroh QUIC
 ```
@@ -110,7 +110,7 @@ not hand-edited. See [`plans/gateway-local-routing.md`](plans/gateway-local-rout
 
 A parking apex (today: `identikey.me`) is a namespace of names that exist before a
 machine does. The berth page itself lives at `https://park.worldtree.network/`.
-Unbound parked names, and Sites alias misses, **302** there with `?from=<original-host>`.
+Unbound parked names, and Sites alias misses, **307 Temporary Redirect** there with `?from=<original-host>`.
 The page keeps its existing lede and mentions the original name as an aside.
 Binding a name does **not** invent a new registry: it writes the same
 `[[alias]]` the rest of the gateway already understands.
