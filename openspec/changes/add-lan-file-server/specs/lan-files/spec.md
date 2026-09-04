@@ -31,10 +31,14 @@ depend on `identikey-core`.
 
 #### Scenario: Claimant holds the key
 
-- GIVEN a challenge issued for this share's audience
-- WHEN a valid `Response` is presented
+- GIVEN a challenge issued for this share's fixed service `aud`
+- WHEN a valid `Response` is presented from LAN v4, mesh ULA, or
+  `.mesh`
 - THEN `verify_response` succeeds
-- AND the fingerprint is the classical public key fingerprint
+- AND `aud` equals that same service id regardless of the address
+  the client used
+- AND the §5 fingerprint is `Blake3(dcbor(PublicKey))`, not the
+  storage-auth fingerprint
 
 #### Scenario: Hosted OP is proposed as the only proof
 
@@ -43,25 +47,39 @@ depend on `identikey-core`.
 - WHEN it is reviewed
 - THEN it is rejected against this requirement
 
+#### Scenario: Unmodified recrypt-server is proposed as the guest
+
+- GIVEN stock `recrypt-server` (`GET /files/{hash}` public, no
+  identikey-auth, storage not blob-door)
+- WHEN it is reviewed as the LAN share
+- THEN it is rejected against this requirement
+
 ### Requirement: Data access is recrypt-storage-auth
 
 Read of stored bytes SHALL require a `recrypt-storage-auth`
 `Capability` whose `subject` is the file hash, `granted_to` is the
-claimant's fingerprint, and permissions include `read`. The
-recryption key SHALL remain the data bearer. The Mjolnir BEAM
-SHALL NOT link `recrypt-storage-auth`.
+storage-auth fingerprint of the claimant, and permissions include
+`read`. The share SHALL map a verified `Response`'s classical
+Ed25519 public key to that fingerprint as
+`Blake3(raw 32-byte key)` before the cap check, and SHALL issue
+Caps in that namespace. It SHALL NOT compare `granted_to` to the
+identikey-auth §5 fingerprint. The recryption key SHALL remain
+the data bearer. The Mjolnir BEAM SHALL NOT link
+`recrypt-storage-auth`.
 
 #### Scenario: Cap permits read
 
-- GIVEN a Capability for hash `h` granted to fingerprint `f` with
-  `read`
-- AND a verified identity whose fingerprint is `f`
+- GIVEN a verified `Response` whose classical key is Ed25519 `K`
+- AND `g = Blake3(K)` (raw key bytes, storage-auth namespace)
+- AND a Capability for hash `h` granted to `g` with `read`
 - WHEN GET of `h` is requested
 - THEN the bytes are returned
+- AND `granted_to` was not compared to `Blake3(dcbor(PublicKey))`
 
 #### Scenario: Cap missing or wrong holder
 
-- GIVEN identity `f` and no Capability granting `f` `read` on `h`
+- GIVEN a verified identity whose storage-auth fingerprint is `g`
+- AND no Capability granting `g` `read` on `h`
 - WHEN GET of `h` is requested
 - THEN it is refused
 - AND the bytes are not returned
@@ -82,22 +100,35 @@ HTTP, not the door.
 
 ### Requirement: LAN and mesh ULA can reach the guest
 
-The share HTTP SHALL be published onto the host IPv4 LAN address
-and the Lightning Mesh ULA on this box. TAP-only bind SHALL NOT
-satisfy this requirement.
+The share HTTP SHALL be published onto the host IPv4 LAN
+interface and the Lightning Mesh wifi interface. Publish SHALL
+bind by interface. When a named interface has no address, publish
+SHALL wait or fail; it SHALL NOT fall back to `0.0.0.0`, `::`, or
+the host GUA. The IPv6 leg SHALL be a host userspace proxy (TAP
+has no IPv6). TAP-only bind SHALL NOT satisfy this requirement.
 
 #### Scenario: Ethernet client fetches
 
-- GIVEN the share is running
-- WHEN a host on `192.168.0.0/24` completes identity and cap
-  checks
+- GIVEN the Ethernet interface is up with an IPv4 address
+- AND the share is running
+- WHEN a host on that LAN completes identity and cap checks
 - THEN GET of an authorized hash succeeds
 
 #### Scenario: Mesh ULA is reachable
 
-- GIVEN the share is published on `fd01:d28c:7e4a`
+- GIVEN the wifi interface holds a stable-privacy (or
+  `ipv6.token`) ULA
+- AND the share proxy is bound to that address
 - WHEN a mesh client completes the same checks
 - THEN GET of an authorized hash succeeds
+
+#### Scenario: Ethernet unplugged
+
+- GIVEN the named Ethernet interface has no address
+- WHEN publish starts
+- THEN it does not bind `0.0.0.0` or the GUA
+- AND the IPv4 publish path waits or fails
+- AND the TAP-only door bind is unchanged
 
 ### Requirement: Mesh discovery is meshd, not iroh-blobs
 

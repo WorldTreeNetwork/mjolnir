@@ -21,8 +21,10 @@ AGPL hosted OP.
 
 - Add capability `lan-files`: a Recrypt share hosted in a Mjolnir
   guest, reachable on the host LAN and mesh ULA.
-- Identity: `identikey-auth` `Challenge` / `Response` with `aud`
-  this service.
+- Identity: `identikey-auth` `Challenge` / `Response` with a
+  fixed service `aud` (not a locator). Cap checks use a mapped
+  storage-auth fingerprint (`Blake3` of raw Ed25519), not the
+  §5 fingerprint.
 - Data access: `recrypt-storage-auth` `Capability` on `SubjectKind::File`
   (Blake3). Recryption key remains the data bearer (Recrypt D-5).
 - Bytes live on the host blob-door (`10.200.0.1:7222`). The door

@@ -36,26 +36,70 @@ Host blob-door on `:host_api_ip:7222` (`10.200.0.1`). Living
 HTTP process that PUTs/GETs the door over TAP INPUT. LAN clients
 never speak to the door.
 
+## Fingerprint join (explicit, not by accident)
+
+`identikey-auth` §5 fingerprint is `Blake3(dcbor(PublicKey))` —
+for Ed25519 that is the self-describing `{alg,key}` map, not the
+bare 32 bytes. `recrypt-storage-auth` `granted_to` is
+`Blake3(raw Ed25519 bytes)`. Those are distinct namespaces by
+construction (auth-challenge v1 §5). This change does not amend
+Recrypt.
+
+The share maps `Response` classical public key → storage-auth
+fingerprint (`Blake3` of the raw Ed25519 key bytes) **before**
+the cap check, and issues Caps in that namespace. GET compares
+`granted_to` to the mapped fingerprint, never to the §5
+fingerprint. Interop is the map, named here.
+
+## `aud` is a service id, not a locator
+
+`identikey-auth` `aud` is one fixed identifier for this share (a
+URN or the share's own fingerprint). It is the same on LAN v4,
+mesh ULA, and `.mesh`. It is never derived from `Host`, bound
+address, or port.
+
 ## How LAN sees it
 
-The guest TAP IP is not the local network. Publish is DNAT or a
-host proxy onto `192.168.0.18` (USB Ethernet) and the mesh ULA
-`fd01:d28c:7e4a` (wifi RA). Blob-door bind is unchanged.
+The guest TAP IP is not the local network and is IPv4-only
+(`Network.allocate_ip/1`). Publish is host-side:
+
+- IPv4: DNAT or a reverse-proxy matched on the Ethernet
+  interface (example address `192.168.0.18/24` when that iface
+  is up).
+- IPv6: a **host userspace proxy** on the wifi interface's
+  stable-privacy ULA (or an `ipv6.token`). TAP has no IPv6, so
+  DNAT66/NAT64 is not the v6 leg. Example prefix
+  `fd01:d28c:7e4a::/48` is not an address; `h2fp.4` publishes
+  the stable ULA, not a temporary address and not the GUA.
+
+Binds are **by interface**, not by a hardcoded address. When
+the named interface has no address, publish waits or fails. It
+does not fall back to `0.0.0.0`, `::`, or the Comcast GUA.
+Blob-door bind is unchanged. Publish port is not 7222 on any
+non-TAP address.
 
 ## Mesh
 
 This laptop is a mesh *client*, not `mjolnir-meshd`. Discovery is
-`meshd publish --ip <host>` on the attached OpenWrt router
-(`lightning-mesh` `docs/deploy/mesh-app-publishing.md`). Radio
-(802.11s / babel) already carries IP. `add-iroh-blobs` stays ADR
-0003 remaining.
+`meshd publish <name> --ip <stable-ULA> --port <p>` on the
+attached OpenWrt router
+(`lightning-mesh` `docs/deploy/mesh-app-publishing.md`). `--ip`
+scopes the name as `<name>.<node>.mesh`. Radio (802.11s / babel)
+already carries IP. `add-iroh-blobs` stays ADR 0003 remaining.
 
-## Licence
+## Guest HTTP is not stock recrypt-server
 
-Guest may run `recrypt-server` (AGPL binary). Mjolnir BEAM does
-not link `recrypt-storage-auth` or `recrypt-core`. `identikey-auth`
-is Apache-2.0 OR BSD-2-Clause-Patent and may live in the guest
-verifier.
+Unmodified `recrypt-server` does not satisfy this share:
+`GET /files/{hash}` is public; auth is dual-sig + nonce, not
+`identikey-auth`; storage is memory|local, not blob-door; default
+persistence is memory. `h2fp.3` is Recrypt HTTP that does four
+things: (1) identikey-auth Challenge/Response with the fixed
+`aud`, (2) cap-gated GET using the mapped storage-auth
+fingerprint, (3) PUT/GET bytes on `blob_door_url`, (4) durable
+caps/index (guest subvolume snapshot or a durable mount). Patch
+`recrypt-server` or a small guest that links `identikey-auth` +
+`recrypt-storage-auth` and speaks the door. Do not AGPL-link
+those crates into the BEAM.
 
 ## Contrast rejected
 
