@@ -4,14 +4,18 @@
 
 A Biscuit that authorizes `redeem` of a foreign secret SHALL name the
 holder that may perform it. v1 holder class is a single Identikey
-public key. The Datalog fact SHALL be `holder(<fingerprint>)` where
-fingerprint is the Blake3 identity fingerprint from
-identikey-auth-challenge v1 §5. A verifier SHALL NOT treat possession
-of the token bytes as sufficient. It SHALL verify a signature by that
-key over a verifier-chosen nonce (and the token identity), compute
-the fingerprint from the presented `{alg, key}`, inject
-`holder(<fingerprint>)`, then evaluate the Biscuit. A failed holder
-proof SHALL fail closed.
+public key. The authority block SHALL carry `bound_holder(<fp>)` and
+`check if holder($fp), $fp == "<fp>"` where fingerprint is the
+Blake3 identity fingerprint from identikey-auth-challenge v1 §5. A
+verifier SHALL NOT treat possession of the token bytes as sufficient.
+It SHALL verify a signature by that public key over (biscuit hash,
+nonce, audience, recipient public encryption key), compute the
+fingerprint from the presented `{alg, key}`, inject
+`holder(<fingerprint>)`, then evaluate. The authorizer SHALL require
+`holder($p), bound_holder($p)` from the authority block. A redeem
+token that binds no holder SHALL be rejected. A failed holder proof
+SHALL fail closed. Copy-out SHALL be sealed to the recipient public
+key (HPKE). A signature that does not cover that key SHALL fail.
 
 This requirement SHALL NOT apply to other agency profiles (VM exec,
 mailbox, snapshot) unless those profiles add it. A root VM-exec
@@ -27,10 +31,28 @@ Biscuit without a holder check is not a violation of this spec.
 #### Scenario: Named key presents
 
 - GIVEN the same Biscuit
-- WHEN Z signs the nonce and audience
+- WHEN Z signs (biscuit hash, nonce, audience, Z's recipient public
+  encryption key)
 - AND the Biscuit's other checks pass
 - THEN the verifier accepts the holder fact
 - AND evaluation may proceed
+- AND copy-out is sealed to that recipient key
+
+#### Scenario: Intermediary collects a delegated signature
+
+- GIVEN holder Z and forwarder C
+- WHEN C obtains Z's signature over a challenge C fetched
+- AND C POSTs the biscuit and that signature
+- THEN C does not receive plaintext secret bytes
+- AND only a holder who can open the HPKE seal reads the secret
+
+#### Scenario: Redeem token with no holder binding
+
+- GIVEN a Biscuit with `right(S, "redeem")` and no
+  `bound_holder` / holder check in the authority block
+- WHEN any presenter requests redeem
+- THEN the verifier rejects
+- AND possession of the bytes is not enough
 
 ### Requirement: Secret bytes stay out of the token
 

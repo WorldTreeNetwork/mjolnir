@@ -66,13 +66,24 @@ At redeem, the verifier:
 
 1. Issues a single-use nonce (`aud` + `exp`).
 2. Verifies a signature by that public key over (biscuit hash, nonce,
-   audience).
+   audience, **recipient public encryption key**).
 3. Injects `holder(<fingerprint>)`.
-4. Evaluates the Biscuit.
+4. Evaluates the Biscuit. The authorizer SHALL require
+   `holder($p), bound_holder($p)` from the **authority** block
+   (`bound_holder(<fp>)` minted next to the check). A token with
+   `right(S, "redeem")` and no holder binding SHALL be rejected —
+   absent check is not a failed proof.
+5. Copy-out SHALL be sealed to the recipient public key (HPKE,
+   RFC 9180, DHKEM-X25519 or P-256 so enclave holders work). The
+   key MAY be ephemeral and generated in-guest. A stolen holder
+   signature buys ciphertext, not the PAT.
 
-Possession of the Biscuit bytes is not enough. This is bearer-plus-
-holder, the same *idea* as Recrypt D-5 §2, implemented with a
-signature instead of PRE because the payload is a foreign secret.
+Possession of the Biscuit bytes is not enough. A delegated
+signature from Z is not enough. This is bearer-plus-holder-plus-
+sealed-delivery, the same *idea* as Recrypt D-5 §0 substrate
+("keypair generated in-guest, here is the public half, deliver
+this blob to it"), implemented with a signature plus HPKE because
+the payload is a foreign secret.
 
 v1 does not bind to “agent type” as a string the presenter self-
 asserts. Type, if ever, is a fact the verifier injects from its own
