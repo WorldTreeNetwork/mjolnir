@@ -63,18 +63,31 @@ storage-auth fingerprint of the claimant, and permissions include
 Ed25519 public key to that fingerprint as
 `Blake3(raw 32-byte key)` before the cap check, and SHALL issue
 Caps in that namespace. It SHALL NOT compare `granted_to` to the
-identikey-auth §5 fingerprint. The recryption key SHALL remain
-the data bearer. The Mjolnir BEAM SHALL NOT link
-`recrypt-storage-auth`.
+identikey-auth §5 fingerprint. First put of `h` SHALL record
+`ownership(h)` as the putter's storage-auth fingerprint. GET
+SHALL require the Capability's root `issuer` to equal
+`ownership(h)`. The recryption key SHALL remain the data bearer.
+The Mjolnir BEAM SHALL NOT link `recrypt-storage-auth`.
 
 #### Scenario: Cap permits read
 
 - GIVEN a verified `Response` whose classical key is Ed25519 `K`
 - AND `g = Blake3(K)` (raw key bytes, storage-auth namespace)
-- AND a Capability for hash `h` granted to `g` with `read`
+- AND `ownership(h) = g`
+- AND a Capability for hash `h` granted to `g` with `read` whose
+  root issuer is `g`
 - WHEN GET of `h` is requested
 - THEN the bytes are returned
 - AND `granted_to` was not compared to `Blake3(dcbor(PublicKey))`
+
+#### Scenario: Cap issued by non-owner
+
+- GIVEN `ownership(h) = g_owner`
+- AND a Capability for `h` granted to claimant `g` whose root
+  issuer is not `g_owner`
+- WHEN GET of `h` is requested
+- THEN it is refused
+- AND a self-issued cap does not read `h`
 
 #### Scenario: Cap missing or wrong holder
 

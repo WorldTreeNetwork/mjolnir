@@ -35,6 +35,16 @@ accept. Grok authored; advise reader must not be Grok (ADR-005).
       :170). One sentence in `design.md`; spec scenario "Claimant
       holds the key" gains the path-independence clause.
       (`reviews/2026-09-04-fable-advise.md`)
+- [x] Send-back 2026-09-04 (fable reread): cap gate has no root of
+      trust — spec "Cap permits read" accepts any Capability for `h`
+      granted to `g`, so a claimant self-issues one and reads any
+      hash. Pin in `design.md`: put is identikey-auth gated and
+      records `ownership(h) = g_putter` (`OwnershipStore::register`,
+      first putter wins); GET requires the cap/chain root issuer to
+      equal `ownership(h)`; issuer keys learned from `Verified` at
+      auth time keyed by `g`. Spec gains "AND root issuer is the
+      recorded owner" plus scenario "Cap issued by non-owner" →
+      refused. (`reviews/2026-09-04-reread-advise.md`)
 - [ ] After accept: pointer in `docs/architecture.md` (do not delete
       prior sidecar text)
 

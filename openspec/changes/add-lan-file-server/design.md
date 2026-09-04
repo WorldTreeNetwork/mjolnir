@@ -51,6 +51,14 @@ the cap check, and issues Caps in that namespace. GET compares
 `granted_to` to the mapped fingerprint, never to the §5
 fingerprint. Interop is the map, named here.
 
+Put is identikey-auth gated. First successful put of hash `h`
+records `ownership(h) = g_putter` via `OwnershipStore::register`
+(first putter wins; a different owner is refused). GET requires
+the presented Capability (or chain root) `issuer` to equal
+`ownership(h)`. Issuer verifying keys are learned from `Verified`
+at auth time, keyed by `g`. A cap the claimant self-issues for
+someone else's hash SHALL NOT read.
+
 ## `aud` is a service id, not a locator
 
 `identikey-auth` `aud` is one fixed identifier for this share (a
