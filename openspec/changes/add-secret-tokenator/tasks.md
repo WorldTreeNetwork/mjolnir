@@ -22,6 +22,22 @@ Sol is not subscribed.
       opaque; secret_id path-safe
 - [x] Send-back 2026-08-26: copy-out to RAM/tmpfs, not virtio-fs;
       thin proxy named as more-secure pattern
+- [ ] Send-back 2026-09-04 (Fable, `reviews/2026-09-04-fable-advise.md`
+      finding 1): vault root vs off-box backup. `secret_store_root`
+      is under `@sites`, which `backup-sites-b2.sh` rclone-copies to
+      B2 append-only (`hard_delete=false`). Decision 1 names the
+      vault's on-disk root and picks: root outside `@sites` (escrow
+      precedent, `config.exs:34-38`) or `--exclude 'keyspace/_opaque/**'`
+      named as load-bearing. Spec SHALL + scenario: secret bytes are
+      not copied off-host by Mjolnir's own backup jobs.
+- [ ] Send-back 2026-09-04 (Fable, finding 2): `mj freeze` persists
+      guest RAM (`@snapshots/<name>.mem`, vm-freeze spec), so
+      "process memory or tmpfs" is a snapshot sink. Decision 4 names
+      freeze and picks: quiesce hook drops redeemed secrets
+      (`MemorySnapshot` `:quiesce_fun` seam, re-redeem after thaw), or
+      `.mem` declared secret-bearing, or explicitly accepted with the
+      Decision 5 revocation caveat. One scenario under "Copy-out is
+      v1"; cross-ref `vm-freeze`.
 - [ ] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
 - [ ] After accept: fold deltas into `openspec/specs/secret-tokenator/`
