@@ -61,6 +61,32 @@ defmodule Mjolnir.Vsock.ConnectionTest do
     end
   end
 
+  defp serve(sock, :reseed_ok) do
+    case recv_request(sock) do
+      {:msg, %{"id" => id, "type" => "reseed_entropy"}} ->
+        frame =
+          Protocol.encode(
+            %{
+              "type" => "reseed_entropy_response",
+              "id" => id,
+              "ok" => true,
+              "bytes" => 32
+            },
+            0
+          )
+
+        :gen_tcp.send(sock, frame)
+        serve(sock, :reseed_ok)
+
+      {:msg, %{"id" => id}} ->
+        reply_exec(sock, id, "ok")
+        serve(sock, :reseed_ok)
+
+      :closed ->
+        :ok
+    end
+  end
+
   defp serve(sock, :immediate) do
     case recv_request(sock) do
       {:msg, %{"id" => id, "type" => "ping"}} ->
@@ -130,5 +156,19 @@ defmodule Mjolnir.Vsock.ConnectionTest do
 
     # The connection is still fully usable: the next request gets its reply.
     assert {:ok, "ok"} = Connection.exec(conn, "echo ok", 2_000)
+  end
+
+  test "send_request matches reseed_entropy_response by id" do
+    path = start_fake_guest(:reseed_ok)
+    {:ok, conn} = Connection.start_link(%{vm_id: "vm-reseed", socket_path: path})
+
+    req = %{
+      "type" => "reseed_entropy",
+      "id" => "req-reseed-1",
+      "seed_hex" => String.duplicate("ab", 32)
+    }
+
+    assert {:ok, %{"type" => "reseed_entropy_response", "ok" => true, "bytes" => 32}} =
+             Connection.send_request(conn, req, 2_000)
   end
 end

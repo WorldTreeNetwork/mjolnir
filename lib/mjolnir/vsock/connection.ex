@@ -655,6 +655,17 @@ defmodule Mjolnir.Vsock.Connection do
       {:ok, %{"type" => "terminal_error", "id" => id} = response} ->
         reply_to_pending(state, id, {:error, response}, "terminal_error")
 
+      # Generic reply for send_request/3. Reseed, inject_secrets, suspend/resume
+      # all go through that call; without this they log "Unknown vsock message
+      # type" and time out while the guest already answered (live thaw 2026-09-03).
+      {:ok, %{"id" => id} = response} when is_binary(id) ->
+        if Map.has_key?(state.pending_requests, id) do
+          reply_to_pending(state, id, {:ok, response}, response["type"] || "response")
+        else
+          Logger.warning("Unknown vsock message type: #{inspect(response)}")
+          state
+        end
+
       {:ok, other} ->
         Logger.warning("Unknown vsock message type: #{inspect(other)}")
         state
