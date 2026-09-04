@@ -1108,11 +1108,12 @@ async fn handle_connection<S>(
         Disposition::Parked(apex, subdomain) => {
             let host_bare_owned = host_without_port(&host).to_ascii_lowercase();
             let host_bare = host_bare_owned.as_str();
+            let serving_here = parked::is_canonical_host(host_bare);
             info!(
                 peer = %peer,
                 apex = %apex.suffix,
                 subdomain = %subdomain,
-                route = "parked",
+                route = if serving_here { "parked" } else { "parked-redirect" },
                 "proxy decision"
             );
             if let Some(ref resolver) = ctx.sites_resolver {
@@ -1153,9 +1154,13 @@ async fn handle_connection<S>(
                     LookupResult::Miss | LookupResult::Error => {}
                 }
             }
-            let _ = stream
-                .write_all(&parked::http_response(host_bare, &subdomain))
-                .await;
+            let resp = if serving_here {
+                let from = parked::origin_from_request(&header_buf);
+                parked::http_response(host_bare, &subdomain, from.as_deref())
+            } else {
+                parked::redirect_to_canonical(host_bare)
+            };
+            let _ = stream.write_all(&resp).await;
             let _ = stream.shutdown().await;
         }
         Disposition::Reject(
@@ -1231,7 +1236,17 @@ async fn handle_connection<S>(
                         return;
                     }
                     LookupResult::Miss => {
-                        // Fall through to the existing 404 below.
+                        info!(
+                            peer = %peer,
+                            host = %host_bare,
+                            route = "parked-redirect",
+                            "unknown site — redirecting to berth"
+                        );
+                        let _ = stream
+                            .write_all(&parked::redirect_to_canonical(host_bare))
+                            .await;
+                        let _ = stream.shutdown().await;
+                        return;
                     }
                     LookupResult::Error => {
                         warn!(
@@ -3108,10 +3123,10 @@ mod tests {
         _m.assert_async().await; // resolver never consulted
     }
 
-    /// A miss on the widened arm must still produce the ORIGINAL status, not a
-    /// blanket 400/404 — proves widening changed nothing for non-Sites hosts.
+    /// A Sites miss on an unknown host 302s to the canonical berth, carrying
+    /// the original Host as `?from=`.
     #[tokio::test(flavor = "multi_thread")]
-    async fn resolver_miss_preserves_original_reject_status() {
+    async fn resolver_miss_redirects_to_park() {
         let mut api = mockito::Server::new_async().await;
         let _m = api
             .mock("GET", "/api/sites/aliases/lookup?host=worldtree.network")
@@ -3139,8 +3154,9 @@ mod tests {
         )
         .await;
         assert!(
-            resp.starts_with("HTTP/1.1 400 Bad Request") && resp.contains("Empty subdomain"),
-            "a Sites miss on the bare apex must still yield the original 400: {resp}"
+            resp.starts_with("HTTP/1.1 302 Found")
+                && resp.contains("Location: https://park.worldtree.network/?from=worldtree.network"),
+            "a Sites miss must redirect to the berth: {resp}"
         );
     }
 }

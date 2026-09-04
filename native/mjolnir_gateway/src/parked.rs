@@ -3,6 +3,18 @@
 //! This is the berth: the hostname exists in the fabric, but no machine is
 //! tied to it yet. Binding the name is writing an `[[alias]]` (Iroh node ID)
 //! — the page goes away the moment classify hits the alias.
+//!
+//! Unknown incoming names (unbound parked hosts, Sites misses) 302 to
+//! [`CANONICAL_HOST`]. The berth page may mention the original host as an
+//! aside, from `?from=` or the Referer.
+
+/// Public berth URL. Unbound names redirect here.
+pub const CANONICAL_HOST: &str = "park.worldtree.network";
+
+/// True when `host` (already stripped of `:port`) is the canonical berth.
+pub fn is_canonical_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case(CANONICAL_HOST)
+}
 
 /// HTML-escape a string that will be interpolated into the page.
 pub fn escape(s: &str) -> String {
@@ -30,8 +42,8 @@ pub fn display_name(host: &str, subdomain: &str) -> String {
 }
 
 /// Full HTTP/1.1 response for the berth page.
-pub fn http_response(host: &str, subdomain: &str) -> Vec<u8> {
-    let body = page(host, subdomain);
+pub fn http_response(host: &str, subdomain: &str, from: Option<&str>) -> Vec<u8> {
+    let body = page(host, subdomain, from);
     format!(
         "HTTP/1.1 200 OK\r\n\
 Content-Type: text/html; charset=utf-8\r\n\
@@ -46,10 +58,119 @@ Connection: close\r\n\
     .into_bytes()
 }
 
+/// 302 to the canonical berth, carrying the original host as `?from=`.
+pub fn redirect_to_canonical(from_host: &str) -> Vec<u8> {
+    let location = match sanitize_hostname(from_host).filter(|h| !is_canonical_host(h)) {
+        Some(h) => format!("https://{CANONICAL_HOST}/?from={h}"),
+        None => format!("https://{CANONICAL_HOST}/"),
+    };
+    format!(
+        "HTTP/1.1 302 Found\r\n\
+Location: {location}\r\n\
+Cache-Control: no-store\r\n\
+Content-Length: 0\r\n\
+Connection: close\r\n\
+\r\n"
+    )
+    .into_bytes()
+}
+
+/// Hostname allowed in `?from=` / Referer: labels, dots, hyphens; no scheme, path, or port.
+pub fn sanitize_hostname(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let s = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    let s = s.split(['/', '?', '#']).next().unwrap_or(s);
+    let s = s.rsplit('@').next().unwrap_or(s);
+    let s = match s.rsplit_once(':') {
+        Some((h, port)) if port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => s,
+    };
+    let s = s.trim_matches('.');
+    if s.is_empty() || s.len() > 253 {
+        return None;
+    }
+    let ok = s
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    if !ok || s.starts_with('-') || s.ends_with('-') || s.contains("..") {
+        return None;
+    }
+    Some(s.to_ascii_lowercase())
+}
+
+/// Original host from `?from=` on the request line, else the Referer host.
+pub fn origin_from_request(header_bytes: &[u8]) -> Option<String> {
+    let end = header_bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(header_bytes.len());
+    let header_str = String::from_utf8_lossy(&header_bytes[..end]);
+    let mut referer = None;
+    for (i, line) in header_str.split("\r\n").enumerate() {
+        if i == 0 {
+            if let Some(from) = from_query(line) {
+                return Some(from);
+            }
+        }
+        let b = line.as_bytes();
+        if b.len() > 8 && b[..8].eq_ignore_ascii_case(b"referer:") {
+            referer = sanitize_hostname(line[8..].trim());
+        }
+    }
+    referer.filter(|h| !is_canonical_host(h))
+}
+
+fn from_query(request_line: &str) -> Option<String> {
+    // "GET /?from=foo.identikey.me HTTP/1.1"
+    let target = request_line.split_whitespace().nth(1)?;
+    let query = target.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (k, v) = match pair.split_once('=') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        if k == "from" {
+            return sanitize_hostname(&percent_decode(v)).filter(|h| !is_canonical_host(h));
+        }
+    }
+    None
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(v) = u8::from_str_radix(hex, 16) {
+                    out.push(v as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 /// Self-contained berth page. `host` is the bare hostname (no port);
 /// `subdomain` is the label under the parked apex (empty on the apex itself).
-pub fn page(host: &str, subdomain: &str) -> String {
+/// `from` is an optional original host (redirect query or Referer).
+pub fn page(host: &str, subdomain: &str, from: Option<&str>) -> String {
     let name = escape(&display_name(host, subdomain));
+    let from_aside = match from.and_then(sanitize_hostname) {
+        Some(h) if !h.eq_ignore_ascii_case(host) => {
+            format!(r#" <span class="from">from {}</span>"#, escape(&h))
+        }
+        _ => String::new(),
+    };
     let host = escape(host);
     format!(
         r##"<!DOCTYPE html>
@@ -173,10 +294,14 @@ pub fn page(host: &str, subdomain: &str) -> String {
     font-style: italic;
     font-size: clamp(1.05rem, 2vw, 1.35rem);
     color: var(--ash);
-    max-width: 28ch;
+    max-width: 42ch;
     line-height: 1.45;
     margin-top: 1.6rem;
     animation: rise 1.3s cubic-bezier(.2,.8,.2,1) 0.16s both;
+  }}
+  .lede .from {{
+    font-size: 0.92em;
+    opacity: 0.72;
   }}
   footer {{
     align-self: start;
@@ -218,7 +343,7 @@ pub fn page(host: &str, subdomain: &str) -> String {
     <p class="stamp">parked</p>
     <div>
       <h1>{name}</h1>
-      <p class="lede">A berth on the fabric. No machine is tied to this name yet.</p>
+      <p class="lede">A berth on the fabric. No machine is tied to this name yet.{from_aside}</p>
     </div>
     <footer>mjolnir · <span>{host}</span></footer>
   </main>
@@ -245,19 +370,73 @@ mod tests {
 
     #[test]
     fn page_embeds_escaped_host_and_is_html() {
-        let html = page("park.identikey.me", "park");
+        let html = page("park.identikey.me", "park", None);
         assert!(html.starts_with("<!DOCTYPE html>"));
         assert!(html.contains("<h1>park</h1>"));
         assert!(html.contains("park.identikey.me"));
         assert!(!html.contains("<script"));
+        assert!(!html.contains(r#"class="from""#));
+    }
+
+    #[test]
+    fn page_mentions_from_host_as_aside() {
+        let html = page(
+            "park.worldtree.network",
+            "",
+            Some("https://foo.identikey.me/path"),
+        );
+        assert!(html.contains(
+            "A berth on the fabric. No machine is tied to this name yet. <span class=\"from\">from foo.identikey.me</span>"
+        ));
+        assert!(html.contains("<h1>park.worldtree.network</h1>"));
+    }
+
+    #[test]
+    fn page_from_is_html_escaped() {
+        let html = page("park.worldtree.network", "", Some("<script>x</script>.me"));
+        assert!(!html.contains("<script>x</script>"));
+        // invalid hostname dropped entirely
+        assert!(!html.contains(r#"class="from""#));
     }
 
     #[test]
     fn http_response_is_200_html_no_store() {
-        let raw = String::from_utf8(http_response("park.identikey.me", "park")).unwrap();
+        let raw = String::from_utf8(http_response("park.identikey.me", "park", None)).unwrap();
         assert!(raw.starts_with("HTTP/1.1 200 OK"));
         assert!(raw.contains("Content-Type: text/html; charset=utf-8"));
         assert!(raw.contains("Cache-Control: no-store"));
         assert!(raw.contains("<h1>park</h1>"));
+    }
+
+    #[test]
+    fn redirect_carries_from_query() {
+        let raw = String::from_utf8(redirect_to_canonical("Foo.IdentiKey.me")).unwrap();
+        assert!(raw.starts_with("HTTP/1.1 302 Found"));
+        assert!(raw.contains("Location: https://park.worldtree.network/?from=foo.identikey.me"));
+    }
+
+    #[test]
+    fn redirect_drops_canonical_from() {
+        let raw = String::from_utf8(redirect_to_canonical("park.worldtree.network")).unwrap();
+        assert!(raw.contains("Location: https://park.worldtree.network/"));
+        assert!(!raw.contains("?from="));
+    }
+
+    #[test]
+    fn origin_from_request_prefers_query_over_referer() {
+        let req = b"GET /?from=a.identikey.me HTTP/1.1\r\nHost: park.worldtree.network\r\nReferer: https://b.identikey.me/\r\n\r\n";
+        assert_eq!(
+            origin_from_request(req).as_deref(),
+            Some("a.identikey.me")
+        );
+    }
+
+    #[test]
+    fn origin_from_request_falls_back_to_referer() {
+        let req = b"GET / HTTP/1.1\r\nHost: park.worldtree.network\r\nReferer: https://park.identikey.me/x\r\n\r\n";
+        assert_eq!(
+            origin_from_request(req).as_deref(),
+            Some("park.identikey.me")
+        );
     }
 }
