@@ -22,6 +22,17 @@ cross-family reader. Sol is not subscribed.
       `reviews/2026-09-04-advise.md` (oh-my-claudecode-critic;
       Fable 5.1 / opus-4.8 / Sol were infra-red; this is the
       other-family accept). No owed boxes.
+- [ ] Send-back 2026-09-04 (Fable 5.1,
+      `reviews/2026-09-04-fable-advise.md` F1): bind copy-out to
+      the holder, not only the proof. Holder proof SHALL include
+      and sign over a recipient public encryption key; copy-out
+      SHALL be sealed to it (HPKE, X25519 or P-256). Or add a
+      Rejected line stating the threat model that makes a
+      delegated signature out of scope. Spec delta + Decision 3.
+- [ ] Send-back 2026-09-04 (Fable 5.1, F2): verifier SHALL reject
+      a redeem token that binds no holder (absent check ≠ failed
+      proof). One sentence in the holder-bound SHALL; suggested
+      `bound_holder(<fp>)` in authority + authorizer policy.
 - [ ] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`
       (new sections; keep three-layer table; point tokenator at
