@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-09-10 / add-typed-log:** Bun/Node have no AF_UNIX datagram API. Host syslog ingest is UDP (loopback / `10.200.0.1`), not unix `/dev/log`. Guest forwarder ≠ host ch2 registration. Fold living `typed-log` only after emit+ingest landed.
+
 - **2026-08-25 / add-host-sidecar-redis:** Live `rclone` of Redis 7 `appendonlydir` is not restore-safe (torn incr). `redis-cli --rdb` is consistent as RDB, but `appendonly yes` loads AOF on start and ignores RDB; `CONFIG` was renamed empty so restore cannot flip AOF off. Host timer is stop → copy `/var/lib/mjolnir/redis/` → start. `mix mjolnir.redis.ensure` must not `app.start` (a second OTP app on the live host). Mix task module is `Mjolnir.Redis.Ensure`. No `just deploy-redis`.
 
 - **2026-08-22 / add-mailbox-durable-accept:** Forge.Store tmp+`:file.sync`+rename does not fsync the parent directory. On macOS `:file.open(dir, [:raw, :read])` is `:eisdir`; use `[:raw, :read, :directory]`. A ledger whose 200 means crash-safe accept needs both. Exclusive `:file.make_link` is the same-id TOCTOU fix, not stat-then-write.

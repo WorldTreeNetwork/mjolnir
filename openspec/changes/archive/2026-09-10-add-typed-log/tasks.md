@@ -26,8 +26,8 @@ must not be Grok (ADR-005). Fable 5.1 is the cross-family reader.
       group; `:app_log` sinks `[:eventbus]`
 - [x] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
-- [ ] Fold ADR-only; living `openspec/specs/typed-log/` waits on
-      first implementing act (learning 2026-08-16)
+- [x] Fold living `openspec/specs/typed-log/` now that emit + ingest
+      + subscribe_logs have landed
 
 Handoffs (not checkboxes; activated, blocked on advise accept):
 

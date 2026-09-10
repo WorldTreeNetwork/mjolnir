@@ -201,4 +201,46 @@ defmodule Mjolnir.EventBusTest do
       assert_receive {:mjolnir_event, ^vm_id, :vm_spawned, %{}}
     end
   end
+
+  describe "subscribe_logs/1" do
+    test "receives :app_log for one app and not VM lifecycle" do
+      app = "myscape-#{System.unique_integer([:positive])}"
+      other = "other-#{System.unique_integer([:positive])}"
+
+      EventBus.subscribe_logs(app)
+      EventBus.publish(app, :app_log, %{schema: "myscape/v1"})
+      EventBus.publish(app, :vm_spawned, %{})
+      EventBus.publish(other, :app_log, %{schema: "x/v1"})
+
+      assert_receive {:mjolnir_event, ^app, :app_log, %{schema: "myscape/v1"}}
+      refute_receive {:mjolnir_event, ^app, :vm_spawned, _}, 50
+      refute_receive {:mjolnir_event, ^other, :app_log, _}, 50
+    end
+
+    test "subscribe_logs(:all) gets every app_log, not VM events" do
+      a = "app-a-#{System.unique_integer([:positive])}"
+      b = "app-b-#{System.unique_integer([:positive])}"
+
+      EventBus.subscribe_logs(:all)
+      EventBus.publish(a, :app_log, %{schema: "a"})
+      EventBus.publish(b, :app_log, %{schema: "b"})
+      EventBus.publish(a, :vm_stopped, %{})
+
+      assert_receive {:mjolnir_event, ^a, :app_log, %{schema: "a"}}
+      assert_receive {:mjolnir_event, ^b, :app_log, %{schema: "b"}}
+      refute_receive {:mjolnir_event, ^a, :vm_stopped, _}, 50
+    end
+
+    test "unsubscribe_logs stops delivery" do
+      app = "myscape-#{System.unique_integer([:positive])}"
+
+      EventBus.subscribe_logs(app)
+      EventBus.publish(app, :app_log, %{schema: "v1"})
+      assert_receive {:mjolnir_event, ^app, :app_log, _}
+
+      EventBus.unsubscribe_logs(app)
+      EventBus.publish(app, :app_log, %{schema: "v2"})
+      refute_receive {:mjolnir_event, ^app, :app_log, %{schema: "v2"}}, 50
+    end
+  end
 end

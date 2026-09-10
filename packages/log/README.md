@@ -21,3 +21,7 @@ log.info({ url: "/worlds/xela.glb" }, "probe ok");
 ```
 
 Unset `syslog` → stdout only. Syslog send failure does not throw on the log call (UDP).
+
+`validateRecord(rec, schema)` reports unknown fields as issues; it does not drop them from the JSON.
+
+OTP: `Mjolnir.EventBus.subscribe_logs("myscape")` or `subscribe_logs(:all)` for `:app_log` without VM lifecycle noise.

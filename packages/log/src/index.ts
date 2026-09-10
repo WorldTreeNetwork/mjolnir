@@ -45,3 +45,4 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
 
 export { format3164, priFromPino, rfc3164Stamp } from "./syslog.ts";
 export { renderLine, wantsColor } from "./pretty.ts";
+export { validateRecord, type JsonSchema, type ValidationIssue } from "./schema.ts";

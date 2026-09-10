@@ -1,6 +1,6 @@
 # ADR 0010 — Typed log (pino → syslog → EventBus)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-10
 **Change:** [`add-typed-log`](../../openspec/changes/add-typed-log/proposal.md)
 **Living spec (after fold):** [`openspec/specs/typed-log/spec.md`](../../openspec/specs/typed-log/spec.md)
