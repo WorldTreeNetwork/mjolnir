@@ -692,6 +692,11 @@ Blob door `:7222` (`blob_door_url`), orchestrator API `:4000`
 (`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`),
 Redis `:6379` (provisioned `REDIS_URL`, ADR
 [`0007`](decisions/0007-host-sidecar-redis.md)).
+Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
+`:app_log`) are ADR
+[`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2
+stays; host ingest is UDP. Living spec lands with implement
+changes, not the architecture fold.
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing

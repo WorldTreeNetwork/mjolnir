@@ -13,12 +13,14 @@ Full argument:
 
 1. **MIT `mjolnir-log` in `packages/log`.** Bun for dev/build/runtime.
    Publish npm. Pino is the logger. Not a WorldTree checkout.
-2. **Syslog is the wire.** Pino JSON is the MSG. Stdout default on;
-   syslog always; no ANSI on the wire.
+2. **Syslog is the wire.** Pino JSON is the MSG. v1 headers are
+   RFC 3164. Stdout default on; UDP syslog when configured;
+   no ANSI on the wire.
 3. **Two ingest paths, one Router.** Guest `/dev/log` → vsock ch2
-   stays. Host unix datagram for apps (myscape). EventBus `:app_log`
-   vs existing `:vm_syslog`.
-4. **`:pg` EventBus.** No Phoenix.PubSub. App id is the binary key.
+   stays (forwarder built; host ch2 register is ingest work).
+   Host ingest is **UDP** (loopback; `10.200.0.1` from guests).
+   `:app_log` iff MSG is JSON with `schema`; `source` is a stamp.
+4. **`:pg` EventBus.** No Phoenix.PubSub. App id is self-asserted.
 5. **App TS types → generated JSON Schema.** Pretty and LSP consume
    that schema. Unknown fields kept, flagged.
 6. **Code is later nodes.** `add-log-emit`, `add-log-ingest`,
@@ -26,7 +28,10 @@ Full argument:
 
 ## Built vs remaining
 
-Built: guest syslog pipeline (`lib/mjolnir/syslog/`, guest
-`syslog.rs`).
+Built: guest forwarder + RFC 3164 parser + Router/EventBus.
 
-Remaining: advise, then the five implement landings.
+Not built: ch2 Listener registration, multi-VM sender id, host
+UDP, `mjolnir-log`.
+
+Remaining: the five implement landings. This change folds the ADR
+only.

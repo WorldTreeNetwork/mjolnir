@@ -32,11 +32,14 @@ and EventBus each invent a dialect.
 
 ## Impact
 
-- Capabilities: ADDED `typed-log` (materialized by fold)
+- Capabilities: ADDED `typed-log` (living spec only when an
+  implementing act has landed — not this architecture fold)
 - ADRs: 0010 (this change). Pointer from `docs/architecture.md`
-  after accept.
-- Does not replace `Mjolnir.Syslog` vsock ch2. Host unix datagram
-  is an additional Listener source.
+  after the amendment boxes below.
+- Does not replace `Mjolnir.Syslog` vsock ch2. Host **UDP**
+  (loopback; `10.200.0.1` from guests) is an additional Listener
+  source. Unix datagram is not the emitter path (bun has no
+  AF_UNIX dgram).
 - Does not add Phoenix.PubSub.
 
 ## User journey & surfaces
@@ -50,7 +53,9 @@ Developer in myscape logs `world.asset_failed({ url, status })`.
   CI is plain ASCII; syslog carries the JSON MSG; an Elixir process
   subscribed to `:all` or the app id receives `{:mjolnir_event, id, :app_log, record}`.
 - **Empty** — `openspec/specs/typed-log/` does not exist yet.
-  Correct: fold creates it.
+  Correct: fold of an *implementing* change (`add-log-emit` /
+  `add-log-ingest`) creates it. This architecture change folds
+  only the ADR (learning 2026-08-16).
 - **Failed (today)** — ad-hoc `console` / in-process rings; guest
   syslog is RFC 3164 text only; host apps never hit EventBus.
 - **Off** — Duke parks. ADR is amended in place, not deleted.
@@ -58,7 +63,8 @@ Developer in myscape logs `world.asset_failed({ url, status })`.
 ## Out of scope
 
 - pino package implementation — `add-log-emit`
-- Host socket + Router JSON parse — `add-log-ingest`
+- Host UDP listener + RFC 3164 JSON MSG parse + ch2 register —
+  `add-log-ingest`
 - Subscribe helper / topic docs — `add-log-subscribe`
 - Language server — `add-log-lsp`
 - Myscape type file + wiring — `add-myscape-log-types`

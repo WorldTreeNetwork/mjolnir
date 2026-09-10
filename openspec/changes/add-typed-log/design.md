@@ -45,14 +45,19 @@ Rejected:
 
 ## Decision 2 — Syslog is the wire; JSON is the MSG
 
-Pino's line is a JSON object. That object is the syslog **MSG**
-(RFC 5424 preferred; RFC 3164 still parsed for guests). PRI encodes
-severity. TAG / APP-NAME is the originating app (`myscape`, `xela`,
-guest tag as today).
+Pino's line is a JSON object. That object is the syslog **MSG**.
+v1 wire is **RFC 3164** (the parser we have). RFC 5424 header parse
+is not v1. PRI encodes severity. TAG is the originating app
+(`myscape`, guest tag as today).
 
 Stdout is the same JSON (or pretty, see D5), default on. Syslog is
-always attempted. Failure to send syslog must not crash the app;
-stdout still works.
+attempted when a UDP target is configured; unset target means
+stdout only, no error. Failure to send syslog must not crash the
+app. Syslog bytes never contain ANSI.
+
+Pino transports under bun: prefer in-process `pino.multistream`
+(pretty stream + UDP writer). Do not use `thread-stream` worker
+transports as the v1 path.
 
 Rejected:
 
@@ -60,28 +65,44 @@ Rejected:
 - Dual JSONL files plus syslog (two dialects)
 - Replacing guest RFC 3164 text from busybox `logger`
 
-## Decision 3 — Two ingest paths, one Router
+## Decision 3 — Two ingest paths, one Router; JSON `schema` discriminates
 
-Keep **guest** `/dev/log` → vsock channel 2 → `Syslog.Listener`
-(already built).
+Keep **guest** `/dev/log` → vsock channel 2. The guest *forwarder*
+is built (`syslog.rs`). The host does **not** yet call
+`Listener.register_connection/3`; `:vm_spawned` is unmatched; with
+two VMs the Listener drops all data. Wiring ch2 + multi-VM sender
+id is **`add-log-ingest`**, not "already built."
 
-Add **host** unix datagram (or UDP localhost) that the same
-`Syslog.Listener`/`Router` family accepts. Apps like myscape on a
-Mac write that socket. Router stamps `source: :guest | :host` and
-publishes EventBus:
+**Host ingest is UDP**, not unix datagram. Bun/Node have no AF_UNIX
+datagram API. Loopback port on the host; guests send to
+`10.200.0.1` (ADR 0005 hotel IP). Target is explicit config;
+unset = stdout only.
 
-- guests: existing `:vm_syslog` (unchanged payload)
-- typed app JSON MSG: `:app_log` with parsed map + schema id
+**Discriminator:** EventBus type is `:app_log` iff the MSG parses
+as a JSON object that carries a `schema` field, **regardless of
+source**. `source: :guest | :host` is a stamp, not the switch.
+Non-JSON guest text stays `:vm_syslog`.
 
-`EventBus.publish/3` already keys on a binary id. Host apps use an
-app id string (e.g. `"myscape"`), not a VM uuid.
+App id on `:app_log` is **self-asserted** (UDP has no peer
+credentials). `EventBus.publish/3` still keys a binary id; app
+ids share `{:vm, id}` with VM uuids. `:all` subscribers receive
+app logs unless ingest uses a distinct `:pg` group — document
+that in `add-log-subscribe`.
+
+Max record **64 KiB**. Oversize is routed as malformed raw, never
+silently dropped. Guest recv and `:gen_udp` recbuf must match.
+
+`:app_log` default sinks are `[:eventbus]` only (not `:logger`).
+Level maps from pino `level`.
 
 Rejected:
 
 - Guest-only (myscape would never show up)
-- Phoenix.PubSub or Redis pubsub (house style is `:pg`; Phase 4
-  cluster `:pg` is the scale path)
+- Unix datagram as the emitter path (not bun-native)
+- Phoenix.PubSub or Redis pubsub
 - A second BEAM app just for logs
+- Folding unimplemented SHALLs into `openspec/specs/typed-log/`
+  from this architecture change
 
 ## Decision 4 — App-owned TypeScript types → generated JSON Schema
 
@@ -114,10 +135,14 @@ Wire is JSON (no ANSI). Pretty is a stdout transport:
 
 ## Built vs remaining
 
-Built: guest syslog vsock ch2, RFC 3164 parser, Router → EventBus
-`:vm_syslog` + Logger, `:pg` EventBus.
+Built: guest **forwarder** (`native/mjolnir_guest_agent/src/syslog.rs`
+→ vsock ch2); RFC 3164 parser; Router → EventBus `:vm_syslog` +
+Logger; `:pg` EventBus.
 
-Remaining: advise, then emit / ingest / subscribe / lsp / myscape
-type file. Architecture-only SHALLs that are not true of the code
-must not fold into living specs until the implementing act lands
-(learning 2026-08-16).
+Not built: host registration of the Listener as ch2 handler;
+multi-VM sender identification; host UDP socket; JSON-`schema`
+discriminator; `mjolnir-log` package.
+
+Remaining implement: emit / ingest (includes ch2 wire-up) /
+subscribe / lsp / myscape type file. This change folds the ADR
+only (learning 2026-08-16).

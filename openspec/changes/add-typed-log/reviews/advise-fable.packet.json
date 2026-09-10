@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-typed-log-advise",
+  "node_id": "add-typed-log",
+  "change_id": "add-typed-log",
+  "capability": "typed-log",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-fable-5.1-arch-review" }
+  },
+  "goal": "Architecture advise for add-typed-log (ADR 0010). Author is Grok. You are Fable 5.1, other family (ADR-005).\n\nWhy: Apps (myscape first) need a typed log that is pretty on a TTY, plain ASCII in CI, and durable on syslog so any Mjolnir node can subscribe. Guest syslog-over-vsock already exists for /dev/log. It does not give TypeScript a library, a type file, or a host-side path for a process that is not a guest.\n\nRead first (blind pass, no design.md/tasks.md yet): openspec/changes/add-typed-log/proposal.md; openspec/changes/add-typed-log/specs/typed-log/spec.md; docs/decisions/0010-typed-log.md; lib/mjolnir/syslog/router.ex; lib/mjolnir/syslog/listener.ex; lib/mjolnir/event_bus.ex; native/mjolnir_guest_agent/src/syslog.rs; docs/LEARNINGS.md line about 2026-08-16 fold not importing unimplemented SHALLs.\n\nCite file:line for code claims. Persist review at openspec/changes/add-typed-log/reviews/2026-09-10-advise.md with ADVISE accept or send-back, READER: fable-5.1-arch-review, SPAWN: this spawn dir.",
+  "anchors": [
+    { "symbol": "Mjolnir.Syslog.Router", "invariant": "guest :vm_syslog path stays; typed app records are a distinct EventBus type" },
+    { "symbol": "Mjolnir.EventBus.publish/3", "invariant": "binary id key; :pg not Phoenix.PubSub" },
+    { "symbol": "packages/log", "invariant": "does not exist yet; architecture only" }
+  ],
+  "acceptance": { "kind": "none" },
+  "out_of_scope": [
+    { "item": "Implement packages/log", "tracked_as": "add-log-emit" },
+    { "item": "Host socket code", "tracked_as": "add-log-ingest" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-typed-log/reviews/",
+      "openspec/changes/add-typed-log/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader"
+}

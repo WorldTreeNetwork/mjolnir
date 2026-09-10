@@ -28,10 +28,11 @@ runtime logger SHALL be pino.
 
 ### Requirement: Stdout and syslog sinks
 
-The library SHALL write to stdout by default and SHALL also emit
-syslog. Syslog emit failure SHALL NOT crash the process. The
-syslog MSG SHALL be a JSON object (the pino line). The syslog
-bytes SHALL NOT contain ANSI escape sequences.
+The library SHALL write to stdout by default. When a UDP syslog
+target is configured it SHALL also emit RFC 3164 syslog whose MSG
+is the pino JSON object. Unset target SHALL mean stdout only, with
+no error. Syslog emit failure SHALL NOT crash the process. The
+syslog bytes SHALL NOT contain ANSI escape sequences.
 
 #### Scenario: TTY pretty
 
@@ -65,24 +66,39 @@ schema identifier. Unknown fields SHALL be preserved on the wire.
 
 ### Requirement: Host and guest ingest, EventBus subscribe
 
-Mjolnir SHALL keep guest syslog on vsock channel 2. Mjolnir SHALL
-accept host application syslog on a unix datagram (or localhost
-UDP) and route parsed typed records to `Mjolnir.EventBus` as
-`:app_log`. Guest RFC 3164 text SHALL continue to publish as
+Mjolnir SHALL keep guest syslog on vsock channel 2 and SHALL
+register the Listener as that channel's handler (this is
+`add-log-ingest` work; the guest forwarder already exists).
+Mjolnir SHALL accept host application syslog on UDP (loopback
+port; guests MAY send to `10.200.0.1`). Unix datagram SHALL NOT
+be required of the TypeScript emitter. A record SHALL publish as
+`:app_log` iff the MSG is a JSON object with a `schema` field,
+regardless of `source`. Non-JSON guest text SHALL publish as
 `:vm_syslog`. Subscribe SHALL use existing `:pg` process groups.
-Phoenix.PubSub SHALL NOT be required.
+Phoenix.PubSub SHALL NOT be required. `:app_log` default sinks
+SHALL be `[:eventbus]`. Records larger than 64 KiB SHALL be
+treated as malformed raw, not dropped silently.
 
 #### Scenario: Host app log reaches a subscriber
 
 - GIVEN a process has `EventBus.subscribe("myscape")` or
   `EventBus.subscribe(:all)`
-- WHEN myscape emits a typed log through syslog to the host
-  socket
+- WHEN myscape emits a typed log through UDP syslog to the
+  configured host port
 - THEN the process receives
   `{:mjolnir_event, "myscape", :app_log, record}`
 
 #### Scenario: Guest logger still works
 
-- GIVEN a running VM whose guest agent forwards `/dev/log`
-- WHEN a process inside the VM writes syslog
-- THEN EventBus still publishes `:vm_syslog` for that VM id
+- GIVEN a running VM whose guest agent forwards `/dev/log` and
+  whose vsock ch2 handler is the Syslog.Listener
+- WHEN a process inside the VM writes non-JSON syslog
+- THEN EventBus publishes `:vm_syslog` for that VM id
+
+#### Scenario: JSON from a guest is still :app_log
+
+- GIVEN a guest process emits RFC 3164 whose MSG is JSON with
+  `schema`
+- WHEN the Listener parses the line
+- THEN EventBus publishes `:app_log` (source stamp may be
+  `:guest`)
