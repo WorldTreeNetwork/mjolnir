@@ -21,6 +21,7 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 - Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
 - `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
+- Client API: `https://api.vm.worldtree.network` (`mj doctor` / `mj secrets ls <app>`). Deploy secrets live at `/var/lib/mjolnir/deploy/secrets/<slug>.json`, `0600 root:root`. Managed LUKS passphrases at `/var/lib/mjolnir/escrow/<vm_id>`, same mode. Elixir is root; gateway is `User=mjolnir` and cannot read those files.
 
 ## Local Control Plane (Justfile)
 
