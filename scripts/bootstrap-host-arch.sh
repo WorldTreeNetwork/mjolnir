@@ -118,12 +118,12 @@ check_system_suitability() {
         fi
     fi
 
-    # BTRFS host filesystem check
-    if ! btrfs filesystem show / &>/dev/null && ! findmnt -t btrfs &>/dev/null; then
+    # BTRFS host filesystem check (`btrfs filesystem show PATH` is not reliable)
+    if findmnt -n -o FSTYPE / | grep -qx btrfs || findmnt -t btrfs &>/dev/null; then
+        log_success "BTRFS filesystem present"
+    else
         log_warn "No BTRFS filesystem detected. This script assumes the host is on BTRFS."
         log_warn "If /var/lib/mjolnir is not on BTRFS, subvolume operations will fail."
-    else
-        log_success "BTRFS filesystem present"
     fi
 
     local mem_gb
@@ -386,6 +386,11 @@ deploy_mjolnir_code() {
 
     cd "$MJOLNIR_CODE"
 
+    if command -v mise &>/dev/null; then
+        mise trust "$MJOLNIR_CODE/.mise.toml" >/dev/null 2>&1 || true
+        mise trust "$MJOLNIR_CODE" >/dev/null 2>&1 || true
+    fi
+
     log_info "Fetching dependencies..."
     MIX_ENV=prod mix deps.get
 
@@ -465,8 +470,10 @@ setup_btrfs() {
     mkdir -p "$MJOLNIR_ROOT/btrfs"
 
     # Confirm we're actually on BTRFS (creates subvolumes, not just directories)
-    if ! btrfs filesystem show "$MJOLNIR_ROOT/btrfs" &>/dev/null; then
-        log_warn "$MJOLNIR_ROOT/btrfs is not on a BTRFS filesystem"
+    local btrfs_fstype
+    btrfs_fstype=$(findmnt -n -o FSTYPE "$MJOLNIR_ROOT/btrfs" 2>/dev/null || findmnt -n -o FSTYPE / | head -1)
+    if [[ "$btrfs_fstype" != "btrfs" ]]; then
+        log_warn "$MJOLNIR_ROOT/btrfs fstype=${btrfs_fstype:-unknown} (want btrfs)"
         log_warn "Subvolume operations will use regular directories (CoW cloning won't work)"
     else
         log_success "Confirmed BTRFS at $MJOLNIR_ROOT/btrfs"
@@ -619,17 +626,32 @@ $include_line
 NFTEOF
     fi
 
-    # Load the rules now
+    # Load the mjolnir table only. Do not restart nftables.service — that
+    # flushes Tailscale's xtables/nft hybrid rules on Arch.
     if nft -f "$nft_file" 2>/dev/null; then
         log_success "nftables rules loaded"
     else
-        log_warn "Failed to load nftables rules immediately — will take effect after nftables.service restart"
+        log_warn "Failed to load nftables NAT immediately (missing nf_nat/dummy.ko is common if the running kernel != /lib/modules)."
+        log_warn "Hotel IP fallback: 10.200.0.1/32 on lo. Reboot onto a matching kernel for dummy.ko + masquerade."
     fi
 
-    # Enable nftables to persist across reboots
-    systemctl enable nftables.service 2>/dev/null || true
-    systemctl restart nftables.service 2>/dev/null || \
-        log_warn "nftables.service restart failed — rules may not persist on next boot"
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/mjolnir-hotel-ip.service << 'UNIT'
+[Unit]
+Description=Mjolnir hotel IP 10.200.0.1
+After=network-pre.target
+Before=mjolnir.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'if modprobe dummy 2>/dev/null; then ip link add dummy-mjolnir type dummy 2>/dev/null || true; ip link set dummy-mjolnir up; ip addr replace 10.200.0.1/32 dev dummy-mjolnir; else ip addr replace 10.200.0.1/32 dev lo; fi'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now mjolnir-hotel-ip.service
 
     log_success "VM networking configured (subnet: $vm_subnet, nftables)"
 }
@@ -729,6 +751,10 @@ setup_systemd_service() {
     for d in btrfs sockets boot; do
         [[ -d "$MJOLNIR_ROOT/$d" ]] && chown mjolnir:mjolnir "$MJOLNIR_ROOT/$d"
     done
+
+    # ProtectSystem=strict requires every ReadWritePaths entry to exist.
+    # Ubuntu units list /etc/ufw; Arch does not ship it.
+    mkdir -p /etc/ufw
 
     cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
 
