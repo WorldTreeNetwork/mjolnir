@@ -31,7 +31,8 @@ cross-family reader. Sol is not subscribed.
       the tier argument, not "cannot recrypt without GitHub".
 - [x] Fold notes from 2026-09-10: copy-out pointer; online-verifier
       application; salt cites D-5.
-- [ ] Cross-family re-advise after amend (ADR-005; not Grok).
+- [x] Cross-family re-advise after amend (ADR-005; not Grok)
+      (`reviews/2026-09-10-readvise.md`, accept).
 - [ ] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`
       (new sections; keep three-layer table; point tokenator at
