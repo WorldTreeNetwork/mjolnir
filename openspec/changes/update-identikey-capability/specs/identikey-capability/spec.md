@@ -4,14 +4,19 @@
 
 A Biscuit that authorizes `redeem` of a foreign secret SHALL name the
 holder that may perform it. v1 holder class is a single Identikey
-public key. The Datalog fact SHALL be `holder(<fingerprint>)` where
-fingerprint is the Blake3 identity fingerprint from
-identikey-auth-challenge v1 §5. A verifier SHALL NOT treat possession
-of the token bytes as sufficient. It SHALL verify a signature by that
-key over a verifier-chosen nonce (and the token identity), compute
-the fingerprint from the presented `{alg, key}`, inject
-`holder(<fingerprint>)`, then evaluate the Biscuit. A failed holder
-proof SHALL fail closed.
+public key. The token SHALL carry a holder **check**
+(`check if holder($fp), $fp == "<fingerprint>"`) and SHALL NOT
+assert a `holder` fact in any block. Fingerprint is the Blake3
+identity fingerprint from identikey-auth-challenge v1 §5. A verifier
+SHALL NOT treat possession of the token bytes as sufficient. It
+SHALL verify a signature by that key over a single signed tuple
+(token identity, verifier-chosen nonce, audience; plus a response
+key if the profile seals the release), compute the fingerprint from
+the presented `{alg, key}`, inject the `holder(<fingerprint>)`
+**fact** (verifier-injected only), then evaluate the Biscuit. A
+failed holder proof SHALL fail closed. Encoding of the tuple and
+the definition of token identity stay with `add-biscuit-runtime` /
+`ikp-6yz.2`.
 
 This requirement SHALL NOT apply to other agency profiles (VM exec,
 mailbox, snapshot) unless those profiles add it. A root VM-exec
@@ -27,10 +32,18 @@ Biscuit without a holder check is not a violation of this spec.
 #### Scenario: Named key presents
 
 - GIVEN the same Biscuit
-- WHEN Z signs the nonce and audience
+- WHEN Z signs the tuple (token identity, nonce, audience)
 - AND the Biscuit's other checks pass
-- THEN the verifier accepts the holder fact
+- THEN the verifier accepts the injected holder fact
 - AND evaluation may proceed
+
+#### Scenario: Token asserts a holder fact
+
+- GIVEN a minted Biscuit whose authority or attenuation block
+  contains a `holder` fact
+- WHEN a verifier evaluates it
+- THEN the verifier rejects
+- AND redeem does not run
 
 ### Requirement: Secret bytes stay out of the token
 
@@ -40,10 +53,14 @@ the presenter can decrypt without the verifier. It MAY name a secret
 identifier and SHALL, if it carries a digest of the secret, use a
 **salted** Blake3 commitment (`Blake3(domain || salt || secret)`).
 Salt MAY travel with the token. An unsalted hash of the secret
-SHALL NOT appear on the wire. Copy-out SHALL be verifiable against
-that commitment. Holder fingerprints SHALL be Blake3 per
-auth-challenge v1 §5, not a SHA-256 stub and not a raw-Ed25519
-preimage.
+SHALL NOT appear on the wire (Recrypt D-5: salting is mandatory
+for low-entropy secrets). Copy-out (release of `{value, salt}`
+to the holder; defined by `add-secret-tokenator`) SHALL be
+verifiable against that commitment. Holder fingerprints SHALL be
+Blake3 per auth-challenge v1 §5, not a SHA-256 stub and not a
+raw-Ed25519 preimage. The secret-redemption profile is an
+online-verifier application of agency; it does not weaken
+capability-v1 §2 for other profiles.
 
 #### Scenario: Inspect minted token
 
@@ -105,11 +122,20 @@ for *our* ciphertext. A design that puts Recrypt-protected data
 behind this tokenator, or that PRE-transforms a GitHub PAT, SHALL be
 rejected.
 
+The verifier SHALL release the secret only to the party that
+completed the holder proof, over a channel that delegation-path
+intermediaries cannot read. Application profiles choose the
+binding: host-local overlay where the holder is the socket peer
+(Mjolnir v1), a transport authenticated to the holder key, or
+sealing the response to a response key carried in the signed
+holder proof.
+
 #### Scenario: PAT is the example foreign secret
 
 - GIVEN an owner holds a GitHub PAT in a store the tokenator can
   read
 - WHEN agent Z presents a valid holder-bound Biscuit for that secret
+  over a holder-bound channel
 - THEN the tokenator may return the PAT to Z
 - AND intermediate agents who only forwarded the Biscuit do not
   receive it

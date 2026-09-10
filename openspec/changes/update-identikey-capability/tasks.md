@@ -18,29 +18,19 @@ cross-family reader. Sol is not subscribed.
 - [x] Send-back 2026-08-26: fingerprint encoding (auth-challenge §5)
 - [x] Human amend 2026-08-26: salted Blake3 commitments; unsalted
       secret hashes forbidden; Gordian elision deferred
-- [ ] Send-back 2026-09-10 (Fable, `reviews/2026-09-10-advise.md`
-      finding 1): holder is a **check** in the token
-      (`check if holder($fp), $fp == "<fp>"`), never a `holder` fact
-      in any block; the fact is verifier-injected only. Add the
-      rejection scenario (token asserting a `holder` fact).
-- [ ] Send-back 2026-09-10 (finding 2): release SHALL go only to the
+- [x] Send-back 2026-09-10 (Fable, `reviews/2026-09-10-advise.md`
+      finding 1): holder is a **check** in the token, never a
+      `holder` fact in any block; rejection scenario added.
+- [x] Send-back 2026-09-10 (finding 2): release SHALL go only to the
       party that completed the holder proof, over a channel
-      delegation-path intermediaries cannot read; application profile
-      names the binding (overlay peer / holder-authenticated transport
-      / sealed to a response key in the proof).
-- [ ] Send-back 2026-09-10 (finding 3): one signed tuple in the
-      requirement — token identity, nonce, audience (plus response key
-      if a profile seals). Encoding stays `add-biscuit-runtime` /
-      `ikp-6yz.2`.
-- [ ] Send-back 2026-09-10 (rationale, not SHALL): Decision 1 and
-      Rejected say the PAT "cannot be recrypted without GitHub". It
-      can. Replace with the tier argument (PRE = durable read, no
-      per-use policy, rotation re-keys holders; agency = redeemable
-      use with TTL/scope/log, PAT rotates without re-issue).
-- [ ] Fold notes from 2026-09-10 (not spec text): copy-out pointer to
-      `add-secret-tokenator`; redemption profile is an online-verifier
-      application (does not weaken capability-v1 §2); salt clause
-      cites D-5 for low-entropy secrets.
+      intermediaries cannot read; profiles named.
+- [x] Send-back 2026-09-10 (finding 3): one signed tuple — token
+      identity, nonce, audience (plus response key if a profile
+      seals). Encoding stays `add-biscuit-runtime` / `ikp-6yz.2`.
+- [x] Send-back 2026-09-10 (rationale, not SHALL): Decision 1 uses
+      the tier argument, not "cannot recrypt without GitHub".
+- [x] Fold notes from 2026-09-10: copy-out pointer; online-verifier
+      application; salt cites D-5.
 - [ ] Cross-family re-advise after amend (ADR-005; not Grok).
 - [ ] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`

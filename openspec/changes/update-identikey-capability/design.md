@@ -38,9 +38,13 @@ It is not a new crypto system.
 
 Recrypt D-5 still holds: we do **not** put *our* ciphertext behind a
 tokenator. PRE stays offline. GitHub PATs are not our ciphertext.
-They cannot be recrypted into a form only Z can read without GitHub
-participating. A holder that already stores the PAT is the honest
-availability dependency.
+The owner *could* Recrypt-encrypt the PAT to Z (plaintext in hand;
+no GitHub participation needed). That is the wrong tier: PRE is
+durable read with no per-use policy, no TTL at use, no redemption
+log, and PAT rotation re-keys every holder. Agency plus an online
+verifier gives redeemable use with TTL/scope/log, and PAT rotation
+without re-issuing tokens. A holder that already stores the PAT is
+the honest availability dependency.
 
 ## Decision 2 — The secret never enters the token
 
@@ -57,10 +61,11 @@ v1 holder class: **one Identikey public key**, and **only on the
 secret-redemption profile**. VM-exec / mailbox biscuits are not
 forced to carry a holder check (rbac-design Phase 1 stays valid).
 
-Datalog: `check if holder($fp), $fp == "<blake3-fingerprint>"`.
-Fingerprint is auth-challenge v1 §5 (Blake3 of the self-describing
-key). HTTP proof carries `{alg, key}`; the verifier computes `fp`
-and injects `holder(fp)`. Do not stuff raw key bytes into Datalog.
+Datalog: `check if holder($fp), $fp == "<blake3-fingerprint>"` in
+the token. The token SHALL NOT assert a `holder` fact in any
+block; the verifier injects that fact from the presented `{alg,
+key}`. Fingerprint is auth-challenge v1 §5 (Blake3 of the
+self-describing key). Do not stuff raw key bytes into Datalog.
 
 At redeem, the verifier:
 
