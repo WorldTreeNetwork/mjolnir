@@ -710,6 +710,14 @@ Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
 stays; host ingest is UDP. Living spec lands with implement
 changes, not the architecture fold.
 
+Deploy secrets (`mj secrets set|ls|unset`) merge
+`/var/lib/mjolnir/deploy/secrets/<slug>.json` at service-VM spawn.
+Living spec [`deploy-secrets`](../openspec/specs/deploy-secrets/spec.md)
+(`add-deploy-secrets-cli` folded 2026-09-10). Unix `0600 root:root` is
+hygiene, not confidentiality — see
+[`secrets-architecture.md`](secrets-architecture.md#what-0600-means-steer-2026-09-10).
+Not recrypt, not biscuit, not live-guest inject.
+
 Foreign-secret redeem (GitHub PAT, API keys) is ADR
 [`0008`](decisions/0008-secret-tokenator.md): opaque vault + salted
 Blake3 commitment; holder-bound Biscuit; `POST /api/secrets/redeem`

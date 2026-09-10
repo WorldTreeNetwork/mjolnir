@@ -402,6 +402,9 @@ On the hypervisor those files are `0600 root:root` (Elixir is root;
 gateway `User=mjolnir` cannot read them). API ownership is
 `Policy.App` (`user_id == owner_id`), not a Linux user.
 
+Living spec: [`deploy-secrets`](../openspec/specs/deploy-secrets/spec.md)
+(folded from `add-deploy-secrets-cli` 2026-09-10).
+
 ## What 0600 means (steer 2026-09-10)
 
 Unix DAC on host files is **hygiene**, not confidentiality and not
