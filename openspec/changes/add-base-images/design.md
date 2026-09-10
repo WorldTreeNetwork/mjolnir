@@ -145,8 +145,9 @@ Rejected:
 
 ## Decision 4 — Independent debootstraps, shared helpers, no flavor DSL
 
-`ubuntu-24.04`, `ci-ubuntu-24.04`, and `buzz-agent` stay **separate
-debootstrap recipes**. They are not `FROM ubuntu-24.04` snapshots.
+`ubuntu-24.04`, `ci-ubuntu-24.04`, `buzz-agent`, and `arch` stay
+**separate bootstrap recipes** (debootstrap or pacstrap). They are
+not `FROM ubuntu-24.04` snapshots.
 
 CI has a `runner` user, virtio-fs workspace mounts, and a fat
 mise-managed toolchain (rust, zig). Buzz has sprig as the
@@ -190,13 +191,15 @@ Operator sequence:
    `just build-buzz-agent-image`).
 4. Spawn from the new image; vsock ping must succeed without
    inject. Then tear the probe VM down.
-5. Delete `@snapshots/deploy-*` layers whose cache parent is the
-   rebuilt alias. `CacheKey.compute` hashes `parent_layer_id` as a
-   string (`cache_key.ex:74-75`); `Builder` defaults that to the
-   base-image name (`builder.ex:102`); the orchestrator passes the
-   alias (`orchestrator.ex:122`). A changed filesystem under the
-   same name is otherwise a silent cache hit. Latent until retire
-   flips the deploy default; live from then until `mjolnir-b0gb.6`.
+5. Delete every `@snapshots/deploy-*` layer via `mj snapshot rm`
+   / `DELETE /api/snapshots/:name` (removes the `.json` sidecar
+   the planner lists from). Do not use raw `btrfs subvolume
+   delete`. Layer metadata records no parent, so the chain under
+   the rebuilt alias is not separable from the rest of the deploy
+   cache; a surviving name fails the next re-snapshot with
+   `{:snapshot_exists, _}`. Latent until retire flips the deploy
+   default; live from then until `mjolnir-b0gb.6`, which makes the
+   parent a pin and removes this step.
 
 Order on 45.76.77.97: `ubuntu-24.04` first (spawn + deploy default),
 then `ci-ubuntu-24.04`, `buzz-agent`, `arch`. Do **not** rebuild

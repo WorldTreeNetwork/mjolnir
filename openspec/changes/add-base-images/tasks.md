@@ -34,8 +34,9 @@ unimplemented HTTP or pin resolver into living specs
 | Deploy default; Node deploy uses ubuntu + mise | PENDING | `remove-deploy-node-bun` |
 | Snapshot is not a catalog entry | fold-now (rule) | `add-base-image-list` for listing |
 | Toolchains are not OS roots (review reject) | fold-now | — |
+| Recipes SHALL NOT produce `deploy-node-bun` | PENDING | `remove-deploy-node-bun` |
 | Catalog image boots without inject | fold-now | — |
-| Declared live images match recipes (v0 + cache drop) | fold-now | — |
+| Declared live images match recipes (v0 + drop all deploy-* layers) | fold-now | — |
 | Retired image is not rebuilt | fold-now | `remove-deploy-node-bun` for the delete |
 | Pins are immutable; aliases move | PENDING | `add-base-image-pins` |
 | Flavors are independent recipes | fold-now | — |
@@ -55,7 +56,22 @@ Owed from advise send-back `reviews/2026-09-10-advise.md`
 - [x] Finding 4: D5 operator sequence step 5 + ADR D5 — after an
       in-place alias rebuild, delete `@snapshots/deploy-*` layers
       whose cache parent is that alias.
-- [ ] Re-advise (cross-family) after the four above.
+- [x] Re-advise (cross-family) after the four above
+      (`reviews/2026-09-10-readvise.md`).
+
+Owed from re-advise `reviews/2026-09-10-readvise.md` (Fable 5.1,
+cross-family; send-back on the finding-4 wording, which the prior
+review itself mis-specified). D1–D6 stand:
+
+- [x] Finding 1: D5 v0 cache drop → delete *every* `@snapshots/deploy-*`
+      layer after an in-place alias rebuild, via `mj snapshot rm` /
+      `DELETE /api/snapshots/:name` (sidecar included; not raw
+      `btrfs subvolume delete`). D6 removes the step.
+- [x] Finding 2: split fold row — review-reject fold-now; "Recipes
+      SHALL NOT produce `deploy-node-bun`" PENDING on
+      `remove-deploy-node-bun`.
+- [x] Ride-along: "bootstrap recipes" (debootstrap or pacstrap).
+- [ ] Re-advise (cross-family) after the three above.
 
 Handoffs (not checkboxes):
 
@@ -77,4 +93,5 @@ Handoffs (not checkboxes):
   pin, retargets the alias, record pin on deploy, cache parent is
   the pin. Before a second tenant. `mj bases` should leave room
   for `kind` / `resolves_to` so list does not freeze aliases as
-  identity.
+  identity. `@base/` has no sidecar; "produced by that recipe" is
+  a filename regex until pins land — note for list + pins.

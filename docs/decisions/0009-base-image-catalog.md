@@ -23,15 +23,18 @@ Full argument:
 3. **Image must boot without inject.** Binary + unit + wants
    symlink are recipe post-conditions (`guest-agent.sh`). Inject
    is a refresh when `:guest_agent_bin` exists, not a crutch.
-4. **Independent debootstraps, shared helpers.** No FROM-ubuntu
+4. **Independent bootstrap recipes, shared helpers.** No FROM-ubuntu
    flavor DSL in this change. Share `scripts/lib/{guest-agent,mise,terminfo}.sh`.
+   Arch is pacstrap; ubuntu-family is debootstrap.
 5. **Rebuild declared live images from current recipes (v0).** A
    subvolume older than its recipe is not the catalog. Snapshot
    the previous image into `@snapshots/<name>-pre-rebuild-<date>`
-   before replace. After an in-place alias rebuild, delete
-   `@snapshots/deploy-*` layers whose cache parent is that alias
-   (`CacheKey.compute` hashes the parent string). In-place on the
-   alias name is OK while we own every app. Do not rebuild
+   before replace. After an in-place alias rebuild, delete every
+   `@snapshots/deploy-*` layer via `mj snapshot rm` /
+   `DELETE /api/snapshots/:name` (sidecar included; not raw
+   `btrfs subvolume delete`). Layers do not record a parent, so
+   the chain is not separable. D6 removes this step. In-place on
+   the alias name is OK while we own every app. Do not rebuild
    `deploy-node-bun` (D1) or unmanaged names. Human 2026-08-27.
 6. **Pins are immutable; aliases move (v1).** `ubuntu-24.04` /
    `ubuntu-latest` are channels. `ubuntu-24.04-20260827` is a pin

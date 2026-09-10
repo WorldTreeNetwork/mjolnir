@@ -119,9 +119,14 @@ name's current recipe, including a current guest agent. **v0**
 (single tenant): the alias subvolume MAY be replaced in place
 after snapshotting the previous tree to
 `@snapshots/<name>-pre-rebuild-<date>`. After an in-place alias
-rebuild the operator SHALL delete `@snapshots/deploy-*` layers
-whose cache parent is that alias string (`CacheKey.compute`
-hashes the parent name). **v1** (D6): the recipe writes a new pin
+rebuild the operator SHALL delete every `@snapshots/deploy-*`
+layer via `mj snapshot rm` / `DELETE /api/snapshots/:name`
+(sidecar `.json` included). Layer metadata records no parent, so
+the chain under the rebuilt alias is not separable; a surviving
+name fails the next re-snapshot with `{:snapshot_exists, _}`.
+Raw `btrfs subvolume delete` SHALL NOT be the path (it leaves
+the sidecar the planner lists from). D6 (`add-base-image-pins`)
+removes this step. **v1** (D6): the recipe writes a new pin
 and retargets the alias; it SHALL NOT overwrite the previous pin.
 `deploy-node-bun` SHALL NOT be rebuilt. Unmanaged names SHALL NOT
 be rebuilt by this requirement. Running `@vms/<uuid>` clones
@@ -135,8 +140,8 @@ SHALL NOT be destroyed by a base rebuild.
 - THEN `@snapshots/ubuntu-24.04-pre-rebuild-<date>` exists
 - AND `@base/ubuntu-24.04` contains the current agent
 - AND a spawn from that image answers vsock without inject
-- AND `@snapshots/deploy-*` layers whose cache parent is the
-  alias `ubuntu-24.04` are deleted
+- AND every `@snapshots/deploy-*` layer is deleted via
+  `mj snapshot rm` / `DELETE /api/snapshots/:name`
 
 #### Scenario: Retired image is not rebuilt
 
@@ -193,9 +198,10 @@ under `@base/`, not only `@snapshots/`.
 ### Requirement: Flavors are independent recipes sharing helpers
 
 `ubuntu-24.04`, `ci-ubuntu-24.04`, `buzz-agent`, and `arch` SHALL
-be built by separate debootstrap recipes. They SHALL share
-`scripts/lib/guest-agent.sh` and `scripts/lib/terminfo.sh`.
-Ubuntu-family recipes SHALL also share `scripts/lib/mise.sh`. A FROM-ubuntu flavor DSL SHALL NOT be
+be built by separate bootstrap recipes (debootstrap or pacstrap).
+They SHALL share `scripts/lib/guest-agent.sh` and
+`scripts/lib/terminfo.sh`. Ubuntu-family recipes SHALL also share
+`scripts/lib/mise.sh`. A FROM-ubuntu flavor DSL SHALL NOT be
 required to add or rebuild a declared image. CI SHALL keep a
 non-root runner user and workspace-mount plumbing. Buzz-agent SHALL
 keep the harness as the signal-receiving process.
