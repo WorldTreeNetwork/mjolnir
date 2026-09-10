@@ -404,7 +404,8 @@ BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 |                           Mounted in guest as: root=myfs rootfstype=virtiofs rw
 |
 +-- @snapshots/
-    {name}/                 Frozen machines (named snapshots, deploy-* layers)
+    {name}/                 Named filesystem snapshots (BTRFS subvolume clones)
+    {name}.mem/             Memory-park artifacts (`state.json` + RAM) when kind is memory
 ```
 
 `@base/` is a **declared catalog of OS roots**, not a pile of
@@ -430,6 +431,11 @@ DELETE /api/vms/:id                 [vms:stop]     Stop VM
 GET  /api/vms/:id/ticket            [shell:connect] Iroh ticket
 GET  /api/vms/:id/node-id           [shell:connect] Iroh node ID
 POST /api/vms/:id/await-shell       [shell:connect] Wait for shell
+POST /api/vms/:id/snapshots         [snapshots:create] Filesystem snapshot (VM keeps serving)
+POST /api/vms/:id/freeze            [snapshots:create] Memory park; source VMM torn down
+GET  /api/snapshots                 [snapshots:read]  List (`kind`: filesystem | memory)
+GET  /api/snapshots/:name           [snapshots:read]  Show (`kind`)
+POST /api/snapshots/:name/thaw      [vms:spawn]    Restore memory snapshot to source_vm_id
 ```
 
 Authentication: JWT bearer tokens with scope-based authorization. Scopes are space-separated strings in the token claims. Localhost bypass available for development.
@@ -446,7 +452,7 @@ Authentication: JWT bearer tokens with scope-based authorization. Scopes are spa
 | ~125ms boot, ~5MB overhead | VMs feel instant. Can run hundreds on a single host. |
 | Minimal device model | Reduced attack surface. No PCI, no USB, no GPU — just virtio. |
 | virtio-fs for rootfs sharing | BTRFS subvolumes mounted directly into guests. No ext4 image files. |
-| Native snapshotting | Future: pause VM, save memory+CPU state, resume anywhere. |
+| Native snapshotting | `mj freeze` parks RAM+fs and tears the source VMM down (`vm.snapshot` is terminal for virtio-fs). `mj thaw` restores the same VM id. |
 | vsock for host-guest | Direct communication without networking. Low latency, no TCP overhead. |
 
 Docker gives you process isolation (cgroups + namespaces). Cloud Hypervisor gives you hardware isolation (KVM + reduced VMM). For running untrusted code — especially AI agents with full system access — hardware isolation is non-negotiable.
@@ -603,17 +609,21 @@ BTRFS reflink already enables instant filesystem snapshots:
 
 This captures workspace state (files, installed packages, project data) without needing memory snapshots. For development environments and AI agent workspaces, this is sufficient.
 
-### Full State Snapshots (Future)
+### Full State Snapshots (same-host freeze/thaw)
 
-Cloud Hypervisor supports native memory + CPU state snapshots via `vm.pause` + state serialization. Combined with BTRFS filesystem snapshots, this enables true pause/resume:
+Cloud Hypervisor `vm.snapshot` is terminal for virtio-fs: the source
+VMM does not resume. Operators therefore get distinct verbs, not a
+`--memory` flag on filesystem snapshot. Living spec:
+[`vm-freeze`](../openspec/specs/vm-freeze/spec.md).
 
-```elixir
-# Pause VM, save everything (memory + filesystem)
-{:ok, snap} = Mjolnir.VM.snapshot("vm-123")
-
-# Resume exact execution state, possibly on a different host
-{:ok, vm} = Mjolnir.VM.restore(snap, target_node: :"mjolnir@host2")
 ```
+mj freeze <id> <name>   # park RAM+fs; source VM stops
+mj thaw <name>          # restore the same VM id
+```
+
+Filesystem `POST /api/vms/:id/snapshots` / `mj snapshot create` is
+unchanged. Spawn from a memory snapshot is refused. Cross-host restore
+(`target_node:`) is still later.
 
 ### Cross-Host Migration
 
@@ -796,7 +806,8 @@ iex> Mjolnir.VM.stop(vm.id)
   btrfs/
     @base/ubuntu-24.04/             Base rootfs (BTRFS subvolume, directory tree)
     @vms/{uuid}/                    Per-VM rootfs (BTRFS subvolume, CoW clone)
-    @snapshots/{name}/              Named snapshots (BTRFS subvolume clones)
+    @snapshots/{name}/              Named filesystem snapshots (BTRFS subvolume clones)
+    @snapshots/{name}.mem/          Memory-park artifacts (kind memory)
 
 /tmp/mjolnir/
   {uuid}.sock                       Cloud Hypervisor API socket (Unix domain)

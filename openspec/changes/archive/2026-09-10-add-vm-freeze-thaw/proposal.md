@@ -1,6 +1,8 @@
 # add-vm-freeze-thaw
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-09-10 → `openspec/specs/vm-freeze/spec.md`.
 
 **Rigor:** change
 **Bead:** mjolnir-3y6.10
