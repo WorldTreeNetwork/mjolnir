@@ -71,7 +71,8 @@ review itself mis-specified). D1–D6 stand:
       SHALL NOT produce `deploy-node-bun`" PENDING on
       `remove-deploy-node-bun`.
 - [x] Ride-along: "bootstrap recipes" (debootstrap or pacstrap).
-- [ ] Re-advise (cross-family) after the three above.
+- [x] Re-advise (cross-family) after the three above
+      (`reviews/2026-09-10-readvise2.md`, accept).
 
 Handoffs (not checkboxes):
 
