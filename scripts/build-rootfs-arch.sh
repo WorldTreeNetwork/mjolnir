@@ -15,6 +15,8 @@ OUTPUT="${1:-/var/lib/mjolnir/btrfs/@base/arch}"
 AGENT_BIN="${AGENT_BIN:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/guest-agent.sh
+source "$SCRIPT_DIR/lib/guest-agent.sh"
 # shellcheck source=lib/terminfo.sh
 source "$SCRIPT_DIR/lib/terminfo.sh"
 
@@ -159,35 +161,8 @@ arch-chroot "$OUTPUT" systemctl enable serial-getty@ttyS0.service
 
 arch-chroot "$OUTPUT" passwd -l root
 
-# Guest agent
-if [[ -n "$AGENT_BIN" && -f "$AGENT_BIN" ]]; then
-    echo "Installing guest agent..."
-    cp "$AGENT_BIN" "$OUTPUT/usr/local/bin/mjolnir-agent"
-    chmod +x "$OUTPUT/usr/local/bin/mjolnir-agent"
-    mkdir -p "$OUTPUT/etc/mjolnir"
-    chmod 700 "$OUTPUT/etc/mjolnir"
-    cat > "$OUTPUT/etc/systemd/system/mjolnir-agent.service" << 'EOF'
-[Unit]
-Description=Mjolnir Guest Agent
-After=sysinit.target
-Wants=sysinit.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/mjolnir-agent
-Restart=on-failure
-RestartSec=2
-StartLimitBurst=3
-StartLimitIntervalSec=30
-
-[Install]
-WantedBy=basic.target
-EOF
-    arch-chroot "$OUTPUT" systemctl enable mjolnir-agent.service
-else
-    echo "WARNING: No guest agent - vsock commands won't work"
-fi
-
+# Guest agent. Fail closed (mjolnir-0e8); set ALLOW_NO_AGENT=1 to skip.
+install_guest_agent "$OUTPUT"
 install_ghostty_terminfo "$OUTPUT"
 
 # Network setup script (called by guest agent)

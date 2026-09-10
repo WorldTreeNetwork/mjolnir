@@ -17,7 +17,9 @@ Full argument:
 2. **Catalog v1 (closed list):** `ubuntu-24.04` (spawn **and**
    deploy default), `ci-ubuntu-24.04` (Forgejo runner; `@base/dev`
    later), `buzz-agent` (bodies), `arch` (optional, not default).
-   Undeclared subvolumes are unmanaged, never auto-deleted.
+   Undeclared subvolumes are unmanaged, never auto-deleted. A pin
+   produced by a declared alias's recipe is declared (archived),
+   not unmanaged; unmanaged is a name with no recipe in this repo.
 3. **Image must boot without inject.** Binary + unit + wants
    symlink are recipe post-conditions (`guest-agent.sh`). Inject
    is a refresh when `:guest_agent_bin` exists, not a crutch.
@@ -26,9 +28,11 @@ Full argument:
 5. **Rebuild declared live images from current recipes (v0).** A
    subvolume older than its recipe is not the catalog. Snapshot
    the previous image into `@snapshots/<name>-pre-rebuild-<date>`
-   before replace. In-place on the alias name is OK while we own
-   every app. Do not rebuild `deploy-node-bun` (D1) or unmanaged
-   names. Human 2026-08-27.
+   before replace. After an in-place alias rebuild, delete
+   `@snapshots/deploy-*` layers whose cache parent is that alias
+   (`CacheKey.compute` hashes the parent string). In-place on the
+   alias name is OK while we own every app. Do not rebuild
+   `deploy-node-bun` (D1) or unmanaged names. Human 2026-08-27.
 6. **Pins are immutable; aliases move (v1).** `ubuntu-24.04` /
    `ubuntu-latest` are channels. `ubuntu-24.04-20260827` is a pin
    the recipe produces and never overwrites. Spawn/deploy resolve

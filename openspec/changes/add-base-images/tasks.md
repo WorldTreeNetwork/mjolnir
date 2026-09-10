@@ -22,11 +22,40 @@ Fable 5 is still the cross-family reader for code landings.
       `reviews/2026-08-28-fable-advise.md`
 - [x] After accept: pointer in `docs/architecture.md` Filesystem
       section (do not delete prior layout text)
-- [ ] Fold deltas into `openspec/specs/base-images/` only when the
-      first implementing act has landed (retire), or fold
-      architecture-only SHALLs that are already true of the design
-      (do not import unimplemented HTTP into living specs —
-      learning 2026-08-16)
+Fold split (Fable 2026-09-10 finding 3). Folder does not decide
+which SHALLs are "already true" — this table does. Do not import
+unimplemented HTTP or pin resolver into living specs
+(learning 2026-08-16).
+
+| Requirement / scenario | Fold | Waits on |
+|---|---|---|
+| Catalog definition; unmanaged; pin is declared (archived) | fold-now (rule) | `add-base-image-list` for the list surface |
+| Spawn default | fold-now | — |
+| Deploy default; Node deploy uses ubuntu + mise | PENDING | `remove-deploy-node-bun` |
+| Snapshot is not a catalog entry | fold-now (rule) | `add-base-image-list` for listing |
+| Toolchains are not OS roots (review reject) | fold-now | — |
+| Catalog image boots without inject | fold-now | — |
+| Declared live images match recipes (v0 + cache drop) | fold-now | — |
+| Retired image is not rebuilt | fold-now | `remove-deploy-node-bun` for the delete |
+| Pins are immutable; aliases move | PENDING | `add-base-image-pins` |
+| Flavors are independent recipes | fold-now | — |
+
+Owed from advise send-back `reviews/2026-09-10-advise.md`
+(Fable 5.1, cross-family; binary verdict replacing the two
+`accept-with-nits` above). D1–D6 stand; these are delta/ADR text:
+
+- [x] Finding 1: `scripts/build-rootfs-arch.sh` sources
+      `scripts/lib/guest-agent.sh` and calls `install_guest_agent`
+      (verify is inside the helper). D3 SHALL stays over all
+      declared names including `arch`.
+- [x] Finding 2: catalog requirement + ADR 0009 D2 — a pin
+      produced by a declared alias's recipe is declared (archived),
+      not unmanaged; unmanaged is a name with no recipe in this repo.
+- [x] Finding 3: fold-gate table above.
+- [x] Finding 4: D5 operator sequence step 5 + ADR D5 — after an
+      in-place alias rebuild, delete `@snapshots/deploy-*` layers
+      whose cache parent is that alias.
+- [ ] Re-advise (cross-family) after the four above.
 
 Handoffs (not checkboxes):
 

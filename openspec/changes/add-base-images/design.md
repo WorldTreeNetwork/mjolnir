@@ -88,15 +88,15 @@ Declared `@base/` names:
 | `ubuntu-24.04` | `mj spawn` default **and** `mj deploy` default | Recipe: `scripts/build-rootfs-ubuntu-24.04.sh`. Has `mise`. |
 | `ci-ubuntu-24.04` | Forgejo runner (`ubuntu-24.04:mjolnir:ci-ubuntu-24.04`) | Recipe: `scripts/build-ci-image.sh`. Converge to `@base/dev` later (Buzz design Decision 6). Not this change. |
 | `buzz-agent` | Buzz remote-agent bodies | Recipe: `scripts/build-buzz-agent-image.sh`. |
-| `arch` | Optional spawn (`mj spawn --base arch`, `just deploy-rootfs distro=arch`) | Not a default. Kept while the recipe exists. |
+| `arch` | Optional spawn (`mj spawn --base arch`, `just deploy-rootfs distro=arch`) | Not a default. Recipe sources `guest-agent.sh` (D3). |
 
 A name is declared when it has a recipe in this repo **and** is in
 this table. Adding a name is an ADR amend, not a new script dropped
-on the server.
-
-Undeclared subvolumes (`tatastu-agent` today; `deploy-node-bun`
-until deleted) are **unmanaged**. Later `mj bases` lists them as
-such. They are never auto-deleted. Discovering them is the operator
+on the server. A pin produced by a declared alias's recipe is
+declared (archived), not unmanaged. Unmanaged is a name with no
+recipe in this repo (`tatastu-agent` today; `deploy-node-bun`
+until deleted). Later `mj bases` lists unmanaged names as such.
+They are never auto-deleted. Discovering them is the operator
 surface (`add-base-image-list`); garbage-collecting them is a human.
 
 `@base/` vs `@snapshots/` vs deploy layers:
@@ -121,8 +121,10 @@ A catalog image SHALL contain:
 3. `basic.target.wants` symlink
 
 `scripts/lib/guest-agent.sh` `install_guest_agent` is the
-post-condition. A recipe that produces an image missing any of
-these fails the build (`ALLOW_NO_AGENT=1` is the explicit opt-out).
+post-condition. All four declared recipes source that helper
+(arch included, 2026-09-10). A recipe that produces an image
+missing any of these fails the build (`ALLOW_NO_AGENT=1` is the
+explicit opt-out).
 
 `Mjolnir.VM.inject_guest_agent/1` is a **refresh** of the binary in
 a clone when `:guest_agent_bin` exists. It is not how a new image
@@ -188,6 +190,13 @@ Operator sequence:
    `just build-buzz-agent-image`).
 4. Spawn from the new image; vsock ping must succeed without
    inject. Then tear the probe VM down.
+5. Delete `@snapshots/deploy-*` layers whose cache parent is the
+   rebuilt alias. `CacheKey.compute` hashes `parent_layer_id` as a
+   string (`cache_key.ex:74-75`); `Builder` defaults that to the
+   base-image name (`builder.ex:102`); the orchestrator passes the
+   alias (`orchestrator.ex:122`). A changed filesystem under the
+   same name is otherwise a silent cache hit. Latent until retire
+   flips the deploy default; live from then until `mjolnir-b0gb.6`.
 
 Order on 45.76.77.97: `ubuntu-24.04` first (spawn + deploy default),
 then `ci-ubuntu-24.04`, `buzz-agent`, `arch`. Do **not** rebuild

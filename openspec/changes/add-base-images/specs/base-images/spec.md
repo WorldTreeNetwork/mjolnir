@@ -5,7 +5,9 @@
 `@base/` SHALL contain OS-root templates (kernel-compatible
 userspace, guest agent, networking hook). A name in `@base/` is
 **declared** when it has a recipe in this repository and appears in
-the catalog v1 list. `@snapshots/` SHALL hold frozen machines
+the catalog v1 list. A pin produced by a declared alias's recipe
+is declared (archived), not unmanaged. Unmanaged is a name with no
+recipe in this repository. `@snapshots/` SHALL hold frozen machines
 (human-named snapshots and `deploy-*` content-addressed layers).
 A snapshot SHALL be spawnable and SHALL NOT be a catalog entry.
 Adding a declared name SHALL amend ADR 0009.
@@ -45,6 +47,15 @@ The system SHALL NOT delete unmanaged subvolumes automatically.
 - WHEN the catalog is listed
 - THEN it is reported unmanaged
 - AND it is not deleted
+
+#### Scenario: Pin is declared, not unmanaged
+
+- GIVEN alias `ubuntu-24.04` has a recipe in this repository
+- AND pin `ubuntu-24.04-20260827` was produced by that recipe
+- WHEN the catalog is listed
+- THEN the pin is declared (archived)
+- AND it is not reported unmanaged
+- AND it is not a catalog alias operators pick as a default
 
 ### Requirement: Toolchains are not OS roots
 
@@ -107,11 +118,14 @@ A declared alias on a host SHALL point at the output of that
 name's current recipe, including a current guest agent. **v0**
 (single tenant): the alias subvolume MAY be replaced in place
 after snapshotting the previous tree to
-`@snapshots/<name>-pre-rebuild-<date>`. **v1** (D6): the recipe
-writes a new pin and retargets the alias; it SHALL NOT overwrite
-the previous pin. `deploy-node-bun` SHALL NOT be rebuilt.
-Unmanaged names SHALL NOT be rebuilt by this requirement. Running
-`@vms/<uuid>` clones SHALL NOT be destroyed by a base rebuild.
+`@snapshots/<name>-pre-rebuild-<date>`. After an in-place alias
+rebuild the operator SHALL delete `@snapshots/deploy-*` layers
+whose cache parent is that alias string (`CacheKey.compute`
+hashes the parent name). **v1** (D6): the recipe writes a new pin
+and retargets the alias; it SHALL NOT overwrite the previous pin.
+`deploy-node-bun` SHALL NOT be rebuilt. Unmanaged names SHALL NOT
+be rebuilt by this requirement. Running `@vms/<uuid>` clones
+SHALL NOT be destroyed by a base rebuild.
 
 #### Scenario: Stale ubuntu is rebuilt
 
@@ -121,6 +135,8 @@ Unmanaged names SHALL NOT be rebuilt by this requirement. Running
 - THEN `@snapshots/ubuntu-24.04-pre-rebuild-<date>` exists
 - AND `@base/ubuntu-24.04` contains the current agent
 - AND a spawn from that image answers vsock without inject
+- AND `@snapshots/deploy-*` layers whose cache parent is the
+  alias `ubuntu-24.04` are deleted
 
 #### Scenario: Retired image is not rebuilt
 
@@ -176,10 +192,10 @@ under `@base/`, not only `@snapshots/`.
 
 ### Requirement: Flavors are independent recipes sharing helpers
 
-`ubuntu-24.04`, `ci-ubuntu-24.04`, and `buzz-agent` SHALL be built
-by separate debootstrap recipes. They SHALL share
-`scripts/lib/guest-agent.sh`, `scripts/lib/mise.sh`, and
-`scripts/lib/terminfo.sh`. A FROM-ubuntu flavor DSL SHALL NOT be
+`ubuntu-24.04`, `ci-ubuntu-24.04`, `buzz-agent`, and `arch` SHALL
+be built by separate debootstrap recipes. They SHALL share
+`scripts/lib/guest-agent.sh` and `scripts/lib/terminfo.sh`.
+Ubuntu-family recipes SHALL also share `scripts/lib/mise.sh`. A FROM-ubuntu flavor DSL SHALL NOT be
 required to add or rebuild a declared image. CI SHALL keep a
 non-root runner user and workspace-mount plumbing. Buzz-agent SHALL
 keep the harness as the signal-receiving process.
