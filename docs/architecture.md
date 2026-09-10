@@ -393,7 +393,7 @@ No bridge device needed. Each VM has its own TAP with a /32 route. The host acts
 BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 |
 +-- @base/                  Declared OS-root catalog (ADR 0009)
-|   ubuntu-24.04/           Default for mj spawn and mj deploy
+|   ubuntu-24.04/           Default for mj spawn (deploy default waits on remove-deploy-node-bun)
 |   ci-ubuntu-24.04/        Forgejo runner
 |   buzz-agent/             Bodies
 |   arch/                   Optional; not a default
@@ -411,8 +411,10 @@ BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 `@base/` is a **declared catalog of OS roots**, not a pile of
 toolchain images. Pins vs aliases, unmanaged names, and rebuild
 rules: [`docs/decisions/0009-base-image-catalog.md`](decisions/0009-base-image-catalog.md)
-(`add-base-images`). Toolchains live in `mise` layers or snapshots,
-not extra `@base/` debootstraps. `deploy-node-bun` is retired by
+(ADR 0009; `add-base-images` folded 2026-09-10). Living spec:
+[`openspec/specs/base-images/spec.md`](../openspec/specs/base-images/spec.md).
+Toolchains live in `mise` layers or snapshots, not extra `@base/`
+debootstraps. `deploy-node-bun` is retired by
 `remove-deploy-node-bun` (not this pointer).
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.

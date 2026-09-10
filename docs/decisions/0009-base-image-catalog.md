@@ -1,13 +1,13 @@
 # ADR 0009 — Base image catalog
 
-**Status:** Proposed
+**Status:** Accepted (Fable accept 2026-09-10, `reviews/2026-09-10-readvise2.md`)
 **Date:** 2026-08-27
-**Change:** [`add-base-images`](../../openspec/changes/add-base-images/proposal.md)
-**Living spec (after fold):** [`openspec/specs/base-images/spec.md`](../../openspec/specs/base-images/spec.md)
+**Change:** [`add-base-images`](../../openspec/changes/archive/2026-09-10-add-base-images/proposal.md) (folded 2026-09-10)
+**Living spec:** [`openspec/specs/base-images/spec.md`](../../openspec/specs/base-images/spec.md)
 **Epic:** `mjolnir-b0gb`
 
 Full argument:
-[`openspec/changes/add-base-images/design.md`](../../openspec/changes/add-base-images/design.md).
+[`openspec/changes/archive/2026-09-10-add-base-images/design.md`](../../openspec/changes/archive/2026-09-10-add-base-images/design.md).
 
 ## One screen
 
@@ -47,10 +47,20 @@ Full argument:
 
 ## Built vs remaining
 
-Built: D5 operator rebuild on 45.76.77.97 (2026-08-27). Nothing of
-the catalog API, Orchestrator default flip, or pin/alias resolver.
+Built (living spec, fold-now): catalog definition (unmanaged;
+pin produced by a declared alias's recipe is declared archived);
+`mj spawn` default `ubuntu-24.04`; toolchains are not OS roots
+(review reject; `deploy-node-bun` is not a catalog name); declared
+recipes bake guest agent so a clone boots without inject; v0
+in-place rebuild of declared live images plus drop every
+`@snapshots/deploy-*` layer; retired image is not rebuilt; flavors
+are independent bootstrap recipes sharing helpers. D5 operator
+rebuild on 45.76.77.97 (2026-08-27).
 
-Remaining: `remove-deploy-node-bun` (`mjolnir-b0gb.2`),
-`add-base-image-list` (`mjolnir-b0gb.3` / `mjolnir-8vo`),
-`add-base-image-health` (`mjolnir-b0gb.4` / `mjolnir-pj6t` /
-`mjolnir-hjnz`), then `add-base-image-pins` (`mjolnir-b0gb.6`).
+Remaining (do not import as living SHALLs): `remove-deploy-node-bun`
+(`mjolnir-b0gb.2`) — Orchestrator default `ubuntu-24.04`, Node
+deploy uses ubuntu+mise, recipes SHALL NOT produce
+`deploy-node-bun`; `add-base-image-list` (`mjolnir-b0gb.3` /
+`mjolnir-8vo`) — listing surfaces; `add-base-image-health`
+(`mjolnir-b0gb.4` / `mjolnir-pj6t` / `mjolnir-hjnz`); then
+`add-base-image-pins` (`mjolnir-b0gb.6`) — D6 pin/alias resolver.
