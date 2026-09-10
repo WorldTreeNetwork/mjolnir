@@ -713,7 +713,9 @@ changes, not the architecture fold.
 Foreign-secret redeem (GitHub PAT, API keys) is ADR
 [`0008`](decisions/0008-secret-tokenator.md): opaque vault + salted
 Blake3 commitment; holder-bound Biscuit; `POST /api/secrets/redeem`
-on existing `api_url`. Code landings are later
+on existing `api_url`. Living spec
+[`secret-tokenator`](../openspec/specs/secret-tokenator/spec.md)
+(`add-secret-tokenator` folded 2026-09-10). Code landings are later
 (`add-biscuit-runtime`, `add-tokenator-redeem`, `add-capability-mint`,
 `add-capability-hop`). Protocol holder/hop text is
 `update-identikey-capability`.

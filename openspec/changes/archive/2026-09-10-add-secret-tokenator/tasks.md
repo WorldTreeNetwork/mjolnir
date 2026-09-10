@@ -24,11 +24,14 @@ Sol is not subscribed.
       thin proxy named as more-secure pattern
 - [x] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
-- [ ] After accept: fold deltas into `openspec/specs/secret-tokenator/`
+- [x] After accept: fold deltas into `openspec/specs/secret-tokenator/`
       only when the first implementing act has landed, or fold
       architecture-only SHALLs that are already true of the design
       (do not import unimplemented HTTP into living specs —
-      learning 2026-08-16)
+      learning 2026-08-16). Folded 2026-09-10: architecture-only
+      SHALLs + review-rejection scenarios (Fable fold guidance
+      `reviews/2026-09-10-advise.md`). HTTP/NIF/mint/hop remain
+      with later changes.
 
 Handoffs (not checkboxes):
 

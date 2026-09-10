@@ -2,14 +2,14 @@
 
 **Status:** Accepted (Fable 5.1, 2026-09-10)
 **Date:** 2026-08-26
-**Change:** [`add-secret-tokenator`](../../openspec/changes/add-secret-tokenator/proposal.md)
-**Living spec (after fold):** [`openspec/specs/secret-tokenator/spec.md`](../../openspec/specs/secret-tokenator/spec.md)
+**Change:** [`add-secret-tokenator`](../../openspec/changes/archive/2026-09-10-add-secret-tokenator/proposal.md) (folded 2026-09-10)
+**Living spec:** [`openspec/specs/secret-tokenator/spec.md`](../../openspec/specs/secret-tokenator/spec.md)
 **Epic:** `mjolnir-axsb.1`
 **Protocol:** [`update-identikey-capability`](../../openspec/changes/update-identikey-capability/design.md)
   → `identikey-capability-v1.md` after that change's act
 
 Full argument:
-[`openspec/changes/add-secret-tokenator/design.md`](../../openspec/changes/add-secret-tokenator/design.md).
+[`openspec/changes/archive/2026-09-10-add-secret-tokenator/design.md`](../../openspec/changes/archive/2026-09-10-add-secret-tokenator/design.md).
 
 ## One screen
 
@@ -37,9 +37,21 @@ Full argument:
 
 ## Built vs remaining
 
-Built: nothing of the HTTP path. Opaque `put_opaque` exists
-(Buzz nsec). Real Blake3 NIF is not wired (`Sites.Crypto.blake3_hash/1`
-is SHA-256).
+Built (living spec, fold-now): opaque vault + salted Blake3
+commitment shape (`put_opaque("secrets", …)`; path-safe id; guests
+do not write; unsalted hash and SHA-256 stub are review-reject);
+copy-out is v1, thin proxy is the more secure pattern, proxy-only
+v1 is review-reject; redeem on existing `api_url` in the BEAM, no
+new overlay port, not `@skip_auth_paths`, no VM-scope JWT;
+holder-bound redeem (signature + `holder(<fp>)`; reused nonce
+fails closed); secret bytes not in logs; Recrypt PRE is not this
+vault. Opaque `put_opaque` exists (Buzz nsec). Real Blake3 NIF is
+not wired (`Sites.Crypto.blake3_hash/1` is SHA-256).
 
-Remaining: advise, then the four implement landings above. Guild
-holder class and Papyrus UI are not this capability's first act.
+Remaining (do not import as living SHALLs): `add-biscuit-runtime`
+(real Blake3 NIF / authority key), `add-tokenator-redeem`
+(challenge + POST handler; fourth Auth branch; nonce store;
+copy-out bytes), `add-capability-mint` (deposit + mint; `meta`
+owner fingerprint), `add-capability-hop` (signed block per hop).
+Guild holder class and Papyrus UI are not this capability's first
+act.
