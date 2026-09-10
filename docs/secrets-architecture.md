@@ -398,11 +398,35 @@ volume above: `/var/lib/mjolnir/deploy/secrets/<slug>.json`, injected at
 Walkthrough: [Deploying a Web App](guide/deploying-an-app.md#secrets-stay-out-of-the-snapshot).
 `mj spawn` (throwaway shell) does not read that file.
 
+On the hypervisor those files are `0600 root:root` (Elixir is root;
+gateway `User=mjolnir` cannot read them). API ownership is
+`Policy.App` (`user_id == owner_id`), not a Linux user.
+
+## What 0600 means (steer 2026-09-10)
+
+Unix DAC on host files is **hygiene**, not confidentiality and not
+authorization. Live paths stay `0600 root:root` for now. On-disk
+bytes become ciphertext (recrypt); mode bits on ciphertext are
+enough. Do not invent per-tenant Linux users.
+
+| Axis | Mechanism | Tracked as |
+|---|---|---|
+| Hygiene (other Unix users) | `0600 root:root` | shipped |
+| Confidentiality of managed DEK | wrap to owner's IdentiKey via recrypt PRE | `mjolnir-k8y.4` |
+| Who may set / ls / inject | Biscuit Datalog (JWT dual-mode v1) | `mjolnir-k8y.5` |
+| Deploy JSON at spawn | host-readable; spawn must inject env | stays; not recrypt-v1 |
+
+`managed` escrow (`/var/lib/mjolnir/escrow/<vm_id>`) is the same
+hygiene today: the host can still decrypt. Recrypt is what changes
+that, not a chown.
+
 ## Future Work
 
 - **CLI for LUKS inject**: `mj secrets init` / `push` / `status` against a VM
   id (Iroh ALPN, host-blind). Do not confuse with `mj secrets set <app> KEY`,
   which is the shipped deploy-secrets merge.
+- **Wrap managed LUKS DEK to IdentiKey** (`mjolnir-k8y.4`)
+- **Biscuit on secrets API** (`mjolnir-k8y.5`)
 - **IdentiKey S3 sync**: Sync encrypted LUKS files to S3 for backup/restore across VM instances
 - **Secret rotation**: Re-encrypt with a new passphrase without unmounting
 - **Audit logging**: Log injection attempts (success/failure) with peer identity
