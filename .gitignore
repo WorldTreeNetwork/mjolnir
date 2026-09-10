@@ -22,6 +22,10 @@ native/target/
 .DS_Store
 Thumbs.db
 
+# TypeScript / bun packages
+**/node_modules/
+packages/*/dist/
+
 # Test/Dev
 /cover/
 /doc/

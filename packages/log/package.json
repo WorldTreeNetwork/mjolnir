@@ -1,0 +1,28 @@
+{
+  "name": "mjolnir-log",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Typed pino logger: stdout + RFC 3164 syslog (UDP). Bun-native, published on npm.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --outdir dist --target bun"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "dependencies": {
+    "pino": "^9.9.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.21"
+  }
+}
