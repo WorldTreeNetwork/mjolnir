@@ -22,7 +22,7 @@ Sol is not subscribed.
       opaque; secret_id path-safe
 - [x] Send-back 2026-08-26: copy-out to RAM/tmpfs, not virtio-fs;
       thin proxy named as more-secure pattern
-- [ ] After accept: pointer in `docs/architecture.md` (do not delete
+- [x] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
 - [ ] After accept: fold deltas into `openspec/specs/secret-tokenator/`
       only when the first implementing act has landed, or fold

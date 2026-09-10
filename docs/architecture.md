@@ -709,6 +709,14 @@ Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
 [`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2
 stays; host ingest is UDP. Living spec lands with implement
 changes, not the architecture fold.
+
+Foreign-secret redeem (GitHub PAT, API keys) is ADR
+[`0008`](decisions/0008-secret-tokenator.md): opaque vault + salted
+Blake3 commitment; holder-bound Biscuit; `POST /api/secrets/redeem`
+on existing `api_url`. Code landings are later
+(`add-biscuit-runtime`, `add-tokenator-redeem`, `add-capability-mint`,
+`add-capability-hop`). Protocol holder/hop text is
+`update-identikey-capability`.
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing

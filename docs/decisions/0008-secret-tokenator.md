@@ -1,6 +1,6 @@
 # ADR 0008 — Secret tokenator (foreign secrets)
 
-**Status:** Proposed
+**Status:** Accepted (Fable 5.1, 2026-09-10)
 **Date:** 2026-08-26
 **Change:** [`add-secret-tokenator`](../../openspec/changes/add-secret-tokenator/proposal.md)
 **Living spec (after fold):** [`openspec/specs/secret-tokenator/spec.md`](../../openspec/specs/secret-tokenator/spec.md)
