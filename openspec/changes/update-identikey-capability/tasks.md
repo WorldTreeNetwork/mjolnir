@@ -33,11 +33,11 @@ cross-family reader. Sol is not subscribed.
       application; salt cites D-5.
 - [x] Cross-family re-advise after amend (ADR-005; not Grok)
       (`reviews/2026-09-10-readvise.md`, accept).
-- [ ] After accept: `act` fold the ADDED requirements into
+- [x] After accept: `act` fold the ADDED requirements into
       `identikey-protocol/docs/standards/identikey-capability-v1.md`
       (new sections; keep three-layer table; point tokenator at
       `add-secret-tokenator`)
-- [ ] After accept: `act` one-line on protocol `docs/standards/README.md`
+- [x] After accept: `act` one-line on protocol `docs/standards/README.md`
       if the table blurb needs the holder/redeem sentence
 
 Handoffs (not checkboxes):
