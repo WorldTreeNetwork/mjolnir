@@ -15,6 +15,7 @@ defmodule Mjolnir.Deploy.RuntimeTest do
     not_ready_times = Keyword.get(opts, :not_ready_times, 0)
     prev = Keyword.get(opts, :prev)
     prev_custom_domain = Keyword.get(opts, :prev_custom_domain)
+    prev_stateful = Keyword.get(opts, :prev_stateful, false)
     spawn_result = Keyword.get(opts, :spawn_result, {:ok, %{id: "svc-vm-1"}})
     exec_fail_on = Keyword.get(opts, :exec_fail_on)
 
@@ -25,7 +26,8 @@ defmodule Mjolnir.Deploy.RuntimeTest do
     # put, see prev == new, and leak the previous guest).
     initial_entry =
       if prev || prev_custom_domain do
-        {:ok, %{service_vm_id: prev, custom_domain: prev_custom_domain}}
+        {:ok,
+         %{service_vm_id: prev, custom_domain: prev_custom_domain, stateful: prev_stateful}}
       else
         {:error, :not_found}
       end
@@ -111,6 +113,36 @@ defmodule Mjolnir.Deploy.RuntimeTest do
 
       # No previous VM → nothing stopped.
       refute Enum.any?(ev, &match?({:stop, _}, &1))
+    end
+  end
+
+  describe "start/4 — stateful adopt" do
+    test "refuses cutover of a stateful app", %{agent: agent} do
+      ops = recording_ops(agent, prev: "old-vm", prev_stateful: true)
+
+      assert {:error, :stateful_app_refuses_redeploy} =
+               Runtime.start("hive", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 ticket_timeout: 5_000
+               )
+
+      refute Enum.any?(events(agent), &match?({:spawn, _}, &1))
+    end
+
+    test "force redeploy of a stateful app is allowed", %{agent: agent} do
+      ops = recording_ops(agent, prev: "old-vm", prev_stateful: true)
+
+      assert {:ok, r} =
+               Runtime.start("hive", @release, @plan,
+                 ops: ops,
+                 gateway_domain: @domain,
+                 ticket_timeout: 5_000,
+                 force: true
+               )
+
+      assert r.service_vm_id == "svc-vm-1"
+      assert {:spawn, _} = Enum.find(events(agent), &match?({:spawn, _}, &1))
     end
   end
 
@@ -205,7 +237,8 @@ defmodule Mjolnir.Deploy.RuntimeTest do
                Runtime.start("app", @release, @plan, ops: ops, gateway_domain: @domain)
 
       tags = events(agent) |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
-      assert tags == [:spawn]
+      # registry_get runs first so a stateful app can refuse before spawn.
+      assert tags == [:registry_get, :spawn]
     end
   end
 

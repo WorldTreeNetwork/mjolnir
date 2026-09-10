@@ -19,8 +19,8 @@ is not built. Living specs must not claim it.
 - Carry the remaining unimplemented SHALLs from `add-buzz-local-client`
   as this change’s deltas. `mjolnir-1pe` (nsec inject) folded into
   the living spec on 2026-08-17.
-- Implement via existing beads: `mjolnir-gti`, `nod-identikey-admit`,
-  `nod-base-dev`, Nostr ingress.
+- Self-hosted relay / NIP-OA (`mjolnir-gti`) moved to
+  `add-buzz-relay`. This change keeps facade, admit crate, `@base/dev`.
 
 ## Impact
 

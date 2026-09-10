@@ -366,6 +366,13 @@ C        recrypt for Blossom blobs (independent of A; can run in parallel)
 **B0 is not the hosted business** — it is one relay we run so that P1 has somewhere to demo. It is
 small, it unblocks the visible milestone, and it is the first half of B1 anyway.
 
+B0 live (2026-09-10): Join `wss://buzz.identikey.me`. Named app `buzz-relay`,
+guest `9471612b-29ff-4849-ba78-d8028c309fee`, snapshot `buzz-relay-b0`.
+Native systemd units (not Docker — guest kernel has no NETFILTER/BRIDGE).
+`BUZZ_ALLOW_NIP_OA_AUTH=true`, closed membership, owner is the Desktop
+identity. Secrets: `~/.config/mjolnir/buzz-relay.env` on the Mac (0600)
+and LUKS-managed in the guest. Restore: `docs/runbooks/buzz-relay-restore.md`.
+
 **Announce at P3, not P1.** A provider that deploys but mishandles termination will be judged
 against a spec that is public, precise, and unusually well written. The comparison is unforgiving
 and the audience will actually read it.

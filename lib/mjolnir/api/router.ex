@@ -44,6 +44,16 @@ defmodule Mjolnir.API.Router do
 
     * **Response**: `200` `{"app", "removed": true}`; `404` if not deployed.
 
+  ### `PUT /api/apps/:app`
+
+    * **Body**: `{"service_vm_id": "<uuid>", "port": 3000}` and optional
+      `release_snapshot`, `force`. Binds an **existing** running VM as a
+      named app. Does not spawn or stop a VM. Marks the entry `stateful`
+      so a later `mj deploy` refuses cutover unless `force`.
+    * **Response**: `200` `{app, service_vm_id, port, release_snapshot,
+      stateful}`. `404` `vm_not_found`. `409` `app_exists` or
+      `stateful_vm_mismatch`.
+
   ### `GET /api/apps`
 
     * **Response**: `200` `{"apps": [{"app_name", "url", "custom_domain",
@@ -1495,6 +1505,17 @@ defmodule Mjolnir.API.Router do
     if conn.halted, do: conn, else: handle_deploy(conn)
   end
 
+  # Adopt an existing running VM as a named app without cutover.
+  put "/api/apps/:app" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      handle_adopt(conn, app)
+    else
+      conn
+    end
+  end
+
   # Set (or change) an app's custom domain.
   put "/api/apps/:app/domain" do
     conn = require_scope(conn, "vms:spawn")
@@ -1809,6 +1830,81 @@ defmodule Mjolnir.API.Router do
       is_binary(e.custom_domain) and
         String.downcase(String.trim_trailing(String.trim(e.custom_domain), ".")) == want
     end)
+  end
+
+  defp handle_adopt(conn, app) do
+    user = %{user_id: conn.assigns[:user_id]}
+    vm_id = conn.body_params["service_vm_id"]
+    port = conn.body_params["port"]
+    snap = conn.body_params["release_snapshot"]
+    force? = conn.body_params["force"] in [true, "true"]
+
+    cond do
+      not is_binary(vm_id) or vm_id == "" ->
+        json(conn, 400, %{error: "service_vm_id is required"})
+
+      not is_integer(port) or port < 1 or port > 65_535 ->
+        json(conn, 400, %{error: "port must be an integer 1..65535"})
+
+      true ->
+        case Mjolnir.Deploy.Registry.get(app) do
+          {:ok, entry} ->
+            case Mjolnir.Policy.App.authorize(:adopt, user, entry) do
+              :ok ->
+                do_adopt(conn, app, vm_id, port, snap, force?)
+
+              :error ->
+                json(conn, 404, %{error: "app_not_found", app: app})
+            end
+
+          {:error, :not_found} ->
+            case Mjolnir.Policy.App.authorize(:deploy_new, user, nil) do
+              :ok ->
+                do_adopt(conn, app, vm_id, port, snap, force?)
+
+              :error ->
+                json(conn, 404, %{error: "app_not_found", app: app})
+            end
+        end
+    end
+  end
+
+  defp do_adopt(conn, app, vm_id, port, snap, force?) do
+    opts = [
+      owner_id: conn.assigns[:user_id],
+      force: force?
+    ]
+
+    opts =
+      if is_binary(snap) and snap != "", do: Keyword.put(opts, :release_snapshot, snap), else: opts
+
+    case Mjolnir.API.Adopt.adopt(app, vm_id, port, opts) do
+      {:ok, entry} ->
+        json(conn, 200, %{
+          app: entry.app_name,
+          service_vm_id: entry.service_vm_id,
+          port: entry.port,
+          release_snapshot: entry.release_snapshot,
+          stateful: entry.stateful
+        })
+
+      {:error, :vm_not_found} ->
+        json(conn, 404, %{error: "vm_not_found"})
+
+      {:error, :app_exists} ->
+        json(conn, 409, %{error: "app_exists"})
+
+      {:error, :stateful_vm_mismatch} ->
+        json(conn, 409, %{error: "stateful_vm_mismatch"})
+
+      {:error, {:snapshot_failed, reason}} ->
+        Logger.error("Adopt snapshot failed for #{app}: #{inspect(reason)}")
+        json(conn, 500, %{error: "snapshot_failed"})
+
+      {:error, {:registry_failed, reason}} ->
+        Logger.error("Adopt registry failed for #{app}: #{inspect(reason)}")
+        json(conn, 500, %{error: "adopt_failed"})
+    end
   end
 
   # --- POST /api/deploy ------------------------------------------------------

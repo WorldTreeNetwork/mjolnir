@@ -36,6 +36,7 @@ defmodule Mjolnir.Policy.App do
           | :issue_cert
           | :set_secrets
           | :unset_secrets
+          | :adopt
   @type user :: %{user_id: String.t()} | nil
   @type resource :: %{owner_id: String.t() | nil} | nil
 
@@ -67,7 +68,8 @@ defmodule Mjolnir.Policy.App do
              :remove_domain,
              :issue_cert,
              :set_secrets,
-             :unset_secrets
+             :unset_secrets,
+             :adopt
            ] do
     if uid == oid, do: :ok, else: :error
   end

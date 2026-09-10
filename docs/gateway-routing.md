@@ -117,16 +117,23 @@ Binding a name does **not** invent a new registry: it writes the same
 
 ### How to point a name
 
+Live DNS (2026-09-10): `identikey.me` A `45.76.77.97`. Individual names
+(`auth.identikey.me`, `buzz.identikey.me`) are either that A or a CNAME
+to the apex. There is **no** wildcard Origin cert and **no**
+`*.identikey.me` CNAME in production; TLS is HTTP-01 per host via
+`mj cert issue` / `mjolnir-gateway cert issue`.
+
+Aspirational parking-namespace sketch (not what the zone actually
+serves today):
+
 ```
 park.identikey.me.   CNAME   vm.worldtree.network.
 *.identikey.me.      CNAME   vm.worldtree.network.
 identikey.me.        A       45.76.77.97
 ```
 
-`identikey.me` is not in the worldtree ACME zone, so TLS is Origin-CA / BYO
-(`[[cert]]`), same as `zine.identikey.io`. A wildcard Origin cert covering
-`*.identikey.me` + `identikey.me` is what makes the namespace work; a single-host
-cert covers only the seed name.
+`identikey.me` is not in the worldtree ACME DNS-01 zone. Each bound
+name needs its own HTTP-01 `[[cert]]`.
 
 ### How to reference the service
 

@@ -296,12 +296,16 @@ Host (off the data volume):
   │ KEEP escrow entry
   ✓ dormant
 
-  incoming message → wake
+  incoming message → wake   (SAME vm_id — dormancy thaw only)
   │ clone rootfs from snapshot (.luks present)
   │ boot, wait for agent
   │ escrow HIT → read passphrase
   │ vsock: inject_secrets{passphrase} (no init_size) ─> open existing LUKS, load env
   ✓ secrets transparently restored, no human in the loop
+
+  mj spawn --snapshot (NEW vm_id) does NOT hit escrow. Copy
+  /var/lib/mjolnir/escrow/<old> → <new> first, or drop secrets.luks
+  and re-supply secrets. See docs/runbooks/buzz-relay-restore.md.
 
   kill / destroy
   │ delete escrow entry  (dormancy does NOT delete it)

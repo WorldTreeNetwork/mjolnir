@@ -78,16 +78,4 @@ host sidecar. Buzz relays SHALL NOT use the sidecar.
 - THEN the VM boots with a working guest agent and can run the
   project’s tests without a second orchestrator
 
-### Requirement: Provider-deployed identity on our relay
-
-A self-hosted Buzz relay used as the local-client target SHALL accept
-the provider-deployed identity class (desktop-minted key plus NIP-OA
-`auth_tag`). The “plain member, no auth_tag” workaround SHALL NOT be
-the default join path.
-
-#### Scenario: Deployed agent is a relay member
-
-- GIVEN our relay and a `deploy` that presents `private_key_nsec` and
-  `auth_tag`
-- WHEN the harness authenticates
-- THEN the relay does not refuse with `restricted: not a relay member`
+<!-- Provider-deployed identity + B0 relay VM live in add-buzz-relay. -->

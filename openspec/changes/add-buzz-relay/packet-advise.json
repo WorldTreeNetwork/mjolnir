@@ -1,0 +1,35 @@
+{
+  "id": "pkt-advise-add-buzz-relay-re",
+  "node_id": "nod-buzz-relay",
+  "change_id": "add-buzz-relay",
+  "capability": "buzz-local-client",
+  "goal": "Re-advise add-buzz-relay after send-back amend. Prior review: openspec/changes/add-buzz-relay/reviews/2026-09-10-advise.md (send-back, Fable 5.1). Author is still Grok 4.6.\n\nWHY unchanged: self-hosted hive so buzz-backend-mjolnir has a NIP-OA target; Block-hosted refuses provider-deployed identity (block/buzz#2663).\n\nAmend answers F1–F4:\n- F1/D5: native systemd units, not compose. Guest kernel has no NETFILTER/BRIDGE; virtiofsd no --xattr. skopeo extract of ghcr.io/block/buzz:main. Compose .env is the contract.\n- F2/D3: docs/gateway-routing.md is stale. Live DNS is Linode apex. Tasks: A record 45.76.77.97 + HTTP-01 mj cert issue. ASK box for DNS.\n- F3: cutover-free Registry adopt (PUT /api/apps/:app / mj app adopt). Detector stays SvelteKit-only. Default refuse redeploy of adopted stateful app.\n- F4: VM-level secrets_mode:managed + POST /api/vms/:id/secrets. Not mj secrets (deploy-secrets requires redeploy).\n- F6: mj snapshot create is crash-consistent; freeze is not backup.\n- F5: dropped 'cannot be removed via buzz-admin' from the journey.\n\nDelta SHALLs: one VM, RELAY_URL wss://buzz.identikey.me byte-for-byte, gateway TLS, NIP-OA + closed membership, events on guest rootfs — unchanged in intent, runtime wording now 'systemd units' not 'compose bundle'.\n\nCited same as first pass plus the send-back file. Write openspec/changes/add-buzz-relay/reviews/2026-09-10-re-advise.md. BLIND PASS on Why + living spec + cited code first. Do not open design.md or tasks.md until the take is written. Do not implement, fold, or flip the banner.",
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "fable-5.1-arch-review" }
+  },
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-buzz-relay/reviews",
+      "openspec/changes/add-buzz-relay/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner"]
+  },
+  "acceptance": { "kind": "none" },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "reader"
+}

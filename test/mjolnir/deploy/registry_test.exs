@@ -43,6 +43,22 @@ defmodule Mjolnir.Deploy.RegistryTest do
       assert fetched.app_name == "my-app"
       assert fetched.release_snapshot == "snap-abc"
       assert fetched.service_vm_id == "vm-123"
+      assert fetched.stateful == false
+    end
+
+    test "stateful flag round-trips to disk", %{name: name, dir: dir} do
+      {:ok, entry} =
+        Registry.put(name, "hive", %{
+          release_snapshot: "snap-hive",
+          service_vm_id: "vm-hive",
+          stateful: true
+        })
+
+      assert entry.stateful == true
+
+      bin = File.read!(Path.join(dir, "hive.json"))
+      assert {:ok, map} = Jason.decode(bin)
+      assert map["stateful"] == true
     end
 
     test "updated_at is stamped automatically", %{name: name} do
