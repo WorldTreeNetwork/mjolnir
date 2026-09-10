@@ -133,3 +133,9 @@ end
 if pg_tenant_listen = System.get_env("MJOLNIR_PG_TENANT_LISTEN_IP") do
   config :mjolnir, pg_tenant_listen_ip: pg_tenant_listen
 end
+
+if syslog_udp_port = System.get_env("MJOLNIR_SYSLOG_UDP_PORT") do
+  config :mjolnir, :syslog,
+    udp_host: System.get_env("MJOLNIR_SYSLOG_UDP_HOST", "127.0.0.1"),
+    udp_port: String.to_integer(syslog_udp_port)
+end

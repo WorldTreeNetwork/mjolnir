@@ -137,10 +137,15 @@ defmodule Mjolnir.Vsock.Connection do
 
   @doc """
   Register a process to receive data for a specific channel.
-  The handler will receive messages of the form {:vsock_data, channel, data}.
+
+  `handler` is either:
+
+  - a `pid` — receives `{:vsock_data, channel, data}` (PTY)
+  - `{pid, meta}` — receives `{:vsock_data, channel, data, meta}` so a
+    shared handler (Syslog.Listener) can tell which VM sent the frame
   """
-  def register_channel_handler(pid, channel, handler_pid) do
-    GenServer.call(pid, {:register_channel_handler, channel, handler_pid})
+  def register_channel_handler(pid, channel, handler) do
+    GenServer.call(pid, {:register_channel_handler, channel, handler})
   end
 
   @doc """
@@ -164,11 +169,24 @@ defmodule Mjolnir.Vsock.Connection do
 
     case connect(state) do
       {:ok, socket} ->
-        {:ok, %{state | socket: socket}}
+        {:ok, %{state | socket: socket}, {:continue, :register_syslog}}
 
       {:error, reason} ->
         {:stop, reason}
     end
+  end
+
+  @impl true
+  def handle_continue(:register_syslog, state) do
+    if Process.whereis(Mjolnir.Syslog.Listener) do
+      Mjolnir.Syslog.Listener.register_connection(
+        self(),
+        state.vm_id,
+        Mjolnir.Vsock.cid(state.vm_id)
+      )
+    end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -331,8 +349,8 @@ defmodule Mjolnir.Vsock.Connection do
     end
   end
 
-  def handle_call({:register_channel_handler, channel, handler_pid}, _from, state) do
-    handlers = Map.put(state.channel_handlers, channel, handler_pid)
+  def handle_call({:register_channel_handler, channel, handler}, _from, state) do
+    handlers = Map.put(state.channel_handlers, channel, handler)
     {:reply, :ok, %{state | channel_handlers: handlers}}
   end
 
@@ -425,7 +443,11 @@ defmodule Mjolnir.Vsock.Connection do
         Logger.warning("Data on unregistered channel #{channel}")
         state
 
-      pid ->
+      {pid, meta} when is_pid(pid) ->
+        send(pid, {:vsock_data, channel, data, meta})
+        state
+
+      pid when is_pid(pid) ->
         send(pid, {:vsock_data, channel, data})
         state
     end

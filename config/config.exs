@@ -183,12 +183,19 @@ config :mjolnir,
 config :mjolnir,
   allowed_mount_prefixes: []
 
-# Syslog-over-vsock transport. VMs stream syslog via vsock channel 2.
+# Syslog ingest. Guests stream RFC 3164 on vsock channel 2. Host apps
+# (mjolnir-log) send UDP when udp_port is set; unset = no bind.
+# Loopback for host processes; bind 10.200.0.1 so guests can send to
+# the hotel IP. :app_log sinks are EventBus-only (no journald double).
 # See lib/mjolnir/syslog/.
 config :mjolnir, :syslog,
   enabled: true,
   vsock_channel: 2,
-  sinks: [:eventbus, :logger]
+  sinks: [:eventbus, :logger],
+  app_log_sinks: [:eventbus]
+
+# udp_host: {127, 0, 0, 1},
+# udp_port: 3164
 
 # Auth defaults
 config :mjolnir, :auth,
