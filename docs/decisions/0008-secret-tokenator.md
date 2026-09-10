@@ -5,8 +5,11 @@
 **Change:** [`add-secret-tokenator`](../../openspec/changes/archive/2026-09-10-add-secret-tokenator/proposal.md) (folded 2026-09-10)
 **Living spec:** [`openspec/specs/secret-tokenator/spec.md`](../../openspec/specs/secret-tokenator/spec.md)
 **Epic:** `mjolnir-axsb.1`
-**Protocol:** [`update-identikey-capability`](../../openspec/changes/update-identikey-capability/design.md)
-  → `identikey-capability-v1.md` after that change's act
+**Protocol:** identikey-protocol
+  [`identikey-capability-v1.md` §7](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md#7-secret-redemption-profile-foreign-secrets)
+  (secret-redemption profile; folded from
+  [`update-identikey-capability`](../../openspec/changes/archive/2026-09-10-update-identikey-capability/design.md)
+  2026-09-10)
 
 Full argument:
 [`openspec/changes/archive/2026-09-10-add-secret-tokenator/design.md`](../../openspec/changes/archive/2026-09-10-add-secret-tokenator/design.md).

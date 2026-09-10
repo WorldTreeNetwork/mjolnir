@@ -725,8 +725,11 @@ on existing `api_url`. Living spec
 [`secret-tokenator`](../openspec/specs/secret-tokenator/spec.md)
 (`add-secret-tokenator` folded 2026-09-10). Code landings are later
 (`add-biscuit-runtime`, `add-tokenator-redeem`, `add-capability-mint`,
-`add-capability-hop`). Protocol holder/hop text is
-`update-identikey-capability`.
+`add-capability-hop`). Protocol holder/hop/redeem SHALLs live in
+identikey-protocol
+[`identikey-capability-v1.md` §7](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md#7-secret-redemption-profile-foreign-secrets)
+(secret-redemption profile; `update-identikey-capability` folded
+2026-09-10). Do not copy those SHALLs into `openspec/specs/`.
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing
