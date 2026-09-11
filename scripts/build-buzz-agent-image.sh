@@ -530,6 +530,15 @@ set -euo pipefail
 : "${BUZZ_PRIVATE_KEY:?buzz-harness: BUZZ_PRIVATE_KEY not injected — refusing to start}"
 : "${BUZZ_RELAY_URL:?buzz-harness: BUZZ_RELAY_URL not injected — refusing to start}"
 
+: "${OPENAI_COMPAT_BASE_URL:=http://10.200.0.1:8020/v1}"
+: "${OPENAI_COMPAT_API:=chat}"
+: "${OPENAI_COMPAT_MODEL:=qwen3.8-27b}"
+: "${BUZZ_AGENT_PROVIDER:=openai}"
+if [[ -z "${OPENAI_COMPAT_API_KEY:-}" && -r /etc/buzz-host-llm.key ]]; then
+  OPENAI_COMPAT_API_KEY="$(cat /etc/buzz-host-llm.key)"
+fi
+export OPENAI_COMPAT_BASE_URL OPENAI_COMPAT_API OPENAI_COMPAT_MODEL OPENAI_COMPAT_API_KEY BUZZ_AGENT_PROVIDER
+
 # Scope the nostr git credential helper to the relay's own HTTP origin, rather
 # than installing it globally where it would answer for unrelated remotes.
 # Mirrors block/buzz@main:scripts/sprig-entrypoint.sh.
@@ -616,67 +625,42 @@ Unit=buzz-harness.service
 WantedBy=multi-user.target
 EOF
 
+# Quoted heredoc: an unquoted one ran `systemctl show` from a comment's backticks
+# against the *host* systemd and dumped 150 lines of unit keys into the guest file.
 cat > "$R/etc/systemd/system/buzz-harness.service" << EOF
 [Unit]
 Description=Buzz ACP harness (buzz-acp)
-Documentation=https://github.com/block/buzz/blob/main/docs/remote-agents.md
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/run/mjolnir/buzz.env
-
-# Harness exit terminates the VM — the systemd realization of "the harness is
-# the guest's signal-receiving process". Both actions power off; the host tells
-# intentional from accidental by the recorded exit code, not by which action ran.
-#
-# These live in [Unit], not [Service]: they are systemd.unit(5) options. Put in
-# [Service] they are silently half-ignored — `systemctl show` reports
-# SuccessAction=none while the service sits there inactive and the VM keeps
-# running, which is exactly the "clean exit leaves the body alive" failure I5
-# forbids.
 SuccessAction=poweroff
 FailureAction=poweroff
 
 [Service]
-# Type=exec: the unit's main process IS buzz-acp (the entrypoint execs it), so
-# systemd's SIGTERM reaches the harness with no shell in between.
 Type=exec
 User=agent
 Group=agent
 WorkingDirectory=$AGENT_HOME
 Environment=HOME=$AGENT_HOME
-# Generic Mjolnir secrets volume, if the guest agent rendered one. Optional (-).
 EnvironmentFile=-/run/mjolnir/secrets.env
-# The agent identity. Required — its existence is what started this unit.
 EnvironmentFile=/run/mjolnir/buzz.env
 ExecStart=/usr/local/bin/buzz-harness-entrypoint
 ExecStopPost=+/usr/local/bin/buzz-harness-exit-record
-
-# I3 drain budget. Sized to the harness's full graceful-shutdown path
-# (publish kind:10100 + kind:20001 offline, then exit 0). A SIGKILL that races
-# this converts a clean stop into an abnormal one and burns the relay's 180s
-# presence TTL — conformance-relevant, not a tuning knob.
 KillSignal=SIGTERM
 KillMode=mixed
 TimeoutStopSec=$TERMINATION_GRACE_SECONDS
-
-# I5: nothing in the guest revives the harness. Intentional exit is final, and
-# the binding ships no revive-on-abnormal-death policy until the upstream
-# exit-code contract is pinned by test (Known Defect 6).
 Restart=no
-
-# The identity env is readable by this unit and nothing else.
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=false
 PrivateTmp=false
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
-# Only the path unit is enabled. The service is started BY the path unit, so
-# enabling it would race the injection and fail its ConditionPathExists.
-chroot "$R" systemctl enable buzz-harness.path
+# Do not `systemctl enable` inside the chroot — it talks to the host daemon via
+# /run. Link the path unit the way systemd would.
+mkdir -p "$R/etc/systemd/system/multi-user.target.wants"
+ln -sfn /etc/systemd/system/buzz-harness.path \
+    "$R/etc/systemd/system/multi-user.target.wants/buzz-harness.path"
 
 # ── Serial console autologin ─────────────────────────────────────────────────
 
