@@ -16,5 +16,5 @@ secrets tasks and added R2/R4/R6 lines.
 - [x] Domain + HTTP-01 cert: `https://buzz.identikey.me/_liveness` is 200 (cert issue via `mjolnir-gateway cert issue` as user `mjolnir`; API `systemd-run --collect` swallowed the success and 500'd)
 - [x] Snapshot `buzz-relay-b0` (crash-consistent). Do not `mj freeze` as backup
 - [x] Restore runbook: `docs/runbooks/buzz-relay-restore.md`
-- [ ] EYES: Desktop Join `wss://buzz.identikey.me` with the owner identity; confirm the owner is a *member row* of the seeded community (startup logged NIP-43 `member_count: 1`)
+- [x] EYES: Desktop Join `wss://buzz.identikey.me` with the owner identity; confirm the owner is a *member row* of the seeded community (startup logged NIP-43 `member_count: 1`). Looked 2026-09-10: Duke — it's working.
 - [x] Document Join URL + NIP-OA policy next to `docs/plans/initiatives/buzz-provider.md` § B0 (no new surface)
