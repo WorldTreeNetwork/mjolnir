@@ -23,6 +23,10 @@ Full argument:
 4. **`:pg` EventBus.** No Phoenix.PubSub. App id is self-asserted.
 5. **App TS types → generated JSON Schema.** Pretty and LSP consume
    that schema. Unknown fields kept, flagged.
+   LSP pin: bun bin `mjolnir-log-lsp` in `packages/log` (NDJSON
+   diagnostics via `validateRecord`; `vscode-languageserver` +
+   `jsonc-parser` are optionalDependencies, not imported by the
+   logger entry).
 6. **Code is later nodes.** `add-log-emit`, `add-log-ingest`,
    `add-log-subscribe`, `add-log-lsp`, `add-myscape-log-types`.
 

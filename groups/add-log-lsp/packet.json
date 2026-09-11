@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-log-lsp-2026-09-10",
+  "node_id": "add-log-lsp",
+  "capability": "typed-log",
+  "change_id": "add-log-lsp",
+  "role": "worker",
+  "surface": "packet-only",
+  "density": "lean",
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "grok-4.6" }
+  },
+  "goal": "Implement add-log-lsp per openspec/changes/add-log-lsp/ (design.md D1–D3, delta specs/typed-log/spec.md, Fable accept reviews/2026-09-10-readvise2.md). Architecture is accepted. Stay on HEAD. Do not fold.\n\nMust land:\n1. mjolnir-log exports pino envelope fragment (required level/time/schema/app/name; optional msg + err object) and generateSchema(appConst) that merges envelope ∪ app fields, additionalProperties false, fails on envelope-key collision, nested properties, enum/array/$ref/anyOf, unknown type.\n2. Derived-type helper. Library-owned --check compares canonical JSON (stable key order, 2-space indent, trailing newline) or parsed-equal.\n3. validateRecord: unknown type is an issue not a pass (schema.ts:35); test it.\n4. bun bin mjolnir-log-lsp (vscode-languageserver + jsonc-parser as optionalDependencies). Logger entry MUST NOT import them. NDJSON diagnostics on .jsonl/.ndjson/{-leading .log. path→range via jsonc-parser; unresolved path = whole line. Schema registry: **/*schema.json + initializationOptions.schemaPaths. Unknown $id diagnostic. No schema key → no diagnostic. Duplicate $id → one ambiguous-schema-id diagnostic.\n5. Pointer in docs/decisions/0010-typed-log.md if D4 needs a one-line LSP pin. Check act boxes on tasks.md.\n\nDo not rewrite Myscape (mjolnir-4o4s). Do not fold living spec. Do not add a .vsix.",
+  "non_goals": [
+    "Do not fold openspec/specs/typed-log/.",
+    "Do not rewrite myscape src/lib/log (mjolnir-4o4s).",
+    "Do not publish a VS Code extension.",
+    "Do not recurse validateRecord into nested properties this slice."
+  ],
+  "anchors": [
+    {
+      "symbol": "validateRecord",
+      "invariant": "packages/log/src/schema.ts stays the language core; unknown type is an issue; LSP maps ValidationIssue to diagnostics"
+    },
+    {
+      "symbol": "generateSchema",
+      "invariant": "library owns envelope merge + closed world; apps supply only the const object"
+    },
+    {
+      "symbol": "createLogger",
+      "invariant": "envelope equals what createLogger stamps (index.ts name + base schema/app; pino level/time/msg/err)"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd packages/log && bun test"
+  },
+  "out_of_scope": [
+    { "item": "VS Code .vsix", "tracked_as": "later thin client" },
+    { "item": "Myscape re-author", "tracked_as": "mjolnir-4o4s" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "packages/log/",
+      "docs/decisions/0010-typed-log.md",
+      "openspec/changes/add-log-lsp/tasks.md"
+    ],
+    "do_not": ["fold", "deploy", "push"]
+  }
+}

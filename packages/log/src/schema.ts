@@ -23,6 +23,10 @@ export function validateRecord(
     const got = rec[key];
     const want = spec.type;
     if (!want) continue;
+    if (want !== "string" && want !== "number" && want !== "boolean" && want !== "object") {
+      issues.push({ path: key, message: `unknown type ${want}` });
+      continue;
+    }
     const ok =
       want === "string"
         ? typeof got === "string"
@@ -30,9 +34,7 @@ export function validateRecord(
           ? typeof got === "number"
           : want === "boolean"
             ? typeof got === "boolean"
-            : want === "object"
-              ? typeof got === "object" && got !== null && !Array.isArray(got)
-              : true;
+            : typeof got === "object" && got !== null && !Array.isArray(got);
     if (!ok) issues.push({ path: key, message: `expected ${want}` });
   }
   if (schema.additionalProperties === false) {

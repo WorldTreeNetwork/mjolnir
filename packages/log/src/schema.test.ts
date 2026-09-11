@@ -29,4 +29,21 @@ describe("validateRecord", () => {
     expect(issues).toEqual([{ path: "extra", message: "unknown field" }]);
     expect(rec.extra).toBe(true);
   });
+
+  test("unknown JSON Schema type is an issue, not a pass", () => {
+    const withArray = {
+      ...schema,
+      properties: { ...schema.properties, tags: { type: "array" } },
+    };
+    const issues = validateRecord({ schema: "myscape/v1", tags: ["a"] }, withArray);
+    expect(issues.find((i) => i.path === "tags")?.message).toBe("unknown type array");
+
+    const withInteger = {
+      ...schema,
+      properties: { ...schema.properties, n: { type: "integer" } },
+    };
+    expect(validateRecord({ schema: "myscape/v1", n: 1 }, withInteger).find((i) => i.path === "n")?.message).toBe(
+      "unknown type integer",
+    );
+  });
 });

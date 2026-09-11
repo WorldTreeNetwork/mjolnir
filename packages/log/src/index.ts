@@ -46,3 +46,17 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
 export { format3164, priFromPino, rfc3164Stamp } from "./syslog.ts";
 export { renderLine, wantsColor } from "./pretty.ts";
 export { validateRecord, type JsonSchema, type ValidationIssue } from "./schema.ts";
+export {
+  PINO_ENVELOPE,
+  ENVELOPE_KEYS,
+  ENVELOPE_REQUIRED,
+  generateSchema,
+  canonicalJson,
+  schemaMatches,
+  assertSchemaMatches,
+  GenerateError,
+  type AppFields,
+  type EnvelopeRecord,
+  type GeneratedSchema,
+  type LogFromSchema,
+} from "./generate.ts";

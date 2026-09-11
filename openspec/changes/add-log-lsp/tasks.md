@@ -8,12 +8,12 @@ Grok (ADR-005).
 - [x] Delta `specs/typed-log/spec.md` (generate + LSP)
 - [x] Advise accept from a non-Grok reader (Fable 5.1) —
       `reviews/2026-09-10-readvise2.md`
-- [ ] After accept: pointer in `docs/decisions/0010-typed-log.md` if
+- [x] After accept: pointer in `docs/decisions/0010-typed-log.md` if
       D4 needs a one-line LSP pin
 
 Handoffs (not checkboxes):
 
-- bun generate + `mjolnir-log-lsp` binary — act after accept
+- bun generate + `mjolnir-log-lsp` binary — done this act
 - VS Code `.vsix` — later
 - Myscape generate wiring — first consumer already has types
 - **Fold:** MODIFIED "generate step" and ADDED "SHALL ship a
@@ -58,7 +58,7 @@ see `reviews/2026-09-10-readvise.md`; F1–F4 closed):
 - [x] D3: closed-world subset is root-level `properties` only; nested
       `properties` fail generate until `validateRecord` recurses
       (F7 architecture)
-- [ ] Act: flip `schema.ts:35` unknown-type to an issue, with a test
+- [x] Act: flip `schema.ts:35` unknown-type to an issue, with a test
       (F7 shipped-code; after advise accept)
 - [x] D1: NDJSON line with no `schema` key → no diagnostic (living
       spec `:app_log` iff `schema`); open tracker `mjolnir-4o4s`

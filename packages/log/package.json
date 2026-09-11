@@ -7,6 +7,10 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "bin": {
+    "mjolnir-log": "./src/bin/mjolnir-log.ts",
+    "mjolnir-log-lsp": "./src/bin/mjolnir-log-lsp.ts"
+  },
   "scripts": {
     "test": "bun test",
     "build": "bun build ./src/index.ts --outdir dist --target bun"
@@ -24,5 +28,10 @@
   },
   "devDependencies": {
     "@types/bun": "^1.2.21"
+  },
+  "optionalDependencies": {
+    "jsonc-parser": "^3.3.1",
+    "vscode-languageserver": "^10.1.1",
+    "vscode-languageserver-textdocument": "^1.0.14"
   }
 }
