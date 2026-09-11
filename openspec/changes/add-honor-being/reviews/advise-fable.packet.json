@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-honor-being-advise",
+  "node_id": "add-honor-being",
+  "change_id": "add-honor-being",
+  "capability": "honor-being",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-fable-5.1-arch-review" }
+  },
+  "goal": "Architecture advise for add-honor-being (ADR 0011). Author is Grok. You are Fable 5.1, other family (ADR-005).\n\nWhy: A non-technical vibe coder needs a complete hosted dev environment for hypersigil-store-frontend: grok in a VM, passkey login, a preview URL, signed commits, and push that cuts over prod. Spawn and wrug /term exist. They do not say whose identikey the machine is, how grok relates to IdentiKey, or how a git-signing key is bound to a C2 identity.\n\nRead first (blind pass, no design.md/tasks.md yet): openspec/changes/add-honor-being/proposal.md; openspec/changes/add-honor-being/specs/honor-being/spec.md; docs/decisions/0011-honor-being.md; openspec/specs/web-pty-edge/spec.md; openspec/specs/base-images/spec.md; openspec/specs/buzz-local-client/spec.md; lib/mjolnir/identity.ex; lib/mjolnir/secret_store.ex (put_opaque); lib/mjolnir/vsock/protocol.ex inject_identity_request; docs/LEARNINGS.md 2026-08-16 fold-not-unimplemented-SHALLs and 2026-08-17 mjolnir-1pe opaque inject. identikey-core (sibling repo) living passkeys + managed-custody if readable.\n\nCite file:line for code claims. Persist review at openspec/changes/add-honor-being/reviews/2026-09-10-advise.md with ADVISE accept or send-back, READER: fable-5.1-arch-review, SPAWN: this spawn dir.",
+  "non_goals": [
+    "Implement grok bootstrap, CORS, or identikey client registration",
+    "Accept in the author tab",
+    "Fold living honor-being SHALLs on this architecture change"
+  ],
+  "anchors": [
+    { "symbol": "Mjolnir.Identity", "invariant": "opaque VM material is _opaque/vms/<id>/, vsock-injected, never on VM struct/StateStore/API views" },
+    { "symbol": "Mjolnir.SecretStore.put_opaque/4", "invariant": "unsigned blobs, mode 0600, not Gordian envelopes" },
+    { "symbol": "web-pty-edge", "invariant": "foreign-origin browser never holds the Mjolnir JWT; wrug /term is the attach path" },
+    { "symbol": "ADR 0009", "invariant": "@base/ is OS roots not toolchains; snapshots are spawnable and not catalog entries" },
+    { "symbol": "C2", "invariant": "user Elect, IdentiKey Sign+Auth; Honor is a device credential not a second XID Sign key" }
+  ],
+  "acceptance": { "kind": "none" },
+  "out_of_scope": [
+    { "item": "Passkey client + wrug Keycloak cutover", "tracked_as": "add-identikey-being-client" },
+    { "item": "SSH key inject + identikey device row", "tracked_as": "add-vm-git-subkey" },
+    { "item": "Forgejo write registration", "tracked_as": "add-honor-git-remote" },
+    { "item": "grok + Vite ticket preview", "tracked_as": "add-honor-dev-preview" },
+    { "item": "Prod Medusa CORS", "tracked_as": "update-hypersigil-store-cors" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-honor-being/reviews/",
+      "openspec/changes/add-honor-being/tasks.md"
+    ],
+    "do_not": ["fold", "act", "deploy", "implement"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "skill-host",
+  "role": "reader",
+  "inherited": [
+    { "fact": "Folding an architecture-plus-one-slice change must not import unimplemented SHALLs into openspec/specs/. This architecture change folds the ADR only.", "source": "docs/LEARNINGS.md:2026-08-16 add-buzz-local-client" },
+    { "fact": "SecretStore envelope API cannot hold an unsigned nsec; _opaque/vms/<id>/ is the store namespace. Guest inject_identity is in-tree.", "source": "docs/LEARNINGS.md:2026-08-17 mjolnir-1pe" },
+    { "fact": "Foreign-origin web terminals terminate on a trusted edge; browser does not open the Mjolnir PTY WebSocket with a JWT.", "source": "openspec/specs/web-pty-edge/spec.md ADR 0004" }
+  ]
+}
