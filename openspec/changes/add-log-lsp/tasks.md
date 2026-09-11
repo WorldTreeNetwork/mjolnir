@@ -6,7 +6,8 @@ Grok (ADR-005).
 
 - [x] Write `design.md` (D1–D3)
 - [x] Delta `specs/typed-log/spec.md` (generate + LSP)
-- [ ] Advise accept from a non-Grok reader (Fable 5.1)
+- [x] Advise accept from a non-Grok reader (Fable 5.1) —
+      `reviews/2026-09-10-readvise2.md`
 - [ ] After accept: pointer in `docs/decisions/0010-typed-log.md` if
       D4 needs a one-line LSP pin
 
@@ -62,4 +63,16 @@ see `reviews/2026-09-10-readvise.md`; F1–F4 closed):
 - [x] D1: NDJSON line with no `schema` key → no diagnostic (living
       spec `:app_log` iff `schema`); open tracker `mjolnir-4o4s`
       (`add-myscape-log-generate`; `mjolnir-asmx` stays closed) (F8)
-- [ ] Re-advise on route `fable-5.1-arch-review`
+- [x] Re-advise on route `fable-5.1-arch-review` — accept
+      `reviews/2026-09-10-readvise2.md`
+
+Act notes from that accept (not architecture owed):
+
+- `--check` compares canonical bytes or parsed-equal
+- duplicate `$id` → one "ambiguous schema id" diagnostic
+- app `additionalProperties` ignored or must be false
+- app `required` naming a missing or envelope key fails generate
+- README: bun on PATH; `log.child` keys are app fields; nested
+  shapes flatten until the validator recurses
+- `validateRecord` does not compare `rec.schema` to `$id`; LSP
+  selection owns that for v1
