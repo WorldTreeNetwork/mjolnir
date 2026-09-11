@@ -60,22 +60,28 @@ in `Mjolnir.Admit` is that evaluator until the crate lands.
 - WHEN a gateway plugin or CDN origin adapter depends on it
 - THEN it does not pull `identikey-core` or an AGPL obligation
 
-### Requirement: Dev image is the test image
+### Requirement: Catalog images, not `@base/dev`
 
-Human development VMs and CI VMs SHALL clone the same base
-(`@base/dev`). That image SHALL include the guest agent and a
-single-process in-guest Postgres-compatible store (PGlite) for
-scratch. Stateful production workloads that are **not** a declared
-host-postgres tenant SHALL run real Postgres inside their own VM.
-Declared tenants (ADR 0005 / `add-host-sidecar-tenant`) MAY use the
-host sidecar. Buzz relays SHALL NOT use the sidecar.
+Human spawn SHALL use a declared catalog OS root
+(`ubuntu-24.04`). CI SHALL use `ci-ubuntu-24.04`. Buzz bodies SHALL
+use `buzz-agent`. This change SHALL NOT add `@base/dev` — ADR 0009
+replaced that name. Stateful production workloads that are **not**
+a declared host-postgres tenant SHALL run real Postgres inside
+their own VM. Declared tenants (ADR 0005) MAY use the host sidecar.
+Buzz relays SHALL NOT use the sidecar (B0 hive is guest PG/Redis/
+MinIO on `add-buzz-relay`).
 
-#### Scenario: Spawn a dev box
+#### Scenario: Spawn a shell
 
-- GIVEN `@base/dev` exists on the host
-- WHEN an operator runs `mj spawn` against that base (or the API
-  equivalent)
-- THEN the VM boots with a working guest agent and can run the
-  project’s tests without a second orchestrator
+- GIVEN `@base/ubuntu-24.04` exists on the host
+- WHEN an operator runs `mj spawn` with no `--base`
+- THEN the VM boots with a working guest agent from that catalog
+  image
+
+#### Scenario: Buzz body image
+
+- GIVEN `@base/buzz-agent` exists
+- WHEN a Buzz-managed agent VM is spawned
+- THEN it clones `buzz-agent`, not a host-sidecar database
 
 <!-- Provider-deployed identity + B0 relay VM live in add-buzz-relay. -->

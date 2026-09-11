@@ -4,6 +4,9 @@
 **Change:** [`add-buzz-local-client`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/proposal.md) (folded 2026-08-16)
 **Living spec:** [`openspec/specs/buzz-local-client/spec.md`](../../openspec/specs/buzz-local-client/spec.md)
 **Remaining:** [`add-buzz-local-runtime`](../../openspec/changes/add-buzz-local-runtime/proposal.md)
+(facade / wake producer / admit crate). B0 hive is
+[`add-buzz-relay`](../../openspec/changes/add-buzz-relay/proposal.md)
+(`wss://buzz.identikey.me`, live 2026-09-10).
 **Epic:** `mjolnir-e70`
 
 Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md).
@@ -25,7 +28,10 @@ Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/desig
    declared tenant apps MAY `CREATE DATABASE` in the same process;
    Buzz event logs still SHALL NOT. Item 7 as folded on 2026-08-16
    remains the living text until `add-host-sidecar-tenant` folds.
-8. **Dev = CI = `@base/dev`**. **Relay** is a Mjolnir VM (`mjolnir-gti`).
+8. **Catalog images** (ADR 0009): spawn `ubuntu-24.04`, CI
+   `ci-ubuntu-24.04`, Buzz bodies `buzz-agent`. **Relay** is a
+   Mjolnir VM (`mjolnir-gti` / `add-buzz-relay`; hive live
+   `wss://buzz.identikey.me`). `@base/dev` was never built.
 9. **CDN** (ADR 0001) is the same plugin shape at HTTP. Not this change.
 
 ## Built vs remaining
@@ -35,6 +41,6 @@ refuses `DormantRegistry`, guests stay off the cluster, sidecar is
 catalog-only, nsec is an opaque SecretStore blob injected over vsock
 (`mjolnir-1pe`, 2026-08-17).
 
-Remaining implementation is `add-buzz-local-runtime` (`nod-identikey-admit`,
-`nod-mailbox-control`, `nod-local-relay`, `nod-deploy-happy`, …). Do not
-implement from this ADR.
+Remaining implementation is `add-buzz-local-runtime` (facade, wake
+producer, admit crate). Relay is `add-buzz-relay`. Do not implement
+from this ADR.

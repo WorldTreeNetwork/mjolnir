@@ -1,9 +1,10 @@
 # add-log-lsp
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Bead `mjolnir-vzo6`. Architecture for a schema-driven language
-server on typed-log. Code is `act` after activate + advise accept.
+Activated 2026-09-10. Bead `mjolnir-vzo6`. Architecture for a
+schema-driven language server on typed-log. Code is `act` after
+advise accept.
 
 **Rigor:** architecture
 
