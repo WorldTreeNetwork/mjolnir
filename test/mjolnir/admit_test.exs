@@ -55,6 +55,16 @@ defmodule Mjolnir.AdmitTest do
     end
   end
 
+  describe "verdict/2" do
+    test "portable vocabulary is deny or deliver" do
+      assert Admit.verdict("vm-1", %{wake: true}) == :deny
+
+      assert Admit.verdict("vm-1", %{
+               "attestation" => %{"vm_id" => "vm-1", "epoch" => 0}
+             }) == :deliver
+    end
+  end
+
   describe "deliver_message/3 fail-closed thaw" do
     setup do
       vm_id = "admit-#{System.unique_integer([:positive])}"

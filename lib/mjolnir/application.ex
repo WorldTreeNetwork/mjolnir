@@ -54,6 +54,11 @@ defmodule Mjolnir.Application do
 
           # Per-actor durable message spool (ADR 0006)
           Mjolnir.Mailbox,
+
+          # Buzz protocol facade: Nostr (later Matrix) → OTP mailbox → last hop
+          # is a conformant Nostr event for buzz-acp. Named wake producer. The
+          # host is not a second event log.
+          Mjolnir.Buzz.Facade,
           %{
             id: Mjolnir.StartupMailboxSweep,
             start: {Task, :start_link, [&Mjolnir.Mailbox.sweep/0]},

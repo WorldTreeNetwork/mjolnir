@@ -3,14 +3,14 @@
 Activated 2026-09-10. Relay / NIP-OA is **not** this change
 (`add-buzz-relay`, hive live at `wss://buzz.identikey.me`).
 
-- [ ] Protocol facade: Nostr (later Matrix) → OTP → conformant Nostr
+- [x] Protocol facade: Nostr (later Matrix) → OTP → conformant Nostr
       at a Buzz body. Host is not a second event log.
-- [ ] Wake producer is that ingress (not guest, Reconcile, or a
+- [x] Wake producer is that ingress (not guest, Reconcile, or a
       desktop-only side channel)
-- [ ] Signed attestation + lifecycle epoch field as a portable
+- [x] Signed attestation + lifecycle epoch field as a portable
       crate in `identikey-protocol` (Apache-2.0 or BSD-2-Clause-Patent;
       no `identikey-core`). `Mjolnir.Admit` stays the v1 evaluator
-      until that crate lands.
+      (no NIF this slice).
 
 Handoffs (not checkboxes):
 
