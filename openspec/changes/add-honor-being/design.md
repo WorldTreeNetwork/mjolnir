@@ -1,10 +1,12 @@
-# Design — Honor being (hosted vibe-coder VM)
+# Design — Hosted being (vibe-coder VM)
 
 Canonical ADR index:
 [`docs/decisions/0011-honor-being.md`](../../../docs/decisions/0011-honor-being.md).
 This file is the full argument.
 
 **Status:** Accepted (Fable re-advise 2026-09-10). ACTIVE BUILD.
+Renamed 2026-09-10: product is a **hosted being** (intend
+mis-transcription “Honor”). Change-id unchanged.
 **Change:** `add-honor-being`
 **Epic bead:** `mjolnir-x97p`
 **Architecture bead:** `mjolnir-x97p.1`
@@ -27,18 +29,18 @@ Five questions after intend + steer:
 4. Which git host is the write remote (CI/CD)?
 5. How is the Vite preview reached?
 
-## Decision 1 — Friend C2; Honor is a device of that XID
+## Decision 1 — Friend C2; the VM is a device of that XID
 
 The vibe-coder friend receives a **C2 managed** identikey
-(`identikey-core` `managed-custody`). Honor is not a second
+(`identikey-core` `managed-custody`). The hosted being is not a second
 inception identity. It is a **device** of that XID: a
 `credentials` row (same table as passkeys, `add-device-records`),
 not an `add_key` of Sign onto the document.
 
-**Mjolnir binding (S3):** Honor's `owner_id` is the friend's XID
+**Mjolnir binding (S3):** the VM's `owner_id` is the friend's XID
 as `auth.identikey.me` issues it in OIDC `sub`. `/term` and the
 PTY attach are authorized by `authorize_vm` on that equality. A
-VM Duke spawns under his own `sub` is not a Honor being. Pairwise
+VM Duke spawns under his own `sub` is not this hosted being. Pairwise
 `sub` is not used for this client (`subject_type=public` so `sub`
 is the 64-hex XID).
 
@@ -75,7 +77,7 @@ not hold). Inject into `/run/mjolnir/` tmpfs via the same vsock
 path as `buzz.env`, so a bootstrap snapshot never captures it.
 
 The human never “logs into grok” with a passkey; they log into
-**Honor**, then grok runs.
+the **hosted being**, then grok runs.
 
 Rejected:
 
@@ -131,7 +133,7 @@ Rejected:
 - `forgejo` → `mimir.worldtree.network:VirtueInnova/hypersigil-store-frontend`
   (`.forgejo/workflows/deploy.yml` on `main`, `ENABLE_DEPLOY`)
 
-Honor's `git push` target is Forgejo. GitHub stays a human
+The VM's `git push` target is Forgejo. GitHub stays a human
 mirror if someone wants it. CI remains Forgejo Actions in a
 Mjolnir VM, `mj deploy` `hypersigil-store`.
 
@@ -157,11 +159,11 @@ block first paint.
 
 ## Decision 6 — ubuntu-24.04 bootstrap, not a new @base
 
-ADR 0009: `@base/` is OS roots, not toolchains. Honor clones
-`ubuntu-24.04`, then a **per-friend snapshot** `honor-<xid>` of
+ADR 0009: `@base/` is OS roots, not toolchains. The being clones
+`ubuntu-24.04`, then a **per-friend snapshot** `hosted-<xid>` of
 the grok+bun+git bootstrap (not a catalog entry; living
 base-images already covers "Snapshot is not a catalog entry").
-Do not declare `@base/honor`.
+Do not declare `@base/hosted`.
 
 Clone the repo **inside** the guest. `extra_mounts` is still
 ignored (`mjolnir-gge.1.9`). wrug `/term` + `mj connect --session
@@ -176,7 +178,7 @@ revoked (opaque delete + `revoke_device` + Forgejo delete).
 
 The ticket URL (and therefore the CORS entry) is held by
 `preserve_iroh_key: true` on spawn from the **per-friend**
-snapshot `honor-<xid>`. Do not preserve Iroh identity from a
+snapshot `hosted-<xid>`. Do not preserve Iroh identity from a
 shared bootstrap snapshot (two VMs would share one node id).
 
 Rejected: copying `_opaque/vms/<old>/` onto `<new>` and

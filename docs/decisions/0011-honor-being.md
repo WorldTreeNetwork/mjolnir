@@ -1,4 +1,4 @@
-# ADR 0011 — Honor being (hosted vibe-coder VM)
+# ADR 0011 — Hosted being (vibe-coder VM)
 
 **Status:** Accepted
 **Date:** 2026-09-10
@@ -10,10 +10,13 @@ Full argument:
 [`openspec/changes/add-honor-being/design.md`](../../openspec/changes/add-honor-being/design.md).
 
 Amended 2026-09-10 after Fable send-back (S1–S4).
+Renamed 2026-09-10: first intend line was transcribed “a honor being”;
+the intent is a **hosted being**. Change-id `add-honor-being` is
+unchanged.
 
 ## One screen
 
-1. **Friend C2; Honor is a device.** Not a second XID. Not a Sign
+1. **Friend C2; the VM is a device.** Not a second XID. Not a Sign
    key on the document. Duke may hold Elect recovery.
    `owner_id` = friend's XID = public OIDC `sub` from
    `auth.identikey.me`. `/term` authorized by `authorize_vm` on
@@ -32,8 +35,8 @@ Amended 2026-09-10 after Fable send-back (S1–S4).
 5. **Ticket URL + prod API + per-ticket CORS.** No
    `*.vm.worldtree.network` wildcard. Ticket host is
    unauthenticated HTTP; named subdomain (v2) stabilizes CORS.
-6. **ubuntu-24.04 → per-friend snapshot `honor-<xid>`, not
-   `@base/honor`.** Clone inside the guest. Reuse wrug `/term` +
+6. **ubuntu-24.04 → per-friend snapshot `hosted-<xid>`, not
+   `@base/hosted`.** Clone inside the guest. Reuse wrug `/term` +
    tmux `main`.
 7. **Respawn is a new device.** New key, new credentials row, new
    Forgejo key; old revoked. URL held by `preserve_iroh_key` from

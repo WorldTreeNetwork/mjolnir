@@ -10,7 +10,7 @@ auto-logged, not menued.
 
 ## Decided
 
-- Whose identikey: friend C2 managed identity; Honor is a **device**
+- Whose identikey: friend C2 managed identity; the VM is a **device**
   of that XID; Duke may hold Elect recovery (decide-for-me / activate)
 - Grok login split: IdentiKey **passkey gates the being** (browser
   `/term` + preview). Grok inference is `XAI_API_KEY` or one grok.com
@@ -31,7 +31,7 @@ None.
 
 ## Feeds change
 
-Honor is a long-lived ubuntu-24.04 VM (snapshot of a bootstrap, not
+A hosted being is a long-lived ubuntu-24.04 VM (snapshot of a bootstrap, not
 a new `@base` name) for a non-technical vibe coder. The friend's
 C2 identikey is the identity; the VM is a device of it. Browser
 passkey at `auth.identikey.me` opens wrug `/term` (tmux `session=main`)

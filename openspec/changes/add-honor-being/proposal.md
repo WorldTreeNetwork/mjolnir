@@ -46,7 +46,7 @@ four different beings.
 
 ## User journey & surfaces
 
-Friend (or Duke acting as the friend) opens the Honor environment
+Friend (or Duke acting as the friend) opens the hosted-being environment
 from a browser.
 
 - **Working (after later act)** — passkey at

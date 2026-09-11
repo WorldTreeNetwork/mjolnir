@@ -417,16 +417,17 @@ Toolchains live in `mise` layers or snapshots, not extra `@base/`
 debootstraps. `deploy-node-bun` is retired by
 `remove-deploy-node-bun` (not this pointer).
 
-A **Honor being** is a long-lived vibe-coder VM: a *device* of a
+A **hosted being** is a long-lived vibe-coder VM: a *device* of a
 friend's C2 identikey (`credentials.kind = ssh_git`), not a new
 `@base/` name. ADR
 [`0011`](decisions/0011-honor-being.md) (`add-honor-being`, advise
-accept 2026-09-10). Passkey at `auth.identikey.me` gates wrug
-`/term`; grok uses `XAI_API_KEY` in tmpfs; git is SSH-signed from
-opaque inject; write remote is Forgejo on mimir. Living spec waits
-on implement landings (`add-identikey-being-client`,
-`add-vm-git-subkey`, `add-honor-git-remote`,
-`add-honor-dev-preview`, `update-hypersigil-store-cors`).
+accept 2026-09-10; “Honor” was a mis-transcription of hosted).
+Passkey at `auth.identikey.me` gates wrug `/term`; grok uses
+`XAI_API_KEY` in tmpfs; git is SSH-signed from opaque inject;
+write remote is Forgejo on mimir. Living spec waits on implement
+landings (`add-identikey-being-client`, `add-vm-git-subkey`,
+`add-honor-git-remote`, `add-honor-dev-preview`,
+`update-hypersigil-store-cors`).
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
 
