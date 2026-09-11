@@ -177,12 +177,14 @@ install_base_packages() {
         log_warn "virtiofsd not found in repos — check AUR or install manually"
     fi
 
-    # virtiofsd ships at /usr/lib/virtiofsd on Arch; the mjolnir code expects
-    # /usr/libexec/virtiofsd (FHS-compliant location). Symlink bridges that.
-    if [[ -f /usr/lib/virtiofsd && ! -e /usr/libexec/virtiofsd ]]; then
-        mkdir -p /usr/libexec
-        ln -s /usr/lib/virtiofsd /usr/libexec/virtiofsd
-        log_info "Linked /usr/lib/virtiofsd → /usr/libexec/virtiofsd"
+    # virtiofsd ships at /usr/lib/virtiofsd on Arch. Mjolnir's compiled default
+    # is /usr/local/bin/virtiofsd (config.exs); bootstrap also used to only
+    # link /usr/libexec, which left spawn failing with :enoent.
+    if [[ -f /usr/lib/virtiofsd ]]; then
+        mkdir -p /usr/libexec /usr/local/bin
+        ln -sfn /usr/lib/virtiofsd /usr/libexec/virtiofsd
+        ln -sfn /usr/lib/virtiofsd /usr/local/bin/virtiofsd
+        log_info "Linked /usr/lib/virtiofsd → /usr/libexec/virtiofsd and /usr/local/bin/virtiofsd"
     fi
 
     # File capabilities let virtiofsd override DAC checks, chown, etc. without
