@@ -19,10 +19,10 @@ cannot stay honest with the type file.
 
 ## What
 
-- MODIFIED `typed-log`: bun generate step (app const schema
-  object ∪ library envelope → JSON Schema) is the schema source;
-  closed-world generate; `--check` drift gate; LSP consumes that
-  schema.
+- MODIFIED `typed-log`: `mjolnir-log` owns `generateSchema`
+  (app const ∪ envelope → JSON Schema); closed-world, root-only
+  properties; envelope required/optional/`err`/collision;
+  `--check` drift gate; LSP consumes that schema.
 - ADDED: stdio language server `mjolnir-log-lsp` in `packages/log`
   (`vscode-languageserver` optionalDependency). Diagnostics on
   NDJSON records (unknown field, type mismatch, missing required,
@@ -51,7 +51,8 @@ JSON log record or generated `schema.json`.
 ## Out of scope
 
 - VS Code marketplace `.vsix` — later thin client
-- Myscape type file (closed `mjolnir-asmx`)
+- Myscape type file rewrite — `mjolnir-4o4s`
+  (`add-myscape-log-generate`); `mjolnir-asmx` stays closed
 - Pretty rewrite / syslog / EventBus
 - TS call-site completions on `log.info({ ... })` as the only
   product (allowed later; v1 is JSON-record diagnostics)

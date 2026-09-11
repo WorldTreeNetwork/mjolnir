@@ -38,4 +38,28 @@ see `reviews/2026-09-10-advise.md`):
       (F4, LEARNINGS 2026-08-16)
 - [x] D1: state document model (NDJSON vs `.json`), `path`→range
       parser, schema discovery, and where LSP deps live
+- [x] Re-advise on route `fable-5.1-arch-review` — done 2026-09-10,
+      send-back; see `reviews/2026-09-10-readvise.md`
+
+Owed (re-advise 2026-09-10, fable-5.1-arch-review, send-back —
+see `reviews/2026-09-10-readvise.md`; F1–F4 closed):
+
+- [x] D2: generator ownership — `mjolnir-log` exports `generateSchema`
+      (or a `generate --check` bin) and the derived-type helper; apps
+      supply only the const object; closed-world enforcement lives in
+      the library once (F5)
+- [x] D2 + scenario "Generate from types": envelope fragment contract —
+      required = `level, time, schema, app, name`; `msg` optional;
+      `err` optional `type: object` (pino default serializer emits it
+      on `log.error(err)`); generated schema always
+      `additionalProperties: false`; an app key that collides with an
+      envelope key fails generate (F6)
+- [x] D3: closed-world subset is root-level `properties` only; nested
+      `properties` fail generate until `validateRecord` recurses
+      (F7 architecture)
+- [ ] Act: flip `schema.ts:35` unknown-type to an issue, with a test
+      (F7 shipped-code; after advise accept)
+- [x] D1: NDJSON line with no `schema` key → no diagnostic (living
+      spec `:app_log` iff `schema`); open tracker `mjolnir-4o4s`
+      (`add-myscape-log-generate`; `mjolnir-asmx` stays closed) (F8)
 - [ ] Re-advise on route `fable-5.1-arch-review`

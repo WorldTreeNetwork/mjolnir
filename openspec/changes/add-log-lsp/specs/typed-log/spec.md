@@ -4,18 +4,25 @@
 
 An originating application SHALL provide a TypeScript const schema
 object for its log events; the field type SHALL be derived from
-that object. A generate step SHALL emit JSON Schema that is the
-library-owned pino envelope (`level`, `time`, `schema`, `app`,
-`name`, `msg`) union the app's fields. Apps SHALL NOT hand-list
+that object via a helper exported by `mjolnir-log`. `mjolnir-log`
+SHALL export `generateSchema` (or a `generate --check` bin) that
+emits JSON Schema: library-owned pino envelope union the app's
+fields. Closed-world enforcement SHALL live in that library
+function, not per app. Envelope required keys SHALL be `level`
+(number), `time` (string), `schema` (string), `app` (string),
+`name` (string). Envelope optional keys SHALL be `msg` (string)
+and `err` (`type: object`). Generated schema SHALL set
+`additionalProperties: false`. An app key that collides with an
+envelope key SHALL fail generate. Apps SHALL NOT hand-list
 envelope keys. `$id` on the emitted schema SHALL be the same
 const passed to `createLogger({ schema })`. The generate step
 SHALL fail on any construct outside the subset `validateRecord`
-checks. `bun generate --check` (or the package test) SHALL fail
-when the committed schema file differs from generated output.
-The library SHALL validate records against that schema. Unknown
-fields SHALL be preserved on the wire and reported as issues.
-An unknown JSON Schema `type` SHALL be a validation issue, not a
-pass.
+checks, including nested `properties` until the validator
+recurses. Library-owned `--check` SHALL fail when the committed
+schema file differs from generated output. The library SHALL
+validate records against that schema. Unknown fields SHALL be
+preserved on the wire and reported as issues. An unknown JSON
+Schema `type` SHALL be a validation issue, not a pass.
 
 #### Scenario: Unknown field kept
 
@@ -26,25 +33,35 @@ pass.
 
 #### Scenario: Generate from types
 
-- GIVEN an app const schema object that lists `url: string`
+- GIVEN an app const schema object that lists `url: string` and
+  does not list envelope keys
 - AND the library envelope fragment
-- WHEN the bun generate step runs
+- WHEN `generateSchema` runs
 - THEN the emitted JSON Schema has `url` with type string
-- AND it has envelope keys `level`, `time`, `schema`, `app`, `name`, `msg`
+- AND required envelope keys `level`, `time`, `schema`, `app`, `name`
+- AND optional envelope keys `msg` and `err`
+- AND `additionalProperties` is false
 - AND `$id` matches the record `schema` field the logger stamps
-- AND the app object does not itself list those envelope keys
+
+#### Scenario: Envelope key collision
+
+- GIVEN an app const schema object that lists `level`
+- WHEN `generateSchema` runs
+- THEN it fails
+- AND no schema file is written
 
 #### Scenario: Closed world
 
-- GIVEN an app const schema object that uses `enum` or `type: array`
-- WHEN the bun generate step runs
+- GIVEN an app const schema object that uses `enum`, `type: array`,
+  or nested `properties`
+- WHEN `generateSchema` runs
 - THEN it fails
 - AND no schema file is written
 
 #### Scenario: Drift check
 
 - GIVEN a committed `schema.json` that differs from generate output
-- WHEN `bun generate --check` runs
+- WHEN library-owned `--check` runs
 - THEN the step fails
 
 ## ADDED Requirements
@@ -58,6 +75,7 @@ unknown `$id` on NDJSON log records (one JSON object per line;
 `.jsonl` / `.ndjson` / `{`-leading `.log`). Schema selection
 SHALL use the record's `schema` / `$id` against a registry of
 workspace `**/*schema.json` plus `initializationOptions.schemaPaths`.
+An NDJSON line with no `schema` key SHALL produce no diagnostic.
 The LSP SHALL map each `ValidationIssue.path` onto a text range
 via a position-preserving JSON parser; unresolved paths SHALL
 use the whole line. The LSP SHALL NOT drop unknown fields from
@@ -79,3 +97,9 @@ NOT import them. A VS Code extension SHALL NOT be required for v1.
 - AND an NDJSON line `{ "schema": "myscape/v2" }`
 - WHEN the document is validated
 - THEN one diagnostic names `myscape/v2`
+
+#### Scenario: Untyped line
+
+- GIVEN an NDJSON line `{ "msg": "hello" }` with no `schema` key
+- WHEN the document is validated
+- THEN there is no diagnostic on that line

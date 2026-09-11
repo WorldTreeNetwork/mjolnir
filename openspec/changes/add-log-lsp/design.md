@@ -1,6 +1,6 @@
 # Design — add-log-lsp
 
-**Status:** Active (architecture amend after Fable send-back 2026-09-10).
+**Status:** Active (architecture amend after Fable re-advise send-back 2026-09-10).
 **Change:** `add-log-lsp`
 **Bead:** `mjolnir-vzo6`
 **Capability:** `typed-log` (ADR 0010 D4)
@@ -41,6 +41,9 @@ be resolved, the diagnostic range is the whole line.
 `**/*schema.json` and (2) `initializationOptions.schemaPaths`.
 A record's `schema` field selects the schema. Unknown `$id`
 yields one diagnostic (`no schema for <id>`), not silence.
+An NDJSON line with no `schema` key is not a typed-log record
+(living spec: `:app_log` iff `schema`); the LSP emits no
+diagnostic for it.
 
 **Where LSP deps live.** Bin stays in `packages/log` so the LSP
 cannot be older than the checker it wraps. `vscode-languageserver`
@@ -58,22 +61,38 @@ type. This is ADR 0010 D4 for v1 without a TypeScript-compiler
 generator. Rejected: `ts-json-schema-generator` (heavy, and the
 first consumer's truth is already a const object).
 
+**Generator ownership.** `mjolnir-log` exports `generateSchema`
+(and a derived-type helper). Apps supply only the const object.
+Closed-world enforcement and envelope merge live in the library
+once. Act may ship that as an export plus a thin app script or
+as a `mjolnir-log generate --check` bin; the library owns the
+logic either way. Each app writing its own merge is a second
+checker.
+
 **Envelope.** `mjolnir-log` exports the pino envelope fragment
-`createLogger` actually stamps: `level`, `time`, `schema`, `app`,
-`name`, `msg` (`packages/log/src/index.ts` sets `name` and
-`base: { schema, app }`; pino adds `level` / `time` / `msg`).
+`createLogger` actually stamps (`packages/log/src/index.ts` sets
+`name` and `base: { schema, app }`; pino adds `level` / `time` /
+`msg`; pino's default serializer emits `err` on `log.error(err)`):
+
+- required: `level` (number), `time` (string), `schema` (string),
+  `app` (string), `name` (string)
+- optional: `msg` (string), `err` (`type: object`)
+- generated schema always `additionalProperties: false`
+- an app key that collides with an envelope key fails generate
+
 Generated schema = envelope ∪ app fields. Apps never hand-list
-pino keys. Myscape's current `schema.json` omits `name`; with
-`additionalProperties: false` every emitted record fails today.
+pino keys. Myscape's current `types.ts` hand-lists five envelope
+keys and omits `name`; the rewrite is bead `mjolnir-4o4s`
+(`add-myscape-log-generate`; `mjolnir-asmx` stays closed).
 
 **`$id`.** One const is both the object's `$id` and the value
 passed to `createLogger({ schema })`. Generate copies `$id`; it
 does not take a second flag.
 
-**Drift gate.** `bun generate --check` (or the package test)
-fails when the committed `schema.json` differs from generated
-output. A generate step that only writes is the hand copy with
-a script.
+**Drift gate.** Library-owned `generate --check` (or
+`assertSchemaMatches`) fails when the committed `schema.json`
+differs from generated output. A generate step that only writes
+is the hand copy with a script.
 
 Unknown fields stay on the wire and are diagnostics, matching
 `validateRecord`.
@@ -88,10 +107,12 @@ subset; do not invent a second type checker
 one supports a construct the other does not).
 
 **Closed world.** Generate fails on any construct outside what
-`validateRecord` checks. The checkable subset today is `$id`,
-`type` ∈ {`string`, `number`, `boolean`, `object`}, `properties`,
-`required`, `additionalProperties`. `enum`, `items`, `$ref`,
-`anyOf` / `oneOf` / `allOf`, and `type: array` (until the
-validator grows) fail the bun step. `validateRecord` treats an
-unknown `type` as an issue, not a pass (`schema.ts` currently
-returns `true` for anything else).
+`validateRecord` checks. The checkable subset today is root-level
+`$id`, `type` ∈ {`string`, `number`, `boolean`, `object`},
+`properties`, `required`, `additionalProperties`. Nested
+`properties` fail generate until `validateRecord` recurses.
+`enum`, `items`, `$ref`, `anyOf` / `oneOf` / `allOf`, and
+`type: array` (until the validator grows) fail the bun step.
+`validateRecord` treats an unknown `type` as an issue, not a
+pass (`schema.ts:35` currently returns `true` for anything else;
+act flips that with a test).
