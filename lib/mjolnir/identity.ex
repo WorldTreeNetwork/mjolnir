@@ -10,7 +10,12 @@ defmodule Mjolnir.Identity do
   See `openspec/changes/add-buzz-local-runtime` (mjolnir-1pe).
   """
 
-  @type t :: %{private_key_nsec: String.t(), relay_url: String.t()}
+  @type t :: %{
+          private_key_nsec: String.t(),
+          relay_url: String.t(),
+          auth_tag: String.t() | nil,
+          env: %{optional(String.t()) => String.t()}
+        }
 
   @opaque_key "identity"
   @store_kind "vms"
@@ -27,6 +32,8 @@ defmodule Mjolnir.Identity do
   def parse_params(params) when is_map(params) do
     nsec = Map.get(params, "private_key_nsec") || Map.get(params, :private_key_nsec)
     url = Map.get(params, "relay_url") || Map.get(params, :relay_url)
+    auth_tag = optional_string(params, "auth_tag")
+    env = optional_env(params)
 
     cond do
       not is_binary(nsec) or not is_binary(url) ->
@@ -38,8 +45,20 @@ defmodule Mjolnir.Identity do
       not clean_string?(nsec) or not clean_string?(url) ->
         {:error, "identity values must not contain control characters"}
 
+      match?({:error, _}, auth_tag) ->
+        auth_tag
+
+      match?({:error, _}, env) ->
+        env
+
       true ->
-        {:ok, %{private_key_nsec: nsec, relay_url: url}}
+        {:ok,
+         %{
+           private_key_nsec: nsec,
+           relay_url: url,
+           auth_tag: elem(auth_tag, 1),
+           env: elem(env, 1)
+         }}
     end
   end
 
@@ -94,8 +113,23 @@ defmodule Mjolnir.Identity do
   Keys only — callers that log should use `entry_keys/1`, not this map.
   """
   @spec env_entries(t()) :: %{String.t() => String.t()}
-  def env_entries(%{private_key_nsec: nsec, relay_url: url}) do
-    %{"BUZZ_PRIVATE_KEY" => nsec, "BUZZ_RELAY_URL" => url}
+  def env_entries(%{private_key_nsec: nsec, relay_url: url} = identity) do
+    base = %{
+      "BUZZ_PRIVATE_KEY" => nsec,
+      "NOSTR_PRIVATE_KEY" => nsec,
+      "BUZZ_RELAY_URL" => url
+    }
+
+    base =
+      case identity[:auth_tag] || identity["auth_tag"] do
+        tag when is_binary(tag) and tag != "" -> Map.put(base, "BUZZ_AUTH_TAG", tag)
+        _ -> base
+      end
+
+    extra = identity[:env] || identity["env"] || %{}
+    # Extra env must not clobber identity keys. Those come from the top-level
+    # payload, never from a nested map (Buzz reserved-key rule).
+    Map.merge(base, Map.drop(extra, Map.keys(base)))
   end
 
   @doc "Key names only, for logs."
@@ -118,6 +152,64 @@ defmodule Mjolnir.Identity do
 
   defp clean_string?(s) do
     not String.contains?(s, ["\0", "\n", "\r"])
+  end
+
+  defp optional_string(params, name) do
+    atom = extra_atom(name)
+
+    case Map.get(params, name) || (atom && Map.get(params, atom)) do
+      nil ->
+        {:ok, nil}
+
+      "" ->
+        {:ok, nil}
+
+      value when is_binary(value) ->
+        if clean_string?(value) do
+          {:ok, value}
+        else
+          {:error, "identity.#{name} must not contain control characters"}
+        end
+
+      _ ->
+        {:error, "identity.#{name} must be a string"}
+    end
+  end
+
+  defp extra_atom("auth_tag"), do: :auth_tag
+  defp extra_atom(_), do: nil
+
+  defp optional_env(params) do
+    case Map.get(params, "env") || Map.get(params, :env) do
+      nil ->
+        {:ok, %{}}
+
+      env when is_map(env) ->
+        Enum.reduce_while(env, {:ok, %{}}, fn {k, v}, {:ok, acc} ->
+          key = to_string(k)
+
+          cond do
+            not is_binary(v) ->
+              {:halt, {:error, "identity.env values must be strings"}}
+
+            not posix_env_name?(key) ->
+              {:halt, {:error, "identity.env key #{inspect(key)} is not a POSIX env name"}}
+
+            not clean_string?(v) or String.contains?(v, "\t") ->
+              {:halt, {:error, "identity.env #{key} must not contain control characters"}}
+
+            true ->
+              {:cont, {:ok, Map.put(acc, key, v)}}
+          end
+        end)
+
+      _ ->
+        {:error, "identity.env must be an object"}
+    end
+  end
+
+  defp posix_env_name?(key) do
+    key != "" and not String.match?(key, ~r/^[0-9]/) and String.match?(key, ~r/\A[A-Za-z0-9_]+\z/)
   end
 
   defp artifact_text(blob) when is_binary(blob), do: blob
