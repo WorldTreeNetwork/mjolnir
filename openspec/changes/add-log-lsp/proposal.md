@@ -12,18 +12,22 @@ advise accept.
 
 ADR 0010 D4 says pretty and LSP share JSON Schema generated from
 app TypeScript types. `validateRecord` shipped in `mjolnir-log`.
-Myscape already has a hand-copied `schema.json`. There is no
-editor protocol, and no bun generate step, so diagnostics and
-tokens cannot stay honest with the type file.
+Myscape already has a hand-copied `schema.json` that omits pino
+`name`, so every emitted record fails validation today. There is
+no editor protocol, and no bun generate step, so diagnostics
+cannot stay honest with the type file.
 
 ## What
 
-- MODIFIED `typed-log`: bun generate step (app TS types → JSON
-  Schema) is the schema source; LSP consumes that schema.
+- MODIFIED `typed-log`: bun generate step (app const schema
+  object ∪ library envelope → JSON Schema) is the schema source;
+  closed-world generate; `--check` drift gate; LSP consumes that
+  schema.
 - ADDED: stdio language server `mjolnir-log-lsp` in `packages/log`
-  (`vscode-languageserver`). Diagnostics on JSON records (unknown
-  field, type mismatch, missing required). Schema id / `$id` on
-  the record selects the schema. Unknown fields kept and flagged.
+  (`vscode-languageserver` optionalDependency). Diagnostics on
+  NDJSON records (unknown field, type mismatch, missing required,
+  unknown `$id`). Schema id / `$id` on the record selects the
+  schema. Unknown fields kept and flagged.
 - VS Code `.vsix` is a later thin client, not this change.
 
 ## Impact
@@ -36,8 +40,8 @@ tokens cannot stay honest with the type file.
 Editor (neovim / zed / VS Code via generic LSP). Developer opens a
 JSON log record or generated `schema.json`.
 
-- **Working (after later act)** — unknown field and type mismatch
-  are diagnostics; hover/tokens from schema types.
+- **Working (after later act)** — unknown field, type mismatch,
+  missing required, and unknown `$id` are diagnostics on NDJSON.
 - **Empty** — no `mjolnir-log-lsp` binary; myscape `schema.json` is
   hand-duplicated from `types.ts`.
 - **Failed (today)** — `validateRecord` only at runtime in tests /
