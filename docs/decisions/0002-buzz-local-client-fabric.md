@@ -3,10 +3,11 @@
 **Status:** Accepted (2026-08-16)
 **Change:** [`add-buzz-local-client`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/proposal.md) (folded 2026-08-16)
 **Living spec:** [`openspec/specs/buzz-local-client/spec.md`](../../openspec/specs/buzz-local-client/spec.md)
-**Remaining:** [`add-buzz-local-runtime`](../../openspec/changes/add-buzz-local-runtime/proposal.md)
-(facade / wake producer / admit crate). B0 hive is
+**Remaining:** B0 hive is
 [`add-buzz-relay`](../../openspec/changes/add-buzz-relay/proposal.md)
-(`wss://buzz.identikey.me`, live 2026-09-10).
+(`wss://buzz.identikey.me`, live 2026-09-10). Runtime facade / wake
+producer / admit crate folded 2026-09-10
+([`add-buzz-local-runtime`](../../openspec/changes/archive/2026-09-10-add-buzz-local-runtime/proposal.md)).
 **Epic:** `mjolnir-e70`
 
 Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md`](../../openspec/changes/archive/2026-08-16-add-buzz-local-client/design.md).
@@ -39,8 +40,10 @@ Full argument: [`openspec/changes/archive/2026-08-16-add-buzz-local-client/desig
 Built (living spec): fail-closed `Mjolnir.Admit` shape-check, `:never`
 refuses `DormantRegistry`, guests stay off the cluster, sidecar is
 catalog-only, nsec is an opaque SecretStore blob injected over vsock
-(`mjolnir-1pe`, 2026-08-17).
+(`mjolnir-1pe`, 2026-08-17), Nostr protocol facade as named wake
+producer (`Mjolnir.Buzz.Facade`), portable `identikey-admit` crate
+(identikey-protocol `093ceb1`; no NIF; `Mjolnir.Admit` remains the v1
+Elixir evaluator).
 
-Remaining implementation is `add-buzz-local-runtime` (facade, wake
-producer, admit crate). Relay is `add-buzz-relay`. Do not implement
-from this ADR.
+Remaining: B0 hive / NIP-OA is `add-buzz-relay`. Matrix ingress and
+NIF linking are not built. Do not implement from this ADR.

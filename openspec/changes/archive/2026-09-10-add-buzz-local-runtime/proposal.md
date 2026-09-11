@@ -1,6 +1,10 @@
 # add-buzz-local-runtime
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-09-10 → `openspec/specs/buzz-local-client/spec.md`.
+> Built SHALLs only (Nostr facade, wake producer, identikey-admit crate).
+> Matrix ingress, NIF linking, and `@base/dev` were not imported.
 
 Activated 2026-09-10. Bead `mjolnir-e70.3`. Split: B0 hive is
 `add-buzz-relay` (`mjolnir-gti`) — **live**.

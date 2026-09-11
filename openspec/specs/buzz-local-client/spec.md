@@ -2,10 +2,11 @@
 
 What is built. Folded from
 [`add-buzz-local-client`](../../changes/archive/2026-08-16-add-buzz-local-client/proposal.md)
-on 2026-08-16, and from `mjolnir-1pe` on 2026-08-17. Decisions that
-are not yet code live in
-[`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md)
-and `openspec/changes/add-buzz-local-runtime/`.
+on 2026-08-16, from `mjolnir-1pe` on 2026-08-17, and from
+[`add-buzz-local-runtime`](../../changes/archive/2026-09-10-add-buzz-local-runtime/proposal.md)
+on 2026-09-10. Decisions live in
+[`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md).
+B0 hive / NIP-OA is `add-buzz-relay`. Catalog names are ADR 0009.
 
 ## Purpose
 
@@ -13,7 +14,10 @@ Request-path thaws are fail-closed. Buzz bodies with `restart_policy:
 never` cannot enter `DormantRegistry`. Guests stay off the Erlang
 cluster. The host Postgres sidecar is a catalog, not a tenant hotel.
 The agent nsec is an opaque SecretStore blob, not a field on the VM
-record.
+record. Nostr enters through `Mjolnir.Buzz.Facade`; that ingress is
+the named wake producer; last hop is a conformant Nostr event.
+`identikey-admit` is the portable protocol crate; `Mjolnir.Admit`
+remains the v1 Elixir evaluator.
 
 ## Requirements
 
@@ -116,3 +120,65 @@ the `inject_identity` guest agent to be deployed.
 - WHEN the StateStore running record, list/info API bodies, `Inspect`
   of the VM, and logs from `Identity.put/2` are searched for the nsec
 - THEN there are no matches
+
+### Requirement: Protocol facade (Nostr)
+
+External Nostr traffic SHALL enter the host through
+`Mjolnir.Buzz.Facade` / `Mjolnir.Buzz.Nostr`, which translates it into
+the internal OTP message-passing architecture (mailboxes). When an
+internal message is delivered into a Buzz body, the last hop SHALL
+translate it back into a conformant Nostr event for `buzz-acp`. The
+host SHALL NOT persist Buzz event kinds as a substitute event log;
+the relay remains the log. Further protocol adapters SHALL share
+`Facade.ingest_internal/2`, not a second thaw path.
+
+#### Scenario: Running body, mention stays on Nostr
+
+- GIVEN a running Buzz-managed agent VM whose harness is connected to
+  the relay
+- WHEN a human posts a channel mention in the Buzz desktop
+- THEN the desktop and `buzz-acp` exchange that event with the relay
+  over Nostr
+- AND the host mailbox is not required for those bytes to land
+
+#### Scenario: Dormant body, Nostr becomes an internal wake
+
+- GIVEN a dormant Buzz-managed VM
+- WHEN a mention (or emulated Nostr event) arrives at the host ingress
+- THEN the facade translates it to an internal message
+- AND a proxy decides whether that message is an admitted wake
+- AND if delivered, the last hop presents a conformant Nostr event to
+  the guest harness
+
+### Requirement: Wake producer is the protocol ingress
+
+For Buzz, the producer of a wake SHALL be incoming traffic on the
+Nostr ingress after translation by the protocol facade
+(`Mjolnir.Buzz.Nostr.producer/0` is `"nostr"`). The producer SHALL NOT
+be the guest, Reconcile, or an implicit desktop-only side channel.
+
+#### Scenario: Named producer
+
+- GIVEN a dormant Buzz body and a mention on the relay
+- WHEN a wake occurs
+- THEN the host Nostr ingress produced the internal message that
+  admission considered
+- AND no other unnamed component is required for that production
+
+### Requirement: Protocol versus host policy
+
+`identikey-protocol` crate `identikey-admit` SHALL own the portable
+admission protocol: envelope format, attestation shape (`vm_id` plus
+non-negative integer `epoch`), verdict vocabulary (deny / drop /
+reply-here / deliver), and pure validators. That crate SHALL be
+Apache-2.0 OR BSD-2-Clause-Patent and SHALL NOT depend on
+`identikey-core`. Mjolnir SHALL own lifecycle policy.
+`Mjolnir.Admit` SHALL remain the v1 Elixir evaluator (shape-check;
+`verdict/2` is `:deny` | `:deliver`). This slice SHALL NOT link a
+Rustler NIF.
+
+#### Scenario: A second embedder can link the protocol
+
+- GIVEN the admit protocol published from `identikey-protocol`
+- WHEN a gateway plugin or CDN origin adapter depends on it
+- THEN it does not pull `identikey-core` or an AGPL obligation

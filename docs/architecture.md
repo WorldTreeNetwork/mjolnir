@@ -753,8 +753,11 @@ The local Buzz client fabric (living spec
 [`0002`](decisions/0002-buzz-local-client-fabric.md)) takes the first cut:
 OTP mailboxes on the host are the body-control queue; Nostr stays the Buzz
 event log; admission happens before thaw; the agent nsec is an opaque
-SecretStore blob, not a VM-record field. Remaining runtime SHALLs live in
-`add-buzz-local-runtime`. Channel mobility below is still later.
+SecretStore blob, not a VM-record field. Host Nostr facade
+(`Mjolnir.Buzz.Facade`) is the named wake producer; last hop is
+conformant Nostr; `identikey-admit` is the portable crate
+(`add-buzz-local-runtime` folded 2026-09-10). Channel mobility below
+is still later.
 
 Host Postgres as a **declared tenant hotel** (Hypersigil first) is ADR
 [`0005`](decisions/0005-host-sidecar-tenant-hotel.md), change
