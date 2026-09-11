@@ -27,15 +27,14 @@ Full argument:
    diagnostics via `validateRecord`; `vscode-languageserver` +
    `jsonc-parser` are optionalDependencies, not imported by the
    logger entry).
-6. **Code is later nodes.** `add-log-emit`, `add-log-ingest`,
-   `add-log-subscribe`, `add-log-lsp`, `add-myscape-log-types`.
+6. **Code is later nodes.** Emit/ingest/subscribe folded.
+   `add-log-lsp` folded 2026-09-10 (`mjolnir-log-lsp` +
+   `generateSchema`). Myscape rewrite is `mjolnir-4o4s`.
 
 ## Built vs remaining
 
-Built: guest forwarder + RFC 3164 parser + Router/EventBus.
+Built: `mjolnir-log` (emit, pretty, syslog), host UDP + guest ch2
+ingest, EventBus subscribe, `generateSchema`, `mjolnir-log-lsp`.
 
-Not built: ch2 Listener registration, multi-VM sender id, host
-UDP, `mjolnir-log`.
-
-Remaining: the five implement landings. This change folds the ADR
-only.
+Remaining: Myscape const-object rewrite (`mjolnir-4o4s`). VS Code
+`.vsix` is a later thin client.

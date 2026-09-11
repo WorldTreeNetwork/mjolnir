@@ -719,8 +719,9 @@ Redis `:6379` (provisioned `REDIS_URL`, ADR
 Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
 `:app_log`) are ADR
 [`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2
-stays; host ingest is UDP. Living spec lands with implement
-changes, not the architecture fold.
+stays; host ingest is UDP. Living spec
+[`typed-log`](../openspec/specs/typed-log/spec.md) (`add-log-lsp`
+folded 2026-09-10: `generateSchema` + `mjolnir-log-lsp`).
 
 Deploy secrets (`mj secrets set|ls|unset`) merge
 `/var/lib/mjolnir/deploy/secrets/<slug>.json` at service-VM spawn.

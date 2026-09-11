@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-09-10 / add-log-lsp:** pino `options.name` stamps a `name` key the first consumer's schema omitted, so `additionalProperties: false` failed every record. Envelope is library-owned. npm/bun install `optionalDependencies` by default — the win is "logger entry does not import LSP deps", not "apps do not download them".
+
 - **2026-09-10 / add-typed-log:** Bun/Node have no AF_UNIX datagram API. Host syslog ingest is UDP (loopback / `10.200.0.1`), not unix `/dev/log`. Guest forwarder ≠ host ch2 registration. Fold living `typed-log` only after emit+ingest landed.
 
 - **2026-08-25 / add-host-sidecar-redis:** Live `rclone` of Redis 7 `appendonlydir` is not restore-safe (torn incr). `redis-cli --rdb` is consistent as RDB, but `appendonly yes` loads AOF on start and ignores RDB; `CONFIG` was renamed empty so restore cannot flip AOF off. Host timer is stop → copy `/var/lib/mjolnir/redis/` → start. `mix mjolnir.redis.ensure` must not `app.start` (a second OTP app on the live host). Mix task module is `Mjolnir.Redis.Ensure`. No `just deploy-redis`.

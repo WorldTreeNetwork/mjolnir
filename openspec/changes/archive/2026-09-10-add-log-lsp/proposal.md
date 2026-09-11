@@ -1,6 +1,8 @@
 # add-log-lsp
 
 > **ACTIVE BUILD**
+>
+> Folded 2026-09-10 → `openspec/specs/typed-log/spec.md`.
 
 Activated 2026-09-10. Bead `mjolnir-vzo6`. Architecture for a
 schema-driven language server on typed-log. Code is `act` after
