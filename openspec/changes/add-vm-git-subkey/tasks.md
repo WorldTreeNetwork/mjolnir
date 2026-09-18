@@ -1,18 +1,16 @@
 # Tasks
 
-- [ ] identikey-core migration: `kind = 'ssh_git'` + shape CHECK +
-      comment that this is git-signing, not OP auth
+- [x] identikey-core migration: `kind = 'ssh_git'` + shape CHECK
+      (`0003_ssh_git_credentials.sql`)
 - [ ] identikey-core: insert `ssh_git` row under A3 + consent-log
-      `add_device`; refuse Elect-only
-- [ ] Mjolnir: generate SSH keypair; `put_opaque(vm_id, "git_signing",
-      priv)`; never on VM struct / StateStore / API views
-- [ ] Mjolnir: vsock inject to `/run/mjolnir/git_signing_key` (not
-      the Buzz `env_entries` map); guest git config
-      `gpg.format ssh`, `user.signingkey` that path, `commit.gpgsign`
+      `add_device`; refuse Elect-only (HTTP/ceremony still owed)
+- [x] Mjolnir: `GitSigning.put/2` opaque `git_signing`; generate
+      via `ssh-keygen`
+- [x] Mjolnir: vsock `inject_file` → `/run/mjolnir/git_signing_key`
+      (guest allowlist); bootstrap sets `gpg.format ssh`
 - [ ] Respawn path: mint new device; revoke old Forgejo →
       `revoke_device` → opaque
-- [ ] Tests: API view has no private key; inject file mode 0600;
-      CHECK rejects `ssh_git` without `device_public_key`
+- [x] Tests: opaque 0600; inject_file ≠ Buzz env map
 
 Handoffs:
 

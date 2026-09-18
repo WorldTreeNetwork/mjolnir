@@ -1298,6 +1298,30 @@ async fn handle_request(
             }
         }
         #[cfg(feature = "full")]
+        VsockRequest::InjectFile { id, name, contents } => {
+            info!("InjectFile: name={}", name);
+            let result = if name == "git_signing_key" {
+                crate::secrets::write_git_signing_key(&contents)
+            } else {
+                Err(format!("refused inject_file name {name}"))
+            };
+            match result {
+                Ok(()) => VsockResponse::InjectFileResponse {
+                    id,
+                    ok: true,
+                    error: None,
+                },
+                Err(e) => {
+                    warn!("InjectFile failed: {}", e);
+                    VsockResponse::InjectFileResponse {
+                        id,
+                        ok: false,
+                        error: Some(e),
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "full")]
         VsockRequest::SuspendSecrets { id } => {
             info!("SuspendSecrets");
             match crate::secrets::suspend() {

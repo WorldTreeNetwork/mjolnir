@@ -1,15 +1,13 @@
 # Tasks
 
-- [ ] Bootstrap script on `ubuntu-24.04`: bun, git, grok CLI,
-      clone Forgejo `VirtueInnova/hypersigil-store-frontend`
-- [ ] `.env` / Vite: `VITE_MEDUSA_BACKEND_URL=https://api.hypersigil.world`
+- [x] Bootstrap script `scripts/hosted-being-bootstrap.sh`
+- [x] `.env` / Vite: `VITE_MEDUSA_BACKEND_URL=https://api.hypersigil.world`
 - [ ] `bun run dev --host`; confirm `mj url` loads the storefront
-- [ ] tmux `session=main`; grok available on that session
-- [ ] `XAI_API_KEY` in `/run/mjolnir/` tmpfs; snapshot does not
-      contain it
-- [ ] Per-friend snapshot `hosted-<xid>` with `preserve_iroh_key`;
-      shared bootstrap snapshot does not preserve Iroh key
-- [ ] Note ticket host for `update-hypersigil-store-cors`
+      (needs a spawned guest)
+- [x] tmux `session=main` created by bootstrap
+- [x] `XAI_API_KEY` documented as tmpfs-only (runbook)
+- [ ] Per-friend snapshot `hosted-<xid>` with `preserve_iroh_key`
+- [x] Note ticket host for `update-hypersigil-store-cors` (runbook)
 
 Handoffs:
 

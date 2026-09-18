@@ -2010,6 +2010,17 @@ defmodule Mjolnir.VM do
             Logger.warning("Agent identity inject failed for VM #{state.id}: #{inspect(reason)}")
         end
 
+        case maybe_inject_git_signing(state, vsock_path) do
+          :ok ->
+            Logger.info("Git signing key injected for VM #{state.id}")
+
+          :skipped ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Git signing inject failed for VM #{state.id}: #{inspect(reason)}")
+        end
+
         # Tell guest agent whether to start Iroh. Skip the reconfigure in resume
         # mode if the guest already reports iroh ready — this avoids restarting
         # the iroh daemon and tearing down an otherwise-working endpoint.
@@ -2780,6 +2791,33 @@ defmodule Mjolnir.VM do
 
           {:ok, _other} ->
             {:error, :unexpected_identity_response}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :not_found ->
+        :skipped
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_inject_git_signing(%__MODULE__{id: vm_id}, vsock_path) do
+    case Mjolnir.GitSigning.get(vm_id) do
+      {:ok, pem} ->
+        request = Mjolnir.GitSigning.inject_request(pem)
+
+        case vsock_request(vsock_path, request, 10_000) do
+          {:ok, %{"ok" => true}} ->
+            :ok
+
+          {:ok, %{"ok" => false, "error" => err}} ->
+            {:error, {:git_signing_inject_rejected, err}}
+
+          {:ok, _other} ->
+            {:error, :unexpected_git_signing_response}
 
           {:error, reason} ->
             {:error, reason}

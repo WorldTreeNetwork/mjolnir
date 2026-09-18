@@ -202,8 +202,10 @@ config :mjolnir, :auth,
   bypass_localhost: false,
   issuer: "https://connect.identikey.io/realms/identikey",
   audience: "mjolnir",
-  # Public client `mj login` already uses. No new Keycloak client required;
-  # device-code + PKCE is registered, authorization-code redirect_uris are not.
-  client_id: "mjolnir-cli"
+  # Hosted being `/term` uses mjolnir-term (public PKCE) against
+  # auth.identikey.me when MJOLNIR_AUTH_ISSUER is set. Default issuer stays
+  # Keycloak so existing CLI JWTs still verify until that cutover.
+  client_id: "mjolnir-term",
+  redirect_uri: "https://api.vm.worldtree.network/auth/callback"
 
 import_config "#{config_env()}.exs"

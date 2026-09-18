@@ -124,44 +124,53 @@ defmodule Mjolnir.API.Router do
     json(conn, 200, %{status: "ok"})
   end
 
-  # IdentiKey Connect login (device-code, same client as `mj login`).
+  # Passkey login at auth.identikey.me (authorization-code + PKCE).
   get "/auth/login" do
     next = Mjolnir.Auth.Login.safe_next(conn.query_params["next"])
 
     case Mjolnir.Auth.Login.begin(next) do
-      {:ok, started} ->
+      {:ok, url} ->
         conn
-        |> put_resp_content_type("text/html; charset=utf-8")
-        |> send_resp(200, Mjolnir.API.LoginPage.render(started))
+        |> put_resp_header("location", url)
+        |> send_resp(302, "")
 
       {:error, reason} ->
         Logger.error("IdentiKey login failed to start: #{inspect(reason)}")
 
         json(conn, 502, %{
           error: "identikey_unavailable",
-          message: "IdentiKey Connect did not start a login"
+          message: "IdentiKey did not start a login"
         })
     end
   end
 
-  get "/auth/wait/:id" do
-    case Mjolnir.Auth.Login.poll(id) do
-      {:ok, token, next} ->
-        conn
-        |> put_resp_cookie(Mjolnir.API.Auth.term_cookie(), token,
-          http_only: true,
-          secure: true,
-          same_site: "Lax",
-          path: "/",
-          max_age: 12 * 60 * 60
-        )
-        |> json(200, %{ok: true, next: next})
+  get "/auth/callback" do
+    params = conn.query_params
+    code = params["code"]
+    state = params["state"]
 
-      :pending ->
-        json(conn, 200, %{ok: false, pending: true})
+    cond do
+      not is_binary(code) or not is_binary(state) ->
+        json(conn, 400, %{error: "invalid_callback"})
 
-      {:error, reason} ->
-        json(conn, 200, %{ok: false, error: to_string(reason)})
+      true ->
+        case Mjolnir.Auth.Login.complete(code, state) do
+          {:ok, token, next} ->
+            conn
+            |> put_resp_cookie(Mjolnir.API.Auth.term_cookie(), token,
+              http_only: true,
+              secure: true,
+              same_site: "Lax",
+              path: "/",
+              max_age: 12 * 60 * 60
+            )
+            |> put_resp_header("location", next)
+            |> send_resp(302, "")
+
+          {:error, reason} ->
+            Logger.error("IdentiKey callback failed: #{inspect(reason)}")
+            json(conn, 401, %{error: "login_failed"})
+        end
     end
   end
 
@@ -1876,7 +1885,9 @@ defmodule Mjolnir.API.Router do
     ]
 
     opts =
-      if is_binary(snap) and snap != "", do: Keyword.put(opts, :release_snapshot, snap), else: opts
+      if is_binary(snap) and snap != "",
+        do: Keyword.put(opts, :release_snapshot, snap),
+        else: opts
 
     case Mjolnir.API.Adopt.adopt(app, vm_id, port, opts) do
       {:ok, entry} ->

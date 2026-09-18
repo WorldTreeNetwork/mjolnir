@@ -169,6 +169,14 @@ pub enum VsockRequest {
         id: String,
         entries: std::collections::HashMap<String, String>,
     },
+    /// Write `/run/mjolnir/git_signing_key` (tmpfs). Not the Buzz env map.
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_file")]
+    InjectFile {
+        id: String,
+        name: String,
+        contents: String,
+    },
     /// Wipe the LUKS volume key from kernel RAM before a memory snapshot.
     /// No-op (ok, suspended=false) when no mapper is open.
     #[cfg(feature = "full")]
@@ -251,6 +259,14 @@ pub enum VsockResponse {
     #[cfg(feature = "full")]
     #[serde(rename = "inject_identity_response")]
     InjectIdentityResponse {
+        id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[cfg(feature = "full")]
+    #[serde(rename = "inject_file_response")]
+    InjectFileResponse {
         id: String,
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]

@@ -24,6 +24,11 @@ defmodule Mjolnir.Auth.LoginTest do
       assert {:ok, "jwt-here"} = Oidc.classify_token(%{"access_token" => "jwt-here"})
     end
 
+    test "id_token is preferred for the code flow" do
+      assert {:ok, "id.jwt"} =
+               Oidc.classify_token(%{"id_token" => "id.jwt", "access_token" => "at"})
+    end
+
     test "authorization_pending is pending" do
       assert :pending = Oidc.classify_token(%{"error" => "authorization_pending"})
     end

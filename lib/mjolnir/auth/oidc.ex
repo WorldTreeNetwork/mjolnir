@@ -1,18 +1,21 @@
 defmodule Mjolnir.Auth.Oidc do
   @moduledoc """
-  Talks to IdentiKey Connect (Keycloak) using the same public client
-  `mj login` uses (`mjolnir-cli`).
+  OIDC client for `/term` login.
 
-  Authorization-code is blocked today: that client has no redirect_uri
-  for `api.vm.worldtree.network`. Device-code + PKCE is already registered
-  and is what the CLI uses, so the browser login uses it too.
+  Authorization-code + PKCE against the configured issuer (hosted being:
+  `https://auth.identikey.me`). Device-code remains for the Keycloak-era
+  `mj login` client and is not used by `/auth/login`.
   """
 
-  @default_client_id "mjolnir-cli"
-  @scopes "openid offline_access"
+  @default_client_id "mjolnir-term"
+  @scopes "openid"
 
-  @doc "Classify a token-endpoint JSON body. Pure, so tests do not hit Keycloak."
+  @doc "Classify a token-endpoint JSON body. Pure, so tests do not hit the OP."
   @spec classify_token(map()) :: {:ok, String.t()} | :pending | :slow_down | {:error, term()}
+  def classify_token(%{"id_token" => token}) when is_binary(token) and token != "" do
+    {:ok, token}
+  end
+
   def classify_token(%{"access_token" => token}) when is_binary(token) and token != "" do
     {:ok, token}
   end
@@ -22,7 +25,7 @@ defmodule Mjolnir.Auth.Oidc do
   def classify_token(%{"error" => err}), do: {:error, {:oidc_error, err}}
   def classify_token(other), do: {:error, {:oidc_unexpected, other}}
 
-  @doc "PKCE S256 pair. Verifier is sent to the token endpoint; challenge to device-auth."
+  @doc "PKCE S256 pair. Verifier is sent to the token endpoint; challenge to /authorize."
   @spec pkce() :: {String.t(), String.t()}
   def pkce do
     verifier = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
@@ -41,11 +44,57 @@ defmodule Mjolnir.Auth.Oidc do
     Application.get_env(:mjolnir, :auth, [])[:issuer]
   end
 
+  @spec redirect_uri() :: String.t()
+  def redirect_uri do
+    Application.get_env(:mjolnir, :auth, [])
+    |> Keyword.get(:redirect_uri, "https://api.vm.worldtree.network/auth/callback")
+  end
+
+  @doc "Build the OP `/authorize` URL for a public PKCE client."
+  @spec authorize_url(String.t(), String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def authorize_url(state, code_challenge, redirect_uri)
+      when is_binary(state) and is_binary(code_challenge) and is_binary(redirect_uri) do
+    with {:ok, conf} <- discover() do
+      endpoint = conf["authorization_endpoint"]
+
+      query =
+        URI.encode_query(%{
+          "client_id" => client_id(),
+          "response_type" => "code",
+          "scope" => @scopes,
+          "redirect_uri" => redirect_uri,
+          "state" => state,
+          "code_challenge" => code_challenge,
+          "code_challenge_method" => "S256"
+        })
+
+      {:ok, endpoint <> "?" <> query}
+    end
+  end
+
+  @doc "Exchange an authorization code for an ID/access token."
+  @spec exchange_code(String.t(), String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def exchange_code(code, code_verifier, redirect_uri)
+      when is_binary(code) and is_binary(code_verifier) and is_binary(redirect_uri) do
+    with {:ok, conf} <- discover(),
+         {:ok, body} <-
+           post_form(conf["token_endpoint"], %{
+             "grant_type" => "authorization_code",
+             "client_id" => client_id(),
+             "code" => code,
+             "code_verifier" => code_verifier,
+             "redirect_uri" => redirect_uri
+           }) do
+      classify_token(body)
+    end
+  end
+
   @spec start_device(String.t()) :: {:ok, map()} | {:error, term()}
   def start_device(code_challenge) when is_binary(code_challenge) do
     with {:ok, conf} <- discover(),
+         {:ok, endpoint} <- device_endpoint(conf),
          {:ok, body} <-
-           post_form(conf["device_authorization_endpoint"], %{
+           post_form(endpoint, %{
              "client_id" => client_id(),
              "scope" => @scopes,
              "code_challenge" => code_challenge,
@@ -85,6 +134,11 @@ defmodule Mjolnir.Auth.Oidc do
     end
   end
 
+  defp device_endpoint(%{"device_authorization_endpoint" => url}) when is_binary(url),
+    do: {:ok, url}
+
+  defp device_endpoint(_), do: {:error, :no_device_endpoint}
+
   defp discover do
     case issuer() do
       nil ->
@@ -94,7 +148,7 @@ defmodule Mjolnir.Auth.Oidc do
         url = String.trim_trailing(issuer, "/") <> "/.well-known/openid-configuration"
 
         case get_json(url) do
-          {:ok, %{"device_authorization_endpoint" => _, "token_endpoint" => _} = conf} ->
+          {:ok, %{"authorization_endpoint" => _, "token_endpoint" => _} = conf} ->
             {:ok, conf}
 
           {:ok, other} ->
@@ -128,8 +182,6 @@ defmodule Mjolnir.Auth.Oidc do
   end
 
   defp default_http({:post, url, form}) do
-    # Keycloak returns 400 with {"error":"authorization_pending"} while the
-    # user is still on the login page. That is not a transport failure.
     case Req.post(url, form: form, decode_body: true) do
       {:ok, %{body: body}} when is_map(body) -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:http, status, body}}

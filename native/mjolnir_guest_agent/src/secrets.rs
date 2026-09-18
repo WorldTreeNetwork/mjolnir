@@ -28,6 +28,8 @@ pub const SECRETS_ENV_PATH: &str = "/run/mjolnir/secrets.env";
 /// Buzz harness start trigger. Tmpfs. KEY=value (no `export`) for systemd
 /// EnvironmentFile. Group-readable so User=agent can load it.
 pub const IDENTITY_ENV_PATH: &str = "/run/mjolnir/buzz.env";
+/// SSH git-signing private key. Tmpfs. Mode 0600. Never on the rootfs.
+pub const GIT_SIGNING_KEY_PATH: &str = "/run/mjolnir/git_signing_key";
 pub const SECRETS_PROFILE_PATH: &str = "/etc/profile.d/mjolnir-secrets.sh";
 pub const DEFAULT_SECRETS_SIZE_MB: u32 = 32;
 
@@ -620,6 +622,32 @@ pub fn write_identity_env(entries: &HashMap<String, String>) -> Result<(), Strin
     );
 
     info!("Wrote {} identity vars to {}", entries.len(), IDENTITY_ENV_PATH);
+    Ok(())
+}
+
+/// Write the SSH git-signing private key to tmpfs. Contents are never logged.
+pub fn write_git_signing_key(contents: &str) -> Result<(), String> {
+    if contents.is_empty() {
+        return Err("empty git signing key".into());
+    }
+    if let Some(parent) = Path::new(GIT_SIGNING_KEY_PATH).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(GIT_SIGNING_KEY_PATH)
+        .map_err(|e| format!("Failed to write {}: {}", GIT_SIGNING_KEY_PATH, e))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {}", GIT_SIGNING_KEY_PATH, e))?;
+    let _ = std::fs::set_permissions(
+        GIT_SIGNING_KEY_PATH,
+        std::fs::Permissions::from_mode(0o600),
+    );
+    info!("Wrote git signing key to {}", GIT_SIGNING_KEY_PATH);
     Ok(())
 }
 

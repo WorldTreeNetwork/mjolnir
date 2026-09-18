@@ -27,6 +27,18 @@ if issuer = System.get_env("MJOLNIR_AUTH_ISSUER") do
     audience: System.get_env("MJOLNIR_AUTH_AUDIENCE", "mjolnir")
 end
 
+if client_id = System.get_env("MJOLNIR_AUTH_CLIENT_ID") do
+  config :mjolnir, :auth, client_id: client_id
+end
+
+if redirect_uri = System.get_env("MJOLNIR_AUTH_REDIRECT_URI") do
+  config :mjolnir, :auth, redirect_uri: redirect_uri
+end
+
+# Hosted being: MJOLNIR_AUTH_ISSUER=https://auth.identikey.me
+# MJOLNIR_AUTH_CLIENT_ID=mjolnir-term
+# MJOLNIR_AUTH_REDIRECT_URI=https://api.vm.worldtree.network/auth/callback
+
 if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
 end

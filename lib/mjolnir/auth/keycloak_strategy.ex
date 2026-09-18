@@ -23,8 +23,15 @@ defmodule Mjolnir.Auth.KeycloakStrategy do
   use JokenJwks.DefaultStrategyTemplate
 
   def init_opts(opts) do
-    issuer = Keyword.fetch!(opts, :issuer)
-    jwks_url = String.trim_trailing(issuer, "/") <> "/protocol/openid-connect/certs"
+    issuer = Keyword.fetch!(opts, :issuer) |> String.trim_trailing("/")
+
+    jwks_url =
+      Keyword.get(opts, :jwks_url) ||
+        if String.contains?(issuer, "connect.identikey.io") do
+          issuer <> "/protocol/openid-connect/certs"
+        else
+          issuer <> "/.well-known/jwks.json"
+        end
 
     opts
     |> Keyword.put(:jwks_url, jwks_url)
