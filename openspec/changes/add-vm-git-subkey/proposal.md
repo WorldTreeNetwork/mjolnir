@@ -1,6 +1,6 @@
 # add-vm-git-subkey
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-x97p.3`. ADR 0011 Decisions 3 and 7. Fable readvise
 notes: generalize inject; stable guest path; revoke Forgejo →

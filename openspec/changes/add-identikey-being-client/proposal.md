@@ -1,6 +1,6 @@
 # add-identikey-being-client
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-x97p.2`. Steer + ADR 0011: passkey at
 `auth.identikey.me` opens wrug `/term`. grok is not an IdentiKey

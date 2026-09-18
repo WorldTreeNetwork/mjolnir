@@ -1,6 +1,6 @@
 # add-honor-dev-preview
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-x97p.5`. ADR 0011 Decisions 2, 5, 6. Product is a
 **hosted being** (change-id keeps `honor`).
