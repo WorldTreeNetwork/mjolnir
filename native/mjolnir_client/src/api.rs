@@ -749,7 +749,10 @@ pub async fn cmd_snapshot_show(
     println!("Snapshot");
     println!("═══════════════════════════════════════════════════════");
     println!("Name:         {}", m.name);
-    println!("Kind:         {}", m.kind.as_deref().unwrap_or("filesystem"));
+    println!(
+        "Kind:         {}",
+        m.kind.as_deref().unwrap_or("filesystem")
+    );
     println!("Source VM:    {}", m.source_vm_id);
     println!("Created At:    {}", m.created_at);
     println!("Size:         {} MB", size_mb);
@@ -1104,14 +1107,16 @@ pub async fn cmd_doctor_host(
     Ok(())
 }
 
-/// `mj message <id> <json>` — deliver a JSON payload into a VM; wakes a
-/// dormant VM if it is parked.
+/// `mj message [--id <producer-id>] <id> <json>` — deliver a JSON payload
+/// into a VM; wakes a dormant VM if it is parked. A producer `--id` makes
+/// retries duplicate-safe (host 200 `duplicate`).
 pub async fn cmd_message(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     id_or_ticket: &str,
     payload: &str,
+    producer_id: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let payload_value: serde_json::Value =
@@ -1123,10 +1128,15 @@ pub async fn cmd_message(
 
     let id = resolve_vm_id(&client, base, id_or_ticket).await?;
 
+    let mut req_body = serde_json::json!({ "payload": payload_value });
+    if let Some(pid) = producer_id {
+        req_body["id"] = serde_json::Value::String(pid.to_string());
+    }
+
     let body = send_text(
         client
             .post(format!("{}/api/vms/{}/messages", base, &id))
-            .json(&serde_json::json!({ "payload": payload_value })),
+            .json(&req_body),
         "message",
     )
     .await?;
@@ -1134,7 +1144,17 @@ pub async fn cmd_message(
     if json {
         println!("{}", body);
     } else {
-        eprintln!("Accepted message for {}", id);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        let mid = parsed
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let status = parsed
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queued");
+        eprintln!("Accepted message {} for {} ({})", mid, id, status);
     }
     Ok(())
 }

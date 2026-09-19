@@ -195,6 +195,9 @@ enum Command {
         id: String,
         /// JSON payload, e.g. '{"key":"val"}'
         payload: String,
+        /// Producer message id. Same id retried is a host duplicate, not a second turn.
+        #[arg(long = "id")]
+        message_id: Option<String>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -922,9 +925,21 @@ async fn main() {
         Command::Message {
             id,
             payload,
+            message_id,
             api,
             token,
-        } => api::cmd_message(&profile, &api, &token, &id, &payload, json).await,
+        } => {
+            api::cmd_message(
+                &profile,
+                &api,
+                &token,
+                &id,
+                &payload,
+                message_id.as_deref(),
+                json,
+            )
+            .await
+        }
         Command::Doctor {
             id,
             fix,
@@ -1289,5 +1304,54 @@ async fn main() {
     if let Err(e) = result {
         eprintln!("Error: {:?}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn message_producer_id_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "mjolnir",
+            "message",
+            "--id",
+            "turn-1",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            r#"{"type":"turn"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Message {
+                id,
+                payload,
+                message_id,
+                ..
+            } => {
+                assert_eq!(message_id.as_deref(), Some("turn-1"));
+                assert_eq!(id, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+                assert_eq!(payload, r#"{"type":"turn"}"#);
+            }
+            _ => panic!("expected Message"),
+        }
+    }
+
+    #[test]
+    fn message_without_producer_id_parses() {
+        let cli = Cli::try_parse_from([
+            "mjolnir",
+            "message",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            r#"{"type":"turn"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Message { message_id, .. } => {
+                assert_eq!(message_id, None);
+            }
+            _ => panic!("expected Message"),
+        }
     }
 }

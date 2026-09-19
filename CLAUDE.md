@@ -91,6 +91,7 @@ mj reboot <id> | mj restart <id>       # Restart a wedged VM (kill hypervisor â†
 mj url <id>                            # Web gateway URL
 mj connect <id>                        # Interactive PTY (WebSocket); retries on drop (backoff + jitter). --session NAME reattaches tmux. --no-reconnect for one-shot.
 mj message <id> '{"k":"v"}'            # Send a payload in; wakes a dormant VM
+mj message --id turn-1 <id> '{"k":"v"}'  # Retry-safe producer id (second POST is 200 duplicate)
 mj doctor [<id>] [--fix]               # Health probe (no id = API + host); --fix heals
 mj ticket get <id> [--wait]            # Connection ticket (--wait blocks for PTY readiness)
 mj snapshot create <id> <name>         # Checkpoint a VM
