@@ -27,9 +27,10 @@ not the archive.
 
 - Stream PUT/GET. No full-object RAM buffer. Axum
   `DefaultBodyLimit::disable()`. Hash Blake3 incrementally.
-- Host disk sink + LRU cache at `/var/lib/mjolnir/btrfs/@blobs`
-  (BTRFS subvolume). Default cache budget **64 GiB**. Incoming
-  files under `incoming/`, accepted objects under `objects/`.
+- Host disk sink + LRU cache at `/var/lib/mjolnir/blobs`
+  (**outside** `btrfs_root` — snapshots must not pin cache extents).
+  Default cache budget **64 GiB**. Incoming files under
+  `incoming/`, accepted objects under `objects/`.
 - Write-through: 2xx accepted only after B2 HeadObject confirms,
   same as today. Local file is not the durability proof.
 - Per-object ceiling **1 TiB** (`BLOB_DOOR_MAX_BYTES`), disk full
@@ -43,7 +44,7 @@ not the archive.
 
 - Capabilities: ADDED on `blob-store`
 - ADRs: none (0003 already said the door is not the archive)
-- Host disk: 64 GiB working-set on the BTRFS data SSD
+- Host disk: 64 GiB working-set at `/var/lib/mjolnir/blobs` (not `btrfs_root`)
 
 ## User journey & surfaces
 
@@ -52,7 +53,7 @@ Duke, from a guest (`curl` / `mj exec`) or any HTTP client of
 
 - **Working (after)** — PUT of hundreds of MiB (and up to the
   disk) returns 201 after B2 confirms; GET of that hash is served
-  from `/var/lib/mjolnir/btrfs/@blobs/objects/` without another
+  from `/var/lib/mjolnir/blobs/objects/` without another
   B2 download; door restart still GET-misses from B2.
 - **Empty** — cache dir missing or empty; first GET after a miss
   fills it.

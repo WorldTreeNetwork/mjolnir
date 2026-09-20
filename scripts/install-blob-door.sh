@@ -18,9 +18,11 @@ ENV_DST="/etc/mjolnir/blob-door.env"
 HOST_IP="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
 VM_SUBNET="${MJOLNIR_VM_SUBNET:-10.192.0.0/10}"
 BUCKET="${B2_BUCKET:-mjolnir-blobs}"
-CACHE_DIR="${BLOB_DOOR_CACHE_DIR:-/var/lib/mjolnir/btrfs/@blobs}"
+CACHE_DIR="${BLOB_DOOR_CACHE_DIR:-/var/lib/mjolnir/blobs}"
 CACHE_BYTES="${BLOB_DOOR_CACHE_BYTES:-68719476736}"
 MAX_BYTES="${BLOB_DOOR_MAX_BYTES:-1099511627776}"
+BTRFS_ROOT="${MJOLNIR_BTRFS_ROOT:-/var/lib/mjolnir/btrfs}"
+LEGACY_CACHE_DIR="/var/lib/mjolnir/btrfs/@blobs"
 
 if [[ $EUID -ne 0 ]]; then
     echo "Error: run as root" >&2
@@ -45,19 +47,62 @@ install -d /opt/mjolnir/bin
 install -m 0755 "$NATIVE/target/release/mjolnir-blob-door" "$BIN_DST"
 install -m 0644 "$ROOT/systemd/mjolnir-blob-door.service" "$UNIT_DST"
 
+# Cache must not live under btrfs_root. Snapshots of that volume pin
+# CoW extents; LRU then cannot free space and the disk fills monotonically.
+# Same reason SecretEscrow is /var/lib/mjolnir/escrow, not on the data disk.
+refuse_btrfs_cache() {
+    local prefix="${BTRFS_ROOT%/}"
+    case "$CACHE_DIR" in
+        "$prefix"|"$prefix"/*)
+            echo "WARNING: BLOB_DOOR_CACHE_DIR=$CACHE_DIR is under btrfs_root; relocating to /var/lib/mjolnir/blobs" >&2
+            CACHE_DIR="/var/lib/mjolnir/blobs"
+            ;;
+    esac
+}
+
 ensure_cache_dir() {
-    local parent
-    parent="$(dirname "$CACHE_DIR")"
-    if [[ -d "$parent" ]] && stat -f -c %T "$parent" 2>/dev/null | grep -qi btrfs; then
-        if [[ ! -d "$CACHE_DIR" ]]; then
-            echo "=== Creating BTRFS subvolume $CACHE_DIR ==="
-            btrfs subvolume create "$CACHE_DIR"
-        fi
-    else
-        mkdir -p "$CACHE_DIR"
-    fi
     mkdir -p "$CACHE_DIR/objects" "$CACHE_DIR/incoming"
     chmod 700 "$CACHE_DIR"
+}
+
+migrate_legacy_cache() {
+    if [[ ! -d "$LEGACY_CACHE_DIR" ]]; then
+        return 0
+    fi
+    if [[ "$CACHE_DIR" == "$LEGACY_CACHE_DIR" ]]; then
+        return 0
+    fi
+    echo "=== Migrating blob cache off btrfs_root ($LEGACY_CACHE_DIR -> $CACHE_DIR) ==="
+    mkdir -p "$CACHE_DIR/objects" "$CACHE_DIR/incoming"
+    if command -v rsync >/dev/null; then
+        rsync -a "$LEGACY_CACHE_DIR/" "$CACHE_DIR/"
+    else
+        cp -a "$LEGACY_CACHE_DIR/." "$CACHE_DIR/"
+    fi
+}
+
+remove_legacy_cache() {
+    if [[ ! -e "$LEGACY_CACHE_DIR" ]]; then
+        return 0
+    fi
+    if [[ "$CACHE_DIR" == "$LEGACY_CACHE_DIR" ]]; then
+        return 0
+    fi
+    echo "=== Removing legacy cache on btrfs_root $LEGACY_CACHE_DIR ==="
+    if btrfs subvolume show "$LEGACY_CACHE_DIR" >/dev/null 2>&1; then
+        btrfs subvolume delete "$LEGACY_CACHE_DIR"
+    else
+        rm -rf "$LEGACY_CACHE_DIR"
+    fi
+}
+
+rewrite_env_key() {
+    local file="$1" key="$2" value="$3"
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    else
+        echo "${key}=${value}" >> "$file"
+    fi
 }
 
 ensure_env_key() {
@@ -146,9 +191,14 @@ print("wrote", dest, "bucket", bucket, file=sys.stderr)
 PY
 }
 
+refuse_btrfs_cache
 provision_env
 ensure_cache_dir
-ensure_env_key "$ENV_DST" BLOB_DOOR_CACHE_DIR "$CACHE_DIR"
+if systemctl is-active --quiet mjolnir-blob-door 2>/dev/null; then
+    systemctl stop mjolnir-blob-door
+fi
+migrate_legacy_cache
+rewrite_env_key "$ENV_DST" BLOB_DOOR_CACHE_DIR "$CACHE_DIR"
 ensure_env_key "$ENV_DST" BLOB_DOOR_CACHE_BYTES "$CACHE_BYTES"
 ensure_env_key "$ENV_DST" BLOB_DOOR_MAX_BYTES "$MAX_BYTES"
 
@@ -172,4 +222,5 @@ sleep 1
 curl -fsS "http://${HOST_IP}:7222/health"
 echo
 ss -lntp | grep 7222 || true
+remove_legacy_cache
 echo "=== blob door installed ==="

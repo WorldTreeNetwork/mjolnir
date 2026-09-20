@@ -27,8 +27,10 @@ pub const DEFAULT_MAX_BYTES: u64 = 1 << 40; // 1 TiB
 /// Working-set cache budget on the host SSD.
 pub const DEFAULT_CACHE_BYTES: u64 = 64 << 30; // 64 GiB
 
-/// Production cache root (BTRFS data disk subvolume).
-pub const DEFAULT_CACHE_DIR: &str = "/var/lib/mjolnir/btrfs/@blobs";
+/// Production cache root. Lives **outside** `btrfs_root` so VM / named
+/// snapshots cannot pin cache extents (same reason escrow is not on the
+/// data volume). Wiping this dir does not lose accepted objects.
+pub const DEFAULT_CACHE_DIR: &str = "/var/lib/mjolnir/blobs";
 
 pub fn hash_to_base58(bytes: &[u8; 32]) -> String {
     bs58::encode(bytes).into_string()

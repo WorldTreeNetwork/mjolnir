@@ -21,8 +21,9 @@ Accepted = HeadObject/GET on B2 succeeded after a hash-checked write.
 Re-PUT of the same bytes is a no-op (no extra version). No DELETE.
 
 PUT/GET stream through a host-disk cache (`BLOB_DOOR_CACHE_DIR`,
-default `/var/lib/mjolnir/btrfs/@blobs`, 64 GiB budget). Accept is
-still HeadObject on B2. `BLOB_DOOR_MAX_BYTES` defaults to 1 TiB;
+default `/var/lib/mjolnir/blobs`, 64 GiB budget). That directory is
+outside `btrfs_root` so snapshots cannot pin cache extents. Accept
+is still HeadObject on B2. `BLOB_DOOR_MAX_BYTES` defaults to 1 TiB;
 ENOSPC is 507. The cache is not the archive.
 
 Build (Linux host for production; macOS is fine for `cargo test`):

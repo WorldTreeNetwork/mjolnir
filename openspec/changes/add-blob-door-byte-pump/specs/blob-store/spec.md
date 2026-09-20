@@ -55,3 +55,12 @@ lose an object the door already reported accepted (B2 still has it).
   is renamed, before B2 HeadObject
 - WHEN it is reviewed
 - THEN it is rejected against this requirement
+
+#### Scenario: Cache under btrfs_root is proposed
+
+- GIVEN a change that places the door cache under `btrfs_root`
+  (including `@blobs` or any nested subvolume on the data volume)
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
+  because VM and named snapshots would CoW-pin cache extents and
+  the disk would fill monotonically

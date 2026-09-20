@@ -22,13 +22,17 @@ canonical copy. Not a new ADR.
    `incoming/`. A cache hit is allowed only for an object that was
    promoted after accept (or filled from a successful B2 GET).
 
-3. **Host SSD sink.** Production path is
-   `/var/lib/mjolnir/btrfs/@blobs` (BTRFS subvolume on the data
-   disk, ~150 GiB free today). Default cache budget 64 GiB
+3. **Host SSD sink, outside `btrfs_root`.** Production path is
+   `/var/lib/mjolnir/blobs` (ext4 OS disk, same reason escrow is
+   not on the data volume). A cache on BTRFS is CoW-pinned by every
+   VM / named snapshot; LRU cannot free those extents and the disk
+   fills monotonically. Default cache budget 64 GiB
    (`BLOB_DOOR_CACHE_BYTES`). Objects larger than the budget are
    still accepted (B2) but not retained. LRU by explicit atime
    touch. `ProtectSystem=strict` needs `ReadWritePaths` on that
-   dir. PrivateTmp is not the cache.
+   dir. PrivateTmp is not the cache. Install refuses a
+   `BLOB_DOOR_CACHE_DIR` under `btrfs_root` and migrates the
+   legacy `@blobs` subvolume off the data disk.
 
 4. **Crazy-large ceiling, disk is the real cap.** Default
    `BLOB_DOOR_MAX_BYTES` is 1 TiB. ENOSPC → 507. Multipart to B2
@@ -42,9 +46,9 @@ canonical copy. Not a new ADR.
 ## Layout
 
 ```
-/var/lib/mjolnir/btrfs/@blobs/
-  incoming/<pid>-<seq>     # in-flight PUT or GET-fill
-  objects/<base58>         # accepted (or B2-filled) payload
+/var/lib/mjolnir/blobs/          # NOT under btrfs_root
+  incoming/<pid>-<seq>           # in-flight PUT or GET-fill
+  objects/<base58>               # accepted (or B2-filled) payload
   objects/<base58>.obao
 ```
 
