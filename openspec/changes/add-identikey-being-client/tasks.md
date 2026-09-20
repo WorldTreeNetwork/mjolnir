@@ -2,7 +2,7 @@
 
 - [x] identikey-core: `ClientJson` + `client_from_spec` honor
       `subject_type` (`public` | `pairwise`, default pairwise)
-- [ ] identikey-core: register Mjolnir public PKCE client on the
+- [x] identikey-core: register Mjolnir public PKCE client on the
       live OP (`IDENTIKEY_CLIENTS` JSON, `subject_type=public`,
       redirect `https://api.vm.worldtree.network/auth/callback`)
 - [x] Mjolnir: `/auth/login` starts authorization-code + PKCE
@@ -14,7 +14,7 @@
 - [x] Tests: unauthenticated `/term` 302s to login; `/auth/login`
       302s to OP authorize with `client_id` + `code_challenge`;
       callback sets `mj_term`
-- [ ] Live: confirm assertion does not insert an identikey account
+- [x] Live: confirm assertion does not insert an identikey account
       (already the OP contract; verify on auth.identikey.me)
 
 Handoffs (not this change):

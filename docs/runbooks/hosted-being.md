@@ -13,10 +13,24 @@ MJOLNIR_AUTH_CLIENT_ID=mjolnir-term
 MJOLNIR_AUTH_REDIRECT_URI=https://api.vm.worldtree.network/auth/callback
 ```
 
-Register the same public PKCE client on identikey-core
-(`IDENTIKEY_CLIENTS` JSON, `subject_type: public`). Passkey at
-`/authorize` opens `/term/:id`. grok uses `XAI_API_KEY` in
-`/run/mjolnir/` tmpfs, not OIDC.
+Live OP (2026-09-20): public PKCE client `mjolnir-term` is registered
+on `auth.identikey.me` via `IDENTIKEY_CLIENTS` (append, never
+replace). `auth: none`, `subject_type: public`, redirect
+`https://api.vm.worldtree.network/auth/callback`. Existing clients
+kept: `IDENTIKEY_CLIENT_ID=taskmaster`, extra
+`taskmaster-laptop` + `wtnf-web`. Passkey at `/authorize` opens
+`/term/:id`. grok uses `XAI_API_KEY` in `/run/mjolnir/` tmpfs, not
+OIDC.
+
+```json
+{"id":"mjolnir-term","auth":"none","subject_type":"public","redirect":"https://api.vm.worldtree.network/auth/callback"}
+```
+
+Guest `identikey` (`1769d148-8949-457b-806f-1e467046da94`). After
+`mj secrets set identikey IDENTIKEY_CLIENTS --stdin`, restart
+`identikey.service` on that VM — do not `mj deploy` from a laptop
+(still defaults to `deploy-node-bun`). Unknown passkey assertion
+returns `credential not found` and does not insert an account.
 
 Existing Keycloak `owner_id`s on mimir will not match an XID `sub`.
 
