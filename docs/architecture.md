@@ -434,10 +434,14 @@ in tmux `main` on the unauthenticated ticket URL, prod API,
 `mjolnir-term`, so the ID token `sub` is the 64-hex XID that
 `owner_id` compares against; it is written in
 [`openspec/specs/web-pty-edge/spec.md`](../openspec/specs/web-pty-edge/spec.md),
-not the honor-being spec. The `ssh_git` git-signing, Forgejo remote,
-and CORS SHALLs are not living yet; they wait on
-`add-vm-git-subkey`, `add-honor-git-remote`, and
-`update-hypersigil-store-cors`.
+not the honor-being spec. The `ssh_git` git-signing SHALL is living
+as of `add-vm-git-subkey` (folded 2026-09-20) — the private key is a
+SecretStore opaque blob injected to the fixed guest path
+`/run/mjolnir/git_signing_key`, deliberately *not* routed through
+`Identity.env_entries/1` (`BUZZ_PRIVATE_KEY`), so a respawn can mint
+a new device without rewriting `git config user.signingkey`. The
+Forgejo remote and CORS SHALLs are not living yet; they wait on
+`add-honor-git-remote` and `update-hypersigil-store-cors`.
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
 

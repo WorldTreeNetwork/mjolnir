@@ -5,13 +5,15 @@ What is built. Seeded by
 on 2026-09-19. The change-id keeps `honor` (a mis-transcription of
 *hosted*); the product is a **hosted being**.
 
-Only the dev-preview landing is living truth here. ADR
+Living truth here is the dev-preview landing plus the `ssh_git`
+git-signing device, folded from
+[`add-vm-git-subkey`](../../changes/archive/2026-09-20-add-vm-git-subkey/proposal.md)
+on 2026-09-20. ADR
 [`0011`](../../../docs/decisions/0011-honor-being.md) also carries
-passkey `/term`, the `ssh_git` git-signing device, the Forgejo write
-remote, and prod CORS — none of those have landed, so none of them
-are SHALLs below. They arrive with `add-identikey-being-client`,
-`add-vm-git-subkey`, `add-honor-git-remote`, and
-`update-hypersigil-store-cors`.
+passkey `/term` — landed, but its SHALLs live in `web-pty-edge`, not
+here — and the Forgejo write remote and prod CORS, which have not
+landed and so are not SHALLs below. Those arrive with
+`add-honor-git-remote` and `update-hypersigil-store-cors`.
 
 ## Purpose
 
@@ -69,3 +71,28 @@ Host. Frontend env SHALL point at `https://api.hypersigil.world`.
 > storefront `.env` only; grok's own config dir, shell history, and
 > anything written before `mj snapshot create` are unguarded. Full
 > snapshot-level enforcement is beaded, not built.
+
+### Requirement: Git signing inject is not the Buzz identity map
+
+The hosted being's SSH git private key SHALL be a distinct
+SecretStore opaque blob (`git_signing` under `_opaque/vms/<id>/`)
+and SHALL be injected to the fixed guest path
+`/run/mjolnir/git_signing_key`. It SHALL NOT be written through
+`Mjolnir.Identity.env_entries/1` (`BUZZ_PRIVATE_KEY`). The path
+SHALL be stable across respawns so `git config user.signingkey`
+does not need a rewrite when the key bytes change.
+
+#### Scenario: Distinct blob
+
+- GIVEN a hosted VM with both a Buzz nsec and a git signing key
+- WHEN the guest tmpfs is listed
+- THEN `/run/mjolnir/buzz.env` and `/run/mjolnir/git_signing_key`
+  are separate files
+- AND `GET /api/vms/:id` contains neither private material
+
+#### Scenario: Stable path on new device
+
+- GIVEN a respawn that minted a new `ssh_git` key
+- WHEN grok commits
+- THEN `user.signingkey` is still `/run/mjolnir/git_signing_key`
+- AND the signature verifies with the new `device_public_key`
