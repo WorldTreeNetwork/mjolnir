@@ -2,12 +2,12 @@
 
 **Status:** Accepted
 **Date:** 2026-09-10
-**Change:** [`add-honor-being`](../../openspec/changes/add-honor-being/proposal.md)
-**Living spec (after an implementing fold):** [`openspec/specs/honor-being/spec.md`](../../openspec/specs/honor-being/spec.md)
+**Change:** [`add-honor-being`](../../openspec/changes/archive/2026-09-20-add-honor-being/proposal.md)
+**Living spec:** [`openspec/specs/honor-being/spec.md`](../../openspec/specs/honor-being/spec.md)
 **Epic:** `mjolnir-x97p`
 
 Full argument:
-[`openspec/changes/add-honor-being/design.md`](../../openspec/changes/add-honor-being/design.md).
+[`openspec/changes/archive/2026-09-20-add-honor-being/design.md`](../../openspec/changes/archive/2026-09-20-add-honor-being/design.md).
 
 Amended 2026-09-10 after Fable send-back (S1–S4).
 Renamed 2026-09-10: first intend line was transcribed “a honor being”;
