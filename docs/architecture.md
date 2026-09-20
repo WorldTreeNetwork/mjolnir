@@ -428,10 +428,16 @@ write remote is Forgejo on mimir. Living spec:
 [`openspec/specs/honor-being/spec.md`](../openspec/specs/honor-being/spec.md),
 seeded by `add-honor-dev-preview` (folded 2026-09-19) — grok + Vite
 in tmux `main` on the unauthenticated ticket URL, prod API,
-`XAI_API_KEY` in tmpfs. The passkey, `ssh_git` git-signing, Forgejo
-remote, and CORS SHALLs are not living yet; they wait on
-`add-identikey-being-client`, `add-vm-git-subkey`,
-`add-honor-git-remote`, and `update-hypersigil-store-cors`.
+`XAI_API_KEY` in tmpfs. The passkey SHALL is living as of
+`add-identikey-being-client` (folded 2026-09-20) — same-origin
+`/term` logs in at `auth.identikey.me` as the **public** PKCE client
+`mjolnir-term`, so the ID token `sub` is the 64-hex XID that
+`owner_id` compares against; it is written in
+[`openspec/specs/web-pty-edge/spec.md`](../openspec/specs/web-pty-edge/spec.md),
+not the honor-being spec. The `ssh_git` git-signing, Forgejo remote,
+and CORS SHALLs are not living yet; they wait on
+`add-vm-git-subkey`, `add-honor-git-remote`, and
+`update-hypersigil-store-cors`.
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
 
