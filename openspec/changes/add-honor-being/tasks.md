@@ -17,9 +17,10 @@ Fable 5.1 is the cross-family reader.
       (`ADVISE: accept`, `READER: fable-5.1-arch-review`)
 - [x] After accept: pointer in `docs/architecture.md` (do not delete
       prior ADR text)
-- [ ] Fold living `openspec/specs/honor-being/` only after an
+- [x] Fold living `openspec/specs/honor-being/` only after an
       implementing landing has made a SHALL true (ADR-only fold
-      until then; learning 2026-08-16)
+      until then; learning 2026-08-16) — precondition met:
+      `add-vm-git-subkey` folded 2026-09-20 (`359b36b`)
 
 Handoffs (not checkboxes; activated, blocked on advise accept):
 
