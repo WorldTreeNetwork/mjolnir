@@ -20,7 +20,10 @@ Read in order if you're new:
 4. **[Deploying a Web App](deploying-an-app.md)** — turning an app into a live HTTPS URL:
    `mj deploy`, `mj secrets set` (host-escrowed env injected at service-VM spawn),
    `mj domain` / `mj cert`. Secrets never enter the snapshot.
-5. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
+5. **[Deploying a Static Site](deploying-a-static-site.md)** — already-built HTML/CSS/JS,
+   no VM: `mj sites publish` from the project's own directory, then a custom-domain
+   alias. Not `mj deploy`.
+6. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
    (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres. How guests find
    locators in `/etc/mjolnir/vm.json`.
 

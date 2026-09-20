@@ -242,7 +242,7 @@ opaque snapshots, and transparent dormancy/wake — not survival of a host compr
 | Host-sidecar tenant `hypersigil` | ✅ provisioned; `DATABASE_URL` / `REDIS_URL` in `hypersigil-api.json` |
 | Detector scope | SvelteKit + `adapter-node`, or an explicit `mjolnir.toml` (Medusa, etc.) |
 | Zine | still **hand-provisioned** (`secrets_mode: none`). Not an example to copy. |
-| IdentiKey Sites | Recrypt path incomplete |
+| IdentiKey Sites | public-mode publish works (`mj sites publish`); see [Deploying a Static Site](deploying-a-static-site.md). Recrypt/gated modes and a one-flag CLI are still open (mjolnir-9bq) |
 
 Hypersigil API (`https://api.hypersigil.world`) deploys through this path. Extra
 app keys (SES, Stripe) go in with `mj secrets set hypersigil-api KEY`, then a
@@ -325,9 +325,9 @@ low-traffic site can park at zero compute and wake on request.
 **Don't split static from dynamic yet.** Publishing fingerprinted build assets to IdentiKey Sites
 and keeping only the server-rendered routes on the VM is a sanctioned future direction
 ([ADR 0001](../decisions/0001-edge-strategy.md)), and framework asset fingerprinting makes that
-migration mechanical when the time comes. But Sites is not finished, there is no measured
-latency pain today, and a split means two artifacts that must version together. One artifact
-until something actually hurts.
+migration mechanical when the time comes. A whole static site (no server) *can* go through
+Sites today — [Deploying a Static Site](deploying-a-static-site.md) — but a split SSR app
+means two artifacts that must version together. One artifact until something actually hurts.
 
 ---
 
