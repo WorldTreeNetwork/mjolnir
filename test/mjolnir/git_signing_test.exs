@@ -42,4 +42,98 @@ defmodule Mjolnir.GitSigningTest do
     assert file_req["type"] == "inject_file"
     refute Map.has_key?(id_req, "name")
   end
+
+  test "mint does not copy opaque across vm_ids", %{vm_id: vm_id} do
+    other = "fedcba98-7654-3210-fedc-ba9876543210"
+    assert {:ok, pub1} = GitSigning.mint(vm_id)
+    assert {:ok, pub2} = GitSigning.mint(other)
+    assert pub1 != pub2
+    assert {:ok, pem1} = GitSigning.get(vm_id)
+    assert {:ok, pem2} = GitSigning.get(other)
+    assert pem1 != pem2
+    assert {:ok, meta} = GitSigning.get_device(vm_id)
+    refute is_map_key(meta, "private_key")
+    refute inspect(meta) =~ "PRIVATE KEY"
+  end
+
+  test "put_device refuses private key material", %{vm_id: vm_id} do
+    pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n"
+
+    assert {:error, :private_key_not_on_device_meta} =
+             GitSigning.put_device(vm_id, %{private_key: pem})
+
+    assert :not_found = GitSigning.get_device(vm_id)
+  end
+
+  test "respawn mints a new key and refuses same-id copy", %{vm_id: vm_id} do
+    other = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert {:ok, pub1} = GitSigning.mint(vm_id)
+    assert {:ok, pem1} = GitSigning.get(vm_id)
+    assert {:ok, pub2} = GitSigning.respawn(vm_id, other)
+    assert pub1 != pub2
+    assert :not_found = GitSigning.get(vm_id)
+    assert {:ok, pem2} = GitSigning.get(other)
+    assert pem1 != pem2
+    assert {:error, :cannot_copy_git_signing} = GitSigning.respawn(other, other)
+  end
+
+  test "revoke order is Forgejo then revoke_device then opaque", %{vm_id: vm_id} do
+    assert {:ok, _pub} = GitSigning.mint(vm_id)
+
+    :ok =
+      GitSigning.put_device(vm_id, %{
+        public_key: "ssh-ed25519 AAAA",
+        xid: "aa",
+        credential_id: "11111111-1111-1111-1111-111111111111"
+      })
+
+    {:ok, order} = Agent.start_link(fn -> [] end)
+
+    on_exit(fn ->
+      Application.delete_env(:mjolnir, :git_signing_forgejo_revoke)
+      Application.delete_env(:mjolnir, :git_signing_revoke_device)
+    end)
+
+    Application.put_env(:mjolnir, :git_signing_forgejo_revoke, fn _meta ->
+      Agent.update(order, &(&1 ++ [:forgejo]))
+      :not_wired
+    end)
+
+    Application.put_env(:mjolnir, :git_signing_revoke_device, fn meta ->
+      Agent.update(order, &(&1 ++ [:revoke_device]))
+      assert meta.xid == "aa"
+      assert meta.credential_id == "11111111-1111-1111-1111-111111111111"
+      :ok
+    end)
+
+    assert :ok = GitSigning.revoke(vm_id)
+    assert Agent.get(order, & &1) == [:forgejo, :revoke_device]
+    assert :not_found = GitSigning.get(vm_id)
+    assert :not_found = GitSigning.get_device(vm_id)
+  end
+
+  test "revoke_device failure keeps the opaque live", %{vm_id: vm_id} do
+    pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nlive\n-----END OPENSSH PRIVATE KEY-----\n"
+    assert :ok = GitSigning.put(vm_id, pem)
+
+    :ok =
+      GitSigning.put_device(vm_id, %{
+        xid: "bb",
+        credential_id: "22222222-2222-2222-2222-222222222222"
+      })
+
+    on_exit(fn ->
+      Application.delete_env(:mjolnir, :git_signing_forgejo_revoke)
+      Application.delete_env(:mjolnir, :git_signing_revoke_device)
+    end)
+
+    Application.put_env(:mjolnir, :git_signing_forgejo_revoke, fn _ -> :not_wired end)
+
+    Application.put_env(:mjolnir, :git_signing_revoke_device, fn _ ->
+      {:error, :identikey_down}
+    end)
+
+    assert {:error, {:revoke_device, :identikey_down}} = GitSigning.revoke(vm_id)
+    assert {:ok, ^pem} = GitSigning.get(vm_id)
+  end
 end

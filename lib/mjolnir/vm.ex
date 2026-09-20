@@ -171,6 +171,7 @@ defmodule Mjolnir.VM do
           optional(:extra_mounts) => list(extra_mount()),
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
           optional(:identity) => Mjolnir.Identity.t(),
+          optional(:git_signing) => boolean(),
           optional(:restart_policy) => :always | :never,
           optional(:await_boot_timeout) => timeout(),
           optional(:id) => vm_id(),
@@ -1123,12 +1124,12 @@ defmodule Mjolnir.VM do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    case store_identity(opts) do
-      :ok ->
-        init_state(opts)
-
+    with :ok <- store_identity(opts),
+         :ok <- store_git_signing(opts) do
+      init_state(opts)
+    else
       {:error, reason} ->
-        Logger.error("VM #{opts.id} refused spawn: identity store failed (#{inspect(reason)})")
+        Logger.error("VM #{opts.id} refused spawn: opaque store failed (#{inspect(reason)})")
 
         {:stop, :normal}
     end
@@ -1138,6 +1139,29 @@ defmodule Mjolnir.VM do
     case opts[:identity] do
       nil -> :ok
       identity -> Mjolnir.Identity.put(opts.id, identity)
+    end
+  end
+
+  # New vm_id mints a new key. Never copy `_opaque` from another id.
+  defp store_git_signing(opts) do
+    case opts[:git_signing] do
+      nil ->
+        :ok
+
+      false ->
+        :ok
+
+      true ->
+        case Mjolnir.GitSigning.mint(opts.id) do
+          {:ok, _pub} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      %{copy_from: _} ->
+        {:error, :cannot_copy_git_signing}
+
+      %{from_vm_id: _} ->
+        {:error, :cannot_copy_git_signing}
     end
   end
 
@@ -1838,6 +1862,10 @@ defmodule Mjolnir.VM do
 
         :not_found ->
           _ = Mjolnir.Identity.delete(state.id)
+          # Forgejo (hook, often :not_wired) → revoke_device → opaque.
+          # Failure keeps the private blob so a crash cannot leave a live
+          # key with no identikey row.
+          _ = Mjolnir.GitSigning.revoke(state.id)
       end
     end
 

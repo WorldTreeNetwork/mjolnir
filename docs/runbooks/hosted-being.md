@@ -97,9 +97,33 @@ Re-inject `XAI_API_KEY` into tmpfs; it is not in the snapshot.
 
 ## Git key
 
-`Mjolnir.GitSigning.put/2` then boot injects
-`/run/mjolnir/git_signing_key`. Forgejo write registration is
-`add-honor-git-remote`. Until that lands, `git clone` of
+`Mjolnir.GitSigning.mint/1` (or `put/2`) stores the private key under
+`_opaque/vms/<vm_id>/git_signing` (mode 0600). Boot injects
+`/run/mjolnir/git_signing_key`. The private key is never on the VM
+struct or `GET /api/vms`. Guest `user.signingkey` stays that path
+across respawns so `git config` does not need a rewrite.
+
+identikey-core `POST /devices/ssh_git` inserts `credentials.kind =
+ssh_git` only after a fresh A3 WebAuthn assertion and a consent-log
+`add_device` row. Elect-only is refused. The public key is
+`device_public_key`; the private key never leaves Mjolnir.
+
+Respawn is a new device (`GitSigning.respawn/2`): new `vm_id`, new
+keypair, never copy `_opaque` across ids. Revoke order for the old
+device:
+
+1. Forgejo write-key delete — **not wired** (`add-honor-git-remote`).
+   The hook returns `:not_wired`; any leftover Forgejo key is the
+   reconcile find. Do not fake a delete.
+2. identikey `POST /devices/ssh_git/revoke` (`revoke_device` /
+   `revoke_ssh_git`)
+3. Opaque delete
+
+If step 2 fails, the private blob stays so a crash cannot leave a
+live key with no identikey row.
+
+Forgejo write registration is `add-honor-git-remote`. Until that
+lands, `git clone` of
 `forgejogit@mimir.worldtree.network:VirtueInnova/hypersigil-store-frontend.git`
 from a fresh `ubuntu-24.04` fails (`Permission denied (publickey)`).
 Seed `WORKDIR` via `scp` + `mj proxy` (not extra_mounts) so
