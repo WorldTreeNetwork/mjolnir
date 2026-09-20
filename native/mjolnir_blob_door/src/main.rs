@@ -1,8 +1,12 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use mjolnir_blob_door::{router, AppState, MemoryStore, DEFAULT_BIND, DEFAULT_MAX_BYTES};
 use mjolnir_blob_door::s3::S3Canonical;
+use mjolnir_blob_door::{
+    router, AppState, DiskCache, MemoryStore, DEFAULT_BIND, DEFAULT_CACHE_BYTES, DEFAULT_CACHE_DIR,
+    DEFAULT_MAX_BYTES,
+};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -25,8 +29,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MAX_BYTES);
+    let cache_budget = std::env::var("BLOB_DOOR_CACHE_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_CACHE_BYTES);
 
     let backend = std::env::var("BLOB_DOOR_BACKEND").unwrap_or_else(|_| "b2".into());
+    let cache_dir = std::env::var("BLOB_DOOR_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if backend == "memory" {
+                std::env::temp_dir().join("mjolnir-blob-door-memory")
+            } else {
+                PathBuf::from(DEFAULT_CACHE_DIR)
+            }
+        });
+
+    let cache = DiskCache::open(cache_dir.clone(), cache_budget).await?;
+    tracing::info!(
+        cache = %cache_dir.display(),
+        cache_budget,
+        max_bytes,
+        "blob door cache"
+    );
+
     match backend.as_str() {
         "memory" => {
             tracing::warn!("BLOB_DOOR_BACKEND=memory — not durable");
@@ -34,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bind,
                 AppState {
                     store: Arc::new(MemoryStore::new()),
+                    cache: Arc::new(cache),
                     max_bytes,
                 },
             )
@@ -45,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bind,
                 AppState {
                     store: Arc::new(store),
+                    cache: Arc::new(cache),
                     max_bytes,
                 },
             )

@@ -32,7 +32,12 @@ GET          /health
 
 `{hash}` is base58 Blake3 of the stored bytes. Door refuses a
 mismatch. Re-PUT of the same bytes is a no-op (no extra B2 version).
-Ack only after HeadObject/GET on B2. v1 RAM cap 64 MiB.
+Ack only after HeadObject/GET on B2. The door is a **write-through
+caching proxy**: it pumps the body onto host SSD
+(`/var/lib/mjolnir/btrfs/@blobs`, 64 GiB budget) and uploads from
+that file. Accept is still B2, not the local file. Per-object
+ceiling 1 TiB (`BLOB_DOOR_MAX_BYTES`); disk full is 507. Cache is
+not the archive — wiping it does not lose accepted objects.
 
 ## From a VM
 

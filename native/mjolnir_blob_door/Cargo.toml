@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "matched-path"] }
 aws-config = { version = "1", default-features = false, features = ["rt-tokio", "credentials-process"] }
@@ -12,13 +13,16 @@ aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", 
 blake3 = "1"
 bs58 = "0.5"
 bytes = "1"
+futures-util = "0.3"
 http-body-util = "0.1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
+tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

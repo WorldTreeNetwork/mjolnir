@@ -2,23 +2,33 @@
 //!
 //! Callers never hold B2 credentials. Accepted means the canonical
 //! store has the object (HeadObject/GET), not that PutObject returned 200.
+//! Host disk is a write-through cache, not the archive.
 
+pub mod cache;
 pub mod http;
 pub mod memory;
+pub mod pump;
 pub mod put;
 pub mod s3;
 pub mod store;
 
+pub use cache::DiskCache;
 pub use http::{router, AppState};
 pub use memory::MemoryStore;
-pub use put::{put_bytes, put_outboard, PutError};
+pub use put::{put_file, PutError};
 pub use store::{CanonicalStore, StoreError};
 
 /// Default bind — same port Sites planned for the recrypt sidecar.
 pub const DEFAULT_BIND: &str = "127.0.0.1:7222";
 
-/// v1 in-memory ceiling. Streaming multipart is a later slice.
-pub const DEFAULT_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Safety rail, not a product limit. Disk is the real cap (507 on ENOSPC).
+pub const DEFAULT_MAX_BYTES: u64 = 1 << 40; // 1 TiB
+
+/// Working-set cache budget on the host SSD.
+pub const DEFAULT_CACHE_BYTES: u64 = 64 << 30; // 64 GiB
+
+/// Production cache root (BTRFS data disk subvolume).
+pub const DEFAULT_CACHE_DIR: &str = "/var/lib/mjolnir/btrfs/@blobs";
 
 pub fn hash_to_base58(bytes: &[u8; 32]) -> String {
     bs58::encode(bytes).into_string()

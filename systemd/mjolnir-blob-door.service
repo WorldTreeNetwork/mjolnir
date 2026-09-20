@@ -14,6 +14,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=yes
+# Disk cache / incoming sink. ProtectSystem=strict makes /var read-only
+# without this. Install script creates the subvolume before first start.
+ReadWritePaths=/var/lib/mjolnir/btrfs/@blobs
 Restart=on-failure
 
 [Install]

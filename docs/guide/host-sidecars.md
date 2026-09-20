@@ -69,8 +69,10 @@ curl -sS "$url/storage/blob/b3/$hash" -o out
 ```
 
 Routes: `PUT/GET/HEAD /storage/blob/b3/{hash}` and optional `.obao`.
-Mismatch → 400. Same bytes again → 200, no extra B2 version. PUT cap
-64 MiB. Do not send GiB through `deliver_message`.
+Mismatch → 400. Same bytes again → 200, no extra B2 version. The
+door streams to host SSD (`/var/lib/mjolnir/btrfs/@blobs`) and
+write-throughs to B2; 1 TiB safety rail, 64 GiB cache budget. Do
+not send GiB through `deliver_message`.
 
 Operator / deploy / Sites cutover: [blob-door runbook](../runbooks/blob-door.md).
 Living spec: [`blob-store`](../../openspec/specs/blob-store/spec.md).

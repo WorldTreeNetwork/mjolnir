@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 
-use crate::store::{CanonicalStore, StoreError};
+use crate::store::{BlobStream, CanonicalStore, StoreError};
 
 /// In-process stand-in for B2. Survives dropping the HTTP server.
 #[derive(Default)]
@@ -53,5 +55,19 @@ impl CanonicalStore for MemoryStore {
         objects.insert(key.to_string(), bytes);
         *versions.entry(key.to_string()).or_insert(0) += 1;
         Ok(())
+    }
+
+    async fn put_path(&self, key: &str, path: &Path) -> Result<(), StoreError> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        self.put(key, bytes).await
+    }
+
+    async fn get_stream(&self, key: &str) -> Result<(u64, BlobStream), StoreError> {
+        let bytes = self.get(key).await?;
+        let len = bytes.len() as u64;
+        let stream = futures_util::stream::once(async move { Ok(Bytes::from(bytes)) });
+        Ok((len, Box::pin(stream)))
     }
 }
