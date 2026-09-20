@@ -421,7 +421,8 @@ A **hosted being** is a long-lived vibe-coder VM: a *device* of a
 friend's C2 identikey (`credentials.kind = ssh_git`), not a new
 `@base/` name. ADR
 [`0011`](decisions/0011-honor-being.md) (`add-honor-being`, advise
-accept 2026-09-10; “Honor” was a mis-transcription of hosted).
+accept 2026-09-10, architecture folded 2026-09-20; “Honor” was a
+mis-transcription of hosted).
 Passkey at `auth.identikey.me` gates wrug `/term`; grok uses
 `XAI_API_KEY` in tmpfs; git is SSH-signed from opaque inject;
 write remote is Forgejo on mimir. Living spec:

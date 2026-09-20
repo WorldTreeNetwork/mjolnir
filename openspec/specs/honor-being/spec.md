@@ -8,7 +8,9 @@ on 2026-09-19. The change-id keeps `honor` (a mis-transcription of
 Living truth here is the dev-preview landing plus the `ssh_git`
 git-signing device, folded from
 [`add-vm-git-subkey`](../../changes/archive/2026-09-20-add-vm-git-subkey/proposal.md)
-on 2026-09-20. ADR
+on 2026-09-20, plus the being-as-device and respawn rules from
+[`add-honor-being`](../../changes/archive/2026-09-20-add-honor-being/proposal.md)
+(architecture fold 2026-09-20). ADR
 [`0011`](../../../docs/decisions/0011-honor-being.md) also carries
 passkey `/term` — landed, but its SHALLs live in `web-pty-edge`, not
 here — and the Forgejo write remote and prod CORS, which have not
@@ -96,3 +98,57 @@ does not need a rewrite when the key bytes change.
 - WHEN grok commits
 - THEN `user.signingkey` is still `/run/mjolnir/git_signing_key`
 - AND the signature verifies with the new `device_public_key`
+
+### Requirement: Hosted being is a device of a friend's C2 identikey
+
+A hosted being SHALL be a Mjolnir VM bound to a C2 managed
+identikey as a `credentials` row of kind `ssh_git`, not as a
+second XID and not as an additional Sign key on the C2 document.
+The VM's `owner_id` SHALL equal that XID as the public OIDC `sub`
+issued by `auth.identikey.me`. Creating the device SHALL require
+a fresh A3 (WebAuthn) assertion for that XID and SHALL append a
+consent-log entry (`action = add_device`). Creating the device
+SHALL NOT require an Elect signature.
+
+#### Scenario: Friend identity survives a new hosted VM
+
+- GIVEN a stored C2 identikey for the friend
+- WHEN a hosted being is provisioned with a fresh A3 assertion
+- THEN the friend's XID is unchanged
+- AND a `credentials` row of kind `ssh_git` exists for that XID
+- AND the VM's `owner_id` equals that XID
+- AND the C2 document still has IdentiKey as the Sign+Auth holder
+  and the user as Elect
+
+#### Scenario: No implicit device without A3 consent
+
+- GIVEN no fresh A3 assertion for the friend's XID
+- WHEN a VM is spawned
+- THEN it is not a hosted being
+- AND no `ssh_git` credentials row is inserted
+
+#### Scenario: Duke-owned spawn is not a hosted being
+
+- GIVEN Duke's OIDC `sub` is not the friend's XID
+- WHEN Duke spawns a VM under his own token
+- THEN `owner_id` is Duke's `sub`
+- AND the VM is not a hosted being of the friend
+
+### Requirement: Respawn is a new device; ticket held per-friend
+
+A respawn SHALL mint a new `vm_id`, a new SSH key, and a new
+`ssh_git` credentials row, and SHALL revoke the previous device
+(opaque delete, `revoke_device`). Spawn from the per-friend
+snapshot `hosted-<xid>` SHALL set `preserve_iroh_key: true` so the
+ticket URL survives. Spawn from a shared bootstrap snapshot SHALL
+NOT preserve the Iroh key. Forgejo key delete on revoke is
+`add-honor-git-remote`, not this requirement.
+
+#### Scenario: Kill and respawn from the friend's snapshot
+
+- GIVEN the being was snapshotted as `hosted-<xid>` with an Iroh key
+- WHEN the VM is stopped and spawned from that snapshot with
+  `preserve_iroh_key: true`
+- THEN the ticket URL is unchanged
+- AND a new `ssh_git` device exists
+- AND the previous `ssh_git` row is revoked
