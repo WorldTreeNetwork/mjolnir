@@ -1862,9 +1862,9 @@ defmodule Mjolnir.VM do
 
         :not_found ->
           _ = Mjolnir.Identity.delete(state.id)
-          # Forgejo (hook, often :not_wired) → revoke_device → opaque.
-          # Failure keeps the private blob so a crash cannot leave a live
-          # key with no identikey row.
+          # Forgejo write-key delete → revoke_device → opaque. A failed
+          # Forgejo delete stops the chain (opaque stays). No host token
+          # is :not_wired (dev/test reconcile find), not a fake delete.
           _ = Mjolnir.GitSigning.revoke(state.id)
       end
     end
