@@ -4,12 +4,12 @@ Operator inventory. Fingerprints are Blake3 of the raw ED25519 pubkey
 (`IdentiKey.fingerprint/1`, Elixir-style base58). Rebuild on the laptop,
 publish with `mj`. Do not commit keypair files.
 
-| Site | Domain(s) | Source | Publish dir | Keypair |
-|---|---|---|---|---|
-| `wtnf` | worldtree.network | `~/work/WorldTree/wtnf-web` | `build/` (SvelteKit `adapter-static`) | `~/.ssh/wtnf-identikey.json` (host copy `/etc/mjolnir/wtnf-identikey.json`) |
-| `lightning-mesh` | lightning.worldtree.network | `~/work/WorldTree/lightning-mesh/docs-web` | `build/` (`./scripts/publish.sh`) | `~/.config/mjolnir/identikey.json` |
-| `intentional` | intentional.agency, www.intentional.agency | `mjolnir/sites/intentional-agency/` | the folder itself | `~/.config/mjolnir/intentional-identikey.json` (host copy `/etc/mjolnir/intentional-identikey.json`) |
-| `park` | park.worldtree.network | `mjolnir/sites/park/` | the folder itself | `~/.config/mjolnir/park-identikey.json` (host copy `/etc/mjolnir/park-identikey.json`) |
+| Site | Domain(s) | Blake3 fingerprint | Source | Publish dir | Keypair |
+|---|---|---|---|---|---|
+| `wtnf` | worldtree.network | `ESQdLp4quU2gH4rn6GXzdm93G4SrkME58dJXxHJMrc32` | `~/work/WorldTree/wtnf-web` | `build/` (SvelteKit `adapter-static`) | `~/.ssh/wtnf-identikey.json` (host `/etc/mjolnir/wtnf-identikey.json`) |
+| `lightning-mesh` | lightning.worldtree.network | `9m9YdqCFcQKGtLzAk2rKYMLK9xw9zERpJiEqWk3NAfaQ` | `~/work/WorldTree/lightning-mesh/docs-web` | `build/` (`./scripts/publish.sh`) | `~/.config/mjolnir/identikey.json` |
+| `intentional` | intentional.agency, www.intentional.agency | `DkDaveebrZXCEoqxcFAJDLu7o2qqRm3zuBDfyGFCDcPZ` | `mjolnir/sites/intentional-agency/` | the folder itself | `~/.config/mjolnir/intentional-identikey.json` (host `/etc/mjolnir/intentional-identikey.json`) |
+| `park` | park.worldtree.network | `5N6QezYt2LhQyrNDywUvsYoaVJEC2xWDV7QTnfGRH6rw` | `mjolnir/sites/park/` | the folder itself | `~/.config/mjolnir/park-identikey.json` (host `/etc/mjolnir/park-identikey.json`) |
 
 `~/work/WorldTree/intentional.agency/` is notes, not the published tree.
 Skip `e2e` / `e2e2` / `prunetest` — fixtures, not materialized.
