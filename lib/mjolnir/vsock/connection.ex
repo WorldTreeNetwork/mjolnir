@@ -600,9 +600,24 @@ defmodule Mjolnir.Vsock.Connection do
         Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           {ok, error} =
             case Mjolnir.VM.deliver_message(target, source_vm_id, payload, opts) do
-              {:ok, _} -> {true, nil}
-              :ok -> {true, nil}
-              {:error, reason} -> {false, inspect(reason)}
+              {:ok, _} ->
+                {true, nil}
+
+              :ok ->
+                {true, nil}
+
+              {:error, :not_found} ->
+                case Mjolnir.Mailbox.accept(target, source_vm_id, payload, opts) do
+                  {:ok, _} ->
+                    Mjolnir.Mailbox.kick(target)
+                    {true, nil}
+
+                  {:error, reason} ->
+                    {false, inspect(reason)}
+                end
+
+              {:error, reason} ->
+                {false, inspect(reason)}
             end
 
           resp = Protocol.send_message_response(id, ok, error)

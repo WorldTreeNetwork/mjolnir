@@ -1106,6 +1106,67 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Caller mailbox (non-VM). Same @mail spool; peek does not tombstone.
+  get "/api/mail/:id/messages" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      messages = Mjolnir.Mailbox.list_unacked(id)
+      json(conn, 200, %{ok: true, messages: messages})
+    else
+      conn
+    end
+  end
+
+  post "/api/mail/:id/messages" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      from_id = conn.body_params["from_vm_id"] || "external"
+      payload = conn.body_params["payload"] || %{}
+      message_id = conn.body_params["id"]
+
+      case Mjolnir.Mailbox.accept(id, from_id, payload, id: message_id) do
+        {:ok, %{message_id: mid, status: status}} ->
+          Mjolnir.Mailbox.kick(id)
+          json(conn, 200, %{ok: true, message_id: mid, status: status})
+
+        {:error, :invalid_message_id} ->
+          json(conn, 400, %{error: "invalid_message_id"})
+
+        {:error, reason} ->
+          Logger.error("Mailbox accept failed for #{id}: #{inspect(reason)}")
+          json(conn, 500, %{error: "message_delivery_failed"})
+      end
+    else
+      conn
+    end
+  end
+
+  post "/api/mail/:id/ack" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      ids =
+        case conn.body_params["ids"] do
+          list when is_list(list) -> Enum.filter(list, &is_binary/1)
+          _ -> []
+        end
+
+      results =
+        Enum.map(ids, fn mid ->
+          case Mjolnir.Mailbox.ack(id, mid) do
+            :ok -> %{id: mid, ok: true}
+            {:error, reason} -> %{id: mid, ok: false, error: inspect(reason)}
+          end
+        end)
+
+      json(conn, 200, %{ok: true, results: results})
+    else
+      conn
+    end
+  end
+
   # Stop VM
   delete "/api/vms/:id" do
     conn = require_scope(conn, "vms:stop")

@@ -611,4 +611,47 @@ defmodule Mjolnir.API.RouterTest do
       assert vm_ids(conn) == ["meta-a", "meta-b", "meta-c"]
     end
   end
+
+  describe "caller mailbox REST" do
+    setup do
+      root =
+        Path.join(System.tmp_dir!(), "mjolnir-mail-api-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(root)
+      previous = Application.get_env(:mjolnir, :btrfs_root)
+      Application.put_env(:mjolnir, :btrfs_root, root)
+
+      on_exit(fn ->
+        Application.put_env(:mjolnir, :btrfs_root, previous)
+        File.rm_rf(root)
+      end)
+
+      %{box: "caller-#{System.unique_integer([:positive])}"}
+    end
+
+    test "POST then GET peeks without tombstone", %{box: box} do
+      conn =
+        request(:post, "/api/mail/#{box}/messages", %{
+          "id" => "r1",
+          "from_vm_id" => "guest",
+          "payload" => %{"reply" => true}
+        })
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["message_id"] == "r1"
+
+      conn = request(:get, "/api/mail/#{box}/messages")
+      assert conn.status == 200
+      listed = Jason.decode!(conn.resp_body)["messages"]
+      assert Enum.any?(listed, &(&1["message_id"] == "r1"))
+
+      conn = request(:post, "/api/mail/#{box}/ack", %{"ids" => ["r1"]})
+      assert conn.status == 200
+
+      conn = request(:get, "/api/mail/#{box}/messages")
+      listed = Jason.decode!(conn.resp_body)["messages"]
+      refute Enum.any?(listed, &(&1["message_id"] == "r1"))
+    end
+  end
 end

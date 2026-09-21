@@ -115,6 +115,17 @@ defmodule Mjolnir.MailboxTest do
     assert [%{"message_id" => "during-done"}] = Mailbox.list_unacked(vm_id)
   end
 
+  test "non-VM mailbox id uses the same spool", %{vm_id: _vm_id} do
+    box = "caller-#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{message_id: "r1", status: :queued}} =
+             Mailbox.accept(box, "guest-vm", %{"reply" => true}, id: "r1")
+
+    assert [%{"message_id" => "r1"}] = Mailbox.list_unacked(box)
+    assert :ok = Mailbox.ack(box, "r1")
+    assert Mailbox.list_unacked(box) == []
+  end
+
   test "guest send_message message_id is Mailbox.accept id", %{vm_id: vm_id} do
     assert [id: "turn-1"] =
              Mjolnir.Vsock.Connection.guest_send_opts(%{"message_id" => "turn-1"})
