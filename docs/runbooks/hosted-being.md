@@ -73,6 +73,10 @@ This is not a catalog `@base/` name.
 mj snapshot create <id> hosted-<xid>
 ```
 
+`hosted-*` snapshots pause the VM then strip `XAI_API_KEY` from grok
+config, shell history, and the storefront `.env` on the rootfs before
+the BTRFS snapshot. Tmpfs inject (`/run/mjolnir/`) is unchanged.
+
 Respawn from **that** snapshot with `preserve_iroh_key: true` so the
 ticket URL (and later CORS) survive. The flag already exists on
 `VM.spawn` and `POST /api/vms` — do not reimplement it.

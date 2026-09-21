@@ -1,8 +1,10 @@
 # add-honor-snapshot-key-scrub
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Bead `mjolnir-x97p.7` (from `mjolnir-3s6t`, fold 2026-09-19). Living
+Activated 2026-09-20 (ASK halt: activate scrub; leave Buzz DNS
+on the apex CNAME). Bead `mjolnir-x97p.7` (from `mjolnir-3s6t`,
+fold 2026-09-19). Living
 `honor-being` already refuses `XAI_API_KEY` in the storefront `.env`.
 Grok config, shell history, and anything written before
 `mj snapshot create` are unguarded.

@@ -17,6 +17,10 @@
 ## Skipped
 - none
 
+## Later (2026-09-20)
+- DNS pin (R4): leave CNAME to apex (user: don't bother)
+  Why: already `buzz.identikey.me` → `identikey.me` → `45.76.77.97`.
+
 ## Feeds change
 B0 is one named VM `buzz-relay` running Block's `deploy/compose/` behind `wss://buzz.identikey.me`. Gateway TLS. Secrets in `mj secrets`. NIP-OA on so `buzz-backend-mjolnir` has a hive that will accept provider-deployed agents. Not B1, not the provider deploy op, not host-sidecar data.
 

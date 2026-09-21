@@ -3205,11 +3205,12 @@ defmodule Mjolnir.VM do
           # No host-side fsync needed: guest sync is performed above, and
           # btrfs subvolume snapshot is atomic at the filesystem level.
 
-          # Create the snapshot (subvolume snapshot + metadata)
-          BTRFS.create_snapshot(state.id, name,
-            source_vm_id: state.id,
-            owner_id: opts[:owner_id] || state.owner_id
-          )
+          with :ok <- maybe_scrub_hosted_key(state, name) do
+            BTRFS.create_snapshot(state.id, name,
+              source_vm_id: state.id,
+              owner_id: opts[:owner_id] || state.owner_id
+            )
+          end
         after
           # Step 6: Always resume
           case state.hypervisor.resume_instance(state.socket_path) do
@@ -3223,6 +3224,23 @@ defmodule Mjolnir.VM do
 
       error ->
         error
+    end
+  end
+
+  defp maybe_scrub_hosted_key(state, name) do
+    if Mjolnir.HonorBeing.KeyScrub.hosted_snapshot_name?(name) do
+      rootfs = state.rootfs_path || Mjolnir.Reconcile.rootfs_path(state.id)
+
+      case Mjolnir.HonorBeing.KeyScrub.scrub_rootfs(rootfs) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Hosted-being key scrub failed for #{state.id}: #{inspect(reason)}")
+          {:error, {:key_scrub_failed, reason}}
+      end
+    else
+      :ok
     end
   end
 

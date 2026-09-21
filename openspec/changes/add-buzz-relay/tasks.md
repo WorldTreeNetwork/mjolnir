@@ -6,7 +6,7 @@ whose premise the live host still falsifies. Re-advise
 secrets tasks and added R2/R4/R6 lines.
 
 - [x] ASK: DNS — `buzz.identikey.me` CNAME `identikey.me` → A `45.76.77.97` (verified 2026-09-10 at Cloudflare authoritative; apex moved off Linode). Same target as `auth.identikey.me`.
-- [ ] ASK (low, R4): explicit `buzz.identikey.me` A `45.76.77.97` or CNAME `vm.worldtree.network` so the hive does not follow the apex if it moves again
+- [x] ASK (low, R4): explicit `buzz.identikey.me` A `45.76.77.97` or CNAME `vm.worldtree.network` so the hive does not follow the apex if it moves again — **leave CNAME to apex** (Duke 2026-09-20: don't bother pin)
 - [x] Author: sync `design.md` D3 (drop the Linode `74.207.254.179` text) and D4 (`EnvironmentFile=` → `sh -lc`, see below) with these tasks
 - [x] Correct `docs/gateway-routing.md` §"How to point a name" (stale wildcard Origin cert / `*.identikey.me` CNAME) or mark it aspirational
 - [x] Native units in the guest (R3): skopeo extract of `ghcr.io/block/buzz:main`; Ubuntu Postgres **16** (24.04 default, not pgdg 17); Redis 7.0.15; MinIO RELEASE.2025-09-07. 4096 MB. No dockerd.
