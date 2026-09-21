@@ -20,13 +20,17 @@ defmodule Mjolnir.Deploy.Manifest do
 
   ## A broken manifest is an error, never a fallback
 
-  A manifest that fails to parse or validate returns `{:error, …}`; it does
-  **not** fall through to framework detection. Falling through would deploy a
-  *different application* than the one the author described, and would do it
-  silently — a typo'd `start_command` becoming "we ran the SvelteKit default
-  instead" is the kind of failure that costs an afternoon. Unknown keys are
-  errors for the same reason: `start-command` (hyphen) must not be accepted and
-  ignored.
+  A manifest that fails to parse or whose *known* required fields are missing
+  or mistyped returns `{:error, …}`; it does **not** fall through to framework
+  detection. Falling through would deploy a *different application* than the
+  one the author described — a missing `start_command` becoming "we ran the
+  SvelteKit default instead" is the kind of failure that costs an afternoon.
+
+  Unknown keys and tables are ignored (HTTP-style: parse what we understand).
+  A newer `mjolnir.toml` with `[site]` or a future key must still load on an
+  older `mj`. A hyphenated typo (`start-command`) is then a missing
+  `start_command`, which still errors — the required-field check is the
+  safety net, not a closed key set.
 
   ## Fields
 
@@ -51,10 +55,6 @@ defmodule Mjolnir.Deploy.Manifest do
   alias Mjolnir.Deploy.BuildPlan
 
   @manifest_name "mjolnir.toml"
-
-  @required_keys ~w(start_command port)
-  @optional_keys ~w(steps runtime)
-  @known_keys @required_keys ++ @optional_keys
 
   @doc "The manifest filename Mjolnir looks for (`#{@manifest_name}`)."
   @spec filename() :: String.t()
@@ -115,8 +115,7 @@ defmodule Mjolnir.Deploy.Manifest do
   # --- validation ------------------------------------------------------------
 
   defp to_plan(map) do
-    with :ok <- reject_unknown_keys(map),
-         {:ok, start_command} <- fetch_string(map, "start_command"),
+    with {:ok, start_command} <- fetch_string(map, "start_command"),
          {:ok, port} <- fetch_port(map),
          {:ok, steps} <- fetch_steps(map),
          {:ok, runtime} <- fetch_optional_string(map, "runtime", "") do
@@ -128,21 +127,6 @@ defmodule Mjolnir.Deploy.Manifest do
          start_command: start_command,
          port: port
        }}
-    end
-  end
-
-  # A key we do not understand is a typo until proven otherwise. Accepting and
-  # ignoring it means the author's intent silently does nothing.
-  defp reject_unknown_keys(map) do
-    case Map.keys(map) -- @known_keys do
-      [] ->
-        :ok
-
-      unknown ->
-        {:error,
-         {:invalid_manifest,
-          "unknown key(s) #{Enum.map_join(Enum.sort(unknown), ", ", &inspect/1)} — " <>
-            "known keys are #{Enum.join(@known_keys, ", ")}"}}
     end
   end
 

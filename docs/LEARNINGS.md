@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-09-20 / mjolnir.toml:** Unknown keys are ignored (HTTP-style), not rejected. A committed `[site]` or future key must load on an older `mj`. Required-field checks still catch hyphen typos (`start-command` → `start_command is required`). Closed key sets break mixed-version checkouts.
+
 - **2026-09-20 / add-honor-being:** Folding architecture after implementing landings must not import unbuilt SHALLs (Forgejo key registration, prod CORS). `add-vm-git-subkey` already put git inject in the living spec; this fold only adds being-as-device + respawn. A skill-host Opus fold spawn twice wrote `ADVISE: accept` instead of archiving — Grok repaired the honor-being fold on HEAD.
 
 - **2026-09-10 / add-log-lsp:** pino `options.name` stamps a `name` key the first consumer's schema omitted, so `additionalProperties: false` failed every record. Envelope is library-owned. npm/bun install `optionalDependencies` by default — the win is "logger entry does not import LSP deps", not "apps do not download them".

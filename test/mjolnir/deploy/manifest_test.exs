@@ -165,14 +165,28 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert msg =~ "steps must be a list of strings"
     end
 
-    test "a typo'd key is an error, not silently ignored", %{dir: dir} do
-      # `start-command` with a hyphen would otherwise be accepted and dropped,
-      # and the real failure would surface much later as a missing field.
-      write_manifest(dir, ~s(start_command = "./run"\nport = 8080\nstart-command = "./other"))
+    test "unknown keys and tables are ignored so a newer mjolnir.toml loads", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      start-command = "./other"
+      future_flag = true
 
+      [site]
+      name = "blog"
+      dir = "dist"
+      """)
+
+      assert {:ok, %BuildPlan{start_command: "./run", port: 8080}} = Manifest.load(dir)
+    end
+
+    test "a hyphenated typo of a required key still fails as missing, not as unknown", %{
+      dir: dir
+    } do
+      write_manifest(dir, ~s(start-command = "./run"\nport = 8080))
       assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
-      assert msg =~ "unknown key"
-      assert msg =~ "start-command"
+      assert msg =~ "start_command is required"
+      refute msg =~ "unknown key"
     end
   end
 
