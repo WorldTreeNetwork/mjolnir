@@ -23,8 +23,8 @@ defmodule Mjolnir.Sites.Crypto do
   Blake3 hash of bytes. Returns raw 32-byte digest.
 
   Runs `mjolnir-b3` (configured `:blake3_bin`). Content-address for Sites
-  chunks and the blob door. IdentiKey fingerprints do **not** use this —
-  they stay SHA-256 as minted (see `IdentiKey.fingerprint/1`).
+  chunks and the blob door, and `IdentiKey.fingerprint/1` (Blake3 of the
+  raw ED25519 pubkey).
   """
   @spec blake3_hash(binary()) :: binary()
   def blake3_hash(bytes) when is_binary(bytes) do

@@ -75,9 +75,8 @@ Taskmaster or a guest.
 
 ## Sites
 
-`Mjolnir.Sites.Storage.Recrypt` speaks these routes. Content hashes are
-real Blake3 (`mjolnir-b3`). IdentiKey fingerprints stay SHA-256 as
-minted. Cutover:
+`Mjolnir.Sites.Storage.Recrypt` speaks these routes. Content hashes and
+IdentiKey fingerprints are real Blake3 (`mjolnir-b3`). Cutover:
 
 ```
 MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222

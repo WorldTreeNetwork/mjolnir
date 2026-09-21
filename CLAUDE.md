@@ -159,7 +159,7 @@ The full guest agent is built as part of `just deploy-full` (which runs `cargo b
 
 Universal host services on `:host_api_ip` (`10.200.0.1`, `dummy-mjolnir` — not loopback). Guests find locators in `/etc/mjolnir/vm.json`. Catalog: [`docs/guide/host-sidecars.md`](docs/guide/host-sidecars.md).
 
-- **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt: `MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222` (`mjolnir-u8v7.4`). Content hashes are real Blake3 (`mjolnir-b3`); fingerprints stay SHA-256.
+- **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt: `MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222` (`mjolnir-u8v7.4`). Content hashes and IdentiKey fingerprints are real Blake3 (`mjolnir-b3`). Live sites inventory: `docs/guide/live-sites.md`.
 - **Postgres** `:5432` — declared tenant DBs only (`DATABASE_URL` in deploy secrets). Runbook: `docs/runbooks/host-postgres-tenants.md`. Extra app keys: `mj secrets set <app> KEY` then redeploy. Guide: `docs/guide/deploying-an-app.md`.
 - **Redis** `:6379` — AUTH, AOF everysec, systemd not OTP (`REDIS_URL` in deploy secrets). Runbook: `docs/runbooks/host-redis.md`. ADR 0007.
 - **API** `:4000` — `api_url`. Guests do not get the localhost auth bypass.

@@ -25,11 +25,10 @@
 //!
 //! ## Crypto compatibility
 //!
-//! Chunk / snapshot hashes (`content_hash`) are real Blake3, matching
-//! `Mjolnir.Sites.Crypto.blake3_hash/1` and the blob door. IdentiKey
-//! fingerprints stay SHA-256 of the raw pubkey — that is how live fps were
-//! minted while the Elixir hash was a stub. Do not retarget fps without a
-//! keyspace migration.
+//! Chunk / snapshot hashes (`content_hash`) and IdentiKey fingerprints are
+//! real Blake3, matching `Mjolnir.Sites.Crypto.blake3_hash/1` and the blob
+//! door. Fingerprints are Blake3 of the raw ED25519 pubkey (not
+//! auth-challenge v1 §5, which hashes a dCBOR `{alg,key}` map).
 //!
 //! The base58 encoder is a plain big-integer conversion with **no leading-zero
 //! handling** — it mirrors `Crypto.base58_encode/1` exactly, which means a
@@ -170,7 +169,7 @@ impl HeadRecord {
 
 mod crypto {
     use hmac::{Hmac, Mac};
-    use sha2::{Digest, Sha256};
+    use sha2::Sha256;
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -216,9 +215,11 @@ mod crypto {
         *blake3::hash(bytes).as_bytes()
     }
 
-    /// SHA-256 of `bytes` as base58 — IdentiKey fingerprints only.
+    /// Blake3 of `bytes` as base58 — IdentiKey fingerprints. Same digest as
+    /// `content_hash_base58`; kept as a named seam so fingerprint call sites
+    /// stay obvious.
     pub fn fingerprint_hash_base58(bytes: &[u8]) -> String {
-        base58_encode(&Sha256::digest(bytes))
+        content_hash_base58(bytes)
     }
 
     /// `content_hash` in base58 — the form that appears on the wire.
@@ -394,7 +395,7 @@ impl Keypair {
         })?)
     }
 
-    /// base58 SHA-256 of the public key — live fps were minted this way.
+    /// base58 Blake3 of the raw public key — `IdentiKey.fingerprint/1`.
     fn fingerprint(&self) -> String {
         crypto::fingerprint_hash_base58(&self.public)
     }

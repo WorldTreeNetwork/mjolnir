@@ -146,7 +146,7 @@ config :mjolnir,
   # Origin of mjolnir-blob-door (only read by the Recrypt backend).
   # Overridable via MJOLNIR_RECRYPT_STORAGE_URL (e.g. http://10.200.0.1:7222).
   recrypt_storage_url: nil,
-  # Real Blake3 (`mjolnir-b3`). Content hashes only; fingerprints stay SHA-256.
+  # Real Blake3 (`mjolnir-b3`). Content hashes and IdentiKey fingerprints.
   blake3_bin: "/opt/mjolnir/bin/mjolnir-b3",
 
   # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
