@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use http::{header, HeaderMap, HeaderValue, Request, Response, StatusCode};
+use http::{header, HeaderMap, HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Empty, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
@@ -174,18 +174,33 @@ pub async fn serve_connection<S>(
     stream: S,
     header_buf: Vec<u8>,
     dir: PathBuf,
+    site_dir: PathBuf,
+    park_dir: Option<PathBuf>,
     expected_host: String,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let dir = Arc::new(dir);
+    let policy = Arc::new(read_fallback_policy(&site_dir).await);
+    let park_dir = Arc::new(park_dir);
     let expected_host = Arc::new(expected_host);
     let io = TokioIo::new(PrefixedStream::new(header_buf, stream));
 
     let service = service_fn(move |req: Request<Incoming>| {
         let dir = dir.clone();
+        let policy = policy.clone();
+        let park_dir = park_dir.clone();
         let expected_host = expected_host.clone();
-        async move { serve_request(&dir, &expected_host, req).await }
+        async move {
+            serve_request(
+                &dir,
+                policy.as_ref(),
+                park_dir.as_deref(),
+                &expected_host,
+                req,
+            )
+            .await
+        }
     });
 
     if let Err(e) = hyper::server::conn::http1::Builder::new()
@@ -199,6 +214,8 @@ pub async fn serve_connection<S>(
 /// Handle one request against the snapshot directory.
 async fn serve_request(
     dir: &Path,
+    policy: &FallbackPolicy,
+    park_dir: Option<&Path>,
     expected_host: &str,
     req: Request<Incoming>,
 ) -> Result<Response<SiteBody>, Infallible> {
@@ -221,6 +238,7 @@ async fn serve_request(
     }
 
     let path = req.uri().path().to_owned();
+    let method = req.method().clone();
     let req_headers = req.headers().clone();
 
     let serve = ServeDir::new(dir)
@@ -242,7 +260,7 @@ async fn serve_request(
     // A static site's miss is a 404, not an SPA rewrite: serve the snapshot's
     // own 404.html but keep the 404 status.
     if resp.status() == StatusCode::NOT_FOUND {
-        return Ok(not_found_response(dir, &req_headers).await);
+        return Ok(fallback_response(dir, policy, park_dir, &method, &req_headers).await);
     }
 
     // tower-http emits Last-Modified but no ETag. Synthesize a strong-enough
@@ -277,30 +295,108 @@ fn finish(resp: &mut Response<SiteBody>, path: &str) {
         .insert(header::VARY, HeaderValue::from_static("accept-encoding"));
 }
 
-/// Build the 404 response: the snapshot's `404.html` if it has one (honoring
-/// precompressed siblings), with status 404 — never 200.
-async fn not_found_response(dir: &Path, req_headers: &HeaderMap) -> Response<SiteBody> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FallbackPolicy {
+    Unset,
+    Index,
+    NotFound,
+    Empty,
+    Invalid,
+}
+
+async fn read_fallback_policy(site_dir: &Path) -> FallbackPolicy {
+    match tokio::fs::read(site_dir.join("fallback")).await {
+        Ok(bytes) if bytes == b"index.html" => FallbackPolicy::Index,
+        Ok(bytes) if bytes == b"404.html" => FallbackPolicy::NotFound,
+        Ok(bytes) if bytes == b"false" => FallbackPolicy::Empty,
+        Ok(_) => FallbackPolicy::Invalid,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => FallbackPolicy::Unset,
+        Err(_) => FallbackPolicy::Invalid,
+    }
+}
+
+async fn fallback_response(
+    dir: &Path,
+    policy: &FallbackPolicy,
+    park_dir: Option<&Path>,
+    method: &Method,
+    req_headers: &HeaderMap,
+) -> Response<SiteBody> {
+    match policy {
+        FallbackPolicy::Index => {
+            serve_fallback_file(dir, "index.html", method, req_headers, StatusCode::OK).await
+        }
+        FallbackPolicy::NotFound => {
+            serve_fallback_file(dir, "404.html", method, req_headers, StatusCode::NOT_FOUND).await
+        }
+        FallbackPolicy::Empty | FallbackPolicy::Invalid => empty_not_found(),
+        FallbackPolicy::Unset if dir.join("404.html").is_file() => {
+            serve_fallback_file(dir, "404.html", method, req_headers, StatusCode::NOT_FOUND).await
+        }
+        FallbackPolicy::Unset => match park_dir {
+            Some(park) => {
+                serve_fallback_file(park, "404.html", method, req_headers, StatusCode::NOT_FOUND)
+                    .await
+            }
+            None => empty_not_found(),
+        },
+    }
+}
+
+async fn serve_fallback_file(
+    dir: &Path,
+    file: &str,
+    method: &Method,
+    req_headers: &HeaderMap,
+    success_status: StatusCode,
+) -> Response<SiteBody> {
     let mut req = Request::new(Empty::<Bytes>::new());
-    *req.uri_mut() = "/404.html".parse().expect("static uri");
+    *req.method_mut() = method.clone();
+    *req.uri_mut() = format!("/{file}").parse().expect("static uri");
     if let Some(ae) = req_headers.get(header::ACCEPT_ENCODING) {
         req.headers_mut()
             .insert(header::ACCEPT_ENCODING, ae.clone());
     }
+    if success_status == StatusCode::OK {
+        if let Some(value) = req_headers.get(header::IF_MODIFIED_SINCE) {
+            req.headers_mut()
+                .insert(header::IF_MODIFIED_SINCE, value.clone());
+        }
+    }
 
-    let serve = ServeFile::new(dir.join("404.html"))
+    let serve = ServeFile::new(dir.join(file))
         .precompressed_br()
         .precompressed_gzip();
 
     let mut resp = match serve.oneshot(req).await {
-        Ok(r) if r.status() == StatusCode::OK => r.map(|body| body.boxed_unsync()),
-        _ => {
-            let mut plain = text_response(StatusCode::NOT_FOUND, "Not Found");
-            finish(&mut plain, "/404.html");
-            return plain;
+        Ok(r) if matches!(r.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) => {
+            r.map(|body| body.boxed_unsync())
         }
+        _ => return empty_not_found(),
     };
-    // ServeFile answers 200; this is a miss, so correct the status.
+    if resp.status() == StatusCode::OK {
+        if let Some(etag) = derive_etag(resp.headers()) {
+            if success_status == StatusCode::OK && if_none_match_matches(req_headers, &etag) {
+                let mut not_modified = Response::new(empty_body());
+                *not_modified.status_mut() = StatusCode::NOT_MODIFIED;
+                copy_validators(resp.headers(), not_modified.headers_mut());
+                not_modified.headers_mut().insert(header::ETAG, etag);
+                finish(&mut not_modified, &format!("/{file}"));
+                return not_modified;
+            }
+            resp.headers_mut().insert(header::ETAG, etag);
+        }
+        *resp.status_mut() = success_status;
+    }
+    finish(&mut resp, &format!("/{file}"));
+    resp
+}
+
+fn empty_not_found() -> Response<SiteBody> {
+    let mut resp = Response::new(empty_body());
     *resp.status_mut() = StatusCode::NOT_FOUND;
+    resp.headers_mut()
+        .insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
     finish(&mut resp, "/404.html");
     resp
 }
@@ -404,6 +500,10 @@ mod tests {
     /// return the raw response bytes — mirrors the connection-level tests in
     /// `main.rs`.
     async fn round_trip(dir: &Path, request: &str) -> String {
+        round_trip_with_park(dir, None, request).await
+    }
+
+    async fn round_trip_with_park(dir: &Path, park_dir: Option<PathBuf>, request: &str) -> String {
         let (client_end, server_end) = tokio::io::duplex(65536);
         let dir = dir.to_path_buf();
 
@@ -430,7 +530,20 @@ mod tests {
             server_end.read_exact(&mut scratch).await.unwrap();
         }
 
-        serve_connection(server_end, header_buf, dir, "blog.duke.io".into()).await;
+        let site_dir = dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("snapshot has site parent")
+            .to_path_buf();
+        serve_connection(
+            server_end,
+            header_buf,
+            dir,
+            site_dir,
+            park_dir,
+            "blog.duke.io".into(),
+        )
+        .await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let bytes = collected.lock().await.clone();
         String::from_utf8_lossy(&bytes).into_owned()
@@ -535,6 +648,62 @@ mod tests {
             resp.contains("<h1>nope</h1>"),
             "404.html body must be served: {resp}"
         );
+    }
+
+    #[tokio::test]
+    async fn spa_policy_rewrites_miss_to_index_with_html_cache_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, current) = make_site(&tmp);
+        let dir = resolve_snapshot_dir(&root, &current).await.unwrap();
+        std::fs::write(current.parent().unwrap().join("fallback"), b"index.html").unwrap();
+        let resp = round_trip(
+            &dir,
+            "GET /_app/immutable/missing.js HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.contains("<h1>home</h1>"), "got: {resp}");
+        assert!(resp.contains(CC_REVALIDATE), "got: {resp}");
+        assert!(!resp.contains(CC_IMMUTABLE), "got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn false_policy_returns_empty_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, current) = make_site(&tmp);
+        let dir = resolve_snapshot_dir(&root, &current).await.unwrap();
+        std::fs::write(current.parent().unwrap().join("fallback"), b"false").unwrap();
+        let resp = round_trip(
+            &dir,
+            "GET /missing HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "got: {resp}");
+        assert!(!resp.contains("<h1>nope</h1>"), "got: {resp}");
+        assert!(
+            resp.ends_with("\r\n\r\n"),
+            "empty response expected: {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unset_policy_uses_park_404_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (root, current) = make_site(&tmp);
+        let dir = resolve_snapshot_dir(&root, &current).await.unwrap();
+        std::fs::remove_file(dir.join("404.html")).unwrap();
+        let park = tmp.path().join("park-snapshot");
+        std::fs::create_dir_all(&park).unwrap();
+        std::fs::write(park.join("404.html"), b"PARK CHROME").unwrap();
+        let resp = round_trip_with_park(
+            &dir,
+            Some(park),
+            "GET /missing HTTP/1.1\r\nHost: blog.duke.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "got: {resp}");
+        assert!(resp.contains("PARK CHROME"), "got: {resp}");
+        assert!(!resp.contains("location:"), "live miss redirected: {resp}");
     }
 
     #[tokio::test]

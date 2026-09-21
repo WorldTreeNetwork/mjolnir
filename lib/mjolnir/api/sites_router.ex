@@ -53,6 +53,7 @@ defmodule Mjolnir.API.SitesRouter do
 
   alias Mjolnir.Sites.{
     AliasRecord,
+    FallbackPolicy,
     HeadIndex,
     HeadRecord,
     Manifest,
@@ -162,6 +163,25 @@ defmodule Mjolnir.API.SitesRouter do
   end
 
   ## HEAD pointer
+
+  post "/:fp/:name/commit" do
+    with {:ok, bytes, conn} <- read_full_body(conn),
+         {:ok, payload} <- Jason.decode(bytes),
+         {:ok, head_bytes} <- decode_commit_field(payload, "head"),
+         {:ok, policy_bytes} <- decode_optional_commit_field(payload, "fallback"),
+         {:ok, record} <- HeadRecord.parse(head_bytes),
+         :ok <- check_head_matches(record, fp, name),
+         {:ok, policy} <- parse_commit_policy(policy_bytes, fp, name, record.sequence),
+         {:ok, committed} <-
+           commit_head_and_policy(fp, name, head_bytes, record, policy_bytes, policy) do
+      _ = HeadIndex.upsert(committed)
+      materialize(committed)
+      json(conn, 200, %{ok: true, sequence: committed.sequence})
+    else
+      {:error, :sequence_regression} -> json(conn, 409, %{error: "sequence_regression"})
+      {:error, reason} -> json(conn, 400, %{error: inspect(reason)})
+    end
+  end
 
   post "/:fp/:name/head" do
     with {:ok, bytes, conn} <- read_full_body(conn),
@@ -427,6 +447,99 @@ defmodule Mjolnir.API.SitesRouter do
   end
 
   defp head_key(site_name), do: "sites/#{site_name}/HEAD"
+
+  defp fallback_key(site_name), do: "sites/#{site_name}/fallback"
+
+  defp decode_commit_field(payload, key) do
+    with value when is_binary(value) <- Map.get(payload, key),
+         {:ok, decoded} <- Base.decode64(value) do
+      {:ok, decoded}
+    else
+      _ -> {:error, {:bad_commit_field, key}}
+    end
+  end
+
+  defp decode_optional_commit_field(payload, key) do
+    case Map.get(payload, key) do
+      nil -> {:ok, nil}
+      value when is_binary(value) -> Base.decode64(value)
+      _ -> {:error, {:bad_commit_field, key}}
+    end
+  end
+
+  defp parse_commit_policy(nil, _fp, _name, _sequence), do: {:ok, nil}
+
+  defp parse_commit_policy(bytes, fp, name, sequence) do
+    with {:ok, policy} <- FallbackPolicy.parse(bytes),
+         :ok <- equal_or_error(policy.identikey_fp, fp, :identikey_mismatch),
+         :ok <- equal_or_error(policy.site_name, name, :site_mismatch),
+         :ok <- equal_or_error(policy.sequence, sequence, :sequence_mismatch),
+         :ok <- FallbackPolicy.verify(policy) do
+      {:ok, policy}
+    end
+  end
+
+  defp equal_or_error(value, value, _error), do: :ok
+  defp equal_or_error(_left, _right, error), do: {:error, error}
+
+  defp commit_head_and_policy(fp, name, head_bytes, record, policy_bytes, _policy) do
+    :global.trans({__MODULE__, fp, name}, fn ->
+      with :ok <- check_head_monotonic(record, fp, name) do
+        previous = SecretStore.get(fp, fallback_key(name))
+
+        with :ok <- write_policy_record(fp, name, policy_bytes),
+             :ok <- SecretStore.put(fp, head_key(name), head_bytes) do
+          {:ok, record}
+        else
+          {:error, _} = error ->
+            _ = restore_policy_record(fp, name, previous)
+            error
+        end
+      end
+    end)
+  end
+
+  # The new record is verified above. Keeping this dispatch here avoids
+  # changing SecretStore's existing HEAD/manifest canonical signed field sets.
+  defp write_policy_record(fp, name, nil) do
+    case File.rm(policy_record_path(fp, name)) do
+      :ok -> :ok
+      {:error, :enoent} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp write_policy_record(fp, name, bytes) when is_binary(bytes) do
+    path = policy_record_path(fp, name)
+    tmp = path <> ".tmp-#{System.unique_integer([:positive])}"
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(tmp, bytes),
+         :ok <- File.rename(tmp, path) do
+      :ok
+    else
+      error ->
+        _ = File.rm(tmp)
+        error
+    end
+  end
+
+  defp restore_policy_record(fp, name, {:ok, bytes}), do: write_policy_record(fp, name, bytes)
+  defp restore_policy_record(fp, name, :not_found), do: write_policy_record(fp, name, nil)
+  defp restore_policy_record(_fp, _name, {:error, _}), do: :ok
+
+  defp policy_record_path(fp, name) do
+    if safe_record_component?(fp) and safe_record_component?(name) do
+      Path.join([SecretStore.root(), fp, "sites", name, "fallback"])
+    else
+      raise ArgumentError, "unsafe site policy path"
+    end
+  end
+
+  defp safe_record_component?(value) do
+    is_binary(value) and value != "" and value not in [".", ".."] and
+      not String.contains?(value, ["/", "\\", <<0>>])
+  end
 
   defp alias_key(site_name, fqdn), do: "sites/#{site_name}/aliases/#{fqdn}"
 

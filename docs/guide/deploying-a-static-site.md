@@ -157,17 +157,27 @@ ls dist/index.html     # must exist
 - Walks every regular file recursively. Dotfiles are included.
 - Does **not** honor `.gitignore`. The input is a build output; those are
   usually gitignored as a whole.
-- Does **not** rewrite SPA routes. A miss is a 404. Directory URLs get
-  `index.html` (`/about/` → `/about/index.html`). Extensionless client-side
-  routers (`/about` with no file) 404 unless you prerendered that path.
-- A `404.html` in the snapshot is served on miss, with a 404 status.
+- Miss behavior is configured in `mjolnir.toml`, first in the published
+  directory and then in its parent. This is a site-only configuration; it does
+  not require VM deploy fields such as `start_command` or `port`.
+- `[site] fallback = "index.html"` serves the root `index.html` at status 200
+  for client-rendered SPA deep links. `[site] fallback = "404.html"` serves the
+  snapshot's custom error page at status 404. `[site] fallback = false` returns
+  an empty 404.
+- With no configured fallback, a snapshot `404.html` wins. If it is absent,
+  the gateway serves the park site's `404.html` at status 404 on the original
+  Host; a live site miss never redirects to park.
 - Per-file upload limit is **64 MiB**. Larger files are rejected.
 - Symlinks: skip them in the source. Do not rely on `node_modules` links
   or `dist → somewhere-else`.
 
-If the site is a client-rendered SPA with no prerender, Sites is the wrong
-fit unless you also emit a real HTML file per route. Use `adapter-static`
-(or equivalent) with prerender, or [deploy the app](deploying-an-app.md).
+For a client-rendered SPA, put this beside the app root (or inside the output
+directory):
+
+```toml
+[site]
+fallback = "index.html"
+```
 
 ---
 

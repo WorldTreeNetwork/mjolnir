@@ -56,7 +56,7 @@ defmodule Mjolnir.Sites.Materializer do
   require Logger
 
   alias Mjolnir.SecretStore
-  alias Mjolnir.Sites.{HeadRecord, Manifest, Server, Store}
+  alias Mjolnir.Sites.{FallbackPolicy, HeadRecord, Manifest, Server, Store}
 
   @default_retention 5
   @min_compress_size 1024
@@ -147,7 +147,8 @@ defmodule Mjolnir.Sites.Materializer do
          :ok <- check_manifest_matches(manifest, identikey_fp, site_name),
          {:ok, tmp} <- build_tree(manifest, identikey_fp, site_name, snapshot_hash),
          {:ok, dir} <- install_tree(tmp, identikey_fp, site_name, snapshot_hash),
-         :ok <- flip_current(identikey_fp, site_name, snapshot_hash) do
+         :ok <- flip_current(identikey_fp, site_name, snapshot_hash),
+         :ok <- materialize_fallback(identikey_fp, site_name) do
       if Keyword.get(opts, :prune, true), do: prune(identikey_fp, site_name, opts)
 
       {:ok, dir}
@@ -195,6 +196,41 @@ defmodule Mjolnir.Sites.Materializer do
       {:ok, bytes} -> {:ok, bytes}
       :not_found -> {:error, :no_head}
       err -> err
+    end
+  end
+
+  defp materialize_fallback(identikey_fp, site_name) do
+    path = Path.join(site_dir(identikey_fp, site_name), "fallback")
+
+    case SecretStore.get(identikey_fp, "sites/#{site_name}/fallback") do
+      {:ok, bytes} ->
+        with {:ok, policy} <- FallbackPolicy.parse(bytes) do
+          atomic_write_fallback(path, FallbackPolicy.materialized_value(policy))
+        end
+
+      :not_found ->
+        case File.rm(path) do
+          :ok -> :ok
+          {:error, :enoent} -> :ok
+          {:error, reason} -> {:error, {:fallback_remove_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:fallback_read_failed, reason}}
+    end
+  end
+
+  defp atomic_write_fallback(path, bytes) do
+    tmp = path <> ".tmp-#{System.unique_integer([:positive])}"
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(tmp, bytes),
+         :ok <- File.rename(tmp, path) do
+      :ok
+    else
+      error ->
+        _ = File.rm(tmp)
+        {:error, {:fallback_write_failed, error}}
     end
   end
 

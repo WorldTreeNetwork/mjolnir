@@ -36,7 +36,7 @@
 //! Bitcoin base58check, so the `bs58` crate cannot be substituted here.
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::api::api_client;
@@ -102,6 +102,76 @@ struct HeadRecord {
     site_name: String,
     snapshot_hash: String,
     version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SiteFallback {
+    Index,
+    NotFound,
+    Empty,
+}
+
+impl Serialize for SiteFallback {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Index => serializer.serialize_str("index.html"),
+            Self::NotFound => serializer.serialize_str("404.html"),
+            Self::Empty => serializer.serialize_bool(false),
+        }
+    }
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+struct FallbackRecord {
+    created_at: String,
+    fallback: SiteFallback,
+    identikey_fp: String,
+    sequence: u64,
+    signature: Option<MultiSig>,
+    site_name: String,
+}
+
+impl FallbackRecord {
+    fn canonical_signing_bytes(&self) -> Result<Vec<u8>> {
+        let mut unsigned = self.clone();
+        unsigned.signature = None;
+        Ok(serde_json::to_vec(&unsigned)?)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SiteConfigFile {
+    site: Option<SiteConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SiteConfig {
+    fallback: Option<toml::Value>,
+}
+
+fn read_site_fallback(dir: &Path) -> Result<Option<SiteFallback>> {
+    let local = dir.join("mjolnir.toml");
+    let parent = dir.parent().map(|p| p.join("mjolnir.toml"));
+    let path = if local.is_file() {
+        Some(local)
+    } else {
+        parent.filter(|p| p.is_file())
+    };
+    let Some(path) = path else { return Ok(None) };
+    let bytes = std::fs::read_to_string(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    let config: SiteConfigFile = toml::from_str(&bytes)
+        .with_context(|| format!("invalid site configuration {}", path.display()))?;
+    match config.site.and_then(|site| site.fallback) {
+        None => Ok(None),
+        Some(toml::Value::String(value)) if value == "index.html" => Ok(Some(SiteFallback::Index)),
+        Some(toml::Value::String(value)) if value == "404.html" => Ok(Some(SiteFallback::NotFound)),
+        Some(toml::Value::Boolean(false)) => Ok(Some(SiteFallback::Empty)),
+        Some(value) => bail!("invalid [site].fallback in {}: expected \"index.html\", \"404.html\", or false; got {}", path.display(), value),
+    }
 }
 
 /// Custom-domain alias record (`Mjolnir.Sites.AliasRecord`). Field order is the
@@ -641,6 +711,7 @@ pub async fn cmd_publish(
     if !dir.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
+    let fallback = read_site_fallback(&dir)?;
 
     // `--base-url` mirrors the mix task; without it fall back to the profile's
     // configured API, so `mj sites publish` behaves like every other subcommand.
@@ -729,14 +800,15 @@ pub async fn cmd_publish(
         eprintln!("  all chunks already present");
     }
 
-    // 4. Flip HEAD to the new snapshot.
-    let head_sequence = post_head(
+    // 4. Commit unchanged HEAD bytes and the separate policy together.
+    let head_sequence = commit_head_and_fallback(
         &client,
         &base,
         identikey_fp,
         site,
         &snapshot.snapshot_hash,
         sequence,
+        fallback,
         keypair.as_ref(),
     )
     .await?;
@@ -1133,6 +1205,69 @@ async fn post_head(
     Ok(parsed.sequence)
 }
 
+async fn commit_head_and_fallback(
+    client: &reqwest::Client,
+    base: &str,
+    fp: &str,
+    site: &str,
+    snapshot_hash: &str,
+    sequence: u64,
+    fallback: Option<SiteFallback>,
+    keypair: Option<&Keypair>,
+) -> Result<u64> {
+    let mut head = HeadRecord {
+        created_at: now_iso8601(),
+        identikey_fp: fp.to_string(),
+        sequence,
+        signature: None,
+        site_name: site.to_string(),
+        snapshot_hash: snapshot_hash.to_string(),
+        version: 1,
+    };
+    if let Some(kp) = keypair {
+        head.signature = Some(kp.multi_sig(&head.canonical_signing_bytes()?));
+    }
+    let fallback_bytes = match fallback {
+        Some(value) => {
+            let kp = keypair.context("[site].fallback requires a signing keypair")?;
+            let mut record = FallbackRecord {
+                created_at: now_iso8601(),
+                fallback: value,
+                identikey_fp: fp.to_string(),
+                sequence,
+                signature: None,
+                site_name: site.to_string(),
+            };
+            record.signature = Some(kp.multi_sig(&record.canonical_signing_bytes()?));
+            Some(serde_json::to_vec(&record)?)
+        }
+        None => None,
+    };
+    use base64::Engine as _;
+    let payload = serde_json::json!({
+        "head": base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&head)?),
+        "fallback": fallback_bytes.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)),
+    });
+    let resp = client
+        .post(format!("{}/api/sites/{}/{}/commit", base, fp, site))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .context("HEAD and fallback commit request failed")?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::CONFLICT {
+        bail!("publish commit rejected: sequence {} is not greater than the server's current sequence", sequence);
+    }
+    if status != reqwest::StatusCode::OK {
+        bail!("publish commit failed ({}): {}", status, text.trim());
+    }
+    let parsed: HeadResponse = serde_json::from_str(&text)
+        .with_context(|| format!("unexpected commit response: {}", text.trim()))?;
+    Ok(parsed.sequence)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1140,6 +1275,60 @@ async fn post_head(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_test_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mjolnir-sites-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn site_fallback_reads_output_dir_then_parent() {
+        let tmp = config_test_dir("precedence");
+        let dist = tmp.join("dist");
+        std::fs::create_dir(&dist).unwrap();
+        std::fs::write(
+            tmp.join("mjolnir.toml"),
+            "[site]\nfallback = \"index.html\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_site_fallback(&dist).unwrap(),
+            Some(SiteFallback::Index)
+        );
+
+        std::fs::write(dist.join("mjolnir.toml"), "[site]\nfallback = false\n").unwrap();
+        assert_eq!(
+            read_site_fallback(&dist).unwrap(),
+            Some(SiteFallback::Empty)
+        );
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn site_fallback_rejects_invalid_known_value_without_deploy_fields() {
+        let tmp = config_test_dir("invalid");
+        std::fs::write(tmp.join("mjolnir.toml"), "[site]\nfallback = true\n").unwrap();
+        assert!(read_site_fallback(&tmp).is_err());
+
+        std::fs::write(
+            tmp.join("mjolnir.toml"),
+            "[site]\nfallback = \"404.html\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_site_fallback(&tmp).unwrap(),
+            Some(SiteFallback::NotFound)
+        );
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
     use std::io::Write;
 
     /// Vectors captured from the Elixir implementation by evaluating

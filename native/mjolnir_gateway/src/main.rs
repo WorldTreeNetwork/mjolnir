@@ -989,6 +989,7 @@ struct AppCtx {
     routes: Arc<ArcSwap<RouteTable>>,
     iroh_cfg: Arc<IrohConfig>,
     sites_resolver: Option<SitesResolver>,
+    park_cache: Arc<sites_mod::ParkSnapshotCache>,
 }
 
 /// Handle a single incoming connection (plain TCP or TLS). `sni_hostname`, when
@@ -1134,6 +1135,11 @@ async fn handle_connection<S>(
                                 stream,
                                 header_buf,
                                 dir,
+                                current
+                                    .parent()
+                                    .expect("current has site parent")
+                                    .to_path_buf(),
+                                ctx.park_cache.resolve(resolver).await,
                                 host_bare.to_owned(),
                             )
                             .await;
@@ -1206,6 +1212,11 @@ async fn handle_connection<S>(
                                 stream,
                                 header_buf,
                                 dir,
+                                current
+                                    .parent()
+                                    .expect("current has site parent")
+                                    .to_path_buf(),
+                                ctx.park_cache.resolve(resolver).await,
                                 host_bare.to_owned(),
                             )
                             .await;
@@ -1705,6 +1716,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         routes: route_table.clone(),
         iroh_cfg,
         sites_resolver: loaded.sites_resolver.clone(),
+        park_cache: Arc::new(sites_mod::ParkSnapshotCache::default()),
     });
 
     // ── SIGHUP handler ────────────────────────────────────────────────────────
@@ -2756,6 +2768,7 @@ mod tests {
                 default_port: 80,
             }),
             sites_resolver: None,
+            park_cache: Arc::new(sites_mod::ParkSnapshotCache::default()),
         });
 
         let (client_end, proxy_side) = tokio::io::duplex(8192);
@@ -2817,6 +2830,7 @@ mod tests {
                 default_port: 80,
             }),
             sites_resolver: None,
+            park_cache: Arc::new(sites_mod::ParkSnapshotCache::default()),
         });
 
         // SNI says git.worldtree.network; Host header says admin.worldtree.network.
@@ -2881,6 +2895,7 @@ mod tests {
                 default_port: 80,
             }),
             sites_resolver: Some(resolver),
+            park_cache: Arc::new(sites_mod::ParkSnapshotCache::default()),
         })
     }
 
@@ -3155,7 +3170,8 @@ mod tests {
         .await;
         assert!(
             resp.starts_with("HTTP/1.1 307 Temporary Redirect")
-                && resp.contains("Location: https://park.worldtree.network/?from=worldtree.network"),
+                && resp
+                    .contains("Location: https://park.worldtree.network/?from=worldtree.network"),
             "a Sites miss must redirect to the berth: {resp}"
         );
     }
