@@ -2,11 +2,13 @@
 
 What is built. Folded from
 [`add-buzz-local-client`](../../changes/archive/2026-08-16-add-buzz-local-client/proposal.md)
-on 2026-08-16, from `mjolnir-1pe` on 2026-08-17, and from
+on 2026-08-16, from `mjolnir-1pe` on 2026-08-17, from
 [`add-buzz-local-runtime`](../../changes/archive/2026-09-10-add-buzz-local-runtime/proposal.md)
-on 2026-09-10. Decisions live in
+on 2026-09-10, and from
+[`add-buzz-relay`](../../changes/archive/2026-09-20-add-buzz-relay/proposal.md)
+on 2026-09-20. Decisions live in
 [`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md).
-B0 hive / NIP-OA is `add-buzz-relay`. Catalog names are ADR 0009.
+Catalog names are ADR 0009.
 
 ## Purpose
 
@@ -17,7 +19,9 @@ The agent nsec is an opaque SecretStore blob, not a field on the VM
 record. Nostr enters through `Mjolnir.Buzz.Facade`; that ingress is
 the named wake producer; last hop is a conformant Nostr event.
 `identikey-admit` is the portable protocol crate; `Mjolnir.Admit`
-remains the v1 Elixir evaluator.
+remains the v1 Elixir evaluator. The B0 target relay is one stateful
+guest we run at `wss://buzz.identikey.me`, backed up by snapshot, not
+redeployed.
 
 ## Requirements
 
@@ -182,3 +186,61 @@ Rustler NIF.
 - GIVEN the admit protocol published from `identikey-protocol`
 - WHEN a gateway plugin or CDN origin adapter depends on it
 - THEN it does not pull `identikey-core` or an AGPL obligation
+
+### Requirement: B0 self-hosted relay VM
+
+A named Mjolnir app `buzz-relay` SHALL run the Buzz relay, Postgres,
+Redis, and MinIO as systemd units inside **one** guest (Block
+`deploy/compose/.env` is the env contract, not the runtime). That
+guest's filesystem SHALL hold the community event log, object store,
+and git volume. The advertised `RELAY_URL` SHALL be
+`wss://buzz.identikey.me` from first boot (scheme, host, and empty
+port, byte for byte). TLS SHALL terminate at the Mjolnir gateway;
+the guest SHALL NOT run the Caddy overlay. The hive SHALL be treated
+as stateful: a deploy cutover that boots a fresh rootfs SHALL NOT be
+the upgrade path. `mj snapshot create` SHALL be the backup verb.
+
+Restoring that backup is not self-contained: escrow is keyed by
+`vm_id` and a `--snapshot` spawn mints a new one, so the managed
+secrets must be carried across by hand
+([`docs/runbooks/buzz-relay-restore.md`](../../../docs/runbooks/buzz-relay-restore.md)).
+
+#### Scenario: Liveness on the vanity name
+
+- GIVEN `buzz-relay` is running and `mj domain set buzz-relay buzz.identikey.me` has been applied
+- WHEN a client requests `https://buzz.identikey.me/_liveness`
+- THEN the response is HTTP 200
+
+#### Scenario: Snapshot includes the hive
+
+- GIVEN a self-hosted Buzz relay running as that VM
+- WHEN the VM is snapshotted
+- THEN the snapshot includes the event log (Postgres data directory)
+- AND community events are not stored on the host Postgres sidecar
+
+#### Scenario: RELAY_URL matches Join
+
+- GIVEN the relay process
+- WHEN Buzz Desktop joins with `wss://buzz.identikey.me`
+- THEN NIP-11 / NIP-42 challenges advertise that exact URL
+- AND NIP-98 does not 401 solely because of a host/port/scheme mismatch
+
+### Requirement: Provider-deployed identity on our relay
+
+A self-hosted Buzz relay used as the local-client target SHALL accept
+the provider-deployed identity class (desktop-minted key plus NIP-OA
+`auth_tag`). Closed membership SHALL stay on. The "plain member, no
+auth_tag" workaround SHALL NOT be the default join path.
+
+Built here is the relay-side half only: `BUZZ_ALLOW_NIP_OA_AUTH=true`
+with closed membership, owner bootstrapped as a member row. The
+scenario below has not been observed end to end, because the provider
+`deploy` op that mints the `auth_tag` is still a stub in
+`buzz-backend-mjolnir`.
+
+#### Scenario: Deployed agent is a relay member
+
+- GIVEN our relay and a `deploy` that presents `private_key_nsec` and
+  `auth_tag`
+- WHEN the harness authenticates
+- THEN the relay does not refuse with `restricted: not a relay member`
