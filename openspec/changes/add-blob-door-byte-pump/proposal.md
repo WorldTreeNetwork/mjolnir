@@ -11,6 +11,12 @@
 Depends on folded `add-blob-store` / `add-blob-door-overlay`
 (ADR 0003). Does not change overlay bind, keys, or accept proof.
 
+Send-back 2026-09-20 (`reviews/2026-09-20-advise.md`, Astra):
+write-through and B2 accept hold. Contract amend encodes R1–R4
+(hash-before-join, concurrent budget, failed-fill discard,
+resolved cache-root). Code repairs stay owed boxes; this amend
+does not implement them.
+
 ## Why
 
 The door extracts the whole PUT as `Bytes` and holds it in RAM.
