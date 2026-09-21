@@ -17,6 +17,8 @@ PrivateTmp=yes
 # Disk cache / incoming sink. Outside btrfs_root — a cache on the data
 # volume would be CoW-pinned by every snapshot and fill the disk.
 # ProtectSystem=strict makes /var read-only without this.
+# The installer writes a cache-path.conf override when a custom resolved
+# BLOB_DOOR_CACHE_DIR is selected.
 ReadWritePaths=/var/lib/mjolnir/blobs
 Restart=on-failure
 

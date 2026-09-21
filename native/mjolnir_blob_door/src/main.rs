@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use mjolnir_blob_door::s3::S3Canonical;
 use mjolnir_blob_door::{
-    router, AppState, DiskCache, MemoryStore, DEFAULT_BIND, DEFAULT_CACHE_BYTES, DEFAULT_CACHE_DIR,
-    DEFAULT_MAX_BYTES,
+    resolve_cache_dir, router, AppState, DiskCache, MemoryStore, DEFAULT_BIND, DEFAULT_BTRFS_ROOT,
+    DEFAULT_CACHE_BYTES, DEFAULT_CACHE_DIR, DEFAULT_MAX_BYTES,
 };
 use tokio::net::TcpListener;
 
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(DEFAULT_CACHE_BYTES);
 
     let backend = std::env::var("BLOB_DOOR_BACKEND").unwrap_or_else(|_| "b2".into());
-    let cache_dir = std::env::var("BLOB_DOOR_CACHE_DIR")
+    let requested_cache_dir = std::env::var("BLOB_DOOR_CACHE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             if backend == "memory" {
@@ -44,6 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 PathBuf::from(DEFAULT_CACHE_DIR)
             }
         });
+    let btrfs_root = std::env::var("MJOLNIR_BTRFS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_BTRFS_ROOT));
+    let cache_dir = resolve_cache_dir(&requested_cache_dir, &btrfs_root)?;
 
     let cache = DiskCache::open(cache_dir.clone(), cache_budget).await?;
     tracing::info!(

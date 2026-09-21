@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use mjolnir_blob_door::{
-    blake3_bytes, hash_to_base58, router, AppState, CanonicalStore, MemoryStore, StoreError,
+    blake3_bytes, hash_to_base58, resolve_cache_dir, router, AppState, CanonicalStore, MemoryStore,
+    StoreError,
 };
 use tower::ServiceExt;
 
@@ -522,4 +523,147 @@ async fn get_oversize_is_not_cached() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(got, body);
     assert_eq!(object_count(dir.path()), 0);
+}
+
+#[tokio::test]
+async fn get_and_head_reject_non_hash_paths_before_cache_or_store_access() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("marker"), b"absolute-marker").unwrap();
+    let store = Arc::new(CountingStore::new());
+    let cache = Arc::new(
+        mjolnir_blob_door::DiskCache::open(dir.path().to_path_buf(), 1024)
+            .await
+            .unwrap(),
+    );
+    std::fs::write(
+        dir.path().join("incoming").join("marker"),
+        b"incoming-marker",
+    )
+    .unwrap();
+    let app = router(AppState {
+        store: store.clone(),
+        cache,
+        max_bytes: 1024,
+    });
+    let absolute = format!(
+        "{}{}",
+        "%2F",
+        dir.path()
+            .join("marker")
+            .display()
+            .to_string()
+            .trim_start_matches('/')
+            .replace('/', "%2F")
+    );
+    let cases = [
+        format!("/storage/blob/b3/{absolute}"),
+        "/storage/blob/b3/%2E%2E%2Fincoming%2Fmarker".to_string(),
+        "/storage/blob/b3/not-a-hash!!!".to_string(),
+        format!("/storage/blob/b3/{absolute}.obao"),
+        "/storage/blob/b3/%2E%2E%2Fincoming%2Fmarker.obao".to_string(),
+        "/storage/blob/b3/not-a-hash!!!.obao".to_string(),
+    ];
+    for method in ["GET", "HEAD"] {
+        for uri in &cases {
+            let (status, body) = call(app.clone(), method, uri, Vec::new()).await;
+            assert!(status.is_client_error(), "{method} {uri}: {status}");
+            assert_ne!(body, b"absolute-marker");
+            assert_ne!(body, b"incoming-marker");
+        }
+    }
+    assert_eq!(store.gets.load(Ordering::SeqCst), 0);
+    assert_eq!(store.heads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn cache_open_race_falls_back_to_origin() {
+    let body = b"origin survives eviction".to_vec();
+    let h = hash_to_base58(&blake3_bytes(&body));
+    let uri = format!("/storage/blob/b3/{h}");
+    let store = Arc::new(CountingStore::new());
+    store
+        .inner
+        .put(&format!("blob/b3/{h}"), body.clone())
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        mjolnir_blob_door::DiskCache::open(dir.path().to_path_buf(), 1024)
+            .await
+            .unwrap(),
+    );
+    let mut incoming = cache.create_incoming().await.unwrap();
+    use tokio::io::AsyncWriteExt;
+    incoming.file().write_all(&body).await.unwrap();
+    cache
+        .promote(&mut incoming, &h, false, body.len() as u64)
+        .await
+        .unwrap();
+    cache.evict_next_open_for_test();
+
+    let app = router(AppState {
+        store: store.clone(),
+        cache,
+        max_bytes: 1024,
+    });
+    let (status, got) = call(app, "GET", &uri, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, body);
+    assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn failed_fill_completion_is_discarded_and_next_get_uses_origin() {
+    let body = b"never publish a failed fill".to_vec();
+    let h = hash_to_base58(&blake3_bytes(&body));
+    let uri = format!("/storage/blob/b3/{h}");
+    let store = Arc::new(CountingStore::new());
+    store
+        .inner
+        .put(&format!("blob/b3/{h}"), body.clone())
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        mjolnir_blob_door::DiskCache::open(dir.path().to_path_buf(), 1024)
+            .await
+            .unwrap(),
+    );
+    cache.fail_next_fill_completion_for_test();
+    let app = router(AppState {
+        store: store.clone(),
+        cache,
+        max_bytes: 1024,
+    });
+
+    let (status, got) = call(app.clone(), "GET", &uri, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, body);
+    assert_eq!(object_count(dir.path()), 0);
+    assert_eq!(incoming_count(dir.path()), 0);
+
+    let (status, got) = call(app, "GET", &uri, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got, body);
+    assert_eq!(store.gets.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn resolved_cache_root_rejects_symlink_dotdot_and_unsafe_fallbacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let btrfs = dir.path().join("data");
+    let safe = dir.path().join("safe");
+    std::fs::create_dir_all(&btrfs).unwrap();
+    std::fs::create_dir_all(&safe).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&btrfs, dir.path().join("alias")).unwrap();
+
+    #[cfg(unix)]
+    assert!(resolve_cache_dir(&dir.path().join("alias/cache"), &btrfs).is_err());
+    assert!(resolve_cache_dir(&safe.join("../data/cache"), &btrfs).is_err());
+    assert!(resolve_cache_dir(&btrfs.join("fallback"), &btrfs).is_err());
+    assert_eq!(
+        resolve_cache_dir(&safe.join("cache"), &btrfs).unwrap(),
+        std::fs::canonicalize(&safe).unwrap().join("cache")
+    );
 }

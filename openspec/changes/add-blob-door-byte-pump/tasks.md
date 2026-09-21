@@ -11,8 +11,8 @@
 
 ## Owed by architecture advise (2026-09-20)
 
-- [ ] R1: Validate GET/HEAD hashes before cache/store access; regress encoded absolute/parent traversal, incoming-file reads, invalid hashes, and `.obao` path variants. See `reviews/2026-09-20-advise.md`.
-- [ ] R2: Coordinate concurrent cache admission/publication/eviction and accounting; verify real disk usage for distinct/same-key PUT and GET-fill races, and preserve B2 fallback when eviction wins a cache-open race.
-- [ ] R3: Discard GET fills on local flush/sync failure; fault-inject late local completion failure and prove no partial object is published and the next GET uses B2.
-- [ ] R4: Enforce resolved production cache placement outside `btrfs_root`, including unsafe fallback and alias/`..` cases; align accepted custom paths with systemd write access and reconcile the stale `@blobs` install task.
+- [x] R1: Validate GET/HEAD hashes before cache/store access; regress encoded absolute/parent traversal, incoming-file reads, invalid hashes, and `.obao` path variants. See `reviews/2026-09-20-advise.md`.
+- [x] R2: Coordinate concurrent cache admission/publication/eviction and accounting; verify real disk usage for distinct/same-key PUT and GET-fill races, and preserve B2 fallback when eviction wins a cache-open race.
+- [x] R3: Discard GET fills on local flush/sync failure; fault-inject late local completion failure and prove no partial object is published and the next GET uses B2.
+- [x] R4: Enforce resolved production cache placement outside `btrfs_root`, including unsafe fallback and alias/`..` cases; align accepted custom paths with systemd write access and reconcile the stale `@blobs` install task.
 - [x] Fresh advise after preparation (astra-arch-review accepted reconciled contract `d7d5da1`; see `reviews/2026-09-20-re-advise.md`; R1–R4 remain owed to act)

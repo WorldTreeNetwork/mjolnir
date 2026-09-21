@@ -53,6 +53,7 @@ async fn object<S: CanonicalStore>(
     req: Request,
 ) -> Response {
     let (hash, obao) = split_obao(&hash);
+    let valid_hash = hash_from_base58(hash).is_some();
     let hash = hash.to_string();
     let method = req.method().clone();
     let headers = req.headers().clone();
@@ -60,8 +61,9 @@ async fn object<S: CanonicalStore>(
 
     match method.as_str() {
         "PUT" => put_one(state, &hash, obao, headers, body).await,
-        "GET" => get_one(state, &hash, obao).await,
-        "HEAD" if !obao => head_one(state, &hash).await,
+        "GET" if valid_hash => get_one(state, &hash, obao).await,
+        "HEAD" if valid_hash && !obao => head_one(state, &hash).await,
+        "GET" | "HEAD" if !valid_hash => (StatusCode::BAD_REQUEST, "hash").into_response(),
         _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
     }
 }
@@ -141,8 +143,8 @@ async fn put_one<S: CanonicalStore>(
 }
 
 async fn get_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str, obao: bool) -> Response {
-    if let Some(path) = state.cache.get(hash, obao).await {
-        return file_response(path).await;
+    if let Some((file, len)) = state.cache.open_cached(hash, obao).await {
+        return file_response(file, len);
     }
 
     let key = if obao {
@@ -164,18 +166,13 @@ async fn get_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str, obao: b
 }
 
 async fn head_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str) -> Response {
-    if let Some(path) = state.cache.get(hash, false).await {
-        match tokio::fs::metadata(&path).await {
-            Ok(meta) => {
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header(CONTENT_TYPE, "application/octet-stream")
-                    .header(CONTENT_LENGTH, meta.len())
-                    .body(Body::empty())
-                    .unwrap_or_else(|_| StatusCode::OK.into_response());
-            }
-            Err(_) => {}
-        }
+    if let Some((_file, len)) = state.cache.open_cached(hash, false).await {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, len)
+            .body(Body::empty())
+            .unwrap_or_else(|_| StatusCode::OK.into_response());
     }
     match state.store.head(&object_key(hash)).await {
         Ok(len) => Response::builder()
@@ -189,20 +186,12 @@ async fn head_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str) -> Res
     }
 }
 
-async fn file_response(path: std::path::PathBuf) -> Response {
-    let meta = match tokio::fs::metadata(&path).await {
-        Ok(m) => m,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let file = match tokio::fs::File::open(&path).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
+fn file_response(file: tokio::fs::File, len: u64) -> Response {
     let stream = ReaderStream::new(file);
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/octet-stream")
-        .header(CONTENT_LENGTH, meta.len())
+        .header(CONTENT_LENGTH, len)
         .body(Body::from_stream(stream))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
@@ -259,8 +248,11 @@ async fn tee_and_cache(
             }
         }
         if ok {
-            let _ = file.flush().await;
-            let _ = file.sync_all().await;
+            if let Err(e) = cache2.finish_fill(&mut file).await {
+                tracing::warn!(error = %e, "discarding incomplete cache fill");
+                drop(file);
+                return;
+            }
             drop(file);
             if len > 0 && written != len {
                 return;

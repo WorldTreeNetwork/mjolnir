@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use mjolnir_blob_door::DiskCache;
 use tokio::io::AsyncWriteExt;
 
@@ -95,4 +97,77 @@ async fn get_touch_does_not_panic() {
     let path = cache.get("hot", false).await.expect("hit");
     assert!(path.ends_with("hot"));
     assert!(cache.get("missing", false).await.is_none());
+}
+
+#[tokio::test]
+async fn concurrent_distinct_promotions_keep_real_bytes_within_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        DiskCache::open(dir.path().to_path_buf(), 100)
+            .await
+            .unwrap(),
+    );
+    let mut first = cache.create_incoming().await.unwrap();
+    first.file().write_all(&[1; 80]).await.unwrap();
+    let mut second = cache.create_incoming().await.unwrap();
+    second.file().write_all(&[2; 80]).await.unwrap();
+
+    let a = cache.promote(&mut first, "first", false, 80);
+    let b = cache.promote(&mut second, "second", false, 80);
+    let (a, b) = tokio::join!(a, b);
+    a.unwrap();
+    b.unwrap();
+
+    assert!(common::cache_size(dir.path()) <= 100);
+    assert_eq!(common::object_count(dir.path()), 1);
+    assert_eq!(cache.used(), common::cache_size(dir.path()));
+}
+
+#[tokio::test]
+async fn concurrent_same_key_promotions_are_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        DiskCache::open(dir.path().to_path_buf(), 100)
+            .await
+            .unwrap(),
+    );
+    let mut first = cache.create_incoming().await.unwrap();
+    first.file().write_all(&[1; 80]).await.unwrap();
+    let mut second = cache.create_incoming().await.unwrap();
+    second.file().write_all(&[1; 80]).await.unwrap();
+
+    let a = cache.promote(&mut first, "same", false, 80);
+    let b = cache.promote(&mut second, "same", false, 80);
+    let (a, b) = tokio::join!(a, b);
+    a.unwrap();
+    b.unwrap();
+
+    assert_eq!(common::object_count(dir.path()), 1);
+    assert_eq!(common::cache_size(dir.path()), 80);
+    assert_eq!(cache.used(), 80);
+}
+
+#[tokio::test]
+async fn concurrent_promotion_and_get_fill_keep_real_bytes_within_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = Arc::new(
+        DiskCache::open(dir.path().to_path_buf(), 100)
+            .await
+            .unwrap(),
+    );
+    let mut promoted = cache.create_incoming().await.unwrap();
+    promoted.file().write_all(&[1; 80]).await.unwrap();
+    promoted.close().await.unwrap();
+    let fill = dir.path().join("incoming").join("fill-race");
+    std::fs::write(&fill, [2; 80]).unwrap();
+
+    let a = cache.promote(&mut promoted, "put", false, 80);
+    let b = cache.commit_fill(&fill, "fill", false, 80);
+    let (a, b) = tokio::join!(a, b);
+    a.unwrap();
+    b.unwrap();
+
+    assert!(common::cache_size(dir.path()) <= 100);
+    assert_eq!(common::object_count(dir.path()), 1);
+    assert_eq!(cache.used(), common::cache_size(dir.path()));
 }

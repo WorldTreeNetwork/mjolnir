@@ -1,9 +1,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use futures_util::lock::Mutex;
 use tokio::fs::{self, File};
+use tokio::io::AsyncWriteExt;
 
 static INCOMING_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -12,6 +14,9 @@ pub struct DiskCache {
     incoming: PathBuf,
     budget: u64,
     used: AtomicU64,
+    admission: Mutex<()>,
+    fail_next_fill_completion: AtomicBool,
+    evict_next_open: AtomicBool,
 }
 
 pub struct Incoming {
@@ -66,6 +71,9 @@ impl DiskCache {
             incoming,
             budget,
             used: AtomicU64::new(used),
+            admission: Mutex::new(()),
+            fail_next_fill_completion: AtomicBool::new(false),
+            evict_next_open: AtomicBool::new(false),
         })
     }
 
@@ -96,6 +104,46 @@ impl DiskCache {
         }
     }
 
+    /// Open a retained object. A miss or an eviction that wins the open race
+    /// is reported as `None`, allowing callers to fall back to the canonical
+    /// store instead of turning a cache race into a 404.
+    pub async fn open_cached(&self, hash_b58: &str, obao: bool) -> Option<(File, u64)> {
+        let path = self.object_path(hash_b58, obao);
+        let meta = fs::metadata(&path).await.ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        if self.evict_next_open.swap(false, Ordering::SeqCst) {
+            let _guard = self.admission.lock().await;
+            if fs::remove_file(&path).await.is_ok() {
+                self.used.fetch_sub(meta.len(), Ordering::Relaxed);
+            }
+        }
+        let file = File::open(&path).await.ok()?;
+        let len = file.metadata().await.ok()?.len();
+        touch_accessed(&path);
+        Some((file, len))
+    }
+
+    /// Flush and sync a completed GET fill before it may be published.
+    pub async fn finish_fill(&self, file: &mut File) -> io::Result<()> {
+        file.flush().await?;
+        if self.fail_next_fill_completion.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::other("injected fill sync failure"));
+        }
+        file.sync_all().await
+    }
+
+    #[doc(hidden)]
+    pub fn fail_next_fill_completion_for_test(&self) {
+        self.fail_next_fill_completion.store(true, Ordering::SeqCst);
+    }
+
+    #[doc(hidden)]
+    pub fn evict_next_open_for_test(&self) {
+        self.evict_next_open.store(true, Ordering::SeqCst);
+    }
+
     pub async fn create_incoming(&self) -> io::Result<Incoming> {
         let seq = INCOMING_SEQ.fetch_add(1, Ordering::Relaxed);
         let name = format!("{}-{seq}", std::process::id());
@@ -119,6 +167,7 @@ impl DiskCache {
         len: u64,
     ) -> io::Result<Option<PathBuf>> {
         incoming.close().await?;
+        let _guard = self.admission.lock().await;
         let dest = self.object_path(hash_b58, obao);
         if fs::metadata(&dest).await.is_ok() {
             let _ = fs::remove_file(&incoming.path).await;
@@ -146,6 +195,7 @@ impl DiskCache {
         obao: bool,
         len: u64,
     ) -> io::Result<Option<PathBuf>> {
+        let _guard = self.admission.lock().await;
         let dest = self.object_path(hash_b58, obao);
         if fs::metadata(&dest).await.is_ok() {
             let _ = fs::remove_file(path).await;
