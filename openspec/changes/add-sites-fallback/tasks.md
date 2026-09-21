@@ -23,5 +23,6 @@
 - [ ] R3: Pin missing/unreadable explicit targets and invalid policy handling;
       specify HEAD, conditional/range, compression, and fallback cache behavior
       with focused tests, preserving responses that are not snapshot misses.
-- [ ] Fresh architecture advise after R1–R3 contract amendments; reference
-      `reviews/2026-09-21-advise.md` and the reconciled contract.
+- [x] Fresh architecture advise after R1–R3 contract amendments; reference
+      `reviews/2026-09-21-advise.md` and the reconciled contract `9b48f63`;
+      accepted by `astra-arch-review` in `reviews/2026-09-21-re-advise.md`.
