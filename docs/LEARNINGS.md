@@ -2,6 +2,10 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-09-21 / add-guest-mail-consume:** Application ACK is the tombstone; vsock deliver_message_ack is not. The default consume loop must fsync the producer id *before* ACK so a crash between peek and ACK redelivers, and a recorded id is ACK-only on redelivery. Guest `/send` must pass that id as `Mailbox.accept` `id` or VM-to-VM is not retry-safe.
+
+- **2026-09-21 / add-agent-mail-backchannel:** A caller mailbox is the same `@mail/<id>/` spool with a non-VM id. REST peek/ack is not a second ledger. Guest send to a missing VM is accept-into-that-id, not 404.
+
 - **2026-09-20 / mjolnir.toml:** Unknown keys are ignored (HTTP-style), not rejected. A committed `[site]` or future key must load on an older `mj`. Required-field checks still catch hyphen typos (`start-command` → `start_command is required`). Closed key sets break mixed-version checkouts.
 
 - **2026-09-20 / add-honor-being:** Folding architecture after implementing landings must not import unbuilt SHALLs (Forgejo key registration, prod CORS). `add-vm-git-subkey` already put git inject in the living spec; this fold only adds being-as-device + respawn. A skill-host Opus fold spawn twice wrote `ADVISE: accept` instead of archiving — Grok repaired the honor-being fold on HEAD.
