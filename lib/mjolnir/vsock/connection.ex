@@ -590,14 +590,16 @@ defmodule Mjolnir.Vsock.Connection do
         state
 
       {:ok,
-       %{"type" => "send_message", "id" => id, "target_vm_id" => target, "payload" => payload}} ->
+       %{"type" => "send_message", "id" => id, "target_vm_id" => target, "payload" => payload} =
+           msg} ->
         Logger.info("Guest requesting message send to #{target}")
         conn_pid = self()
         source_vm_id = state.vm_id
+        opts = guest_send_opts(msg)
 
         Task.Supervisor.start_child(Mjolnir.TaskSupervisor, fn ->
           {ok, error} =
-            case Mjolnir.VM.deliver_message(target, source_vm_id, payload) do
+            case Mjolnir.VM.deliver_message(target, source_vm_id, payload, opts) do
               {:ok, _} -> {true, nil}
               :ok -> {true, nil}
               {:error, reason} -> {false, inspect(reason)}
@@ -775,6 +777,14 @@ defmodule Mjolnir.Vsock.Connection do
       {:error, reason} ->
         Logger.error("Failed to connect to vsock UDS: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  @doc false
+  def guest_send_opts(msg) when is_map(msg) do
+    case Map.get(msg, "message_id") || Map.get(msg, "producer_id") do
+      id when is_binary(id) and byte_size(id) > 0 -> [id: id]
+      _ -> []
     end
   end
 

@@ -137,6 +137,19 @@ pub async fn run_agent_sdk(
     message_inbox: MessageInbox,
     message_notify: MessageNotify,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if crate::consume::consume_enabled() {
+        let inbox = message_inbox.clone();
+        let notify = message_notify.clone();
+        let bridge = bridge_holder.clone();
+        tokio::spawn(async move {
+            if let Err(e) = consume_loop(inbox, notify, bridge).await {
+                error!("mail consume loop: {}", e);
+            }
+        });
+    } else {
+        info!("mail consume loop disabled (MJOLNIR_MAIL_CONSUME=0)");
+    }
+
     // Spawn a background task to run the HTTP server
     tokio::task::spawn_blocking(move || {
         match run_agent_sdk_blocking(bridge_holder, message_inbox, message_notify) {
@@ -146,6 +159,37 @@ pub async fn run_agent_sdk(
     });
 
     Ok(())
+}
+
+async fn consume_loop(
+    message_inbox: MessageInbox,
+    message_notify: MessageNotify,
+    bridge_holder: BridgeHolder,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut seen = crate::consume::SeenStore::open(crate::consume::seen_path())?;
+    let drop = crate::consume::drop_dir();
+    info!(
+        seen = %crate::consume::seen_path().display(),
+        "mail consume loop started"
+    );
+    loop {
+        let front = { message_inbox.lock().await.front().cloned() };
+        if let Some(msg) = front {
+            let item = crate::consume::MailItem {
+                id: msg.id.clone(),
+                from_vm_id: msg.from_vm_id.clone(),
+                payload: msg.payload.clone(),
+            };
+            if let Err(e) = crate::consume::record_and_dispatch(&mut seen, &item, &drop) {
+                warn!(id = %item.id, error = %e, "mail record failed; will retry");
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                continue;
+            }
+            ack_ids(std::slice::from_ref(&item.id), &message_inbox, &bridge_holder).await;
+            continue;
+        }
+        message_notify.notified().await;
+    }
 }
 
 fn run_agent_sdk_blocking(
@@ -403,10 +447,17 @@ async fn handle_send(
         .cloned()
         .unwrap_or(serde_json::json!({}));
 
-    let id = uuid::Uuid::new_v4().to_string();
+    let corr = uuid::Uuid::new_v4().to_string();
+    let producer_id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&corr)
+        .to_string();
     let req = serde_json::json!({
         "type": "send_message",
-        "id": id,
+        "id": corr,
+        "message_id": producer_id,
         "target_vm_id": target_vm_id,
         "payload": payload
     });
@@ -544,6 +595,17 @@ async fn handle_ack(
         }
     };
 
+    match ack_ids(&ids, message_inbox, bridge_holder).await {
+        Ok(()) => send_http_response(stream, 200, r#"{"ok":true}"#),
+        Err((status, body)) => send_http_response(stream, status, &body),
+    }
+}
+
+async fn ack_ids(
+    ids: &[String],
+    message_inbox: &MessageInbox,
+    bridge_holder: &BridgeHolder,
+) -> Result<(), (u16, String)> {
     {
         let mut inbox = message_inbox.lock().await;
         inbox.retain(|msg| !ids.contains(&msg.id));
@@ -556,10 +618,9 @@ async fn handle_ack(
         "message_ids": ids
     });
 
-    match send_bridge_request(bridge_holder, req).await {
-        Ok(_) => send_http_response(stream, 200, r#"{"ok":true}"#),
-        Err((status, body)) => send_http_response(stream, status, &body),
-    }
+    send_bridge_request(bridge_holder, req)
+        .await
+        .map(|_| ())
 }
 
 async fn handle_done(

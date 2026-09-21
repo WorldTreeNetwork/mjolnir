@@ -8,6 +8,8 @@
 
 #[cfg(feature = "full")]
 mod agent;
+#[cfg(feature = "full")]
+mod consume;
 #[cfg(feature = "iroh")]
 mod iroh;
 mod entropy;

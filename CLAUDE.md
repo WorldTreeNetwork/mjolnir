@@ -240,7 +240,7 @@ Sandbox mode: when `:forge_systemd_units_dir` is set to anything other than `/et
 
 ### Guest Agent (Rust, `native/mjolnir_guest_agent/`)
 
-Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC.
+Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC. Agent SDK on `127.0.0.1:5001` (`GET /messages`, `GET /recv`, `POST /ack`, `POST /done`). Default consume loop peeks the inbox, fsyncs the producer id to `/var/lib/mjolnir/mail-seen`, writes `/var/lib/mjolnir/mail/<id>.json`, optional `/var/lib/agent/on-mail`, then application-ACKs. Disable with `MJOLNIR_MAIL_CONSUME=0`. Needs `just deploy --agent`.
 
 ### Configuration
 

@@ -114,4 +114,17 @@ defmodule Mjolnir.MailboxTest do
     assert [] = Mjolnir.DormantRegistry.take_pending_messages(vm_id)
     assert [%{"message_id" => "during-done"}] = Mailbox.list_unacked(vm_id)
   end
+
+  test "guest send_message message_id is Mailbox.accept id", %{vm_id: vm_id} do
+    assert [id: "turn-1"] =
+             Mjolnir.Vsock.Connection.guest_send_opts(%{"message_id" => "turn-1"})
+
+    assert [] = Mjolnir.Vsock.Connection.guest_send_opts(%{"id" => "corr-only"})
+
+    assert {:ok, %{message_id: "turn-1", status: :queued}} =
+             Mailbox.accept(vm_id, "source-vm", %{"n" => 1}, id: "turn-1")
+
+    assert {:ok, %{status: :duplicate}} =
+             Mailbox.accept(vm_id, "source-vm", %{"n" => 1}, id: "turn-1")
+  end
 end
