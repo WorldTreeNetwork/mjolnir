@@ -16,7 +16,7 @@ pub use cache::DiskCache;
 pub use http::{router, AppState};
 pub use memory::MemoryStore;
 pub use put::{put_file, PutError};
-pub use store::{CanonicalStore, StoreError};
+pub use store::{BlobStream, CanonicalStore, StoreError};
 
 /// Default bind — same port Sites planned for the recrypt sidecar.
 pub const DEFAULT_BIND: &str = "127.0.0.1:7222";

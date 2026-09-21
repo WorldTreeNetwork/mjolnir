@@ -151,6 +151,10 @@ async fn get_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str, obao: b
         object_key(hash)
     };
     match state.store.get_stream(&key).await {
+        Ok((len, upstream)) if len > state.cache.budget() && len > 0 => {
+            // Too big to retain; still pump to the client.
+            stream_response(len, upstream)
+        }
         Ok((len, upstream)) => {
             tee_and_cache(state.cache.clone(), hash.to_string(), obao, len, upstream).await
         }
@@ -222,21 +226,21 @@ async fn tee_and_cache(
             return stream_response(len, stream);
         }
     };
-    let dest = cache.object_path(&hash, obao);
     let incoming_path = incoming.path.clone();
-    // Drop Incoming without persist so Drop would delete — we take
-    // ownership of the path and handle it in the stream. Forget Drop
-    // by persisting only after a full fill; leak the Incoming file
-    // handle by closing it into a tokio File we write in the stream.
     let mut file = incoming.take_file().expect("incoming file");
-    // Incoming would Drop-delete the path when this function returns
-    // (before the body stream runs). Mark persist; the stream
-    // renames or unlinks.
+    // Incoming Drop would delete the path when this function returns
+    // (before the body stream runs). Mark persist; FillGuard lives
+    // inside the stream so a dropped / unpolled body still unlinks.
     incoming.persist();
+    let guard = FillGuard {
+        path: incoming_path.clone(),
+        keep: false,
+    };
 
     let cache2 = cache.clone();
     let stream = async_stream::stream! {
         use tokio::io::AsyncWriteExt;
+        let mut guard = guard;
         let mut ok = true;
         let mut written = 0u64;
         while let Some(item) = upstream.next().await {
@@ -250,7 +254,6 @@ async fn tee_and_cache(
                 }
                 Err(e) => {
                     yield Err(e);
-                    let _ = tokio::fs::remove_file(&incoming_path).await;
                     return;
                 }
             }
@@ -260,20 +263,36 @@ async fn tee_and_cache(
             let _ = file.sync_all().await;
             drop(file);
             if len > 0 && written != len {
-                let _ = tokio::fs::remove_file(&incoming_path).await;
                 return;
             }
-            if tokio::fs::rename(&incoming_path, &dest).await.is_ok() {
-                cache2.account(written);
-            } else {
-                let _ = tokio::fs::remove_file(&incoming_path).await;
+            if cache2
+                .commit_fill(&incoming_path, &hash, obao, written)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                guard.keep = true;
             }
         } else {
             drop(file);
-            let _ = tokio::fs::remove_file(&incoming_path).await;
         }
     };
     stream_response(len, stream)
+}
+
+/// Unlinks a GET-fill incoming file unless `keep` is set (successful commit).
+struct FillGuard {
+    path: std::path::PathBuf,
+    keep: bool,
+}
+
+impl Drop for FillGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn stream_response<St>(len: u64, stream: St) -> Response

@@ -69,6 +69,14 @@ impl DiskCache {
         })
     }
 
+    pub fn budget(&self) -> u64 {
+        self.budget
+    }
+
+    pub fn used(&self) -> u64 {
+        self.used.load(Ordering::Relaxed)
+    }
+
     pub fn object_path(&self, hash_b58: &str, obao: bool) -> PathBuf {
         if obao {
             self.objects.join(format!("{hash_b58}.obao"))
@@ -129,8 +137,28 @@ impl DiskCache {
         Ok(Some(dest))
     }
 
-    pub fn account(&self, len: u64) {
+    /// Keep a GET-miss fill if it fits the budget; otherwise drop it.
+    /// Evicts LRU objects so `used + len` stays ≤ budget.
+    pub async fn commit_fill(
+        &self,
+        path: &Path,
+        hash_b58: &str,
+        obao: bool,
+        len: u64,
+    ) -> io::Result<Option<PathBuf>> {
+        let dest = self.object_path(hash_b58, obao);
+        if fs::metadata(&dest).await.is_ok() {
+            let _ = fs::remove_file(path).await;
+            return Ok(Some(dest));
+        }
+        if len > self.budget {
+            let _ = fs::remove_file(path).await;
+            return Ok(None);
+        }
+        self.evict_to_fit(len).await?;
+        fs::rename(path, &dest).await?;
         self.used.fetch_add(len, Ordering::Relaxed);
+        Ok(Some(dest))
     }
 
     async fn evict_to_fit(&self, need: u64) -> io::Result<()> {

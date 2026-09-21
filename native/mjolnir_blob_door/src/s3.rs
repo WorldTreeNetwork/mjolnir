@@ -14,7 +14,7 @@ use crate::store::{BlobStream, CanonicalStore, StoreError};
 
 /// Below this, a single PutObject. B2/S3 single-PUT max is 5 GiB;
 /// 64 MiB is well under and matches the old RAM cap as the pump unit.
-const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
+pub const MULTIPART_THRESHOLD: u64 = 64 * 1024 * 1024;
 const MIN_PART: u64 = 16 * 1024 * 1024;
 const MAX_PARTS: u64 = 10_000;
 
@@ -44,6 +44,18 @@ impl S3Canonical {
             client: Client::from_conf(config),
             bucket,
         })
+    }
+
+    /// Not on the HTTP surface. Tests delete objects they created.
+    pub async fn delete_object(&self, key: &str) -> Result<(), StoreError> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))?;
+        Ok(())
     }
 
     async fn put_simple(&self, key: &str, path: &Path, len: u64) -> Result<(), StoreError> {
@@ -186,7 +198,9 @@ impl CanonicalStore for S3Canonical {
             .key(key)
             .send()
             .await
-            .map_err(classify_aws)?;
+            .map_err(|e| {
+                classify_missing(e.as_service_error().map(|se| se.is_no_such_key()), &e)
+            })?;
         let len = out.content_length().unwrap_or(0) as u64;
         let reader = out.body.into_async_read();
         let stream = ReaderStream::new(reader);
@@ -201,7 +215,7 @@ impl CanonicalStore for S3Canonical {
             .key(key)
             .send()
             .await
-            .map_err(classify_aws)?;
+            .map_err(|e| classify_missing(e.as_service_error().map(|se| se.is_not_found()), &e))?;
         Ok(out.content_length().unwrap_or(0) as u64)
     }
 
@@ -232,11 +246,34 @@ impl CanonicalStore for S3Canonical {
     }
 }
 
-fn classify_aws<E: std::fmt::Display>(err: E) -> StoreError {
-    let s = err.to_string();
-    if s.contains("NotFound") || s.contains("404") || s.contains("NoSuchKey") {
+#[cfg(test)]
+mod part_size_tests {
+    use super::{part_size_for, MAX_PARTS, MIN_PART, MULTIPART_THRESHOLD};
+
+    #[test]
+    fn small_object_uses_min_part() {
+        assert_eq!(part_size_for(1), MIN_PART);
+        assert_eq!(part_size_for(MULTIPART_THRESHOLD), MIN_PART);
+    }
+
+    #[test]
+    fn tib_stays_under_max_parts() {
+        let tib = 1u64 << 40;
+        let part = part_size_for(tib);
+        let parts = tib.div_ceil(part);
+        assert!(parts <= MAX_PARTS, "parts={parts} part={part}");
+        assert!(part >= MIN_PART);
+    }
+}
+
+fn classify_missing(typed: Option<bool>, err: &impl std::fmt::Debug) -> StoreError {
+    if typed == Some(true) {
+        return StoreError::NotFound;
+    }
+    let debug = format!("{err:?}");
+    if debug.contains("404") || debug.contains("NoSuchKey") || debug.contains("NotFound") {
         StoreError::NotFound
     } else {
-        StoreError::Backend(s)
+        StoreError::Backend(debug)
     }
 }
