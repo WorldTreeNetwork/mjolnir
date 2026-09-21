@@ -1,6 +1,6 @@
 # add-honor-git-remote
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Bead `mjolnir-x97p.4`. ADR 0011 Decisions 4 and 7. Steer: Forgejo
 mimir `VirtueInnova/hypersigil-store-frontend` is the write remote;

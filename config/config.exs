@@ -157,6 +157,13 @@ config :mjolnir,
   runner_config_path: "/etc/mjolnir/runner.yml",
   runner_state_dir: "/var/lib/mjolnir/runner",
   runner_forgejo_url: "http://127.0.0.1:3000",
+  # Host Forgejo API for hosted-being write deploy keys. URL falls back to
+  # runner_forgejo_url when nil. Token from MJOLNIR_FORGEJO_TOKEN at runtime —
+  # never log it, never inject into the guest.
+  forgejo_url: nil,
+  forgejo_token: nil,
+  forgejo_deploy_owner: "VirtueInnova",
+  forgejo_deploy_repo: "hypersigil-store-frontend",
   runner_labels: ["ubuntu-24.04:host"],
   runner_max_concurrent_jobs: 1,
   runner_log_level: "info",

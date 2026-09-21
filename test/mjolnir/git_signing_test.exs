@@ -1,16 +1,23 @@
 defmodule Mjolnir.GitSigningTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Mjolnir.{GitSigning, SecretStore, Vsock.Protocol}
+  alias Mjolnir.Forgejo.DeployKeys
 
   setup do
     root = Path.join(System.tmp_dir!(), "mj-git-signing-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     original = Application.get_env(:mjolnir, :secret_store_root, nil)
     Application.put_env(:mjolnir, :secret_store_root, root)
+    Application.put_env(:mjolnir, :forgejo_token, nil)
 
     on_exit(fn ->
       if original, do: Application.put_env(:mjolnir, :secret_store_root, original)
+      Application.put_env(:mjolnir, :forgejo_token, nil)
+      Application.delete_env(:mjolnir, :forgejo_http)
+      Application.delete_env(:mjolnir, :git_signing_forgejo_register)
+      Application.delete_env(:mjolnir, :git_signing_forgejo_revoke)
+      Application.delete_env(:mjolnir, :git_signing_revoke_device)
       File.rm_rf(root)
     end)
 
@@ -136,4 +143,207 @@ defmodule Mjolnir.GitSigningTest do
     assert {:error, {:revoke_device, :identikey_down}} = GitSigning.revoke(vm_id)
     assert {:ok, ^pem} = GitSigning.get(vm_id)
   end
+
+  test "unconfigured forgejo is :not_wired reconcile find", %{vm_id: vm_id} do
+    Application.put_env(:mjolnir, :forgejo_token, nil)
+    Application.delete_env(:mjolnir, :forgejo_http)
+
+    assert :not_wired =
+             DeployKeys.register(%{public_key: "ssh-ed25519 AAAA", vm_id: vm_id})
+
+    assert :not_wired =
+             DeployKeys.revoke(%{public_key: "ssh-ed25519 AAAA", forgejo_key_id: "1"})
+
+    pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nlive\n-----END OPENSSH PRIVATE KEY-----\n"
+    assert :ok = GitSigning.put(vm_id, pem)
+    assert :ok = GitSigning.revoke(vm_id)
+    assert :not_found = GitSigning.get(vm_id)
+  end
+
+  test "mint registers a write deploy key and revoke deletes it", %{vm_id: vm_id} do
+    {agent, http} = start_fake_forgejo()
+    Application.put_env(:mjolnir, :forgejo_token, "test-token")
+    Application.put_env(:mjolnir, :forgejo_http, http)
+
+    assert {:ok, pub} = GitSigning.mint(vm_id)
+    assert {:ok, meta} = GitSigning.get_device(vm_id)
+    assert meta["forgejo_key_id"] == "1"
+    refute is_map_key(meta, "private_key")
+
+    [post] = Agent.get(agent, & &1.posts)
+    assert post["read_only"] == false
+    assert post["title"] =~ vm_id
+
+    assert String.contains?(
+             post["key"],
+             String.trim(pub) |> String.split() |> Enum.take(2) |> Enum.join(" ")
+           )
+
+    {:ok, order} = Agent.start_link(fn -> [] end)
+
+    Application.put_env(:mjolnir, :git_signing_revoke_device, fn _ ->
+      Agent.update(order, &(&1 ++ [:revoke_device]))
+      :ok
+    end)
+
+    :ok =
+      GitSigning.put_device(vm_id, %{
+        xid: "aa",
+        credential_id: "11111111-1111-1111-1111-111111111111"
+      })
+
+    assert :ok = GitSigning.revoke(vm_id)
+    assert Agent.get(order, & &1) == [:revoke_device]
+    assert Agent.get(agent, & &1.keys) == %{}
+    assert :not_found = GitSigning.get(vm_id)
+    assert :not_found = GitSigning.get_device(vm_id)
+  end
+
+  test "failed Forgejo delete keeps opaque and skips revoke_device", %{vm_id: vm_id} do
+    {agent, http} = start_fake_forgejo()
+    Application.put_env(:mjolnir, :forgejo_token, "test-token")
+    Application.put_env(:mjolnir, :forgejo_http, http)
+
+    assert {:ok, _pub} = GitSigning.mint(vm_id)
+    assert {:ok, pem} = GitSigning.get(vm_id)
+
+    Agent.update(agent, &Map.put(&1, :fail_delete, true))
+
+    called = Agent.start_link(fn -> false end) |> elem(1)
+
+    Application.put_env(:mjolnir, :git_signing_revoke_device, fn _ ->
+      Agent.update(called, fn _ -> true end)
+      :ok
+    end)
+
+    :ok =
+      GitSigning.put_device(vm_id, %{
+        xid: "bb",
+        credential_id: "22222222-2222-2222-2222-222222222222"
+      })
+
+    assert {:error, {:forgejo_revoke, {:http_status, 500, _}}} = GitSigning.revoke(vm_id)
+    assert {:ok, ^pem} = GitSigning.get(vm_id)
+    assert Agent.get(called, & &1) == false
+    assert map_size(Agent.get(agent, & &1.keys)) == 1
+  end
+
+  test "mint register failure does not leave opaque", %{vm_id: vm_id} do
+    {_agent, http} = start_fake_forgejo(fail_post: true)
+    Application.put_env(:mjolnir, :forgejo_token, "test-token")
+    Application.put_env(:mjolnir, :forgejo_http, http)
+
+    assert {:error, {:forgejo_register, {:http_status, 500, _}}} = GitSigning.mint(vm_id)
+    assert :not_found = GitSigning.get(vm_id)
+    assert :not_found = GitSigning.get_device(vm_id)
+  end
+
+  test "respawn deletes the old Forgejo key and registers the new pubkey", %{vm_id: vm_id} do
+    {agent, http} = start_fake_forgejo()
+    Application.put_env(:mjolnir, :forgejo_token, "test-token")
+    Application.put_env(:mjolnir, :forgejo_http, http)
+
+    other = "fedcba98-7654-3210-fedc-ba9876543210"
+    assert {:ok, pub1} = GitSigning.mint(vm_id)
+    assert {:ok, pub2} = GitSigning.respawn(vm_id, other)
+    assert pub1 != pub2
+    assert :not_found = GitSigning.get(vm_id)
+    assert {:ok, _} = GitSigning.get(other)
+
+    keys = Agent.get(agent, &Map.values(&1.keys))
+    assert length(keys) == 1
+    [remaining] = keys
+    blob2 = pub2 |> String.trim() |> String.split() |> Enum.take(2) |> Enum.join(" ")
+    assert remaining["key"] |> String.split() |> Enum.take(2) |> Enum.join(" ") == blob2
+    assert remaining["title"] =~ other
+    refute remaining["title"] =~ vm_id
+
+    assert {:ok, meta} = GitSigning.get_device(other)
+    assert meta["forgejo_key_id"] == "2"
+  end
+
+  defp start_fake_forgejo(opts \\ []) do
+    fail_post = Keyword.get(opts, :fail_post, false)
+
+    {:ok, agent} =
+      Agent.start_link(fn ->
+        %{next_id: 1, keys: %{}, posts: [], fail_delete: false, fail_post: fail_post}
+      end)
+
+    http = fn method, url, headers, body ->
+      authorized =
+        Enum.any?(headers, fn {k, v} ->
+          String.downcase(to_string(k)) == "authorization" and
+            is_binary(v) and String.starts_with?(v, "token ")
+        end)
+
+      cond do
+        not authorized ->
+          {:ok, 401, %{"message" => "unauthorized"}}
+
+        true ->
+          Agent.get_and_update(agent, fn state ->
+            fake_dispatch(state, method, url, body)
+          end)
+      end
+    end
+
+    {agent, http}
+  end
+
+  defp fake_dispatch(%{fail_post: true} = state, :post, _url, _body) do
+    {{:ok, 500, %{"message" => "nope"}}, state}
+  end
+
+  defp fake_dispatch(state, :post, _url, body) do
+    blob = key_blob(body["key"])
+
+    exists =
+      Enum.any?(Map.values(state.keys), fn k -> key_blob(k["key"]) == blob end)
+
+    if exists do
+      {{:ok, 422, %{"message" => "exists"}}, state}
+    else
+      id = state.next_id
+
+      rec = %{
+        "id" => id,
+        "key" => body["key"],
+        "title" => body["title"],
+        "read_only" => body["read_only"]
+      }
+
+      {{:ok, 201, rec},
+       %{
+         state
+         | next_id: id + 1,
+           keys: Map.put(state.keys, id, rec),
+           posts: state.posts ++ [body]
+       }}
+    end
+  end
+
+  defp fake_dispatch(state, :get, _url, _body) do
+    {{:ok, 200, Map.values(state.keys)}, state}
+  end
+
+  defp fake_dispatch(%{fail_delete: true} = state, :delete, _url, _body) do
+    {{:ok, 500, %{"message" => "nope"}}, state}
+  end
+
+  defp fake_dispatch(state, :delete, url, _body) do
+    id =
+      url
+      |> String.split("/")
+      |> List.last()
+      |> String.to_integer()
+
+    {{:ok, 204, nil}, %{state | keys: Map.delete(state.keys, id)}}
+  end
+
+  defp key_blob(key) when is_binary(key) do
+    key |> String.trim() |> String.split() |> Enum.take(2) |> Enum.join(" ")
+  end
+
+  defp key_blob(_), do: ""
 end

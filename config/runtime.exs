@@ -155,3 +155,15 @@ if syslog_udp_port = System.get_env("MJOLNIR_SYSLOG_UDP_PORT") do
     udp_host: System.get_env("MJOLNIR_SYSLOG_UDP_HOST", "127.0.0.1"),
     udp_port: String.to_integer(syslog_udp_port)
 end
+
+# Host Forgejo token for repo deploy keys (add-honor-git-remote). Never log it.
+# Skip in test so a developer shell token cannot hit live Forgejo from mix test.
+if config_env() != :test do
+  if token = System.get_env("MJOLNIR_FORGEJO_TOKEN") do
+    config :mjolnir, forgejo_token: token
+  end
+end
+
+if url = System.get_env("MJOLNIR_FORGEJO_URL") do
+  config :mjolnir, forgejo_url: url
+end

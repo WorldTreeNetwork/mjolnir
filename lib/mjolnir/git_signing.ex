@@ -19,7 +19,8 @@ defmodule Mjolnir.GitSigning do
   @type device_meta :: %{
           optional(:xid) => String.t(),
           optional(:credential_id) => String.t(),
-          optional(:public_key) => String.t()
+          optional(:public_key) => String.t(),
+          optional(:forgejo_key_id) => String.t() | pos_integer()
         }
 
   @doc "Persist an OpenSSH private key for `vm_id`."
@@ -67,15 +68,30 @@ defmodule Mjolnir.GitSigning do
   @doc """
   Mint a new keypair for `vm_id` and store the private opaque.
 
-  Never reads another VM's opaque. Returns the public key (not stored
-  on the VM struct).
+  Registers the pubkey as a Forgejo write deploy key when a host token
+  is configured. Never reads another VM's opaque. Returns the public
+  key (not stored on the VM struct).
   """
   @spec mint(String.t()) :: {:ok, binary()} | {:error, term()}
   def mint(vm_id) when is_binary(vm_id) do
     with {:ok, {priv, pub}} <- generate(),
          :ok <- put(vm_id, priv),
-         :ok <- put_device(vm_id, %{public_key: String.trim(pub)}) do
-      {:ok, pub}
+         trimmed = String.trim(pub),
+         :ok <- put_device(vm_id, %{public_key: trimmed}) do
+      case forgejo_register(vm_id, trimmed) do
+        :ok ->
+          {:ok, pub}
+
+        {:ok, key_id} ->
+          case put_device(vm_id, %{public_key: trimmed, forgejo_key_id: key_id}) do
+            :ok -> {:ok, pub}
+            {:error, reason} -> {:error, reason}
+          end
+
+        {:error, reason} ->
+          _ = delete(vm_id)
+          {:error, {:forgejo_register, reason}}
+      end
     end
   end
 
@@ -87,11 +103,18 @@ defmodule Mjolnir.GitSigning do
     if private_in_meta?(meta) do
       {:error, :private_key_not_on_device_meta}
     else
+      existing =
+        case get_device(vm_id) do
+          {:ok, map} -> map
+          _ -> %{}
+        end
+
       payload =
-        %{}
+        existing
         |> maybe_put_meta("public_key", meta)
         |> maybe_put_meta("xid", meta)
         |> maybe_put_meta("credential_id", meta)
+        |> maybe_put_meta("forgejo_key_id", meta)
 
       Mjolnir.SecretStore.put_opaque(@store_kind, vm_id, @device_key, Jason.encode!(payload))
     end
@@ -114,12 +137,10 @@ defmodule Mjolnir.GitSigning do
   @doc """
   Retire a hosted git-signing device.
 
-  Order is Forgejo key delete (`add-honor-git-remote`, currently a
-  `:not_wired` find), then identikey `revoke_device`, then opaque
-  delete. A crash after identikey revoke must not happen before it —
-  if `revoke_device` fails the private blob stays so we never leave a
-  live key with no identikey row. Forgejo not being wired is the
-  reconcile find, not a fake delete.
+  Order is Forgejo write-key delete, then identikey `revoke_device`,
+  then opaque delete. A failed Forgejo delete stops the chain (opaque
+  stays). `:not_wired` (no host token) is the reconcile find for
+  dev/test and maps to `:ok` — not a fake delete of a live key.
   """
   @spec revoke(String.t()) :: :ok | {:error, term()}
   def revoke(vm_id) when is_binary(vm_id) do
@@ -160,9 +181,26 @@ defmodule Mjolnir.GitSigning do
     Mjolnir.Vsock.Protocol.inject_file_request(@guest_name, pem)
   end
 
-  # add-honor-git-remote owns Forgejo write-key delete. Returning
-  # `:not_wired` (mapped to `:ok`) leaves any remote key as the
-  # reconcile find. Do not pretend the delete succeeded.
+  defp forgejo_register(vm_id, pub) do
+    xid =
+      case get_device(vm_id) do
+        {:ok, map} -> map["xid"]
+        _ -> nil
+      end
+
+    meta = %{public_key: pub, vm_id: vm_id, xid: xid}
+
+    case hook(:git_signing_forgejo_register, meta) do
+      :not_wired -> :ok
+      :ok -> :ok
+      {:ok, key_id} -> {:ok, key_id}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
+    end
+  end
+
+  # Failed delete is an error. `:not_wired` (no token) maps to `:ok` so
+  # revoke can finish in dev/test; leftover keys are the reconcile find.
   defp forgejo_revoke(meta) do
     case hook(:git_signing_forgejo_revoke, meta) do
       :not_wired -> :ok
@@ -194,10 +232,19 @@ defmodule Mjolnir.GitSigning do
   defp hook(key, meta) do
     case Application.get_env(:mjolnir, key) do
       fun when is_function(fun, 1) -> fun.(meta)
-      nil -> if key == :git_signing_forgejo_revoke, do: :not_wired, else: :not_configured
+      nil -> default_hook(key, meta)
       other -> other
     end
   end
+
+  defp default_hook(:git_signing_forgejo_register, meta),
+    do: Mjolnir.Forgejo.DeployKeys.register(meta)
+
+  defp default_hook(:git_signing_forgejo_revoke, meta),
+    do: Mjolnir.Forgejo.DeployKeys.revoke(meta)
+
+  defp default_hook(:git_signing_revoke_device, _meta), do: :not_configured
+  defp default_hook(_key, _meta), do: :not_configured
 
   defp http_revoke_device(xid, credential_id) do
     case identikey_base_url() do
@@ -254,15 +301,21 @@ defmodule Mjolnir.GitSigning do
   defp maybe_put_meta(acc, key, meta) do
     val = Map.get(meta, key) || Map.get(meta, atom_key(key))
 
-    if is_binary(val) and val != "" do
-      Map.put(acc, key, val)
-    else
-      acc
+    cond do
+      key == "forgejo_key_id" and is_integer(val) and val > 0 ->
+        Map.put(acc, key, Integer.to_string(val))
+
+      is_binary(val) and val != "" ->
+        Map.put(acc, key, val)
+
+      true ->
+        acc
     end
   end
 
   defp atom_key("public_key"), do: :public_key
   defp atom_key("xid"), do: :xid
   defp atom_key("credential_id"), do: :credential_id
+  defp atom_key("forgejo_key_id"), do: :forgejo_key_id
   defp atom_key(other), do: other
 end

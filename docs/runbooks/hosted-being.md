@@ -112,26 +112,44 @@ ssh_git` only after a fresh A3 WebAuthn assertion and a consent-log
 `add_device` row. Elect-only is refused. The public key is
 `device_public_key`; the private key never leaves Mjolnir.
 
+The host registers that pubkey as a **write deploy key** on Forgejo
+`VirtueInnova/hypersigil-store-frontend` (`POST /api/v1/repos/…/keys`,
+`read_only: false`). Title includes `vm_id` (and `xid` if known). The
+Forgejo key id is stored on device meta (`forgejo_key_id`), never the
+private key. Token is host-only: `MJOLNIR_FORGEJO_TOKEN` (runtime.exs),
+`Authorization: token …`. Do not log it. Do not put it on the guest or
+the snapshot. Guest `git` uses `IdentityFile=/run/mjolnir/git_signing_key`
+and baked `known_hosts` for `mimir.worldtree.network`.
+
+API URL is `forgejo_url` or `runner_forgejo_url` (`http://127.0.0.1:3000`
+on mimir). Prod hosted-being provision **requires** the token.
+
 Respawn is a new device (`GitSigning.respawn/2`): new `vm_id`, new
 keypair, never copy `_opaque` across ids. Revoke order for the old
 device:
 
-1. Forgejo write-key delete — **not wired** (`add-honor-git-remote`).
-   The hook returns `:not_wired`; any leftover Forgejo key is the
-   reconcile find. Do not fake a delete.
+1. Forgejo write-key delete (`DELETE /api/v1/repos/…/keys/:id`, or
+   match by pubkey). A failed delete is an error — opaque stays.
+   No token is `:not_wired` (dev/test reconcile find only).
 2. identikey `POST /devices/ssh_git/revoke` (`revoke_device` /
    `revoke_ssh_git`)
 3. Opaque delete
 
-If step 2 fails, the private blob stays so a crash cannot leave a
-live key with no identikey row.
+If step 1 or 2 fails, the private blob stays so a crash cannot leave a
+live key with no identikey row. Respawn mints the new key (registers a
+new Forgejo write key) then revokes the old one.
 
-Forgejo write registration is `add-honor-git-remote`. Until that
-lands, `git clone` of
-`forgejogit@mimir.worldtree.network:VirtueInnova/hypersigil-store-frontend.git`
-from a fresh `ubuntu-24.04` fails (`Permission denied (publickey)`).
-Seed `WORKDIR` via `scp` + `mj proxy` (not extra_mounts) so
-`.git` exists and bootstrap skips clone.
+Remote URL (bootstrap default; Forgejo advertises `ssh://git@mimir…`):
+
+```
+forgejogit@mimir.worldtree.network:VirtueInnova/hypersigil-store-frontend.git
+```
+
+Host SSH user is `git` (no `forgejogit` passwd). Bootstrap sets
+`url.git@mimir.worldtree.network:.insteadOf forgejogit@…` and
+`Host mimir.worldtree.network` `User git` so that spec URL still
+clones. GitHub origin is not required. Spawn with `git_signing: true`
+so mint registers the deploy key **before** bootstrap clones.
 
 CLI `mj spawn` on the current `mj` 0.1.0 binary does not list
 `--preserve-iroh-key`; `POST /api/vms` with `preserve_iroh_key: true`
