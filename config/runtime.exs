@@ -108,6 +108,10 @@ if recrypt_storage_url = System.get_env("MJOLNIR_RECRYPT_STORAGE_URL") do
     recrypt_storage_url: recrypt_storage_url
 end
 
+if blake3_bin = System.get_env("MJOLNIR_BLAKE3_BIN") do
+  config :mjolnir, blake3_bin: blake3_bin
+end
+
 case System.get_env("MJOLNIR_PG_ENABLED") do
   "true" -> config :mjolnir, pg_enabled: true
   "false" -> config :mjolnir, pg_enabled: false

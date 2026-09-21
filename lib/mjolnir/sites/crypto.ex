@@ -8,7 +8,8 @@ defmodule Mjolnir.Sites.Crypto do
 
   ## Implementations
 
-  - Blake3 — `:blake3` NIF (Rust, 1.x)
+  - Blake3 — `mjolnir-b3` (stdin → 32 raw bytes). Same crate as the blob
+    door; not the rustler `:blake3` NIF.
   - HKDF-SHA256 — `:crypto` HMAC-SHA256 (RFC 5869)
   - XChaCha20 — HChaCha20 nonce extension + `:crypto` ChaCha20 (raw stream,
     no auth tag; wire-compatible with RFC draft-irtf-cfrg-xchacha §2.3)
@@ -21,12 +22,41 @@ defmodule Mjolnir.Sites.Crypto do
   @doc """
   Blake3 hash of bytes. Returns raw 32-byte digest.
 
-  STUB: SHA-256 placeholder until the Blake3 NIF is wired via recrypt.
-  Same 32-byte shape; not wire-compatible with real Blake3.
+  Runs `mjolnir-b3` (configured `:blake3_bin`). Content-address for Sites
+  chunks and the blob door. IdentiKey fingerprints do **not** use this —
+  they stay SHA-256 as minted (see `IdentiKey.fingerprint/1`).
   """
   @spec blake3_hash(binary()) :: binary()
   def blake3_hash(bytes) when is_binary(bytes) do
-    :crypto.hash(:sha256, bytes)
+    bin = blake3_bin!()
+    dir = Application.get_env(:mjolnir, :socket_dir, System.tmp_dir!())
+    File.mkdir_p!(dir)
+    tmp = Path.join(dir, "b3-#{System.unique_integer([:positive])}")
+
+    try do
+      File.write!(tmp, bytes)
+
+      case System.cmd(bin, [tmp], stderr_to_stdout: true) do
+        {out, 0} when byte_size(out) == 32 ->
+          out
+
+        {out, code} ->
+          raise "mjolnir-b3 failed (exit #{code}): #{inspect(out)}"
+      end
+    after
+      File.rm(tmp)
+    end
+  end
+
+  defp blake3_bin! do
+    bin = Application.get_env(:mjolnir, :blake3_bin, "/opt/mjolnir/bin/mjolnir-b3")
+
+    if is_binary(bin) and File.regular?(bin) do
+      bin
+    else
+      raise ArgumentError,
+            "Blake3 binary missing (#{inspect(bin)}). Build with: cargo build -p mjolnir-blob-door --bin mjolnir-b3"
+    end
   end
 
   @doc """

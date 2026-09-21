@@ -25,6 +25,7 @@ config :mjolnir,
   # Post-snapshot guest health-verify + in-place reboot recovery (mjolnir-l4i)
   # probes a real guest agent over vsock; disable it under test so snapshot
   # paths don't depend on (or block on) a live guest.
-  snapshot_verify_guest: false
+  snapshot_verify_guest: false,
+  blake3_bin: Path.expand("native/target/debug/mjolnir-b3")
 
 config :mjolnir, :auth, bypass_localhost: true

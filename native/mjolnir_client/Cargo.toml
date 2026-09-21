@@ -22,6 +22,7 @@ scopeguard = "1"
 dirs = "6"
 open = "5"
 sha2 = "0.10"
+blake3 = "1"
 rand = "0.8"
 # Sites publish: ED25519 signing, HKDF-SHA256, base64 envelope fields, and
 # second-precision UTC timestamps. XChaCha20 and base58 are implemented in

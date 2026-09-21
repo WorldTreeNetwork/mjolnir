@@ -9,9 +9,10 @@ defmodule Mjolnir.Sites.IdentiKey do
 
   ## Fingerprint
 
-  An IdentiKey fingerprint is the base58-encoded Blake3 hash of the raw
-  ED25519 public-key bytes. It is stable across keypair persistence and is
-  used as the root identifier throughout the SecretStore keyspace.
+  An IdentiKey fingerprint is the base58-encoded SHA-256 of the raw
+  ED25519 public-key bytes. That is how live fps were minted while
+  `Crypto.blake3_hash/1` was a SHA-256 stub. Content hashes are now real
+  Blake3; fingerprints stay SHA-256 until a keyspace/alias migration.
 
   ## Wire format
 
@@ -67,13 +68,13 @@ defmodule Mjolnir.Sites.IdentiKey do
   Compute the IdentiKey fingerprint.
 
   Accepts either a `keypair()` map or raw public-key bytes. Returns the
-  base58-encoded Blake3 hash of the public-key bytes.
+  base58-encoded SHA-256 of the public-key bytes (see moduledoc).
   """
   @spec fingerprint(keypair() | binary()) :: String.t()
   def fingerprint(%{ed25519_public: pub}), do: fingerprint(pub)
 
   def fingerprint(pub) when is_binary(pub) do
-    Crypto.blake3_hash_base58(pub)
+    :crypto.hash(:sha256, pub) |> Crypto.base58_encode()
   end
 
   @doc """

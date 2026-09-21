@@ -75,8 +75,16 @@ Taskmaster or a guest.
 
 ## Sites
 
-`Mjolnir.Sites.Storage.Recrypt` already speaks these routes. Point
-`MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222` and set
-`:sites_storage_backend` to the Recrypt adapter. Default remains
-local BTRFS until that cutover (`mjolnir-u8v7.4`). Do not send chunks
-through recrypt-server `POST /files`.
+`Mjolnir.Sites.Storage.Recrypt` speaks these routes. Content hashes are
+real Blake3 (`mjolnir-b3`). IdentiKey fingerprints stay SHA-256 as
+minted. Cutover:
+
+```
+MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222
+MJOLNIR_BLAKE3_BIN=/opt/mjolnir/bin/mjolnir-b3
+```
+
+in `/etc/mjolnir/env`, then restart Elixir (bounces VMs). Default
+without that env is still local BTRFS. Do not send chunks through
+recrypt-server `POST /files`. Already-published sites keep serving
+from materialized plaintext until republished.

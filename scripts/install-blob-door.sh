@@ -45,19 +45,34 @@ cd "$NATIVE"
 cargo build -p mjolnir-blob-door --release
 install -d /opt/mjolnir/bin
 install -m 0755 "$NATIVE/target/release/mjolnir-blob-door" "$BIN_DST"
+install -m 0755 "$NATIVE/target/release/mjolnir-b3" /opt/mjolnir/bin/mjolnir-b3
 install -m 0644 "$ROOT/systemd/mjolnir-blob-door.service" "$UNIT_DST"
 
-# Cache must not live under btrfs_root. Snapshots of that volume pin
-# CoW extents; LRU then cannot free space and the disk fills monotonically.
-# Same reason SecretEscrow is /var/lib/mjolnir/escrow, not on the data disk.
-refuse_btrfs_cache() {
-    local prefix="${BTRFS_ROOT%/}"
-    case "$CACHE_DIR" in
-        "$prefix"|"$prefix"/*)
-            echo "WARNING: BLOB_DOOR_CACHE_DIR=$CACHE_DIR is under btrfs_root; relocating to /var/lib/mjolnir/blobs" >&2
-            CACHE_DIR="/var/lib/mjolnir/blobs"
+# Cache must not resolve under btrfs_root. Snapshots of that volume pin CoW
+# extents; LRU then cannot free space and the disk fills monotonically.
+# realpath -m resolves existing symlinks without creating the requested path.
+resolve_and_refuse_btrfs_cache() {
+    local resolved_cache resolved_btrfs
+    resolved_cache="$(realpath -m -- "$CACHE_DIR")"
+    resolved_btrfs="$(realpath -m -- "$BTRFS_ROOT")"
+    case "$resolved_cache" in
+        "$resolved_btrfs"|"$resolved_btrfs"/*)
+            echo "Error: BLOB_DOOR_CACHE_DIR=$CACHE_DIR resolves under btrfs_root ($resolved_btrfs)" >&2
+            exit 1
             ;;
     esac
+    CACHE_DIR="$resolved_cache"
+    BTRFS_ROOT="$resolved_btrfs"
+}
+
+configure_systemd_cache_path() {
+    local override_dir="/etc/systemd/system/mjolnir-blob-door.service.d"
+    mkdir -p "$override_dir"
+    {
+        echo '[Service]'
+        echo 'ReadWritePaths='
+        printf 'ReadWritePaths=%s\n' "$CACHE_DIR"
+    } > "$override_dir/cache-path.conf"
 }
 
 ensure_cache_dir() {
@@ -191,9 +206,10 @@ print("wrote", dest, "bucket", bucket, file=sys.stderr)
 PY
 }
 
-refuse_btrfs_cache
+resolve_and_refuse_btrfs_cache
 provision_env
 ensure_cache_dir
+configure_systemd_cache_path
 if systemctl is-active --quiet mjolnir-blob-door 2>/dev/null; then
     systemctl stop mjolnir-blob-door
 fi

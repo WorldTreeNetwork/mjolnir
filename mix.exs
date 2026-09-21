@@ -75,11 +75,8 @@ defmodule Mjolnir.MixProject do
       # a security bump. (Note both 0.7.4 and 0.12.0 declare `elixir: "~> 1.17"`
       # while we build on 1.16; that warning is pre-existing either way.)
       {:ex_mcp, "~> 0.7.4"}
-      # Blake3 NIF (`:blake3`) was tried but its rustler 0.30 binding doesn't
-      # compile on current Rust, and the 0.37+ binding has a cargo
-      # disambiguation bug. `Mjolnir.Sites.Crypto.blake3_hash/1` currently uses
-      # SHA-256 as a same-shape placeholder; real Blake3 will land via the
-      # recrypt Rust integration when that's wired.
+      # Blake3 is `mjolnir-b3` (native/mjolnir_blob_door), not the rustler
+      # `:blake3` NIF. Fingerprints stay SHA-256 as minted.
     ]
   end
 end

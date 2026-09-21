@@ -25,10 +25,11 @@
 //!
 //! ## Crypto compatibility
 //!
-//! `Mjolnir.Sites.Crypto.blake3_hash/1` is **currently a SHA-256 stub** (see its
-//! moduledoc — the Blake3 NIF was backed out). Every `bao_hash`, snapshot hash
-//! and IdentiKey fingerprint is therefore SHA-256, base58-encoded. When the
-//! Elixir side swaps in real Blake3, [`content_hash`] must swap with it.
+//! Chunk / snapshot hashes (`content_hash`) are real Blake3, matching
+//! `Mjolnir.Sites.Crypto.blake3_hash/1` and the blob door. IdentiKey
+//! fingerprints stay SHA-256 of the raw pubkey — that is how live fps were
+//! minted while the Elixir hash was a stub. Do not retarget fps without a
+//! keyspace migration.
 //!
 //! The base58 encoder is a plain big-integer conversion with **no leading-zero
 //! handling** — it mirrors `Crypto.base58_encode/1` exactly, which means a
@@ -209,12 +210,15 @@ mod crypto {
         String::from_utf8(digits).expect("base58 alphabet is ASCII")
     }
 
-    /// Content hash used for `bao_hash`, snapshot hashes and fingerprints.
-    ///
-    /// Named for its role, not its algorithm: the Elixir `blake3_hash/1` it
-    /// mirrors is a SHA-256 stub today. Both sides must flip together.
+    /// Blake3 of `bytes` — `bao_hash` and snapshot hashes. Matches
+    /// `Mjolnir.Sites.Crypto.blake3_hash/1` and the blob door.
     pub fn content_hash(bytes: &[u8]) -> [u8; 32] {
-        Sha256::digest(bytes).into()
+        *blake3::hash(bytes).as_bytes()
+    }
+
+    /// SHA-256 of `bytes` as base58 — IdentiKey fingerprints only.
+    pub fn fingerprint_hash_base58(bytes: &[u8]) -> String {
+        base58_encode(&Sha256::digest(bytes))
     }
 
     /// `content_hash` in base58 — the form that appears on the wire.
@@ -390,9 +394,9 @@ impl Keypair {
         })?)
     }
 
-    /// base58 of the public key's content hash — the site's root identifier.
+    /// base58 SHA-256 of the public key — live fps were minted this way.
     fn fingerprint(&self) -> String {
-        crypto::content_hash_base58(&self.public)
+        crypto::fingerprint_hash_base58(&self.public)
     }
 
     fn sign(&self, message: &[u8]) -> [u8; 64] {
@@ -1146,7 +1150,7 @@ mod tests {
     const ELIXIR_HKDF_SEED0_INFO_A_HTML: &str =
         "3982EC826016D25B3E2600C6A910F9080D200224C30B30180ADEEEE5B7690432";
     const ELIXIR_XCHACHA_KEY7_NONCE9_HELLO: &str = "1ABA233EDBF8168377FFA0";
-    const ELIXIR_HASH_HELLO_WORLD: &str = "DULfJyE3WQqNxy3ymuhAChyNR3yufT88pmqvAazKFMG4";
+    const ELIXIR_HASH_HELLO_WORLD: &str = "FVPfbg9bK7mj7jnaSRXhuVcVakkXcjMPgSwxmauUofYf";
     const ELIXIR_MANIFEST_SIGNING_BYTES: &str = concat!(
         r#"{"created_at":"2026-07-21T12:34:56Z","entries":[{"bao_hash":"H","ciphertext_size":5,"#,
         r#""content_encoding":null,"content_type":"text/html; charset=utf-8","#,
