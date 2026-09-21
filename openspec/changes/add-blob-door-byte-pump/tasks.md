@@ -8,3 +8,10 @@
 - [x] systemd `ReadWritePaths`; install script creates `@blobs`, bumps env
 - [x] Tests: round-trip, mismatch leaves no object, re-PUT no extra version, 413, cache fill on GET miss
 - [x] Docs: runbook, host-sidecars, crate README (64 MiB RAM cap is gone)
+
+## Owed by architecture advise (2026-09-20)
+
+- [ ] R1: Validate GET/HEAD hashes before cache/store access; regress encoded absolute/parent traversal, incoming-file reads, invalid hashes, and `.obao` path variants. See `reviews/2026-09-20-advise.md`.
+- [ ] R2: Coordinate concurrent cache admission/publication/eviction and accounting; verify real disk usage for distinct/same-key PUT and GET-fill races, and preserve B2 fallback when eviction wins a cache-open race.
+- [ ] R3: Discard GET fills on local flush/sync failure; fault-inject late local completion failure and prove no partial object is published and the next GET uses B2.
+- [ ] R4: Enforce resolved production cache placement outside `btrfs_root`, including unsafe fallback and alias/`..` cases; align accepted custom paths with systemd write access and reconcile the stale `@blobs` install task.
