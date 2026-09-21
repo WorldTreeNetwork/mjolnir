@@ -39,20 +39,59 @@ Not a new ADR. Unbound-name 307 stays `parked.rs`. This is the
    never sees it. A file named `fallback` inside the snapshot is
    a site asset, not this policy.
 
-7. **`[site].fallback` is the authoring surface.** `mjolnir.toml`
-   unknown keys stay ignored; this key becomes known on Manifest
-   and on `mj sites publish`. Older `mj` without the key still
-   loads the file (HTTP-style). Hyphen `fall-back` is not an
-   alias.
+7. **`[site].fallback` is the authoring surface.** `mj sites
+   publish <dir>` reads `dir/mjolnir.toml`, then one parent
+   `dir/../mjolnir.toml` (app root when publishing `dist/`).
+   That parse is **site-only**: a file with just `[site]` is
+   valid and MUST NOT require `start_command` / `port`.
+   `Deploy.Manifest` for VM deploy is unchanged (those fields
+   still required there). Unknown keys stay ignored.
+   Hyphen `fall-back` is not an alias. Invalid known values
+   refuse the publish.
+
+8. **Durable source is a signed site policy record, not HEAD
+   and not the snapshot manifest.** HEAD signing bytes stay
+   as they are (mixed-version re-serialize). New record
+   `sites/<name>/fallback` in SecretStore: `{fallback, sequence,
+   identikey_fp, site_name, created_at, signature}`. Absent
+   record = unset policy (steer steps 2/4). Older publishers
+   write nothing. Policy is **site-wide** (not per snapshot).
+   Materializer copies it to the sibling file in the same
+   atomic window as flipping `current`. Rematerialize rebuilds
+   the sibling from the store. Failed publish writes neither
+   HEAD nor policy. Reset: publish with `fallback` omitted
+   deletes the policy record. Rollback of HEAD without a new
+   policy leaves policy as last successful write.
 
 ## Park lookup
 
-Resolve `park.worldtree.network` the same way any Sites Host
-resolves (alias → `(fp, site)` → `current`). Then
-`current/404.html`. Cache that directory handle; it is not
-per-request Elixir.
+Resolve `park.worldtree.network` via the existing alias →
+`(fp, site)` → `current` path, then ServeFile `404.html` only
+— never the park site's fallback chain. Canonicalize +
+`sites_root` containment; escaping `current` is "park missing"
+(empty 404).
+
+Cache the resolved park **directory** with a **60s** success
+TTL. Do not cache lookup failures longer than **5s** (so a
+later publish becomes visible). Republish/prune/rebind are
+visible after the success TTL at worst. No per-miss Elixir
+round-trip on a warm cache.
+
+## Fallback HTTP
+
+- Missing explicit `index.html` or unreadable → empty 404, not
+  200, not park.
+- Missing explicit `404.html` → empty 404, not park.
+- Invalid sibling policy bytes → empty 404 (fail closed).
+- HEAD: same status and headers as GET, empty body.
+- ServeDir 405 / 206 are not misses; do not rewrite them.
+- SPA rewrite uses HTML revalidate Cache-Control even if the
+  request path looks immutable (`/_app/immutable/...`).
+- SPA 200 may 304 on index.html validators; do not 206 a rewrite.
+- Keep br/gz precompression on fallback files.
 
 ## Not this change
 
 Replacing the unbound berth page. Deploying park's snapshot.
-Elixir decrypt `Sites.Server` misses.
+Elixir decrypt `Sites.Server` misses. Changing HEAD or
+snapshot-manifest signed field sets.

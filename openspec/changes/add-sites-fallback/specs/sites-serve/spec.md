@@ -35,7 +35,15 @@ gateway SHALL choose the body in this order:
 4. Else the materialized park site's `404.html` with status 404;
    if that file is missing, empty 404
 
-A 200 or 304 from `ServeDir` SHALL skip this order.
+A 200, 304, 206, or 405 from `ServeDir` SHALL skip this order.
+
+If policy selects `index.html` or `404.html` and that file is
+missing or unreadable, the gateway SHALL return empty 404 — not
+200, not park chrome. Invalid policy bytes on disk SHALL be
+empty 404. HEAD SHALL use the same status and headers as GET
+with an empty body. An SPA rewrite SHALL use HTML revalidate
+Cache-Control even when the request path is under
+`/_app/immutable/`.
 
 #### Scenario: SPA rewrite
 
@@ -93,3 +101,64 @@ named `fallback` SHALL be an ordinary asset.
 - WHEN a client GETs `/fallback`
 - THEN the response is the miss order, not the policy text
   (unless the snapshot itself contains a file `fallback`)
+
+#### Scenario: Explicit SPA target missing
+
+- GIVEN `[site].fallback = "index.html"`
+- AND snapshot `/index.html` is absent
+- WHEN a client GETs `/about`
+- THEN the status is 404
+- AND the body is empty
+- AND park chrome is not served
+
+#### Scenario: HEAD of an SPA miss
+
+- GIVEN `[site].fallback = "index.html"`
+- AND snapshot `/index.html` exists
+- WHEN a client HEADs `/about`
+- THEN the status is 200
+- AND the body is empty
+- AND Content-Type matches GET of `/index.html`
+
+### Requirement: Fallback policy is a signed site record
+
+`[site].fallback` SHALL travel as its own identikey-signed
+SecretStore record (`sites/<name>/fallback`), not as a new field
+on HEAD or on the snapshot manifest (those signing byte sets
+SHALL NOT change). An absent record SHALL mean unset policy.
+Materialize SHALL write the sibling file from that record in the
+same atomic window as flipping `current`. Rematerialize SHALL
+rebuild the sibling from the store. A failed publish SHALL leave
+the previous HEAD and policy in place.
+
+#### Scenario: Older publisher
+
+- GIVEN a client that does not write a policy record
+- WHEN the site is served
+- THEN policy is unset
+- AND snapshot `404.html` / park chrome still apply
+
+#### Scenario: Rematerialize restores policy
+
+- GIVEN a signed policy record `index.html`
+- AND the materialized tree was deleted
+- WHEN materialize runs
+- THEN the sibling policy file is `index.html` again
+- AND `GET /about` is 200 `/index.html`
+
+### Requirement: Park chrome cache is bounded
+
+A successful resolve of park's snapshot directory MAY be reused
+for at most 60 seconds. A failed resolve SHALL NOT be reused for
+more than 5 seconds. Park ServeFile SHALL NOT run the park site's
+own fallback order. A `current` symlink that escapes `sites_root`
+SHALL be treated as park missing.
+
+#### Scenario: Park published after a miss
+
+- GIVEN park was missing
+- AND a live miss returned empty 404
+- AND park's `404.html` is then materialized
+- WHEN more than 5 seconds have passed
+- AND another miss occurs
+- THEN the body is park's `404.html`

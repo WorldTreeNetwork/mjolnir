@@ -12,6 +12,11 @@ A path miss on a **live** bound site must stay on that Host. The
 (`parked.rs`). Default 404 chrome is a **deployed** park site's
 `404.html`, not HTML compiled into the gateway.
 
+Send-back 2026-09-21 (`reviews/2026-09-21-advise.md`, Astra):
+miss order and Host pin hold. Contract amend encodes R1–R3
+(signed site policy record, park cache TTL, missing-target HTTP).
+Code repairs stay owed; this amend does not implement them.
+
 ## Why
 
 `ServeDir` misses always serve the snapshot's `404.html` at status
