@@ -54,9 +54,17 @@ PATH includes `$HOME/.bun/bin`. Vite 6+ host check is opened with
 ticket Host is not 403. `mj connect --session main` is the shell pane.
 
 `mj url` is `https://<ticket>.vm.worldtree.network` (gateway default
-guest port 80). That origin is the preview. CORS for it is
-`update-hypersigil-store-cors` (not this landing). If HMR websocket
-fails through Iroh, first paint is still the gate.
+guest port 80). That origin is the preview. Prod Medusa
+`STORE_CORS` and `AUTH_CORS` list that **exact** ticket origin
+(not a `*.vm.worldtree.network` wildcard). Current preview
+(spawned 2026-09-23 from `hosted-devpreview-test`,
+`preserve_iroh_key`):
+
+`https://8ack4md41n3ofhjyxjnc8sjz7kz1r1pqh3uwrk3tnwowuxqc3gto.vm.worldtree.network`
+
+VM `2d48cc6f-324d-4dff-85a1-58214076fcf7`, Vite in tmux `main:vite`
+on port 80. If HMR websocket fails through Iroh, first paint is
+still the gate. A new ticket means a new CORS entry.
 
 Do **not** write `XAI_API_KEY` onto the guest disk or the snapshot
 tree. Inject it into `/run/mjolnir/` tmpfs after boot (and again
