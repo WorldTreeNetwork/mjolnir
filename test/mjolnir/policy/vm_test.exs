@@ -56,6 +56,23 @@ defmodule Mjolnir.Policy.VMTest do
     end
   end
 
+  describe "terminal invites" do
+    test "an invitee can open the PTY and nothing else" do
+      mark = %{user_id: "mark-xid"}
+      vm = %{owner_id: "user-123", pty_invites: ["mark-xid"]}
+
+      assert :ok = VM.authorize(:pty, mark, vm)
+
+      for action <- [:read, :exec, :stop, :snapshot, :ticket, :message, :grant_pty] do
+        assert :error = VM.authorize(action, mark, vm)
+      end
+    end
+
+    test "a stranger without an invite is still denied the PTY" do
+      assert :error = VM.authorize(:pty, @other_user, @owned_vm)
+    end
+  end
+
   describe "legacy VMs (nil owner_id)" do
     for action <- [:read, :exec, :stop, :snapshot, :ticket, :pty, :message] do
       test "regular user denied #{action} on legacy VM" do

@@ -626,6 +626,48 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Owner grants a terminal invite. The XID can open /term and nothing else.
+  post "/api/vms/:id/term-invites" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      xid = conn.body_params["xid"]
+
+      cond do
+        not (is_binary(xid) and Regex.match?(~r/^[0-9a-f]{64}$/, xid)) ->
+          json(conn, 400, %{error: "invalid_xid"})
+
+        true ->
+          authorize_vm(conn, id, :grant_pty, fn _vm ->
+            case Mjolnir.VM.grant_pty(id, xid) do
+              {:ok, invites} ->
+                json(conn, 200, %{pty_invites: invites})
+
+              {:error, reason} ->
+                json(conn, 500, %{error: "grant_failed", reason: inspect(reason)})
+            end
+          end)
+      end
+    else
+      conn
+    end
+  end
+
+  delete "/api/vms/:id/term-invites/:xid" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :grant_pty, fn _vm ->
+        case Mjolnir.VM.revoke_pty(id, xid) do
+          {:ok, invites} -> json(conn, 200, %{pty_invites: invites})
+          {:error, reason} -> json(conn, 500, %{error: "revoke_failed", reason: inspect(reason)})
+        end
+      end)
+    else
+      conn
+    end
+  end
+
   defp pty_session_param(nil), do: {:ok, nil}
   defp pty_session_param(""), do: {:ok, nil}
   defp pty_session_param(name), do: Validation.validate_session_name(name, "session")

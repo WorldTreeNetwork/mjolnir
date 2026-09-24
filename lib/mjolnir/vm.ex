@@ -57,6 +57,8 @@ defmodule Mjolnir.VM do
     # window where a created VM exists unlabelled — a crash in that window would
     # strand a VM its creator can no longer recognise as its own.
     metadata: %{},
+    # XIDs allowed to open the terminal and nothing else. Not owners.
+    pty_invites: [],
     # Monitor refs of exec Tasks currently running against this VM.
     #
     # A guest busy with a long command is the HEALTHIEST possible state, but it
@@ -349,6 +351,22 @@ defmodule Mjolnir.VM do
       [] ->
         {:error, :not_found}
     end
+  end
+
+  @doc "Allow `xid` to open this VM's terminal without becoming the owner."
+  @spec grant_pty(vm_id(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def grant_pty(vm_id, xid) when is_binary(xid) do
+    GenServer.call(via_tuple(vm_id), {:grant_pty, xid})
+  catch
+    :exit, _ -> {:error, :not_found}
+  end
+
+  @doc "Remove a terminal invite."
+  @spec revoke_pty(vm_id(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def revoke_pty(vm_id, xid) when is_binary(xid) do
+    GenServer.call(via_tuple(vm_id), {:revoke_pty, xid})
+  catch
+    :exit, _ -> {:error, :not_found}
   end
 
   @doc """
@@ -1092,6 +1110,7 @@ defmodule Mjolnir.VM do
       memory_mb: Map.get(cfg, "memory_mb"),
       enable_iroh: Map.get(cfg, "enable_iroh"),
       owner_id: Map.get(cfg, "owner_id"),
+      pty_invites: Map.get(cfg, "pty_invites") || [],
       ssh_public_key: Map.get(cfg, "ssh_public_key"),
       secrets_mode:
         case Map.get(cfg, "secrets_mode") do
@@ -1216,6 +1235,7 @@ defmodule Mjolnir.VM do
       ssh_public_key: ssh_key,
       enable_iroh: enable_iroh,
       owner_id: opts[:owner_id],
+      pty_invites: opts[:pty_invites] || [],
       # secrets_mode flows from spawn opts (router/resume already mapped it to an
       # atom). Without this it defaulted to :none, silently disabling
       # :persistent/:managed for every API-spawned VM.
@@ -1282,6 +1302,20 @@ defmodule Mjolnir.VM do
   def handle_call(:await_boot, from, %{state: :booting} = state) do
     # Store the caller to reply later when boot completes
     {:noreply, Map.put(state, :boot_waiter, from)}
+  end
+
+  def handle_call({:grant_pty, xid}, _from, state) when is_binary(xid) do
+    invites = Enum.uniq([xid | state.pty_invites || []])
+    state = %{state | pty_invites: invites}
+    persist_running_state(state)
+    {:reply, {:ok, invites}, state}
+  end
+
+  def handle_call({:revoke_pty, xid}, _from, state) when is_binary(xid) do
+    invites = Enum.reject(state.pty_invites || [], &(&1 == xid))
+    state = %{state | pty_invites: invites}
+    persist_running_state(state)
+    {:reply, {:ok, invites}, state}
   end
 
   def handle_call(:status, _from, state) do
@@ -3310,6 +3344,7 @@ defmodule Mjolnir.VM do
         "base_image" => state.config.base_image,
         "enable_iroh" => state.enable_iroh,
         "owner_id" => state.owner_id,
+        "pty_invites" => state.pty_invites || [],
         "ssh_public_key" => state.ssh_public_key,
         "secrets_mode" => Atom.to_string(state.secrets_mode),
         # Reconcile reads this back to decide whether a stranded record may be
