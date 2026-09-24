@@ -248,7 +248,8 @@ defmodule Mjolnir.Deploy.DetectorTest do
                package_manager: :bun,
                steps: ["mise install", "bun install", "bun run build"],
                start_command: "node build/index.js",
-               port: 3000
+               port: 3000,
+               base_image: nil
              } = plan
     end
 

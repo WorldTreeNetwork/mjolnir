@@ -92,8 +92,9 @@ defmodule Mjolnir.Deploy.Orchestrator do
     - `:memory_mb` — service VM memory. Default `#{@default_memory_mb}`.
     - `:custom_domain` — explicit fqdn to assign on first deploy (preserved
       across redeploys thereafter by `Runtime.start`).
-    - `:base_image` — deploy base image / base layer id. Default
-      `#{inspect(@default_base_image)}` (gge.1.10).
+    - `:base_image` — deploy base image / base layer id. Wins over
+      `mjolnir.toml` `base_image`. When both are omitted, default
+      `#{inspect(@default_base_image)}` (gge.1.10 / mjolnir-6ee1).
     - `:on_progress` — `(stage :: String.t(), line :: String.t() -> any)` invoked
       as each stage advances. Defaults to a no-op. The HTTP endpoint wires this to
       the NDJSON progress stream.
@@ -110,7 +111,6 @@ defmodule Mjolnir.Deploy.Orchestrator do
     deployer = Keyword.get(opts, :deployer)
     memory_mb = Keyword.get(opts, :memory_mb, @default_memory_mb)
     custom_domain = Keyword.get(opts, :custom_domain)
-    base_image = Keyword.get(opts, :base_image, @default_base_image)
 
     Logger.info("Deploy.Orchestrator: deploying '#{app_name}' from #{src_dir}")
 
@@ -118,6 +118,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
          :ok <- emit(progress, "detect", detect_summary(plan)),
          {:translate, {:ok, steps}} <- {:translate, plan_to_steps(plan, src_dir, ops)},
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
+         base_image = resolve_base_image(opts, plan),
          {:build, {:ok, build}} <-
            {:build, ops.build.(base_image, steps, build_opts(base_image, src_dir, deployer))},
          :ok <-
@@ -211,6 +212,25 @@ defmodule Mjolnir.Deploy.Orchestrator do
   # app has no package_manager (nil) and may declare no runtime, so the inferred
   # phrasing "detected  app ()" would be both ugly and wrong: nothing was
   # detected, the app said so itself. Say which.
+  # `--base` / rpc `:base_image` wins; then the manifest pin; then today's
+  # Node-specialised default. Do not flip the global default to ubuntu-24.04
+  # (mjolnir-6ee1): inferred SvelteKit apps still want bun on PATH.
+  defp resolve_base_image(opts, plan) do
+    case Keyword.get(opts, :base_image) do
+      img when is_binary(img) and img != "" ->
+        img
+
+      _ ->
+        case plan_base_image(plan) do
+          img when is_binary(img) and img != "" -> img
+          _ -> @default_base_image
+        end
+    end
+  end
+
+  defp plan_base_image(%{base_image: img}) when is_binary(img) and img != "", do: img
+  defp plan_base_image(_), do: nil
+
   @doc false
   @spec detect_summary(map()) :: String.t()
   def detect_summary(plan) do

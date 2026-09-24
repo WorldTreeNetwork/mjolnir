@@ -422,6 +422,18 @@ defmodule Mjolnir.API.RouterTest do
   end
 
   describe "POST /api/deploy" do
+    test "400 for an invalid X-Base-Image before the stream starts" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "junk-app")
+        |> put_req_header("x-base-image", "../escape")
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid X-Base-Image"
+    end
+
     test "400 for a body that is not a gzipped tar" do
       conn =
         conn(:post, "/api/deploy", "this is not a tarball")

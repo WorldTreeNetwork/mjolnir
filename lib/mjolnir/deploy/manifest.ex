@@ -68,6 +68,7 @@ defmodule Mjolnir.Deploy.Manifest do
   | `port`          | yes      | port the app binds inside the VM                 |
   | `steps`         | no       | ordered shell commands that build the app        |
   | `runtime`       | no       | mise runtime spec, e.g. `"rust@1.83"`            |
+  | `base_image`    | no       | `@base/` name, e.g. `"ubuntu-24.04"` (6ee1)     |
 
   When `runtime` is set and no step already invokes `mise`, a `mise install`
   step is prepended — otherwise `runtime` would be inert and the declared
@@ -213,14 +214,16 @@ defmodule Mjolnir.Deploy.Manifest do
     with {:ok, start_command} <- fetch_string(map, "start_command"),
          {:ok, port} <- fetch_port(map),
          {:ok, steps} <- fetch_steps(map),
-         {:ok, runtime} <- fetch_optional_string(map, "runtime", "") do
+         {:ok, runtime} <- fetch_optional_string(map, "runtime", ""),
+         {:ok, base_image} <- fetch_optional_name(map, "base_image") do
       {:ok,
        %BuildPlan{
          runtime: runtime,
          package_manager: nil,
          steps: with_runtime_step(steps, runtime),
          start_command: start_command,
-         port: port
+         port: port,
+         base_image: base_image
        }}
     end
   end

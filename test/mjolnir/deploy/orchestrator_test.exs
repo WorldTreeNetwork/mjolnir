@@ -132,6 +132,35 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       # No secrets file → plain boot.
       refute Map.has_key?(o[:spawn_opts], :secrets_mode)
     end
+
+    test "uses the plan's base_image when set (mjolnir.toml pin)", %{agent: agent, dir: dir} do
+      plan = Map.put(@plan, :base_image, "ubuntu-24.04")
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      assert {:ok, _} = Orchestrator.deploy("identikey", dir, ops: ops)
+
+      {:build, base, _steps, o} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "ubuntu-24.04"
+      assert o[:base_image] == "ubuntu-24.04"
+    end
+
+    test "opts :base_image overrides the plan pin", %{agent: agent, dir: dir} do
+      plan = Map.put(@plan, :base_image, "ubuntu-24.04")
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      assert {:ok, _} =
+               Orchestrator.deploy("identikey", dir, ops: ops, base_image: "arch")
+
+      {:build, base, _, o} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "arch"
+      assert o[:base_image] == "arch"
+    end
+
+    test "omitted key still uses deploy-node-bun", %{agent: agent, dir: dir} do
+      ops = recording_ops(agent, [])
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+      {:build, base, _, _} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "deploy-node-bun"
+    end
   end
 
   describe "deploy/3 — managed secrets" do

@@ -22,6 +22,9 @@ defmodule Mjolnir.API.Router do
         single top-level directory, else `"app"`.
       * `X-Memory-MB` — service VM memory. Default `256`.
       * `X-Domain` — optional custom-domain fqdn to assign on first deploy.
+      * `X-Base-Image` — optional `@base/` name (`mj deploy --base`). Overrides
+        `mjolnir.toml` `base_image`. Omitted: the manifest pin, else
+        `deploy-node-bun`.
     * **Response**: `200` with `Content-Type: application/x-ndjson`, a stream of
       newline-delimited JSON objects. Progress lines are `{"stage": ..., "line":
       ...}` (stages: `detect`, `build`, `run`, `done`, or a failing stage name).
@@ -2003,6 +2006,7 @@ defmodule Mjolnir.API.Router do
   defp handle_deploy(conn) do
     with {:ok, body, conn} <- read_full_body(conn),
          {:ok, requested_name} <- deploy_app_name(conn),
+         {:ok, base_image} <- deploy_base_image(conn),
          dest = deploy_src_dest(requested_name),
          {:ok, app_dir} <- extract_source(body, dest) do
       app_name = resolve_app_name(requested_name, app_dir)
@@ -2015,7 +2019,7 @@ defmodule Mjolnir.API.Router do
       # source. Must run before send_chunked/2 — once the response is chunked
       # we can no longer send a 403/404 status.
       authorize_deploy(conn, app_name, fn _entry ->
-        do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain)
+        do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
       end)
     else
       {:error, :too_large} ->
@@ -2023,6 +2027,9 @@ defmodule Mjolnir.API.Router do
 
       {:error, :bad_app_name} ->
         json(conn, 400, %{error: "invalid X-App-Name"})
+
+      {:error, :bad_base_image} ->
+        json(conn, 400, %{error: "invalid X-Base-Image"})
 
       {:error, {:extract_failed, reason}} ->
         json(conn, 400, %{error: "invalid_source_archive", reason: inspect(reason)})
@@ -2036,7 +2043,7 @@ defmodule Mjolnir.API.Router do
   # Streams build progress as chunked JSON. Split out of handle_deploy/1 so the
   # ownership check (mjolnir-xuv) can still return a 403/404 status — once
   # send_chunked/2 runs, the status is committed and cannot be changed.
-  defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain) do
+  defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image) do
     conn = send_chunked(conn, 200)
 
     # The evolving conn is held in the process dictionary rather than an Agent.
@@ -2068,6 +2075,7 @@ defmodule Mjolnir.API.Router do
         deployer: deployer,
         memory_mb: memory_mb,
         custom_domain: custom_domain,
+        base_image: base_image,
         on_progress: on_progress
       )
 
@@ -2132,6 +2140,19 @@ defmodule Mjolnir.API.Router do
     case get_req_header(conn, "x-domain") do
       [d | _] when is_binary(d) and d != "" -> d
       _ -> nil
+    end
+  end
+
+  defp deploy_base_image(conn) do
+    case get_req_header(conn, "x-base-image") do
+      [name | _] when is_binary(name) and name != "" ->
+        case Validation.validate_safe_name(name, "X-Base-Image") do
+          {:ok, safe} -> {:ok, safe}
+          {:error, _} -> {:error, :bad_base_image}
+        end
+
+      _ ->
+        {:ok, nil}
     end
   end
 

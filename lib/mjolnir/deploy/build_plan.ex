@@ -20,11 +20,16 @@ defmodule Mjolnir.Deploy.BuildPlan do
       each step is a candidate snapshot boundary.
     - `start_command` — command the service VM executes to start the app.
     - `port` — port the app binds on inside the VM.
+    - `base_image` — optional `@base/` name from `mjolnir.toml`. `nil` for
+      inferred SvelteKit apps so Orchestrator keeps `deploy-node-bun`
+      (mjolnir-6ee1). A set value is used unless `mj deploy --base` / rpc
+      `:base_image` overrides it.
     """
     field(:runtime, String.t())
     field(:package_manager, :npm | :bun | :pnpm | :yarn | nil)
     field(:steps, [String.t()])
     field(:start_command, String.t())
     field(:port, pos_integer())
+    field(:base_image, String.t() | nil, default: nil)
   end
 end

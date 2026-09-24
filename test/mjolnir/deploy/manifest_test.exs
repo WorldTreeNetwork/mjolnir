@@ -64,6 +64,10 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert {:ok, %BuildPlan{package_manager: nil}} = Manifest.load(dir)
     end
 
+    test "omitted base_image is nil so Orchestrator keeps deploy-node-bun", %{dir: dir} do
+      assert {:ok, %BuildPlan{base_image: nil}} = Manifest.load(dir)
+    end
+
     test "the declared runtime gets a mise install prepended", %{dir: dir} do
       # Without this the toolchain is declared but never installed, and the
       # build silently runs against whatever the base image ships.
@@ -193,6 +197,29 @@ defmodule Mjolnir.Deploy.ManifestTest do
   # ---------------------------------------------------------------------------
   # Optional fields
   # ---------------------------------------------------------------------------
+
+  describe "base_image (mjolnir-6ee1)" do
+    test "round-trips ubuntu-24.04", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./target/release/identikey-server"
+      port = 8080
+      base_image = "ubuntu-24.04"
+      """)
+
+      assert {:ok, %BuildPlan{base_image: "ubuntu-24.04"}} = Manifest.load(dir)
+    end
+
+    test "rejects a path-shaped value", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      base_image = "../escape"
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "base_image"
+    end
+  end
 
   describe "[targets] spawn targets" do
     test "prod plan ignores targets", %{dir: dir} do

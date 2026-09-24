@@ -280,10 +280,18 @@ mj deploy --name hypersigil-api --domain shop.example
 ```
 
 `--name` is required for the secrets file to match unless the directory *is*
-already named `hypersigil-api`. `--domain` is optional (`X-Domain`). The CLI
-tars the tree (honoring `.gitignore`), `POST`s `/api/deploy`, and prints the
-URL. The server reads the secrets file, builds, boots with `secrets_mode:
-:managed`, and cuts over.
+already named `hypersigil-api`. `--domain` is optional (`X-Domain`). Rust /
+non-Node apps pin the maintained image in `mjolnir.toml`:
+
+```toml
+base_image = "ubuntu-24.04"
+```
+
+`mj deploy --base ubuntu-24.04` overrides that pin (`X-Base-Image`). Omitted
+on both sides, Orchestrator still defaults to `deploy-node-bun` (mjolnir-6ee1).
+The CLI tars the tree (honoring `.gitignore`), `POST`s `/api/deploy`, and
+prints the URL. The server reads the secrets file, builds, boots with
+`secrets_mode: :managed`, and cuts over.
 
 **3. Verify — actually verify, don't assume.**
 

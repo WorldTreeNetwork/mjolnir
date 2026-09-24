@@ -366,6 +366,9 @@ enum Command {
         /// Bind a custom domain during deploy
         #[arg(long)]
         domain: Option<String>,
+        /// Base image for the build VM (overrides mjolnir.toml `base_image`)
+        #[arg(long)]
+        base: Option<String>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -1068,9 +1071,10 @@ async fn main() {
             name,
             memory,
             domain,
+            base,
             api,
             token,
-        } => deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain).await,
+        } => deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain, base).await,
         Command::Domain { action } => match action {
             DomainAction::Set {
                 app,
