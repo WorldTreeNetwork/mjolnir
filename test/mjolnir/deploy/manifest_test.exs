@@ -194,28 +194,28 @@ defmodule Mjolnir.Deploy.ManifestTest do
   # Optional fields
   # ---------------------------------------------------------------------------
 
-  describe "[dev] target" do
-    test "prod plan ignores [dev]", %{dir: dir} do
+  describe "[targets] spawn targets" do
+    test "prod plan ignores targets", %{dir: dir} do
       write_manifest(dir, """
       start_command = "node build"
       port = 3000
 
-      [dev]
+      [targets.dev]
       snapshot = "hosted-devpreview-test"
       base = "ubuntu-24.04"
       command = "bun run dev --host 0.0.0.0 --port 80"
 
-      [dev.env]
+      [targets.dev.env]
       VITE_MEDUSA_BACKEND_URL = "https://api.hypersigil.world"
 
-      [dev.git]
+      [targets.dev.git]
       remote = "forgejo"
       sign = true
       """)
 
       assert {:ok, %BuildPlan{start_command: "node build", port: 3000}} = Manifest.load(dir)
 
-      assert {:ok, dev} = Manifest.load_dev(dir)
+      assert {:ok, dev} = Manifest.load_target(dir, "dev")
       assert dev.snapshot == "hosted-devpreview-test"
       assert dev.base == "ubuntu-24.04"
       assert dev.port == 80
@@ -224,23 +224,24 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert dev.git_sign == true
       assert dev.git_remote == "forgejo"
       assert dev.env["VITE_MEDUSA_BACKEND_URL"] == "https://api.hypersigil.world"
+      assert Manifest.load_target(dir, "staging") == :none
     end
 
-    test "a missing [dev] is :none, not an error", %{dir: dir} do
+    test "a missing target is :none, not an error", %{dir: dir} do
       write_manifest(dir, ~s(start_command = "./run"\nport = 8080))
-      assert Manifest.load_dev(dir) == :none
+      assert Manifest.load_target(dir, "dev") == :none
     end
 
-    test "[dev] without a root is an error", %{dir: dir} do
+    test "a target without a root is an error", %{dir: dir} do
       write_manifest(dir, """
       start_command = "./run"
       port = 8080
 
-      [dev]
+      [targets.dev]
       command = "bun run dev"
       """)
 
-      assert {:error, {:invalid_manifest, msg}} = Manifest.load_dev(dir)
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load_target(dir, "dev")
       assert msg =~ "base or snapshot"
       assert {:ok, %BuildPlan{}} = Manifest.load(dir)
     end

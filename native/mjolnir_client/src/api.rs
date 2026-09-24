@@ -31,7 +31,27 @@ pub async fn cmd_spawn(
     memory_mb: &Option<u32>,
     snapshot: &Option<String>,
     base_image: &Option<String>,
+    target: Option<&str>,
+    manifest_path: &str,
+    dry_run: bool,
 ) -> Result<()> {
+    if let Some(name) = target {
+        return cmd_spawn_target(
+            profile,
+            api_flag,
+            token,
+            name,
+            manifest_path,
+            dry_run,
+            memory_mb,
+            snapshot,
+            base_image,
+        )
+        .await;
+    }
+    if dry_run {
+        anyhow::bail!("--dry-run is only valid with --target");
+    }
     if snapshot.is_some() && base_image.is_some() {
         anyhow::bail!("--snapshot and --base are mutually exclusive; pass at most one");
     }
@@ -904,16 +924,20 @@ pub async fn cmd_url(
     Ok(())
 }
 
-pub async fn cmd_dev(
+async fn cmd_spawn_target(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    name: &str,
     path: &str,
     dry_run: bool,
+    memory_override: &Option<u32>,
+    snapshot_override: &Option<String>,
+    base_override: &Option<String>,
 ) -> Result<()> {
-    let dev = crate::dev_manifest::load(std::path::Path::new(path))?;
+    let dev = crate::dev_manifest::load(std::path::Path::new(path), name)?;
     eprintln!(
-        "dev target: {} memory={} port={} sign={}",
+        "target {name}: {} memory={} port={} sign={}",
         dev.snapshot
             .as_deref()
             .or(dev.base.as_deref())
@@ -923,7 +947,7 @@ pub async fn cmd_dev(
         dev.git_sign
     );
     if dry_run {
-        println!("{}", crate::dev_manifest::start_script(&dev));
+        println!("{}", crate::dev_manifest::start_script(name, &dev));
         return Ok(());
     }
 
@@ -937,26 +961,28 @@ pub async fn cmd_dev(
         })
     });
     let mut metadata = serde_json::Map::new();
-    metadata.insert("role".into(), serde_json::json!("dev"));
+    metadata.insert("role".into(), serde_json::json!(name));
     if let Some(remote) = &dev.git_remote {
         metadata.insert("git_remote".into(), serde_json::json!(remote));
     }
 
+    let snapshot = snapshot_override.clone().or(dev.snapshot.clone());
+    let base_image = if snapshot.is_some() {
+        None
+    } else {
+        base_override.clone().or(dev.base.clone())
+    };
     let opts = SpawnOptions {
-        memory_mb: Some(dev.memory_mb),
-        snapshot: dev.snapshot.clone(),
-        base_image: if dev.snapshot.is_some() {
-            None
-        } else {
-            dev.base.clone()
-        },
+        memory_mb: Some(memory_override.unwrap_or(dev.memory_mb)),
+        snapshot,
+        base_image,
         ssh_public_key,
         preserve_iroh_key: Some(dev.preserve_iroh_key),
         git_signing: Some(dev.git_sign),
         metadata: Some(metadata),
     };
 
-    eprintln!("Spawning dev VM...");
+    eprintln!("Spawning target {name}...");
     let resp = spawn_vm(&client, base, &opts).await?;
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
 
@@ -967,13 +993,13 @@ pub async fn cmd_dev(
         Some(await_pty(&client, base, &resp.id, 120_000).await?)
     };
 
-    let script = crate::dev_manifest::start_script(&dev);
+    let script = crate::dev_manifest::start_script(name, &dev);
     let exec_resp: ExecResponse = client
         .post(format!("{}/api/vms/{}/exec", base, resp.id))
         .json(&serde_json::json!({ "command": script }))
         .send()
         .await
-        .context("failed to start [dev].command")?
+        .context("failed to start target command")?
         .error_for_status()
         .context("dev start exec failed")?
         .json()
@@ -1351,6 +1377,9 @@ mod tests {
             &None,
             &Some("my-snapshot".to_string()),
             &Some("my-base-image".to_string()),
+            None,
+            ".",
+            false,
         )
         .await;
         assert!(result.is_err());

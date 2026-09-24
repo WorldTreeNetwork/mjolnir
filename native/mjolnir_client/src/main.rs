@@ -44,22 +44,6 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     // --- VM Operations ---
-    /// Spawn the long-lived VM described by `[dev]` in mjolnir.toml
-    #[command(next_help_heading = "VM Operations")]
-    Dev {
-        /// App directory containing mjolnir.toml (default: .)
-        #[arg(default_value = ".")]
-        path: String,
-        /// Mjolnir API base URL
-        #[arg(long)]
-        api: Option<String>,
-        /// Bearer token for API auth
-        #[arg(long, env = "MJOLNIR_TOKEN")]
-        token: Option<String>,
-        /// Print the plan and exit without spawning
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Spawn a new VM
     #[command(next_help_heading = "VM Operations")]
     Spawn {
@@ -81,6 +65,15 @@ enum Command {
         /// Spawn from a named base image under @base/ (mutually exclusive with --snapshot)
         #[arg(long, conflicts_with = "snapshot")]
         base: Option<String>,
+        /// Read `[targets.NAME]` from mjolnir.toml and spawn that VM
+        #[arg(long, value_name = "NAME")]
+        target: Option<String>,
+        /// Directory containing mjolnir.toml (only with --target; default: .)
+        #[arg(long, default_value = ".")]
+        path: String,
+        /// With --target, print the start script and do not spawn
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List running VMs
     List {
@@ -890,12 +883,6 @@ async fn main() {
 
     let result: anyhow::Result<()> = match cli.command {
         // --- VM Operations ---
-        Command::Dev {
-            path,
-            api,
-            token,
-            dry_run,
-        } => api::cmd_dev(&profile, &api, &token, &path, dry_run).await,
         Command::Spawn {
             api,
             connect,
@@ -903,7 +890,24 @@ async fn main() {
             memory,
             snapshot,
             base,
-        } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot, &base).await,
+            target,
+            path,
+            dry_run,
+        } => {
+            api::cmd_spawn(
+                &profile,
+                &api,
+                &token,
+                connect,
+                &memory,
+                &snapshot,
+                &base,
+                target.as_deref(),
+                &path,
+                dry_run,
+            )
+            .await
+        }
         Command::List {
             dormant,
             filter,

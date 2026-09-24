@@ -1,5 +1,5 @@
-//! `[dev]` table of `mjolnir.toml`. Prod keys are ignored here.
-//! The Elixir `Mjolnir.Deploy.Manifest.load_dev/1` is the same contract.
+//! `[targets.<name>]` in `mjolnir.toml`. Prod keys are ignored here.
+//! The Elixir `Mjolnir.Deploy.Manifest.load_target/2` is the same contract.
 
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
@@ -19,25 +19,29 @@ pub struct DevTarget {
     pub env: BTreeMap<String, String>,
 }
 
-pub fn load(dir: &Path) -> Result<DevTarget> {
+pub fn load(dir: &Path, name: &str) -> Result<DevTarget> {
     let path = dir.join("mjolnir.toml");
     let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    parse(&raw)
+    parse(&raw, name)
 }
 
-pub fn parse(raw: &str) -> Result<DevTarget> {
+pub fn parse(raw: &str, name: &str) -> Result<DevTarget> {
     let value: toml::Value = toml::from_str(raw).context("mjolnir.toml is not valid TOML")?;
     let root = value.as_table().context("mjolnir.toml must be a table")?;
-    let Some(dev) = root.get("dev") else {
-        bail!("mjolnir.toml has no [dev] table");
+    let Some(targets) = root.get("targets") else {
+        bail!("mjolnir.toml has no [targets] table");
     };
-    let dev = dev.as_table().context("[dev] must be a table")?;
+    let targets = targets.as_table().context("[targets] must be a table")?;
+    let Some(dev) = targets.get(name) else {
+        bail!("mjolnir.toml has no [targets.{name}]");
+    };
+    let dev = dev.as_table().context("[targets.{name}] must be a table")?;
 
     let command = req_string(dev, "command")?;
     let base = opt_name(dev, "base")?;
     let snapshot = opt_name(dev, "snapshot")?;
     if base.is_none() && snapshot.is_none() {
-        bail!("[dev] needs base or snapshot");
+        bail!("[targets.{name}] needs base or snapshot");
     }
     let memory_mb = opt_int(dev, "memory_mb", 2048, 128, 32_768)?;
     let port = opt_int(dev, "port", 80, 1, 65_535)? as u16;
@@ -60,16 +64,17 @@ pub fn parse(raw: &str) -> Result<DevTarget> {
     })
 }
 
-/// Shell that starts `[dev].command` in tmux `main:vite` if that window
-/// is not already there. Returns immediately.
-pub fn start_script(dev: &DevTarget) -> String {
+/// Shell that starts the target command in tmux `main:<name>` if that
+/// window is not already there. Returns immediately.
+pub fn start_script(name: &str, dev: &DevTarget) -> String {
     let workdir = dev.workdir.as_deref().unwrap_or("/");
     let mut exports = String::new();
     for (k, v) in &dev.env {
         exports.push_str(&format!("export {}={}\n", k, sh_single(v)));
     }
     format!(
-        "set -e\nexport PATH=\"$HOME/.bun/bin:$PATH\"\ncd {wd}\n{exports}tmux has-session -t main 2>/dev/null || tmux new-session -d -s main\nif tmux list-windows -t main -F '#{{window_name}}' | grep -qx vite; then\n  echo vite-already\nelse\n  tmux new-window -d -t main -n vite \"cd {wd} && export PATH=\\\"\\$HOME/.bun/bin:\\$PATH\\\" && {exports_one} exec {cmd}\"\n  echo vite-started\nfi\n",
+        "set -e\nexport PATH=\"$HOME/.bun/bin:$PATH\"\ncd {wd}\n{exports}tmux has-session -t main 2>/dev/null || tmux new-session -d -s main\nif tmux list-windows -t main -F '#{{window_name}}' | grep -qx {win}; then\n  echo {win}-already\nelse\n  tmux new-window -d -t main -n {win} \"cd {wd} && export PATH=\\\"\\$HOME/.bun/bin:\\$PATH\\\" && {exports_one} exec {cmd}\"\n  echo {win}-started\nfi\n",
+        win = sh_single(name),
         wd = sh_single(workdir),
         exports = exports,
         exports_one = exports.replace('\n', "; "),
@@ -173,16 +178,17 @@ mod tests {
             r#"
             start_command = "node build"
             port = 3000
-            [dev]
+            [targets.dev]
             snapshot = "hosted-devpreview-test"
             base = "ubuntu-24.04"
             command = "bun run dev --host 0.0.0.0 --port 80"
-            [dev.env]
+            [targets.dev.env]
             VITE_MEDUSA_BACKEND_URL = "https://api.hypersigil.world"
-            [dev.git]
+            [targets.dev.git]
             remote = "forgejo"
             sign = true
             "#,
+            "dev",
         )
         .unwrap();
         assert_eq!(dev.snapshot.as_deref(), Some("hosted-devpreview-test"));
@@ -197,7 +203,7 @@ mod tests {
 
     #[test]
     fn missing_root_errors() {
-        let err = parse("[dev]\ncommand = \"bun run dev\"\n").unwrap_err();
+        let err = parse("[targets.dev]\ncommand = \"bun run dev\"\n", "dev").unwrap_err();
         assert!(err.to_string().contains("base or snapshot"));
     }
 }

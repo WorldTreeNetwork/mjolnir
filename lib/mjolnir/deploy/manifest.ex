@@ -32,14 +32,15 @@ defmodule Mjolnir.Deploy.Manifest do
   `start_command`, which still errors — the required-field check is the
   safety net, not a closed key set.
 
-  ## Dev target
+  ## Spawn targets
 
-  Top-level keys are the **prod** plan (`mj deploy`). `[dev]` is a second
-  verb (`mj dev`): a long-lived VM, not a cutover of the service. `load/1`
-  ignores `[dev]`. `load_dev/1` reads it and errors when the table is
-  missing or unusable. A bad `[dev]` does not change what `mj deploy` builds.
+  Top-level keys are the **prod** plan (`mj deploy`). `[targets.<name>]`
+  is a long-lived VM selected by `mj spawn --target <name>`. `load/1`
+  ignores `[targets]`. `load_target/2` reads one name and errors when
+  that table is missing or unusable. A bad target does not change what
+  `mj deploy` builds.
 
-      [dev]
+      [targets.dev]
       snapshot = "hosted-devpreview-test"
       base = "ubuntu-24.04"
       memory_mb = 2048
@@ -48,10 +49,10 @@ defmodule Mjolnir.Deploy.Manifest do
       command = "bun run dev --host 0.0.0.0 --port 80"
       preserve_iroh_key = true
 
-      [dev.env]
+      [targets.dev.env]
       VITE_MEDUSA_BACKEND_URL = "https://api.hypersigil.world"
 
-      [dev.git]
+      [targets.dev.git]
       remote = "forgejo"
       sign = true
 
@@ -82,7 +83,7 @@ defmodule Mjolnir.Deploy.Manifest do
   alias Mjolnir.Deploy.BuildPlan
 
   defmodule DevTarget do
-    @moduledoc "The `[dev]` table: a long-lived VM, not a prod cutover."
+    @moduledoc "One `[targets.<name>]` table: a long-lived VM, not a prod cutover."
     @enforce_keys [:command, :port, :memory_mb, :preserve_iroh_key, :git_sign, :env]
     defstruct [
       :base,
@@ -133,20 +134,35 @@ defmodule Mjolnir.Deploy.Manifest do
   manifest exists but is unusable — which the caller must surface, not swallow.
   """
   @doc """
-  Loads the `[dev]` table. `:none` when the file or the table is absent.
-  `{:error, _}` when `[dev]` is present but unusable.
+  Loads `[targets.<name>]`. `:none` when the file or that target is absent.
+  `{:error, _}` when the target is present but unusable.
   """
-  @spec load_dev(String.t()) :: {:ok, DevTarget.t()} | {:error, term()} | :none
-  def load_dev(app_dir) do
+  @spec load_target(String.t(), String.t()) :: {:ok, DevTarget.t()} | {:error, term()} | :none
+  def load_target(app_dir, name) when is_binary(name) and name != "" do
     file = path(app_dir)
 
     if File.regular?(file) do
       with {:ok, raw} <- read(file),
            {:ok, map} <- parse(raw) do
-        case Map.get(map, "dev") do
-          nil -> :none
-          dev when is_map(dev) -> to_dev(dev)
-          other -> {:error, {:invalid_manifest, "[dev] must be a table, got #{inspect(other)}"}}
+        case Map.get(map, "targets") do
+          nil ->
+            :none
+
+          targets when is_map(targets) ->
+            case Map.get(targets, name) do
+              nil ->
+                :none
+
+              spec when is_map(spec) ->
+                to_target(name, spec)
+
+              other ->
+                {:error,
+                 {:invalid_manifest, "[targets.#{name}] must be a table, got #{inspect(other)}"}}
+            end
+
+          other ->
+            {:error, {:invalid_manifest, "[targets] must be a table, got #{inspect(other)}"}}
         end
       end
     else
@@ -268,7 +284,7 @@ defmodule Mjolnir.Deploy.Manifest do
   # A declared runtime that nothing installs is a trap: the build would run
   # against whatever the base image happens to ship. Prepend the install unless
   # the author is already driving mise themselves.
-  defp to_dev(dev) do
+  defp to_target(name, dev) do
     with {:ok, command} <- fetch_string(dev, "command"),
          {:ok, port} <- fetch_dev_port(dev),
          {:ok, memory_mb} <- fetch_memory(dev),
@@ -279,7 +295,7 @@ defmodule Mjolnir.Deploy.Manifest do
          {:ok, env} <- fetch_env(dev),
          {:ok, git_remote, git_sign} <- fetch_git(dev) do
       if base == nil and snapshot == nil do
-        {:error, {:invalid_manifest, "[dev] needs base or snapshot"}}
+        {:error, {:invalid_manifest, "[targets.#{name}] needs base or snapshot"}}
       else
         {:ok,
          %DevTarget{
@@ -359,7 +375,7 @@ defmodule Mjolnir.Deploy.Manifest do
         end)
 
       other ->
-        {:error, {:invalid_manifest, "[dev.env] must be a table, got #{inspect(other)}"}}
+        {:error, {:invalid_manifest, "[targets.env] must be a table, got #{inspect(other)}"}}
     end
   end
 
@@ -375,7 +391,7 @@ defmodule Mjolnir.Deploy.Manifest do
         end
 
       other ->
-        {:error, {:invalid_manifest, "[dev.git] must be a table, got #{inspect(other)}"}}
+        {:error, {:invalid_manifest, "[targets.git] must be a table, got #{inspect(other)}"}}
     end
   end
 
