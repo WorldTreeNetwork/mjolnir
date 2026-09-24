@@ -208,10 +208,6 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # --- step translation ------------------------------------------------------
 
-  # The one operator-facing line describing what we decided to build. A manifest
-  # app has no package_manager (nil) and may declare no runtime, so the inferred
-  # phrasing "detected  app ()" would be both ugly and wrong: nothing was
-  # detected, the app said so itself. Say which.
   # `--base` / rpc `:base_image` wins; then the manifest pin; then today's
   # Node-specialised default. Do not flip the global default to ubuntu-24.04
   # (mjolnir-6ee1): inferred SvelteKit apps still want bun on PATH.
@@ -231,6 +227,10 @@ defmodule Mjolnir.Deploy.Orchestrator do
   defp plan_base_image(%{base_image: img}) when is_binary(img) and img != "", do: img
   defp plan_base_image(_), do: nil
 
+  # The one operator-facing line describing what we decided to build. A manifest
+  # app has no package_manager (nil) and may declare no runtime, so the inferred
+  # phrasing "detected  app ()" would be both ugly and wrong: nothing was
+  # detected, the app said so itself. Say which.
   @doc false
   @spec detect_summary(map()) :: String.t()
   def detect_summary(plan) do
