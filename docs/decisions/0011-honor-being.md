@@ -28,8 +28,10 @@ unchanged.
 3. **`ssh_git` credential + A3 consent.** Fresh A3 assertion +
    consent-log `add_device`. Not Elect. SSH private key in
    `_opaque/vms/<id>/`, vsock-injected, `gpg.format ssh`. Host is
-   C1-style custodian of that key. Revoke: opaque delete +
-   `revoke_device` + Forgejo key delete.
+   C1-style custodian of that key. Revoke, in order: Forgejo key
+   delete + `revoke_device` + opaque delete — fail closed, so a
+   delete that cannot be confirmed stops the revoke (landed
+   `add-honor-git-remote`, 2026-09-24).
 4. **Forgejo on mimir is the write remote.** GitHub origin does
    not deploy. `git push main` is the accepted prod-cutover risk.
 5. **Ticket URL + prod API + per-ticket CORS.** No
@@ -53,9 +55,10 @@ identikey-core passkey OP (discovery 200), opaque inject
 pattern, `owner_id` + `authorize_vm`, Forgejo deploy.yml, prod
 storefront/API.
 
-Not built: `ssh_git` kind, A3 `add_device` consent, SSH inject,
-Forgejo registration, grok bootstrap, Keycloak cutover, preview
-CORS, `owner_id` = public XID `sub`.
+Not built: grok bootstrap, Keycloak cutover, preview CORS.
+(`ssh_git` kind, A3 `add_device` consent and SSH inject landed with
+`add-vm-git-subkey`; Forgejo registration and `owner_id` = public
+XID `sub` with `add-honor-git-remote` / `add-identikey-being-client`.)
 
 Remaining: the five implement landings. This change folds the ADR
 only.

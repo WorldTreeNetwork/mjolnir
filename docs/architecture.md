@@ -441,8 +441,18 @@ SecretStore opaque blob injected to the fixed guest path
 `/run/mjolnir/git_signing_key`, deliberately *not* routed through
 `Identity.env_entries/1` (`BUZZ_PRIVATE_KEY`), so a respawn can mint
 a new device without rewriting `git config user.signingkey`. The
-Forgejo remote and CORS SHALLs are not living yet; they wait on
-`add-honor-git-remote` and `update-hypersigil-store-cors`.
+Forgejo write-remote SHALL is living as of `add-honor-git-remote`
+(folded 2026-09-24) — the host registers that same `ssh_git` pubkey
+as a **repository write deploy key** on
+`VirtueInnova/hypersigil-store-frontend` (the guest never holds a
+Forgejo token), gated on a consented identikey `ssh_git` row whose
+`xid`/`credential_id` are persisted *before* the grant exists. Revoke
+runs Forgejo delete → `revoke_device` → opaque delete and fails
+**closed**: a missing host token after a key was registered leaves
+the opaque and device metadata in place rather than reporting
+success, so a forgotten live write credential is the one outcome the
+order rules out. The CORS SHALL is not living yet; it waits on
+`update-hypersigil-store-cors`.
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
 
