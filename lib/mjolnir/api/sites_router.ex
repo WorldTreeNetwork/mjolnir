@@ -483,7 +483,7 @@ defmodule Mjolnir.API.SitesRouter do
   defp equal_or_error(_left, _right, error), do: {:error, error}
 
   defp commit_head_and_policy(fp, name, head_bytes, record, policy_bytes, _policy) do
-    :global.trans({__MODULE__, fp, name}, fn ->
+    :global.trans({{__MODULE__, fp, name}, self()}, fn ->
       with :ok <- check_head_monotonic(record, fp, name) do
         previous = SecretStore.get(fp, fallback_key(name))
 
