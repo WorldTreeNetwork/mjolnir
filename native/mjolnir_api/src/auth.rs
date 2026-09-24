@@ -8,16 +8,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_ISSUER: &str = "https://connect.identikey.io/realms/identikey";
+const DEFAULT_ISSUER: &str = "https://auth.identikey.me";
 const CLIENT_ID: &str = "mjolnir-cli";
-const SCOPES: &str = "openid offline_access";
+const SCOPES: &str = "openid";
 
 // --- OIDC Discovery ---
 
 #[derive(Deserialize)]
 struct OidcConfig {
+    authorization_endpoint: Option<String>,
     token_endpoint: String,
-    device_authorization_endpoint: String,
+    device_authorization_endpoint: Option<String>,
 }
 
 async fn discover(issuer: &str) -> Result<OidcConfig> {
@@ -44,10 +45,23 @@ struct DeviceAuthResponse {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
+    /// IdentiKey access tokens are opaque. The API verifies this JWT.
+    id_token: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
     #[allow(dead_code)]
     token_type: Option<String>,
+}
+
+impl TokenResponse {
+    /// What `mj` sends as `Authorization: Bearer`. Keycloak's access token is
+    /// already a JWT. IdentiKey's is not; the ID token is.
+    fn bearer(&self) -> String {
+        self.id_token
+            .clone()
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| self.access_token.clone())
+    }
 }
 
 #[derive(Deserialize)]
@@ -124,7 +138,7 @@ pub async fn load_token() -> Option<String> {
     // Try refresh
     if let Some(ref refresh) = stored.refresh_token {
         if let Ok(new_token) = refresh_token(&stored.issuer, refresh).await {
-            stored.access_token = new_token.access_token;
+            stored.access_token = new_token.bearer();
             stored.refresh_token = new_token.refresh_token.or(stored.refresh_token);
             stored.expires_at = new_token.expires_in.map(|e| now_secs() + e);
             let _ = stored.save();
@@ -173,7 +187,7 @@ pub async fn refresh_stored_token() -> Option<String> {
     let refresh = stored.refresh_token.as_ref()?;
     match refresh_token(&stored.issuer, refresh).await {
         Ok(new_token) => {
-            stored.access_token = new_token.access_token;
+            stored.access_token = new_token.bearer();
             stored.refresh_token = new_token.refresh_token.or(stored.refresh_token);
             stored.expires_at = new_token.expires_in.map(|e| now_secs() + e);
             let _ = stored.save();
@@ -199,7 +213,7 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
             if let Some(ref refresh) = stored.refresh_token {
                 if let Ok(new_token) = refresh_token(&stored.issuer, refresh).await {
                     let refreshed = StoredToken {
-                        access_token: new_token.access_token,
+                        access_token: new_token.bearer(),
                         refresh_token: new_token.refresh_token.or(stored.refresh_token),
                         expires_at: new_token.expires_in.map(|e| now_secs() + e),
                         issuer: stored.issuer,
@@ -215,13 +229,24 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
     let config = discover(issuer).await?;
     let client = reqwest::Client::new();
 
+    // auth.identikey.me has no device-code grant. Passkey is a browser
+    // loopback (RFC 8252). Keycloak still has a device endpoint.
+    if config.device_authorization_endpoint.is_none() {
+        return loopback_login(&client, issuer, &config).await;
+    }
+
+    let device_endpoint = config
+        .device_authorization_endpoint
+        .clone()
+        .expect("checked above");
+
     // Generate PKCE code verifier + challenge (S256)
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
 
     // Step 1: Request device code
     let resp = client
-        .post(&config.device_authorization_endpoint)
+        .post(&device_endpoint)
         .form(&[
             ("client_id", CLIENT_ID),
             ("scope", SCOPES),
@@ -289,7 +314,7 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
         if resp.status().is_success() {
             let token_resp: TokenResponse = resp.json().await?;
             let stored = StoredToken {
-                access_token: token_resp.access_token,
+                access_token: token_resp.bearer(),
                 refresh_token: token_resp.refresh_token,
                 expires_at: token_resp.expires_in.map(|e| now_secs() + e),
                 issuer: issuer.to_string(),
@@ -317,6 +342,132 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
             other => bail!("Auth error: {}", other),
         }
     }
+}
+
+async fn loopback_login(client: &reqwest::Client, issuer: &str, config: &OidcConfig) -> Result<()> {
+    let authz = config
+        .authorization_endpoint
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("issuer has no authorization_endpoint"))?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let redirect = format!("http://127.0.0.1:{port}/callback");
+    let verifier = generate_code_verifier();
+    let challenge = generate_code_challenge(&verifier);
+    let state = generate_code_verifier();
+    let url = format!(
+        "{authz}?response_type=code&client_id={CLIENT_ID}&scope={SCOPES}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
+        encode_query(&redirect),
+        encode_query(&state),
+        encode_query(&challenge),
+    );
+    eprintln!();
+    eprintln!("Open this URL and approve with your passkey:");
+    eprintln!();
+    eprintln!("  {url}");
+    eprintln!();
+    let _ = open::that(&url);
+    eprintln!("Waiting for the browser to come back...");
+    let expect = state.clone();
+    let code = tokio::task::spawn_blocking(move || accept_loopback(listener, &expect))
+        .await
+        .map_err(|e| anyhow::anyhow!("login listener failed: {e}"))??;
+    let resp = client
+        .post(&config.token_endpoint)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", CLIENT_ID),
+            ("code", code.as_str()),
+            ("redirect_uri", redirect.as_str()),
+            ("code_verifier", verifier.as_str()),
+        ])
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await?;
+        bail!("Token exchange failed ({status}): {body}");
+    }
+    let token_resp: TokenResponse = resp.json().await?;
+    let stored = StoredToken {
+        access_token: token_resp.bearer(),
+        refresh_token: token_resp.refresh_token,
+        expires_at: token_resp.expires_in.map(|e| now_secs() + e),
+        issuer: issuer.to_string(),
+    };
+    stored.save()?;
+    eprintln!("Logged in. Token saved to {}", token_path().display());
+    Ok(())
+}
+
+fn accept_loopback(listener: std::net::TcpListener, expect_state: &str) -> Result<String> {
+    use std::io::{Read, Write};
+    let (mut stream, _) = listener.accept()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    let mut buf = [0u8; 8192];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let first = req.lines().next().unwrap_or("");
+    let query = first
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .split_once('?')
+        .map(|(_, q)| q)
+        .unwrap_or("");
+    let mut code = None;
+    let mut state = None;
+    for pair in query.split('&') {
+        let Some((k, v)) = pair.split_once('=') else { continue };
+        let v = percent_decode(v);
+        match k {
+            "code" => code = Some(v),
+            "state" => state = Some(v),
+            "error" => bail!("Authorization failed: {v}"),
+            _ => {}
+        }
+    }
+    if state.as_deref() != Some(expect_state) {
+        bail!("Login state did not match. Run `mj login` again.");
+    }
+    let body = "Logged in. You can close this tab.\n";
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
+    code.ok_or_else(|| anyhow::anyhow!("callback had no code"))
+}
+
+fn encode_query(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Remove stored token.
