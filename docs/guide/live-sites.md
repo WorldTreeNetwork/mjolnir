@@ -56,5 +56,8 @@ those JSON files as root:
 ```
 
 wtnf Forgejo Actions (`wtnf-web/.forgejo/workflows/deploy.yml`) uses
-`vars.IDENTIKEY_FP` and `secrets.MJOLNIR_SITES_TOKEN`. The token is
-bound to a fingerprint — remint the token when the fp changes.
+`vars.IDENTIKEY_FP` (`ESQdLp4quU2gH4rn6GXzdm93G4SrkME58dJXxHJMrc32`),
+`secrets.MJOLNIR_SITES_TOKEN` (bound to that fp; host copy
+`/etc/mjolnir/wtnf-ci-token`), and `vars.MJOLNIR_CLI_URL` (Forgejo
+generic package `WorldTreeNetwork/mjolnir-cli` — must be a Blake3 `mj`).
+Mint tokens on the running node via `mjolnir rpc`, not `mix app.start`.
