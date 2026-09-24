@@ -27,6 +27,47 @@ NOT be required for prod cutover.
 - THEN none are present
 - AND `git` still authenticates with `/run/mjolnir/git_signing_key`
 
+#### Scenario: No identikey row means no deploy key
+
+- GIVEN `git_signing: true` spawn without a consented `ssh_git`
+  device (`xid` and `credential_id` for that pubkey)
+- WHEN the host would register a Forgejo write key
+- THEN registration does not run
+- AND the storefront repo has no new deploy key
+
+#### Scenario: Signing-only spawn cannot write the storefront
+
+- GIVEN a VM minted with git signing but no hosted-being
+  provisioning / A3 `ssh_git` row
+- WHEN Forgejo deploy keys on
+  `VirtueInnova/hypersigil-store-frontend` are listed
+- THEN that VM’s pubkey is absent
+
+### Requirement: Forgejo register and revoke keep recovery metadata
+
+The host SHALL persist identikey `xid` and `credential_id` for the
+exact pubkey **before** calling Forgejo register. A missing host
+token after a key was registered SHALL fail revoke closed: device
+metadata and opaque SHALL remain; `revoke_device` SHALL NOT run.
+`:not_wired` SHALL apply only when no grant was ever registered
+(dev/test). After a remote-create whose key id is not durably
+stored, retry or cleanup SHALL still be able to name that grant
+(pubkey delete), not leave a forgotten write key.
+
+#### Scenario: Token lost after register
+
+- GIVEN a registered deploy key and persisted xid/credential_id
+- WHEN `MJOLNIR_FORGEJO_TOKEN` is unset and revoke runs
+- THEN Forgejo delete is not treated as success
+- AND opaque and device metadata remain
+
+#### Scenario: Register timeout still recoverable
+
+- GIVEN Forgejo created a key but the host did not persist `key_id`
+- WHEN register is retried or revoke runs
+- THEN delete-by-pubkey still removes that grant
+
+
 ## MODIFIED Requirements
 
 ### Requirement: Respawn is a new device; ticket held per-friend

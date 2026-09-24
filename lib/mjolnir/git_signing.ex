@@ -78,20 +78,7 @@ defmodule Mjolnir.GitSigning do
          :ok <- put(vm_id, priv),
          trimmed = String.trim(pub),
          :ok <- put_device(vm_id, %{public_key: trimmed}) do
-      case forgejo_register(vm_id, trimmed) do
-        :ok ->
-          {:ok, pub}
-
-        {:ok, key_id} ->
-          case put_device(vm_id, %{public_key: trimmed, forgejo_key_id: key_id}) do
-            :ok -> {:ok, pub}
-            {:error, reason} -> {:error, reason}
-          end
-
-        {:error, reason} ->
-          _ = delete(vm_id)
-          {:error, {:forgejo_register, reason}}
-      end
+      {:ok, pub}
     end
   end
 
@@ -116,7 +103,15 @@ defmodule Mjolnir.GitSigning do
         |> maybe_put_meta("credential_id", meta)
         |> maybe_put_meta("forgejo_key_id", meta)
 
-      Mjolnir.SecretStore.put_opaque(@store_kind, vm_id, @device_key, Jason.encode!(payload))
+      with :ok <-
+             Mjolnir.SecretStore.put_opaque(
+               @store_kind,
+               vm_id,
+               @device_key,
+               Jason.encode!(payload)
+             ) do
+        maybe_forgejo_register(vm_id, payload)
+      end
     end
   end
 
@@ -139,8 +134,8 @@ defmodule Mjolnir.GitSigning do
 
   Order is Forgejo write-key delete, then identikey `revoke_device`,
   then opaque delete. A failed Forgejo delete stops the chain (opaque
-  stays). `:not_wired` (no host token) is the reconcile find for
-  dev/test and maps to `:ok` — not a fake delete of a live key.
+  stays). `:not_wired` maps to `:ok` only when no grant was recorded.
+  A registered grant without a token is an error; opaque stays.
   """
   @spec revoke(String.t()) :: :ok | {:error, term()}
   def revoke(vm_id) when is_binary(vm_id) do
@@ -181,33 +176,61 @@ defmodule Mjolnir.GitSigning do
     Mjolnir.Vsock.Protocol.inject_file_request(@guest_name, pem)
   end
 
-  defp forgejo_register(vm_id, pub) do
-    xid =
-      case get_device(vm_id) do
-        {:ok, map} -> map["xid"]
-        _ -> nil
-      end
+  defp maybe_forgejo_register(vm_id, payload) do
+    pub = payload["public_key"]
+    xid = payload["xid"]
+    cred = payload["credential_id"]
 
-    meta = %{public_key: pub, vm_id: vm_id, xid: xid}
+    cond do
+      not usable_bin?(pub) ->
+        :ok
 
-    case hook(:git_signing_forgejo_register, meta) do
-      :not_wired -> :ok
-      :ok -> :ok
-      {:ok, key_id} -> {:ok, key_id}
-      {:error, reason} -> {:error, reason}
-      other -> {:error, other}
+      not usable_bin?(xid) or not usable_bin?(cred) ->
+        :ok
+
+      present_id?(payload["forgejo_key_id"]) ->
+        :ok
+
+      true ->
+        meta = %{public_key: pub, vm_id: vm_id, xid: xid, credential_id: cred}
+
+        case hook(:git_signing_forgejo_register, meta) do
+          :not_wired ->
+            :ok
+
+          :ok ->
+            put_device(vm_id, %{forgejo_key_id: "pending"})
+
+          {:ok, key_id} ->
+            put_device(vm_id, %{forgejo_key_id: key_id})
+
+          {:error, reason} ->
+            {:error, {:forgejo_register, reason}}
+
+          other ->
+            {:error, {:forgejo_register, other}}
+        end
     end
   end
 
-  # Failed delete is an error. `:not_wired` (no token) maps to `:ok` so
-  # revoke can finish in dev/test; leftover keys are the reconcile find.
+  # Failed delete is an error. `:not_wired` is `:ok` only when no grant
+  # was recorded. A live or uncertain grant without a token fails closed.
   defp forgejo_revoke(meta) do
+    grant? = present_id?(meta["forgejo_key_id"] || meta[:forgejo_key_id])
+
     case hook(:git_signing_forgejo_revoke, meta) do
+      :not_wired when grant? -> {:error, {:forgejo_revoke, :token_missing}}
       :not_wired -> :ok
       :ok -> :ok
       {:error, reason} -> {:error, {:forgejo_revoke, reason}}
       other -> {:error, {:forgejo_revoke, other}}
     end
+  end
+
+  defp usable_bin?(v), do: is_binary(v) and v != ""
+
+  defp present_id?(id) do
+    (is_binary(id) and id != "") or (is_integer(id) and id > 0)
   end
 
   defp identikey_revoke_device(meta) do

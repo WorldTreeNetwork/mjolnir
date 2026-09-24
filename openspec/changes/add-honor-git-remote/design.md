@@ -62,3 +62,19 @@ Once the deploy key exists, `git clone` / `git push` that URL
 works. GitHub `aetherpunk108/hypersigil-store-frontend` stays a
 human mirror; it is not the deploy trigger and need not appear
 in the guest `remote -v`.
+
+## Decision 5 — Advise 2026-09-24 send-back (R1–R3)
+
+`put_device` today stores `public_key` (and later `forgejo_key_id`)
+without `xid` / `credential_id`. Registration must wait until those
+exist for that pubkey (A3 `ssh_git` row, authenticated owner).
+Ordinary `git_signing: true` spawn is signing-only until that row
+exists.
+
+Revoke: if metadata says a grant exists (or is uncertain) and the
+token is missing, return error; do not `:not_wired` → continue into
+identikey revoke. `:not_wired` is only “never registered”.
+
+Registration compensation: treat pubkey as the durable name. If
+create returns malformed or persist of `key_id` fails, revoke-by-pubkey
+must still work; retries must not stack extra keys.
