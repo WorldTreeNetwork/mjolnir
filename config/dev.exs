@@ -16,6 +16,7 @@ config :mjolnir,
   # Deploy registry kept under the project so the dev BEAM needs no /var/lib perms.
   deploy_state_dir: Path.join(File.cwd!(), ".mjolnir-dev/deploy/registry"),
   blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
+  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit"),
 
   # Auto-inject current guest agent — path relative to project root (works for any checkout location)
   guest_agent_bin:

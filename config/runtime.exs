@@ -112,6 +112,10 @@ if blake3_bin = System.get_env("MJOLNIR_BLAKE3_BIN") do
   config :mjolnir, blake3_bin: blake3_bin
 end
 
+if biscuit_bin = System.get_env("MJOLNIR_BISCUIT_BIN") do
+  config :mjolnir, biscuit_bin: biscuit_bin
+end
+
 case System.get_env("MJOLNIR_PG_ENABLED") do
   "true" -> config :mjolnir, pg_enabled: true
   "false" -> config :mjolnir, pg_enabled: false

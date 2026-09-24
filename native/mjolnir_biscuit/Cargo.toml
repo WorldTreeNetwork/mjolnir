@@ -1,0 +1,20 @@
+[package]
+name = "mjolnir-biscuit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mjolnir-biscuit"
+path = "src/bin/mjolnir-biscuit.rs"
+
+[dependencies]
+base64 = "0.22"
+biscuit-auth = "6.0"
+blake3 = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+

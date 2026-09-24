@@ -148,6 +148,7 @@ config :mjolnir,
   recrypt_storage_url: nil,
   # Real Blake3 (`mjolnir-b3`). Content hashes and IdentiKey fingerprints.
   blake3_bin: "/opt/mjolnir/bin/mjolnir-b3",
+  biscuit_bin: "/opt/mjolnir/bin/mjolnir-biscuit",
 
   # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
   # tests and dev machines without the binary stay green. Operator enables in

@@ -26,6 +26,7 @@ config :mjolnir,
   # probes a real guest agent over vsock; disable it under test so snapshot
   # paths don't depend on (or block on) a live guest.
   snapshot_verify_guest: false,
-  blake3_bin: Path.expand("native/target/debug/mjolnir-b3")
+  blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
+  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit")
 
 config :mjolnir, :auth, bypass_localhost: true
