@@ -67,7 +67,7 @@ defmodule Mjolnir.API.LoginRouteTest do
     conn = request("/auth/callback?code=good-code&state=#{state}")
     assert conn.status == 302
     [next] = get_resp_header(conn, "location")
-    assert next == "/term/#{@vm}"
+    assert next == "/term/#{Mjolnir.VmId.storage_id(@vm)}"
     assert conn.resp_cookies[Mjolnir.API.Auth.term_cookie()].value == "fake.jwt.token"
   end
 

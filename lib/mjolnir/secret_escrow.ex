@@ -50,6 +50,8 @@ defmodule Mjolnir.SecretEscrow do
   """
   @spec put(vm_id(), String.t()) :: :ok | {:error, term()}
   def put(vm_id, passphrase) when is_binary(passphrase) do
+    vm_id = Mjolnir.VmId.storage_id(vm_id)
+
     with :ok <- validate_id(vm_id),
          dir = dir(),
          :ok <- File.mkdir_p(dir),
@@ -74,6 +76,8 @@ defmodule Mjolnir.SecretEscrow do
   """
   @spec get(vm_id()) :: {:ok, String.t()} | :not_found | {:error, term()}
   def get(vm_id) do
+    vm_id = Mjolnir.VmId.storage_id(vm_id)
+
     with :ok <- validate_id(vm_id),
          path = Path.join(dir(), vm_id) do
       case File.read(path) do
@@ -112,6 +116,8 @@ defmodule Mjolnir.SecretEscrow do
   @doc "Delete the escrow entry for `vm_id`. Idempotent — missing is `:ok`."
   @spec delete(vm_id()) :: :ok | {:error, term()}
   def delete(vm_id) do
+    vm_id = Mjolnir.VmId.storage_id(vm_id)
+
     with :ok <- validate_id(vm_id),
          path = Path.join(dir(), vm_id) do
       case File.rm(path) do
@@ -125,6 +131,8 @@ defmodule Mjolnir.SecretEscrow do
   @doc "True if an escrow entry exists for `vm_id`."
   @spec exists?(vm_id()) :: boolean()
   def exists?(vm_id) do
+    vm_id = Mjolnir.VmId.storage_id(vm_id)
+
     case validate_id(vm_id) do
       :ok -> File.exists?(Path.join(dir(), vm_id))
       _ -> false

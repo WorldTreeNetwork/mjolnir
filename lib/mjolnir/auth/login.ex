@@ -81,10 +81,25 @@ defmodule Mjolnir.Auth.Login do
   """
   @spec safe_next(term()) :: String.t()
   def safe_next(next) when is_binary(next) do
-    if Regex.match?(~r/\A\/term\/[0-9a-f-]{36}(?:\?session=[A-Za-z0-9_-]{1,64})?\z/, next) do
-      next
-    else
-      "/"
+    case String.split(next, "?", parts: 2) do
+      ["/term/" <> id] ->
+        case Mjolnir.VmId.canonicalize(id) do
+          {:ok, canonical} -> "/term/" <> canonical
+          :error -> "/"
+        end
+
+      ["/term/" <> id, "session=" <> session] ->
+        if session =~ ~r/\A[A-Za-z0-9_-]{1,64}\z/ do
+          case Mjolnir.VmId.canonicalize(id) do
+            {:ok, canonical} -> "/term/" <> canonical <> "?session=" <> session
+            :error -> "/"
+          end
+        else
+          "/"
+        end
+
+      _ ->
+        "/"
     end
   end
 

@@ -221,7 +221,7 @@ defmodule Mjolnir.VM do
   def spawn(opts \\ %{}) do
     with :ok <- reject_memory_snapshot_spawn(opts),
          :ok <- reject_live_iroh_identity(opts) do
-      do_spawn(Map.put(opts, :id, UUID.uuid4()))
+      do_spawn(Map.put(opts, :id, Mjolnir.VmId.generate()))
     end
   end
 
@@ -313,7 +313,7 @@ defmodule Mjolnir.VM do
   """
   @spec status(vm_id()) :: :booting | :running | :stopped | {:error, :not_found}
   def status(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, :status)
@@ -331,7 +331,7 @@ defmodule Mjolnir.VM do
   """
   @spec get(vm_id()) :: {:ok, t()} | {:error, :not_found | :unreachable}
   def get(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           {:ok,
@@ -374,7 +374,7 @@ defmodule Mjolnir.VM do
   """
   @spec stop(vm_id()) :: :ok | {:error, term()}
   def stop(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         timeout = Application.get_env(:mjolnir, :vm_stop_timeout_ms, 10_000)
 
@@ -433,7 +433,7 @@ defmodule Mjolnir.VM do
   """
   @spec freeze(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def freeze(vm_id, name, opts \\ []) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, {:freeze, name, opts}, 300_000)
 
@@ -471,7 +471,7 @@ defmodule Mjolnir.VM do
   end
 
   defp ensure_id_free(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [] -> :ok
       _ -> {:error, {:vm_running, vm_id, :registered}}
     end
@@ -627,7 +627,7 @@ defmodule Mjolnir.VM do
   """
   @spec retire(vm_id()) :: :ok | {:error, :not_found | :running}
   def retire(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         {:error, :running}
 
@@ -649,7 +649,7 @@ defmodule Mjolnir.VM do
   """
   @spec revive(vm_id()) :: :ok | {:error, term()}
   def revive(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         # The VM has a LIVE GenServer, so Mjolnir.Reconcile skips it and a flip
         # of StateStore intent is a no-op. The failure mode here is "process
@@ -766,7 +766,7 @@ defmodule Mjolnir.VM do
   """
   @spec forget(vm_id()) :: :ok | {:error, :not_found | :running | term()}
   def forget(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         {:error, :running}
 
@@ -799,7 +799,7 @@ defmodule Mjolnir.VM do
   """
   @spec console(vm_id()) :: {:ok, String.t()} | {:error, term()}
   def console(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -822,7 +822,7 @@ defmodule Mjolnir.VM do
   """
   @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
   def get_ticket(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -846,7 +846,7 @@ defmodule Mjolnir.VM do
   @spec connection_info(vm_id()) ::
           {:ok, String.t(), String.t()} | {:error, :not_ready | :not_found}
   def connection_info(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -877,7 +877,7 @@ defmodule Mjolnir.VM do
   """
   @spec await_pty(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
   def await_pty(vm_id, timeout \\ 30_000) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, {:await_pty, timeout}, timeout + 5_000)
 
@@ -925,7 +925,7 @@ defmodule Mjolnir.VM do
   """
   @spec authorize_inject_peer(vm_id(), String.t()) :: :ok | {:error, term()}
   def authorize_inject_peer(vm_id, peer_node_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] -> GenServer.call(pid, {:authorize_inject_peer, peer_node_id})
       [] -> {:error, :not_found}
     end
@@ -941,7 +941,7 @@ defmodule Mjolnir.VM do
   @spec deliver_message(vm_id(), String.t(), term(), keyword()) :: {:ok, map()} | {:error, term()}
   def deliver_message(target_vm_id, from_vm_id, payload, opts \\ []) do
     cond do
-      Registry.lookup(Mjolnir.VMRegistry, target_vm_id) != [] ->
+      registered(target_vm_id) != [] ->
         accept_and_kick(target_vm_id, from_vm_id, payload, opts)
 
       match?({:ok, _}, Mjolnir.DormantRegistry.lookup(target_vm_id)) ->
@@ -977,7 +977,7 @@ defmodule Mjolnir.VM do
   """
   @spec handle_done(vm_id()) :: :ok | {:error, term()}
   def handle_done(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, :handle_done, 60_000)
 
@@ -1067,7 +1067,7 @@ defmodule Mjolnir.VM do
   end
 
   defp call_vm(vm_id, msg, timeout) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, msg, timeout)
@@ -1119,6 +1119,7 @@ defmodule Mjolnir.VM do
           "ephemeral" -> :ephemeral
           _ -> :none
         end,
+      vsock_cid: stamped_cid(%{vsock_cid: Map.get(cfg, "vsock_cid")}),
       # Carried across the resume so a VM that survives one rehydration doesn't
       # quietly lose its lifetime policy and become revivable on the next one.
       # (Reconcile refuses to resume a :never record at all, so this is belt to
@@ -1171,6 +1172,7 @@ defmodule Mjolnir.VM do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    opts = Map.update!(opts, :id, &Mjolnir.VmId.storage_id/1)
 
     with :ok <- store_identity(opts),
          :ok <- store_git_signing(opts) do
@@ -1979,8 +1981,30 @@ defmodule Mjolnir.VM do
   # ============================================================================
 
   defp via_tuple(vm_id) do
-    {:via, Registry, {Mjolnir.VMRegistry, vm_id}}
+    {:via, Registry, {Mjolnir.VMRegistry, Mjolnir.VmId.storage_id(vm_id)}}
   end
+
+  # Exact registry name first, then the base58 spelling of a legacy UUID.
+  # A process started before this boot is registered under the canonical id.
+  defp registered(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [] ->
+        alt = Mjolnir.VmId.storage_id(vm_id)
+        if alt == vm_id, do: [], else: Registry.lookup(Mjolnir.VMRegistry, alt)
+
+      found ->
+        found
+    end
+  end
+
+  defp stamped_cid(%{vsock_cid: cid}) when is_integer(cid) and cid >= 3 and cid < 0xFFFFFFFF,
+    do: cid
+
+  defp stamped_cid(_), do: nil
+
+  defp cid_or_nil(%{vsock_cid: cid}) when is_integer(cid), do: cid
+  defp cid_or_nil(config) when is_map(config), do: Map.get(config, :vsock_cid)
+  defp cid_or_nil(_), do: nil
 
   # Fail-open to :always. See the comment at the call site in init/1: an
   # unrecognised policy becoming :never would strand VMs silently.
@@ -1997,7 +2021,7 @@ defmodule Mjolnir.VM do
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
-      vsock_cid: Mjolnir.Vsock.cid(opts.id),
+      vsock_cid: stamped_cid(opts) || Mjolnir.Vsock.cid(opts.id),
       snapshot: opts[:snapshot],
       preserve_iroh_key: opts[:preserve_iroh_key] || false,
       resume: opts[:resume] || false,
@@ -3210,7 +3234,7 @@ defmodule Mjolnir.VM do
   end
 
   defp do_wait_until_deregistered(vm_id, deadline) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [] ->
         true
 
@@ -3337,22 +3361,30 @@ defmodule Mjolnir.VM do
   @doc false
   @spec build_running_record(t()) :: Mjolnir.StateStore.Record.t()
   def build_running_record(state) do
+    spawn_config = %{
+      "vcpus" => state.config.vcpu_count,
+      "memory_mb" => state.config.mem_size_mib,
+      "base_image" => state.config.base_image,
+      "enable_iroh" => state.enable_iroh,
+      "owner_id" => state.owner_id,
+      "pty_invites" => state.pty_invites || [],
+      "ssh_public_key" => state.ssh_public_key,
+      "secrets_mode" => Atom.to_string(state.secrets_mode),
+      # Reconcile reads this back to decide whether a stranded record may be
+      # rehydrated. It has to be on the FIRST record written, not added later:
+      # a crash between boot and a second write would leave a :never VM
+      # looking restartable, which is exactly the I5 violation this prevents.
+      "restart_policy" => Atom.to_string(state.restart_policy)
+    }
+
+    spawn_config =
+      case cid_or_nil(state.config) do
+        cid when is_integer(cid) -> Map.put(spawn_config, "vsock_cid", cid)
+        _ -> spawn_config
+      end
+
     Mjolnir.StateStore.Record.new(state.id, :running,
-      spawn_config: %{
-        "vcpus" => state.config.vcpu_count,
-        "memory_mb" => state.config.mem_size_mib,
-        "base_image" => state.config.base_image,
-        "enable_iroh" => state.enable_iroh,
-        "owner_id" => state.owner_id,
-        "pty_invites" => state.pty_invites || [],
-        "ssh_public_key" => state.ssh_public_key,
-        "secrets_mode" => Atom.to_string(state.secrets_mode),
-        # Reconcile reads this back to decide whether a stranded record may be
-        # rehydrated. It has to be on the FIRST record written, not added later:
-        # a crash between boot and a second write would leave a :never VM
-        # looking restartable, which is exactly the I5 violation this prevents.
-        "restart_policy" => Atom.to_string(state.restart_policy)
-      },
+      spawn_config: spawn_config,
       identity: %{
         "iroh_node_id" => state.iroh_node_id,
         "hostname" => nil,

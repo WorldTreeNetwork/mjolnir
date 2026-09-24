@@ -6,8 +6,11 @@ defmodule Mjolnir.Auth.LoginTest do
   describe "safe_next/1" do
     test "accepts a term path with optional session" do
       id = "01234567-89ab-cdef-0123-456789abcdef"
-      assert Login.safe_next("/term/#{id}") == "/term/#{id}"
-      assert Login.safe_next("/term/#{id}?session=main") == "/term/#{id}?session=main"
+      canonical = Mjolnir.VmId.storage_id(id)
+      assert Login.safe_next("/term/#{id}") == "/term/#{canonical}"
+
+      assert Login.safe_next("/term/#{canonical}?session=main") ==
+               "/term/#{canonical}?session=main"
     end
 
     test "refuses open redirects and API paths" do
