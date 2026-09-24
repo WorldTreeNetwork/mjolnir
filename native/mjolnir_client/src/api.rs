@@ -954,6 +954,14 @@ async fn cmd_spawn_target(
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
+    if let Some(existing) = find_target_vm(&client, base, name).await? {
+        eprintln!(
+            "reusing {name} VM {} (already running)",
+            existing.id
+        );
+        return finish_target(&client, base, &existing.id, existing.web_url, existing.ticket, name, &dev).await;
+    }
+
     let ssh_public_key = crate::config::resolve_ssh_key_path().and_then(|key_path| {
         crate::config::read_ssh_public_key(profile).map(|ssh_key| {
             eprintln!("Using SSH key: {}", key_path);
@@ -983,33 +991,119 @@ async fn cmd_spawn_target(
     };
 
     eprintln!("Spawning target {name}...");
-    let resp = spawn_vm(&client, base, &opts).await?;
+    let spawned = client
+        .post(format!("{}/api/vms", base))
+        .json(&spawn_body(&opts))
+        .send()
+        .await
+        .context("failed to send spawn request")?;
+    if spawned.status() == reqwest::StatusCode::CONFLICT {
+        let body: serde_json::Value = spawned.json().await.context("409 body")?;
+        let id = body["vm_id"]
+            .as_str()
+            .context("iroh_identity_in_use missing vm_id")?
+            .to_string();
+        eprintln!("reusing {name} VM {id} (Iroh identity already live)");
+        let url = body.get("web_url").and_then(|v| v.as_str()).map(str::to_string);
+        let ticket = body.get("ticket").and_then(|v| v.as_str()).map(str::to_string);
+        return finish_target(&client, base, &id, url, ticket, name, &dev).await;
+    }
+    let spawned = spawned
+        .error_for_status()
+        .context("spawn request failed")?;
+    let resp: SpawnResponse = spawned.json().await.context("failed to parse spawn response")?;
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
-
-    let ticket = if resp.shell_ready == Some(true) {
-        resp.ticket.clone()
-    } else {
+    if resp.shell_ready != Some(true) {
         eprintln!("Waiting for shell...");
-        Some(await_pty(&client, base, &resp.id, 120_000).await?)
-    };
+        let _ = await_pty(&client, base, &resp.id, 120_000).await?;
+    }
+    finish_target(&client, base, &resp.id, resp.web_url, resp.ticket, name, &dev).await
+}
 
-    let script = crate::dev_manifest::start_script(name, &dev);
+fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
+    let mut body = serde_json::json!({});
+    if let Some(key) = &opts.ssh_public_key {
+        body["ssh_public_key"] = serde_json::json!(key);
+    }
+    if let Some(memory) = opts.memory_mb {
+        body["memory_mb"] = serde_json::json!(memory);
+    }
+    if let Some(snap) = &opts.snapshot {
+        body["snapshot"] = serde_json::json!(snap);
+    }
+    if let Some(base_image) = &opts.base_image {
+        body["base_image"] = serde_json::json!(base_image);
+    }
+    if let Some(preserve) = opts.preserve_iroh_key {
+        body["preserve_iroh_key"] = serde_json::json!(preserve);
+    }
+    if let Some(sign) = opts.git_signing {
+        body["git_signing"] = serde_json::json!(sign);
+    }
+    if let Some(metadata) = &opts.metadata {
+        body["metadata"] = serde_json::Value::Object(metadata.clone());
+    }
+    body
+}
+
+struct ListedVm {
+    id: String,
+    web_url: Option<String>,
+    ticket: Option<String>,
+}
+
+async fn find_target_vm(
+    client: &reqwest::Client,
+    base: &str,
+    name: &str,
+) -> Result<Option<ListedVm>> {
+    let resp = client
+        .get(format!("{}/api/vms", base))
+        .query(&[("metadata.role", name)])
+        .send()
+        .await
+        .context("list VMs")?
+        .error_for_status()
+        .context("list VMs failed")?;
+    let body: serde_json::Value = resp.json().await.context("list VMs body")?;
+    let Some(vms) = body["vms"].as_array() else {
+        return Ok(None);
+    };
+    let Some(vm) = vms.iter().find(|vm| vm["state"] == "running") else {
+        return Ok(None);
+    };
+    Ok(Some(ListedVm {
+        id: vm["id"].as_str().unwrap_or_default().to_string(),
+        web_url: vm["web_url"].as_str().map(str::to_string),
+        ticket: vm["ticket"].as_str().map(str::to_string),
+    }))
+}
+
+async fn finish_target(
+    client: &reqwest::Client,
+    base: &str,
+    id: &str,
+    web_url: Option<String>,
+    ticket: Option<String>,
+    name: &str,
+    dev: &crate::dev_manifest::DevTarget,
+) -> Result<()> {
+    let script = crate::dev_manifest::start_script(name, dev);
     let exec_resp: ExecResponse = client
-        .post(format!("{}/api/vms/{}/exec", base, resp.id))
+        .post(format!("{}/api/vms/{}/exec", base, id))
         .json(&serde_json::json!({ "command": script }))
         .send()
         .await
         .context("failed to start target command")?
         .error_for_status()
-        .context("dev start exec failed")?
+        .context("target start exec failed")?
         .json()
         .await
-        .context("failed to parse dev start response")?;
+        .context("failed to parse target start response")?;
     if let Some(output) = &exec_resp.output {
         eprint!("{output}");
     }
-
-    if let Some(url) = resp.web_url {
+    if let Some(url) = web_url {
         println!("{url}");
     } else if let Some(ticket) = ticket.as_deref() {
         println!("https://{ticket}.vm.worldtree.network");

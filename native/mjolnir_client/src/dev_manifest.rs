@@ -64,22 +64,56 @@ pub fn parse(raw: &str, name: &str) -> Result<DevTarget> {
     })
 }
 
-/// Shell that starts the target command in tmux `main:<name>` if that
-/// window is not already there. Returns immediately.
+/// Install a systemd unit so the target command comes back on guest boot,
+/// then start it. Safe to run again.
 pub fn start_script(name: &str, dev: &DevTarget) -> String {
     let workdir = dev.workdir.as_deref().unwrap_or("/");
-    let mut exports = String::new();
+    let unit = format!("mjolnir-target-{}.service", sanitize_unit(name));
+    let mut env_lines = String::new();
     for (k, v) in &dev.env {
-        exports.push_str(&format!("export {}={}\n", k, sh_single(v)));
+        env_lines.push_str(&format!("Environment={}={}\n", k, systemd_env(v)));
     }
+    let inner = format!(
+        "export PATH=/root/.bun/bin:$PATH; cd {workdir}; exec {cmd}",
+        cmd = dev.command
+    );
     format!(
-        "set -e\nexport PATH=\"$HOME/.bun/bin:$PATH\"\ncd {wd}\n{exports}tmux has-session -t main 2>/dev/null || tmux new-session -d -s main\nif tmux list-windows -t main -F '#{{window_name}}' | grep -qx {win}; then\n  echo {win}-already\nelse\n  tmux new-window -d -t main -n {win} \"cd {wd} && export PATH=\\\"\\$HOME/.bun/bin:\\$PATH\\\" && {exports_one} exec {cmd}\"\n  echo {win}-started\nfi\n",
-        win = sh_single(name),
-        wd = sh_single(workdir),
-        exports = exports,
-        exports_one = exports.replace('\n', "; "),
-        cmd = sh_single(&dev.command),
+        r#"set -e
+unit=/etc/systemd/system/{unit}
+cat > "$unit" <<'UNIT'
+[Unit]
+Description=Mjolnir target {name}
+After=network-online.target
+[Service]
+WorkingDirectory={workdir}
+{env_lines}ExecStart=/bin/bash -lc {exec}
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+tmux kill-window -t main:{name} 2>/dev/null || true
+systemctl daemon-reload
+systemctl enable "$unit"
+systemctl restart "$unit"
+systemctl is-active "$unit"
+"#,
+        unit = unit,
+        name = name,
+        workdir = workdir,
+        env_lines = env_lines,
+        exec = sh_single(&inner),
     )
+}
+
+fn sanitize_unit(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .collect()
+}
+
+fn systemd_env(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn sh_single(s: &str) -> String {

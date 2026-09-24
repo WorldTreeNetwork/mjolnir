@@ -25,6 +25,20 @@ defmodule Mjolnir.BTRFSTest do
       File.rm_rf!(tmp)
     end
 
+    test "find_rootfs_with_iroh_key/2 matches key bytes, not the directory name" do
+      tmp = Path.join(System.tmp_dir!(), "btrfs-iroh-#{System.unique_integer([:positive])}")
+      live = Path.join(tmp, "live")
+      other = Path.join(tmp, "other")
+      File.mkdir_p!(Path.join(live, "etc/mjolnir"))
+      File.mkdir_p!(Path.join(other, "etc/mjolnir"))
+      File.write!(Path.join(live, "etc/mjolnir/iroh.key"), "same-key")
+      File.write!(Path.join(other, "etc/mjolnir/iroh.key"), "other-key")
+      on_exit(fn -> File.rm_rf!(tmp) end)
+
+      assert Mjolnir.BTRFS.find_rootfs_with_iroh_key("same-key", [other, live]) == live
+      assert Mjolnir.BTRFS.find_rootfs_with_iroh_key("missing", [live]) == nil
+    end
+
     test "update_snapshot_metadata/2 merges extra fields" do
       tmp = Path.join(System.tmp_dir!(), "btrfs-meta-#{System.unique_integer([:positive])}")
       File.mkdir_p!(Path.join(tmp, "@snapshots"))

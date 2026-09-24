@@ -449,6 +449,14 @@ defmodule Mjolnir.API.Router do
             {:ok, vm} ->
               json(conn, 201, Views.render_vm(vm))
 
+            {:error, {:iroh_identity_in_use, id, ticket}} ->
+              json(conn, 409, %{
+                error: "iroh_identity_in_use",
+                vm_id: id,
+                ticket: ticket,
+                hint: "that snapshot's Iroh key is already live; reuse this VM"
+              })
+
             {:error, reason} ->
               Logger.error("VM spawn failed: #{inspect(reason)}")
               json(conn, 500, %{error: "spawn_failed"})

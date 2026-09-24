@@ -431,6 +431,18 @@ defmodule Mjolnir.BTRFS do
   Directly removes /etc/mjolnir/iroh.key from the rootfs directory (no mount needed
   since the rootfs is now a BTRFS subvolume directory).
   """
+  @doc """
+  The first directory in `dirs` whose `etc/mjolnir/iroh.key` bytes equal
+  `key_bytes`. Used to refuse a second guest with the same Iroh identity.
+  """
+  @spec find_rootfs_with_iroh_key(binary(), [String.t()]) :: String.t() | nil
+  def find_rootfs_with_iroh_key(key_bytes, dirs)
+      when is_binary(key_bytes) and is_list(dirs) do
+    Enum.find(dirs, fn dir ->
+      File.read(Path.join(dir, "etc/mjolnir/iroh.key")) == {:ok, key_bytes}
+    end)
+  end
+
   def delete_iroh_key(rootfs_dir) do
     key_path = Path.join(rootfs_dir, "etc/mjolnir/iroh.key")
 

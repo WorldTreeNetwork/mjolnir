@@ -217,10 +217,39 @@ defmodule Mjolnir.VM do
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
-    with :ok <- reject_memory_snapshot_spawn(opts) do
+    with :ok <- reject_memory_snapshot_spawn(opts),
+         :ok <- reject_live_iroh_identity(opts) do
       do_spawn(Map.put(opts, :id, UUID.uuid4()))
     end
   end
+
+  # preserve_iroh_key keeps the snapshot's node id so the ticket URL stays
+  # put. A second running guest with that same key makes the relay drop
+  # both ("another endpoint connected with the same endpoint id").
+  defp reject_live_iroh_identity(%{preserve_iroh_key: true, snapshot: snapshot} = _opts)
+       when is_binary(snapshot) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    snap_key = Path.join([btrfs_root, "@snapshots", snapshot, "etc/mjolnir/iroh.key"])
+
+    case File.read(snap_key) do
+      {:ok, bytes} ->
+        holder =
+          list()
+          |> Enum.filter(&(&1.state == :running and is_binary(&1.rootfs_path)))
+          |> Enum.map(& &1.rootfs_path)
+          |> then(&Mjolnir.BTRFS.find_rootfs_with_iroh_key(bytes, &1))
+
+        case holder && Enum.find(list(), &(&1.rootfs_path == holder)) do
+          nil -> :ok
+          vm -> {:error, {:iroh_identity_in_use, vm.id, vm.ticket}}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp reject_live_iroh_identity(_opts), do: :ok
 
   defp do_spawn(opts) do
     vm_id = opts.id
