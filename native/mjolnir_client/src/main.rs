@@ -15,6 +15,7 @@ mod cert;
 mod config;
 mod connect;
 mod deploy;
+mod dev_manifest;
 mod domain;
 mod forge;
 mod forge_tui;
@@ -43,6 +44,22 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     // --- VM Operations ---
+    /// Spawn the long-lived VM described by `[dev]` in mjolnir.toml
+    #[command(next_help_heading = "VM Operations")]
+    Dev {
+        /// App directory containing mjolnir.toml (default: .)
+        #[arg(default_value = ".")]
+        path: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
+        /// Bearer token for API auth
+        #[arg(long, env = "MJOLNIR_TOKEN")]
+        token: Option<String>,
+        /// Print the plan and exit without spawning
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Spawn a new VM
     #[command(next_help_heading = "VM Operations")]
     Spawn {
@@ -873,6 +890,12 @@ async fn main() {
 
     let result: anyhow::Result<()> = match cli.command {
         // --- VM Operations ---
+        Command::Dev {
+            path,
+            api,
+            token,
+            dry_run,
+        } => api::cmd_dev(&profile, &api, &token, &path, dry_run).await,
         Command::Spawn {
             api,
             connect,

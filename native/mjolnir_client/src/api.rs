@@ -60,6 +60,7 @@ pub async fn cmd_spawn(
         snapshot: snapshot.clone(),
         base_image: base_image.clone(),
         ssh_public_key,
+        ..SpawnOptions::default()
     };
 
     eprintln!("Spawning VM...");
@@ -900,6 +901,93 @@ pub async fn cmd_url(
         }
     }
 
+    Ok(())
+}
+
+pub async fn cmd_dev(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    path: &str,
+    dry_run: bool,
+) -> Result<()> {
+    let dev = crate::dev_manifest::load(std::path::Path::new(path))?;
+    eprintln!(
+        "dev target: {} memory={} port={} sign={}",
+        dev.snapshot
+            .as_deref()
+            .or(dev.base.as_deref())
+            .unwrap_or("?"),
+        dev.memory_mb,
+        dev.port,
+        dev.git_sign
+    );
+    if dry_run {
+        println!("{}", crate::dev_manifest::start_script(&dev));
+        return Ok(());
+    }
+
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+    let ssh_public_key = crate::config::resolve_ssh_key_path().and_then(|key_path| {
+        crate::config::read_ssh_public_key(profile).map(|ssh_key| {
+            eprintln!("Using SSH key: {}", key_path);
+            ssh_key
+        })
+    });
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("role".into(), serde_json::json!("dev"));
+    if let Some(remote) = &dev.git_remote {
+        metadata.insert("git_remote".into(), serde_json::json!(remote));
+    }
+
+    let opts = SpawnOptions {
+        memory_mb: Some(dev.memory_mb),
+        snapshot: dev.snapshot.clone(),
+        base_image: if dev.snapshot.is_some() {
+            None
+        } else {
+            dev.base.clone()
+        },
+        ssh_public_key,
+        preserve_iroh_key: Some(dev.preserve_iroh_key),
+        git_signing: Some(dev.git_sign),
+        metadata: Some(metadata),
+    };
+
+    eprintln!("Spawning dev VM...");
+    let resp = spawn_vm(&client, base, &opts).await?;
+    eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+
+    let ticket = if resp.shell_ready == Some(true) {
+        resp.ticket.clone()
+    } else {
+        eprintln!("Waiting for shell...");
+        Some(await_pty(&client, base, &resp.id, 120_000).await?)
+    };
+
+    let script = crate::dev_manifest::start_script(&dev);
+    let exec_resp: ExecResponse = client
+        .post(format!("{}/api/vms/{}/exec", base, resp.id))
+        .json(&serde_json::json!({ "command": script }))
+        .send()
+        .await
+        .context("failed to start [dev].command")?
+        .error_for_status()
+        .context("dev start exec failed")?
+        .json()
+        .await
+        .context("failed to parse dev start response")?;
+    if let Some(output) = &exec_resp.output {
+        eprint!("{output}");
+    }
+
+    if let Some(url) = resp.web_url {
+        println!("{url}");
+    } else if let Some(ticket) = ticket.as_deref() {
+        println!("https://{ticket}.vm.worldtree.network");
+    }
     Ok(())
 }
 

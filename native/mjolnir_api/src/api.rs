@@ -16,6 +16,7 @@ pub struct SpawnResponse {
     #[serde(alias = "pty_ready")]
     pub shell_ready: Option<bool>,
     pub persist_interval_ms: Option<u64>,
+    pub web_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -403,6 +404,9 @@ pub struct SpawnOptions {
     pub snapshot: Option<String>,
     pub base_image: Option<String>,
     pub ssh_public_key: Option<String>,
+    pub preserve_iroh_key: Option<bool>,
+    pub git_signing: Option<bool>,
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
@@ -432,6 +436,15 @@ pub async fn spawn_vm(
     }
     if let Some(base_image) = &opts.base_image {
         body["base_image"] = serde_json::Value::String(base_image.clone());
+    }
+    if let Some(preserve) = opts.preserve_iroh_key {
+        body["preserve_iroh_key"] = serde_json::Value::Bool(preserve);
+    }
+    if let Some(sign) = opts.git_signing {
+        body["git_signing"] = serde_json::Value::Bool(sign);
+    }
+    if let Some(metadata) = &opts.metadata {
+        body["metadata"] = serde_json::Value::Object(metadata.clone());
     }
 
     client

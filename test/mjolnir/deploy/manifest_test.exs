@@ -194,6 +194,58 @@ defmodule Mjolnir.Deploy.ManifestTest do
   # Optional fields
   # ---------------------------------------------------------------------------
 
+  describe "[dev] target" do
+    test "prod plan ignores [dev]", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "node build"
+      port = 3000
+
+      [dev]
+      snapshot = "hosted-devpreview-test"
+      base = "ubuntu-24.04"
+      command = "bun run dev --host 0.0.0.0 --port 80"
+
+      [dev.env]
+      VITE_MEDUSA_BACKEND_URL = "https://api.hypersigil.world"
+
+      [dev.git]
+      remote = "forgejo"
+      sign = true
+      """)
+
+      assert {:ok, %BuildPlan{start_command: "node build", port: 3000}} = Manifest.load(dir)
+
+      assert {:ok, dev} = Manifest.load_dev(dir)
+      assert dev.snapshot == "hosted-devpreview-test"
+      assert dev.base == "ubuntu-24.04"
+      assert dev.port == 80
+      assert dev.memory_mb == 2048
+      assert dev.preserve_iroh_key == true
+      assert dev.git_sign == true
+      assert dev.git_remote == "forgejo"
+      assert dev.env["VITE_MEDUSA_BACKEND_URL"] == "https://api.hypersigil.world"
+    end
+
+    test "a missing [dev] is :none, not an error", %{dir: dir} do
+      write_manifest(dir, ~s(start_command = "./run"\nport = 8080))
+      assert Manifest.load_dev(dir) == :none
+    end
+
+    test "[dev] without a root is an error", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+
+      [dev]
+      command = "bun run dev"
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load_dev(dir)
+      assert msg =~ "base or snapshot"
+      assert {:ok, %BuildPlan{}} = Manifest.load(dir)
+    end
+  end
+
   describe "minimal manifest" do
     test "steps and runtime are optional", %{dir: dir} do
       write_manifest(dir, ~s(start_command = "./prebuilt-binary"\nport = 8080))

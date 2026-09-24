@@ -271,6 +271,14 @@ defmodule Mjolnir.API.Router do
           else: opts
 
       opts =
+        case conn.body_params["git_signing"] do
+          true -> Map.put(opts, :git_signing, true)
+          false -> Map.put(opts, :git_signing, false)
+          nil -> opts
+          _ -> Map.put(opts, :_validation_error, "git_signing must be a boolean")
+        end
+
+      opts =
         if Map.has_key?(conn.body_params, "enable_iroh"),
           do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
