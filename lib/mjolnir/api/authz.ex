@@ -32,7 +32,9 @@ defmodule Mjolnir.API.Authz do
   Authorize a resource-level action on a VM.
 
   Looks up the VM by id, checks policy, and calls the success callback with
-  the VM state map. Returns 404 if not found, 403 if unauthorized.
+  the VM state map. A missing VM is 404. Denial is also 404, so a guessed id
+  does not reveal that a VM exists, except for `:pty`: the browser terminal
+  already rendered that id, and a 404 there only looks like a dropped socket.
   """
   def authorize_vm(conn, vm_id, action, callback) do
     user = %{user_id: conn.assigns[:user_id]}
@@ -48,10 +50,7 @@ defmodule Mjolnir.API.Authz do
               "Authz denied: user=#{inspect(user.user_id)} action=#{action} vm=#{vm_id}"
             )
 
-            conn
-            |> put_resp_content_type("application/json")
-            |> send_resp(404, Jason.encode!(%{error: "not_found"}))
-            |> halt()
+            deny_vm(conn, action)
         end
 
       {:error, :not_found} ->
@@ -176,6 +175,22 @@ defmodule Mjolnir.API.Authz do
             |> halt()
         end
     end
+  end
+
+  # The PTY socket is opened only after `/term/:id` has already shown the
+  # page. Hiding denial as 404 makes the browser print "connection error".
+  defp deny_vm(conn, :pty) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(403, Jason.encode!(%{error: "forbidden"}))
+    |> halt()
+  end
+
+  defp deny_vm(conn, _action) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(404, Jason.encode!(%{error: "not_found"}))
+    |> halt()
   end
 
   defp app_not_found(conn, app_name) do

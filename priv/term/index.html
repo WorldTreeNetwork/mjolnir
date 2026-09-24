@@ -109,6 +109,13 @@
     });
     ws.addEventListener("error", () => {
       term.writeln("\r\n\x1b[31m— connection error —\x1b[0m");
+      fetch(location.origin + "/api/vms/" + VM_ID + "/pty" + qs, {credentials: "same-origin"})
+        .then((r) => {
+          if (r.status === 403) {
+            term.writeln("\r\n\x1b[31m— 403 not allowed —\x1b[0m");
+          }
+        })
+        .catch(() => {});
     });
 
     term.onData((data) => {
