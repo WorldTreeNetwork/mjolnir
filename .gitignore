@@ -46,3 +46,7 @@ boot-image/
 *.db
 .beads-credential-key
 .metacoding
+
+# Local agent runtime and spawned-reader artifacts
+/.omx/
+/.spawns/
