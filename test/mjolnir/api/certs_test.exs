@@ -99,6 +99,76 @@ defmodule Mjolnir.API.CertsTest do
     end
   end
 
+  describe "renew_due/1" do
+    @now ~U[2026-09-25 12:00:00Z]
+
+    defp renew_ops(agent, certs) do
+      %{
+        issue_cmd: fn fqdn ->
+          Agent.update(agent, fn s -> %{s | issued: [fqdn | s.issued]} end)
+          {:ok, %{cert: @cert, key: @key, not_after: "2030-01-01T00:00:00Z"}}
+        end,
+        ensure: fn fqdn, cert, key ->
+          Agent.update(agent, fn s -> %{s | ensured: [{fqdn, cert, key} | s.ensured]} end)
+          {:ok, :installed}
+        end,
+        list_certs: fn -> {:ok, certs} end
+      }
+    end
+
+    test "does nothing when every cert is outside the window", %{agent: agent} do
+      ops =
+        renew_ops(agent, [
+          %{host: "taskmaster.dev", not_after: "Jan 1 00:00:00 2030 GMT"}
+        ])
+
+      assert {:ok, :none} = Certs.renew_due(now: @now, ops: ops)
+      assert Agent.get(agent, & &1.issued) == []
+    end
+
+    test "issues only the soonest certificate inside 30 days", %{agent: agent} do
+      ops =
+        renew_ops(agent, [
+          %{host: "fresh.example", not_after: "Jan 1 00:00:00 2030 GMT"},
+          %{host: "zine.identikey.io", not_after: "Sep 22 22:42:17 2026 GMT"},
+          %{host: "older.example", not_after: "Sep 1 00:00:00 2026 GMT"}
+        ])
+
+      assert {:ok, %{fqdn: "older.example", status: :installed}} =
+               Certs.renew_due(now: @now, ops: ops)
+
+      assert Agent.get(agent, & &1.issued) == ["older.example"]
+    end
+
+    test "treats an unreadable expiry as due and skips wildcards", %{agent: agent} do
+      ops =
+        renew_ops(agent, [
+          %{host: "*.example.com", not_after: "Jan 1 00:00:00 2020 GMT"},
+          %{host: "undated.example", not_after: nil}
+        ])
+
+      assert {:ok, %{fqdn: "undated.example"}} = Certs.renew_due(now: @now, ops: ops)
+    end
+
+    test "a certificate 31 days out is not due", %{agent: agent} do
+      ops =
+        renew_ops(agent, [
+          %{host: "edge.example", not_after: "Oct 26 12:00:00 2026 GMT"}
+        ])
+
+      assert {:ok, :none} = Certs.renew_due(now: @now, ops: ops)
+    end
+
+    test "a certificate exactly 30 days out is due", %{agent: agent} do
+      ops =
+        renew_ops(agent, [
+          %{host: "edge.example", not_after: "Oct 25 12:00:00 2026 GMT"}
+        ])
+
+      assert {:ok, %{fqdn: "edge.example"}} = Certs.renew_due(now: @now, ops: ops)
+    end
+  end
+
   describe "list/1" do
     test "strips PEM paths from the public shape", %{ops: ops} do
       assert {:ok, [c]} = Certs.list(ops: ops)

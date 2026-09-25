@@ -292,6 +292,10 @@ if $BUILD_ELIXIR; then
     echo ""
     echo "--- Restarting mjolnir service ---"
     ssh "$HOST" "systemctl restart mjolnir && sleep 2 && systemctl status mjolnir --no-pager"
+
+    echo ""
+    echo "--- Named-host certificate renewal timer ---"
+    ssh "$HOST" "cp $REMOTE_CODE/systemd/mjolnir-cert-renew.service $REMOTE_CODE/systemd/mjolnir-cert-renew.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl enable mjolnir-cert-renew.timer && systemctl start mjolnir-cert-renew.service"
 else
     echo ""
     echo "--- Skipping mjolnir service restart (gateway-only deploy; pass --full to also restart it) ---"

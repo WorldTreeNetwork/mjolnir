@@ -12,6 +12,11 @@ defmodule Mjolnir.API.Certs do
   After Let's Encrypt returns a cert, `Mjolnir.Gateway.Certs.ensure/2` installs
   a `[[cert]]` entry. PEMs never leave the host.
 
+  `renew_due/1` is the daily pass (`systemd/mjolnir-cert-renew.timer`). It
+  re-issues at most one `[[cert]]` whose `not_after` is inside 30 days, the
+  soonest first. The gateway's own 12-hour loop only renews the worldtree
+  DNS-01 certificate and does not look at these files.
+
   Wildcards (`*.`) are refused — HTTP-01 cannot prove them. v1 has no
   `--wildcard` flag.
 
@@ -30,6 +35,8 @@ defmodule Mjolnir.API.Certs do
   @default_issued_dir "/var/lib/mjolnir-gateway/issued"
   @gateway_bin "/usr/local/bin/mjolnir-gateway"
   @default_email "duke@worldtree.io"
+  # Same window as the gateway's primary ACME loop (`renew_before_secs`).
+  @renew_before_seconds 30 * 24 * 60 * 60
 
   @typedoc "Injectable effect seam; defaults capture the real host commands."
   @type ops :: %{
@@ -61,6 +68,49 @@ defmodule Mjolnir.API.Certs do
 
       true ->
         do_issue(fqdn, ops)
+    end
+  end
+
+  @doc """
+  Re-issue at most one installed `[[cert]]` that expires within 30 days.
+
+  Already-expired certificates count. An unreadable `not_after` counts, so a
+  certificate we cannot date does not sit there forever. Wildcards are skipped.
+  When several are due, the soonest (or undated) one is the only one issued
+  this call — the timer runs daily, so the rest drain one per day instead of
+  hitting Let's Encrypt all at once.
+
+  Returns `{:ok, :none}` or the same map as `issue/2`.
+  """
+  @spec renew_due(keyword()) :: {:ok, :none | map()} | {:error, term()}
+  def renew_due(opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    within = Keyword.get(opts, :within_seconds, @renew_before_seconds)
+    ops = merged_ops(opts)
+
+    case ops.list_certs.() do
+      {:ok, certs} ->
+        case next_due(certs, now, within) do
+          nil ->
+            Logger.info("cert renew: none due")
+            {:ok, :none}
+
+          host ->
+            Logger.info("cert renew: issuing #{host}")
+            issue(host, opts)
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc "Like `renew_due/1`, but raises on `{:error, _}` so a systemd oneshot fails."
+  @spec renew_due!(keyword()) :: :none | map()
+  def renew_due!(opts \\ []) do
+    case renew_due(opts) do
+      {:ok, result} -> result
+      {:error, reason} -> raise "cert renewal failed: #{inspect(reason)}"
     end
   end
 
@@ -190,6 +240,97 @@ defmodule Mjolnir.API.Certs do
 
       _ ->
         nil
+    end
+  end
+
+  defp next_due(certs, now, within) do
+    certs
+    |> Enum.map(&cert_host/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reject(&wildcard?/1)
+    |> Enum.filter(&due?(&1, cert_not_after(certs, &1), now, within))
+    |> Enum.sort_by(&expiry_unix(cert_not_after(certs, &1)))
+    |> List.first()
+  end
+
+  defp cert_host(c), do: Map.get(c, :host) || Map.get(c, "host")
+
+  defp cert_not_after(certs, host) do
+    certs
+    |> Enum.find(fn c -> cert_host(c) == host end)
+    |> then(fn c -> Map.get(c, :not_after) || Map.get(c, "not_after") end)
+  end
+
+  defp due?(_host, not_after, now, within) do
+    case expiry(not_after) do
+      {:ok, dt} -> DateTime.diff(dt, now, :second) <= within
+      :error -> true
+    end
+  end
+
+  defp expiry_unix(not_after) do
+    case expiry(not_after) do
+      {:ok, dt} -> DateTime.to_unix(dt)
+      :error -> 0
+    end
+  end
+
+  defp expiry(%DateTime{} = dt), do: {:ok, dt}
+
+  defp expiry(secs) when is_integer(secs) do
+    case DateTime.from_unix(secs) do
+      {:ok, dt} -> {:ok, dt}
+      _ -> :error
+    end
+  end
+
+  defp expiry(stamp) when is_binary(stamp) do
+    stamp = stamp |> String.trim() |> String.replace_prefix("notAfter=", "")
+
+    case DateTime.from_iso8601(stamp) do
+      {:ok, dt, _} ->
+        {:ok, dt}
+
+      _ ->
+        openssl_time(stamp)
+    end
+  end
+
+  defp expiry(_), do: :error
+
+  # `openssl x509 -enddate`: "Sep 22 22:42:17 2026 GMT" (day may be space-padded).
+  defp openssl_time(stamp) do
+    case Regex.run(
+           ~r/\A([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+GMT\z/,
+           stamp
+         ) do
+      [_, mon, day, hour, min, sec, year] ->
+        with {:ok, month} <- month_number(mon),
+             {:ok, naive} <-
+               NaiveDateTime.new(
+                 String.to_integer(year),
+                 month,
+                 String.to_integer(day),
+                 String.to_integer(hour),
+                 String.to_integer(min),
+                 String.to_integer(sec)
+               ) do
+          DateTime.from_naive(naive, "Etc/UTC")
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp month_number(mon) do
+    months = ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+    case Enum.find_index(months, &(&1 == mon)) do
+      nil -> :error
+      idx -> {:ok, idx + 1}
     end
   end
 

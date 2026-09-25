@@ -1,0 +1,14 @@
+[Unit]
+Description=Renew one Mjolnir named-host certificate inside 30 days of expiry
+After=network-online.target mjolnir.service mjolnir-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/mjolnir/env
+ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir rpc Mjolnir.API.Certs.renew_due!()
+Nice=10
+NoNewPrivileges=true
+# The BEAM calls systemd-run --uid=mjolnir for the HTTP-01 dance. This unit
+# stays root so it can rpc the node and so ensure/2 can write gateway.toml.
+# Do not add ReadWritePaths to mjolnir.service for the challenge dir.
