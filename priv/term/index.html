@@ -32,6 +32,12 @@
     #bar .mark { color: var(--accent); font-weight: 600; }
     #bar .id { color: var(--dim); }
     #bar .sess { color: var(--fg); }
+    #bar .hint {
+      margin-left: auto;
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: 0;
+    }
     #term { height: calc(100% - 2rem); padding: 0.4rem 0.5rem 0.6rem; }
     .xterm { height: 100%; }
     .xterm-viewport { overflow-y: auto !important; }
@@ -42,6 +48,7 @@
     <span class="mark">MJOLNIR</span>
     <span class="id">{{VM_SHORT}}</span>
     <span class="sess">{{SESSION}}</span>
+    <span class="hint">Select text, then Ctrl+C copies. Ctrl+V pastes. Ctrl+C with nothing selected stops the program (OpenCode quits). It does not close this page.</span>
   </div>
   <div id="term"></div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -105,7 +112,7 @@
       term.write(new Uint8Array(ev.data));
     });
     ws.addEventListener("close", () => {
-      term.writeln("\r\n\x1b[90m— connection closed —\x1b[0m");
+      term.writeln("\r\n\x1b[90m— connection closed. Refresh to reconnect. Ctrl+C with nothing selected stops the program (OpenCode quits); select text first to copy. —\x1b[0m");
     });
     ws.addEventListener("error", () => {
       term.writeln("\r\n\x1b[31m— connection error —\x1b[0m");
@@ -120,6 +127,72 @@
 
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+    });
+
+    // Windows treats Ctrl+C as copy. This page used to forward that byte
+    // straight into the PTY, so the keystroke killed the foreground program
+    // (and, if that program was the session, the socket closed). Copy when
+    // text is selected; interrupt only when nothing is selected.
+    function copyText(text) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+      } else {
+        fallbackCopy(text);
+      }
+    }
+
+    function fallbackCopy(text) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (e) {}
+      ta.remove();
+    }
+
+    function pasteClipboard() {
+      if (!(navigator.clipboard && navigator.clipboard.readText)) return;
+      navigator.clipboard.readText().then((text) => {
+        if (text) term.paste(text);
+      }).catch(() => {});
+    }
+
+    function chord(ev, key) {
+      return (ev.ctrlKey || ev.metaKey) && !ev.altKey && ev.key.toLowerCase() === key;
+    }
+
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown") return true;
+      const sel = term.getSelection();
+      const copy = (chord(ev, "c") && !ev.shiftKey && sel) || (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "c");
+      if (copy) {
+        ev.preventDefault();
+        copyText(sel);
+        return false;
+      }
+      const paste = (chord(ev, "v") && !ev.shiftKey) || (ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "v") || (ev.shiftKey && ev.key === "Insert");
+      if (paste) {
+        ev.preventDefault();
+        pasteClipboard();
+        return false;
+      }
+      return true;
+    });
+
+    // Selecting text copies it, so a later Ctrl+C is not required. Right-click
+    // copies a selection, or pastes when nothing is selected (Windows console).
+    term.onSelectionChange(() => {
+      copyText(term.getSelection());
+    });
+    term.element.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      const sel = term.getSelection();
+      if (sel) copyText(sel);
+      else pasteClipboard();
     });
 
     window.addEventListener("resize", sendResize);

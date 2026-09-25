@@ -30,6 +30,9 @@ defmodule Mjolnir.API.TermPageTest do
       assert html =~ "main"
       assert html =~ "/api/vms/"
       assert html =~ "xterm"
+      assert html =~ "attachCustomKeyEventHandler"
+      assert html =~ "getSelection"
+      assert html =~ "Ctrl+C copies"
     end
 
     test "defaults a nil session to main" do
