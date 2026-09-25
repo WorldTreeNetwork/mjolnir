@@ -283,7 +283,7 @@ defmodule Mjolnir.Gateway.Certs do
       files_present? =
         read_matches?(eff, cert_path, cert) and read_matches?(eff, key_path, key)
 
-      if files_present? and toml_has_cert?(content, fqdn) do
+      if files_present? and toml_cert_paths(content, fqdn) == {cert_path, key_path} do
         {:ok, :unchanged}
       else
         with :ok <- write_cert_files(eff, dir, cert_path, key_path, cert, key) do
@@ -366,11 +366,51 @@ defmodule Mjolnir.Gateway.Certs do
     end
   end
 
+  # An existing [[cert]] keeps its host but must point at the PEMs just written.
+  # A hand-installed dir (certs/zine) and the slug dir (certs/zine.identikey.io)
+  # are not the same path; leaving the old one in place keeps serving the
+  # expired file.
   defp ensure_cert_block(content, fqdn, cert_path, key_path) do
-    if toml_has_cert?(content, fqdn) do
-      content
-    else
-      append_block(content, render_cert_block(fqdn, cert_path, key_path))
+    chunks = chunks(content)
+
+    case Enum.find_index(chunks, &cert_chunk_for?(&1, fqdn)) do
+      nil ->
+        append_block(content, render_cert_block(fqdn, cert_path, key_path))
+
+      i ->
+        updated = retarget_cert_chunk(Enum.at(chunks, i), cert_path, key_path)
+
+        if updated == Enum.at(chunks, i) do
+          content
+        else
+          chunks |> List.replace_at(i, updated) |> flatten_chunks()
+        end
+    end
+  end
+
+  defp retarget_cert_chunk(lines, cert_path, key_path) do
+    lines
+    |> replace_kv("cert", cert_path)
+    |> replace_kv("key", key_path)
+  end
+
+  defp replace_kv(lines, key, value) do
+    rendered = "#{key} = #{quote_str(value)}"
+
+    case Enum.find_index(lines, &String.match?(&1, ~r/^\s*#{key}\s*=/)) do
+      nil ->
+        lines ++ [rendered]
+
+      i ->
+        indent = lines |> Enum.at(i) |> String.replace(~r/\S.*\z/s, "")
+        List.replace_at(lines, i, indent <> rendered)
+    end
+  end
+
+  defp toml_cert_paths(content, host) do
+    case Enum.find(toml_list_certs(content), &(&1.host == host)) do
+      %{cert_path: cert_path, key_path: key_path} -> {cert_path, key_path}
+      _ -> nil
     end
   end
 

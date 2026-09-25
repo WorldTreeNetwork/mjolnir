@@ -233,6 +233,30 @@ defmodule Mjolnir.Gateway.CertsTest do
       # no second write/reload
       assert Fake.reloads(pid) == 1
     end
+
+    test "retargets an existing [[cert]] that still points at an older directory" do
+      pid = Fake.start()
+
+      toml = """
+      [[cert]]
+      host = "zine.identikey.io"
+      cert = "/etc/mjolnir/certs/zine/fullchain.pem"
+      key = "/etc/mjolnir/certs/zine/privkey.pem"
+      """
+
+      with_toml(pid, toml)
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "zine.identikey.io",
+                 [mode: :origin_ca, cert: @cert_pem, key: @key_pem] ++ Fake.opts(pid)
+               )
+
+      updated = Fake.toml(pid)
+      assert updated =~ ~s(cert = "/etc/mjolnir/certs/zine.identikey.io/fullchain.pem")
+      assert updated =~ ~s(key = "/etc/mjolnir/certs/zine.identikey.io/privkey.pem")
+      refute updated =~ ~s(/etc/mjolnir/certs/zine/fullchain.pem)
+    end
   end
 
   describe "ensure/2 :origin_ca — validation" do
