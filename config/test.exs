@@ -29,4 +29,8 @@ config :mjolnir,
   blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
   biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit")
 
+# Edge-key tests pass a per-test auth_dir. This fallback is still outside the
+# test BTRFS tree and prevents accidental use of the production path.
+config :mjolnir, auth_dir: "/tmp/mjolnir-test/auth"
+
 config :mjolnir, :auth, bypass_localhost: true

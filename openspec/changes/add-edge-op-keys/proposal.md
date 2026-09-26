@@ -6,7 +6,7 @@ Bead `mjolnir-22ff.2`. Steer 2026-09-24.
 
 **Rigor:** architecture
 
-**Preparation (2026-09-24 /run):** still valid (advise-5 accept). No inbound code artifact missing for persist/ADR. Direct-challenge and biscuit consume this later. Authority: 22ff campaign. Ready to act.
+**Preparation (2026-09-26 /run):** still valid (advise-5 accept). No contract change. Biscuit runtime is `e5a6045` and login profiles are `eac52f5`; this node still owns the edge pin and op keys those later call. Authority: 22ff campaign.
 
 ## Why
 

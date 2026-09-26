@@ -1,11 +1,11 @@
 # Tasks
 
-- [ ] Draft ADR `0012-direct-edge-auth` (trust pin, key split, no authlocal, discovery ≠ trust)
-- [ ] Persist stable identity + operational keys under `/var/lib/mjolnir/auth` (`0600`, not `btrfs_root`)
-- [ ] Ordinary sessions use operational keys only; stable key not required online
-- [ ] Rotation overlap: unexpired capabilities remain valid across an op-key rotation
-- [ ] Offline verifier can check the full stable-XID → op-key chain
-- [ ] Compromise/recovery written (op-key rotate vs restore auth dir)
+- [x] Draft ADR `0012-direct-edge-auth` (trust pin, key split, no authlocal, discovery ≠ trust)
+- [x] Persist stable identity + operational keys under `/var/lib/mjolnir/auth` (`0600`, not `btrfs_root`)
+- [x] Ordinary sessions use operational keys only; stable key not required online
+- [x] Rotation overlap: unexpired capabilities remain valid across an op-key rotation
+- [x] Offline verifier can check the full stable-XID → op-key chain
+- [x] Compromise/recovery written (op-key rotate vs restore auth dir)
 - [x] Advise — astra-arch-review, other-family reader of Grok; accepted in `reviews/2026-09-24-advise-5.md` (Fable infrastructure unavailable).
 
 ## Owed from advise 2026-09-24 — astra-arch-review

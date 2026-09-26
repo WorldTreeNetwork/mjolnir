@@ -149,6 +149,9 @@ config :mjolnir,
   # Real Blake3 (`mjolnir-b3`). Content hashes and IdentiKey fingerprints.
   blake3_bin: "/opt/mjolnir/bin/mjolnir-b3",
   biscuit_bin: "/opt/mjolnir/bin/mjolnir-biscuit",
+  # Stable edge identity and delegated operational signing keys. This host
+  # path must remain outside btrfs_root so VM/named snapshots never capture it.
+  auth_dir: "/var/lib/mjolnir/auth",
 
   # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
   # tests and dev machines without the binary stay green. Operator enables in
