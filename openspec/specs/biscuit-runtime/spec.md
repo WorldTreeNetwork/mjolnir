@@ -11,11 +11,13 @@ live in identikey-protocol and are deliberately **not** copied here.
 ## Purpose
 
 One Ed25519-rooted Biscuit mint/verify path and one real Blake3 for
-the whole host. The crate is `native/mjolnir_biscuit` (`biscuit-auth`
-6, `blake3` 1); the BEAM face is the `mjolnir-biscuit` binary driven
-by `System.cmd` from `Mjolnir.Biscuit` — the same shape as
-`mjolnir-b3`, not the rustler `:blake3` NIF. No vsock, no HTTP: the
-API and `mj` call this later, so there is no new surface to reach.
+the whole host. Protocol mint/verify is
+[`identikey-capability`](https://crates.io/crates/identikey-capability)
+0.1 (`identikey-capability-v1`). `native/mjolnir_biscuit` is a thin
+face: JSON CLI, `COMMIT_DOMAIN = "mjolnir/secret-commit/v1"`, BEAM
+`System.cmd` from `Mjolnir.Biscuit` — the same shape as `mjolnir-b3`,
+not the rustler `:blake3` NIF. No vsock, no HTTP, no second
+biscuit-auth mint path.
 
 Holder fingerprints are the identikey-auth v1 §5 dCBOR map, which
 commits to the algorithm; `IdentiKey.fingerprint/1` (raw pubkey
@@ -27,8 +29,8 @@ commitments are salted and domain-separated so an unsalted
 
 ### Requirement: Host mints and verifies Ed25519-rooted Biscuits
 
-The host SHALL mint and verify Biscuits with `biscuit-auth` 6.0 using
-an Ed25519 authority key. Serialize/parse SHALL round-trip. A
+The host SHALL mint and verify Biscuits via `identikey-capability`
+(Ed25519 authority, `biscuit-auth` 6 underneath). Serialize/parse SHALL round-trip. A
 tampered authority block SHALL fail parse. Appending
 `check if holder($fp), $fp == "<fp>"` SHALL succeed authorization
 only when the verifier injects a matching `holder("<fp>")` fact.
