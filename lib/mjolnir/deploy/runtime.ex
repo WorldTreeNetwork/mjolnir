@@ -248,7 +248,10 @@ defmodule Mjolnir.Deploy.Runtime do
       # Same preservation rule as custom_domain: an omitted owner_id is wiped,
       # and a wiped owner makes Policy.App treat the app as legacy/unowned,
       # locking its real owner out of their own redeploys (mjolnir-xuv).
-      owner_id = owner_id_opt || Map.get(prev_entry || %{}, :owner_id)
+      # `stamp/2` also refuses to replace a base58 XID with `localhost`
+      # or a hex spelling.
+      owner_id =
+        Mjolnir.Deploy.Owner.stamp(owner_id_opt, Map.get(prev_entry || %{}, :owner_id))
 
       # `port` is recorded so the gateway local-route generator
       # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.

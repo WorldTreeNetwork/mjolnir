@@ -375,8 +375,9 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
-        /// Owner id stamped on a localhost deploy (X-Owner-Id). Ignored by the
-        /// server unless that request is the loopback bypass.
+        /// Owner stamped on a localhost deploy (X-Owner-Id). Canonical base58
+        /// XID. The server ignores this header unless the request is the
+        /// loopback bypass, and rejects anything that is not that spelling.
         #[arg(long)]
         owner: Option<String>,
     },

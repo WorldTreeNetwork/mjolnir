@@ -1,6 +1,6 @@
 defmodule Mjolnir.VmId do
   @moduledoc """
-  VM ids are 16 random bytes. The text form is base58btc.
+  VM ids are 16 random bytes. The text form is base58.
 
   A UUID (`8-4-4-4-12` hex) is the same 16 bytes with dashes. `canonicalize/1`
   accepts either spelling and returns the base58 form. A 32-byte value (an
@@ -23,7 +23,7 @@ defmodule Mjolnir.VmId do
   end
 
   @doc """
-  Base58btc form of a UUID or of an existing base58 VM id.
+  Base58 form of a UUID or of an existing base58 VM id.
 
   Returns `:error` for anything that is not exactly 16 bytes in one of those
   two spellings.

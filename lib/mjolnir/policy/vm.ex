@@ -44,18 +44,21 @@ defmodule Mjolnir.Policy.VM do
 
   # Terminal invite: PTY only. Not read, exec, stop, or grant.
   def authorize(:pty, %{user_id: uid}, %{owner_id: oid} = vm) when is_binary(uid) do
-    if uid == oid or uid in pty_invites(vm), do: :ok, else: :error
+    if Mjolnir.Deploy.Owner.same?(uid, oid) or
+         Enum.any?(pty_invites(vm), &Mjolnir.Deploy.Owner.same?(uid, &1)),
+       do: :ok,
+       else: :error
   end
 
   # Resource actions: owner only
   def authorize(action, %{user_id: uid}, %{owner_id: oid})
       when action in [:read, :exec, :stop, :snapshot, :ticket, :message, :grant_pty] do
-    if uid == oid, do: :ok, else: :error
+    if Mjolnir.Deploy.Owner.same?(uid, oid), do: :ok, else: :error
   end
-
-  defp pty_invites(%{pty_invites: invites}) when is_list(invites), do: invites
-  defp pty_invites(_), do: []
 
   # Default deny
   def authorize(_, _, _), do: :error
+
+  defp pty_invites(%{pty_invites: invites}) when is_list(invites), do: invites
+  defp pty_invites(_), do: []
 end

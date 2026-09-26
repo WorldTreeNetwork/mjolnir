@@ -1,6 +1,6 @@
 defmodule Mjolnir.VmId.Migrate do
   @moduledoc """
-  Rewrite dashed-UUID VM ids to base58btc on disk.
+  Rewrite dashed-UUID VM ids to base58 on disk.
 
   Runs before StateStore reads its directory. One VM at a time, and safe to
   run again: a record already in base58 is left alone. The vsock CID is

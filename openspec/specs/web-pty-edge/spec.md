@@ -116,8 +116,9 @@ Unauthenticated `GET /term/:id` SHALL redirect the browser through
 `https://auth.identikey.me/authorize` as a registered **public**
 PKCE client (`subject_type=public`, `token_endpoint_auth_method=none`).
 The authorization code SHALL be exchanged on the Mjolnir API origin.
-The resulting ID token `sub` SHALL be the 64-lowercase-hex XID and
-SHALL become `conn.assigns[:user_id]`. The hop SHALL set the existing
+The resulting ID token `sub` SHALL be the base58 text form of the
+32-byte XID and SHALL become `conn.assigns[:user_id]`. A stored
+64-lowercase-hex spelling of those same bytes SHALL still match. The hop SHALL set the existing
 `mj_term` cookie. It SHALL NOT use `connect.identikey.io` / Keycloak
 device-code. It SHALL NOT create an IdentiKey account on assertion.
 Foreign-origin `/devterm*` SHALL continue to terminate on the trusted
@@ -143,5 +144,6 @@ edge (this requirement does not put a Mjolnir JWT in dashboard JS).
 
 - GIVEN the Mjolnir client is registered `subject_type=public`
 - WHEN the ID token is verified
-- THEN `sub` is the 64-lowercase-hex XID
+- THEN `sub` is the base58 XID
 - AND it is not a pairwise `KDF(salt, xid, sector)` value
+- AND a stored hex spelling of the same 32 bytes still matches `owner_id`

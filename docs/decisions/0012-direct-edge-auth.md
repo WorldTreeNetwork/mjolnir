@@ -10,11 +10,18 @@ it never supplies or changes the trust pin. A first connection without a pin
 fails closed. This is not TOFU, and `authlocal.identikey.me` is not an issuer,
 discovery service, or fallback trust root for this path.
 
-The stable identity is Ed25519. Its Gordian-style XID is the lowercase hex
-SHA-256 digest of **exactly the raw 32-byte Ed25519 inception public key**—no
-CBOR wrapper, algorithm label, document label, or text encoding is hashed.
-Consequently, a document carrying another edge's XID cannot bind an attacker
-key to that pin.
+The stable identity is Ed25519. Its pin is the identikey XID of that
+inception key, as BCR-2024-010 and `identikey-core` define it: SHA-256 of
+the tagged CBOR signing public key (tag 40022) whose content is the
+two-element array `[2, raw 32-byte key]`. A document that only writes a
+victim's XID on itself fails that check, because the digest is of the key
+encoding, not of a label.
+
+Inside a signed dCBOR tuple the XID is those 32 raw bytes (a CBOR byte
+string). At a text boundary — JSON files, config, logs — it is **base58**
+of those bytes, per identikey-protocol encoding conventions. That alphabet
+is Bitcoin's, with no checksum. Hex is not the identifier. SHA-256 of the
+raw key, and Blake3 of the raw key, are different namespaces.
 
 The stable private key delegates short-lived operational Ed25519 keys. The
 delegation is an Ed25519 signature over canonical dCBOR:
@@ -24,7 +31,8 @@ delegation is an Ed25519 signature over canonical dCBOR:
  ["edge-proof", "cap-mint"], nbf, exp, true]
 ```
 
-`op_pub` is a CBOR byte string. The final `true` means no onward delegation.
+`op_pub` and `edge_xid` are CBOR byte strings. `edge_xid` is the 32-byte
+XID, not its base58 text. The final `true` means no onward delegation.
 The exact purpose set is required. Ordinary edge proof and capability minting
 use the operational private key; they do not open or require the stable
 private key.
@@ -72,6 +80,27 @@ An old backup plus its old attestation cannot revive a later-superseded kid.
 Without current evidence, direct auth remains unavailable. Root loss without
 leak may use this ceremony; root loss without usable recovery material creates
 a new identity and pin.
+
+## Migration
+
+Checked 2026-09-26 on the WorldTree hypervisor (`45.76.77.97`):
+`/var/lib/mjolnir/auth` does not exist. No edge bundle has been
+provisioned. A version-1 bundle, if one appears, stored a different
+identifier (lowercase hex SHA-256 of the raw key, and that hex as CBOR
+text inside the signature). It is not a spelling of this XID. Load fails
+closed with `:legacy_edge_pin`. The operator deletes the auth directory
+and provisions again, then hands clients the new base58 pin out of band.
+Do not rewrite a version-1 file in place.
+
+Account `owner_id` is a separate value: the public OIDC `sub`, which is
+base58 of an account XID. On that same host, 31 deploy-registry rows and
+40 VM `spawn_config` records store the **same 32 bytes** as 64 lowercase
+hex, plus one `localhost` each. That is a spelling change, not a new
+digest. Authorization compares the bytes, so a base58 `sub` still matches
+a stored hex row. The registry string is rewritten to base58 on the next
+deploy of that app. A VM record is rewritten when that VM is spawned
+again under the base58 owner. Do not rehash these rows, and do not treat
+them as edge pins.
 
 ## Consequences
 

@@ -25,6 +25,10 @@ defmodule Mjolnir.API.Router do
       * `X-Base-Image` — optional `@base/` name (`mj deploy --base`). Overrides
         `mjolnir.toml` `base_image`. Omitted: the manifest pin, else
         `deploy-node-bun`.
+      * `X-Owner-Id` — loopback only. Canonical base58 XID stamped as
+        `owner_id`. A missing or non-canonical value is `400` before the body
+        is read. A signed-in caller is stamped as their `sub`; the header is
+        ignored. Redeploying an app owned by a different XID is `409`.
     * **Response**: `200` with `Content-Type: application/x-ndjson`, a stream of
       newline-delimited JSON objects. Progress lines are `{"stage": ..., "line":
       ...}` (stages: `detect`, `build`, `run`, `done`, or a failing stage name).
@@ -490,7 +494,7 @@ defmodule Mjolnir.API.Router do
       vms =
         Mjolnir.VM.list()
         |> Enum.filter(fn vm ->
-          (user_id == "localhost" or vm.owner_id == user_id) and
+          (user_id == "localhost" or Mjolnir.Deploy.Owner.same?(vm.owner_id, user_id)) and
             metadata_matches?(vm.metadata, selector)
         end)
         |> Enum.map(&Views.render_vm_summary/1)
@@ -501,7 +505,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_stranded()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_stranded_summary/1)
@@ -512,7 +516,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_failed()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_failed_summary/1)
@@ -524,7 +528,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_stopped()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_stopped_summary/1)
@@ -558,7 +562,9 @@ defmodule Mjolnir.API.Router do
           visible =
             Enum.filter(entries, fn e ->
               owner = get_in(e, [:metadata, "spawn_config", "owner_id"])
-              user_id == "localhost" or owner == user_id or is_nil(owner)
+
+              user_id == "localhost" or is_nil(owner) or
+                Mjolnir.Deploy.Owner.same?(owner, user_id)
             end)
 
           json(conn, 200, %{trash: Enum.map(visible, &Views.render_trash_entry/1)})
@@ -584,7 +590,8 @@ defmodule Mjolnir.API.Router do
 
           # Ownership: a user may only restore their own VM. Localhost (the
           # SSH-tunnel admin path) and ownerless legacy entries are allowed.
-          if user_id == "localhost" or owner == user_id or is_nil(owner) do
+          if user_id == "localhost" or is_nil(owner) or
+               Mjolnir.Deploy.Owner.same?(owner, user_id) do
             restore_from_trash(conn, id)
           else
             json(conn, 403, %{error: "forbidden"})
@@ -1446,7 +1453,7 @@ defmodule Mjolnir.API.Router do
           filtered =
             snapshots
             |> Enum.filter(fn meta ->
-              user_id == "localhost" or meta[:owner_id] == user_id
+              user_id == "localhost" or Mjolnir.Deploy.Owner.same?(meta[:owner_id], user_id)
             end)
             |> Enum.map(&Mjolnir.MemorySnapshot.annotate/1)
 
@@ -1558,7 +1565,7 @@ defmodule Mjolnir.API.Router do
       dormant =
         Mjolnir.DormantRegistry.list()
         |> Enum.filter(fn entry ->
-          user_id == "localhost" or entry.owner_id == user_id
+          user_id == "localhost" or Mjolnir.Deploy.Owner.same?(entry.owner_id, user_id)
         end)
         |> Enum.map(fn entry ->
           %{
@@ -1622,6 +1629,70 @@ defmodule Mjolnir.API.Router do
       end
     else
       conn
+    end
+  end
+
+  # Forgejo login → XID. Loopback only: a tenant token must not write the map.
+  get "/api/forgejo-owners/resolve" do
+    conn = conn |> require_scope("vms:read") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.resolve(conn.query_params["repo"]) do
+        {:ok, owner_id} -> json(conn, 200, %{owner_id: owner_id})
+        :error -> json(conn, 404, %{error: "owner_not_linked"})
+      end
+    end
+  end
+
+  put "/api/forgejo-owners/:login" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      forgejo_owner_put(conn, fn owner_id ->
+        Mjolnir.Deploy.ForgejoOwners.put_account(login, owner_id)
+      end)
+    end
+  end
+
+  delete "/api/forgejo-owners/:login" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.delete_account(login) do
+        :ok -> json(conn, 200, %{deleted: true})
+        {:error, reason} -> json(conn, 400, %{error: Atom.to_string(reason)})
+      end
+    end
+  end
+
+  put "/api/forgejo-owners/:login/:repo" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      forgejo_owner_put(conn, fn owner_id ->
+        Mjolnir.Deploy.ForgejoOwners.put_repo(login, repo, owner_id)
+      end)
+    end
+  end
+
+  delete "/api/forgejo-owners/:login/:repo" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.delete_repo(login, repo) do
+        :ok -> json(conn, 200, %{deleted: true})
+        {:error, reason} -> json(conn, 400, %{error: Atom.to_string(reason)})
+      end
     end
   end
 
@@ -1909,6 +1980,37 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Operator routes (Forgejo owner links). A JWT caller is not the host.
+  defp require_localhost(conn) do
+    cond do
+      conn.halted -> conn
+      conn.assigns[:user_id] == "localhost" -> conn
+      true -> json(conn, 403, %{error: "forbidden"})
+    end
+  end
+
+  defp forgejo_owner_put(conn, fun) do
+    owner_id = conn.body_params["owner_id"]
+
+    case fun.(owner_id) do
+      {:ok, id} ->
+        json(conn, 200, %{owner_id: id})
+
+      {:error, reason} when is_atom(reason) ->
+        json(conn, 400, %{error: Atom.to_string(reason)})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: "forgejo_owner_write_failed", reason: inspect(reason)})
+    end
+  end
+
+  defp stored_owner(app_name) do
+    case Mjolnir.Deploy.Registry.get(app_name) do
+      {:ok, entry} -> entry.owner_id
+      _ -> nil
+    end
+  end
+
   defp json(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
@@ -2046,17 +2148,25 @@ defmodule Mjolnir.API.Router do
   @deploy_max_body 256 * 1024 * 1024
 
   defp handle_deploy(conn) do
+    case Mjolnir.Deploy.Owner.resolve(
+           conn.assigns[:user_id],
+           conn |> get_req_header("x-owner-id") |> List.first()
+         ) do
+      {:error, reason} ->
+        json(conn, 400, %{error: Atom.to_string(reason)})
+
+      {:ok, deployer} ->
+        handle_deploy_body(conn, deployer)
+    end
+  end
+
+  defp handle_deploy_body(conn, deployer) do
     with {:ok, body, conn} <- read_full_body(conn),
          {:ok, requested_name} <- deploy_app_name(conn),
          {:ok, base_image} <- deploy_base_image(conn),
          dest = deploy_src_dest(requested_name),
          {:ok, app_dir} <- extract_source(body, dest) do
       app_name = resolve_app_name(requested_name, app_dir)
-      deployer =
-        Mjolnir.Deploy.Owner.resolve(
-          conn.assigns[:user_id],
-          conn |> get_req_header("x-owner-id") |> List.first()
-        )
       memory_mb = deploy_memory_mb(conn)
       custom_domain = deploy_domain(conn)
 
@@ -2064,9 +2174,19 @@ defmodule Mjolnir.API.Router do
       # here, not at the route, because the app name comes from the uploaded
       # source. Must run before send_chunked/2 — once the response is chunked
       # we can no longer send a 403/404 status.
-      authorize_deploy(conn, app_name, fn _entry ->
-        do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
-      end)
+      #
+      # Localhost's policy bypass would otherwise let a loopback deploy stamp
+      # a different XID over an app someone already owns. `claim/2` is that
+      # check. Same 32 bytes stored as hex is a rewrite, not a transfer.
+      case Mjolnir.Deploy.Owner.claim(stored_owner(app_name), deployer) do
+        {:error, :owner_mismatch} ->
+          json(conn, 409, %{error: "owner_mismatch"})
+
+        _ ->
+          authorize_deploy(conn, app_name, fn _entry ->
+            do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
+          end)
+      end
     else
       {:error, :too_large} ->
         json(conn, 413, %{error: "source_too_large", limit_bytes: @deploy_max_body})

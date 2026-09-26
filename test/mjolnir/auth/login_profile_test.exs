@@ -5,8 +5,8 @@ defmodule Mjolnir.Auth.LoginProfileTest do
   alias Mjolnir.Sites.IdentiKey
 
   @now 1_800_000_000
-  @edge String.duplicate("a", 64)
-  @other_edge String.duplicate("b", 64)
+  @edge Mjolnir.Base58.encode(:binary.copy(<<1>>, 32))
+  @other_edge Mjolnir.Base58.encode(:binary.copy(<<2>>, 32))
   @holder_rights [{"vms:read", "vm-a"}, {"vms:read", "vm-b"}]
 
   setup do

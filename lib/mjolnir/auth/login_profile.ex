@@ -13,6 +13,7 @@ defmodule Mjolnir.Auth.LoginProfile do
   and fail closed when the nonce is unknown.
   """
 
+  alias Mjolnir.Base58
   alias Mjolnir.Biscuit
 
   @magic "MJLP1"
@@ -106,7 +107,7 @@ defmodule Mjolnir.Auth.LoginProfile do
       {:allow,
        %{
          subject_xid: profile.subject_xid,
-         edge_xid: profile.edge_xid,
+         edge_xid: Base58.encode(profile.edge_xid),
          login_mode: profile.mode,
          exp: profile.exp
        }}
@@ -124,7 +125,7 @@ defmodule Mjolnir.Auth.LoginProfile do
   def sign_proof(token, request, edge_xid, nonce, exp, session_key)
       when is_binary(token) and is_map(request) and is_binary(edge_xid) and
              is_binary(nonce) and is_integer(exp) do
-    bytes = proof_signing_bytes(token, request, edge_xid, nonce, exp)
+    bytes = proof_signing_bytes(token, request, canonical_edge!(edge_xid), nonce, exp)
     %{nonce: nonce, exp: exp, signature: sign(session_key, bytes)}
   end
 
@@ -153,7 +154,7 @@ defmodule Mjolnir.Auth.LoginProfile do
       {:text, method},
       {:text, target},
       {:bytes, Biscuit.blake3_hash(body)},
-      {:text, edge_xid},
+      {:bytes, canonical_edge!(edge_xid)},
       {:bytes, nonce},
       {:uint, exp}
     ])
@@ -165,7 +166,7 @@ defmodule Mjolnir.Auth.LoginProfile do
     exp = value(claims, :exp)
 
     with true <- is_binary(subject) and byte_size(subject) > 0,
-         true <- valid_edge?(edge),
+         {:ok, edge} <- canonical_edge(edge),
          true <- is_integer(exp) and exp > now,
          {:ok, rights} <- normalize_rights(value(claims, :rights)),
          {:ok, session_public, holder_fp} <- holder_fields(claims, mode),
@@ -247,7 +248,7 @@ defmodule Mjolnir.Auth.LoginProfile do
     Jason.encode!([
       @profile_version,
       profile.subject_xid,
-      profile.edge_xid,
+      Base58.encode(profile.edge_xid),
       Atom.to_string(profile.mode),
       profile.issued_at,
       profile.exp,
@@ -261,6 +262,7 @@ defmodule Mjolnir.Auth.LoginProfile do
     with {:ok, [@profile_version, subject, edge, mode, issued_at, exp, rights, public, fp]} <-
            Jason.decode(bytes),
          {:ok, mode} <- decode_mode(mode),
+         {:ok, edge} <- canonical_edge(edge),
          {:ok, rights} <- normalize_rights(rights),
          {:ok, public} <- decode_optional(public),
          {:ok, fp} <- decode_optional(fp),
@@ -336,8 +338,12 @@ defmodule Mjolnir.Auth.LoginProfile do
   defp current(%{exp: exp}, now) when is_integer(now) and now < exp, do: :ok
   defp current(_, _), do: {:error, :expired}
 
-  defp expected_audience(%{edge_xid: edge}, edge), do: :ok
-  defp expected_audience(_, _), do: {:error, :wrong_audience}
+  defp expected_audience(%{edge_xid: edge}, presented) do
+    case {canonical_edge(edge), canonical_edge(presented)} do
+      {{:ok, bytes}, {:ok, bytes}} -> :ok
+      _ -> {:error, :wrong_audience}
+    end
+  end
 
   defp permitted(profile, request) do
     operation = value(request, :operation)
@@ -424,8 +430,26 @@ defmodule Mjolnir.Auth.LoginProfile do
 
   defp authority_operation(mode), do: "login_mode:" <> Atom.to_string(mode)
 
-  defp valid_edge?(edge),
-    do: is_binary(edge) and byte_size(edge) == 64 and String.match?(edge, ~r/^[0-9a-f]{64}$/)
+  defp valid_edge?(edge), do: match?({:ok, <<_::binary-size(32)>>}, canonical_edge(edge))
+
+  defp canonical_edge!(edge) do
+    {:ok, bytes} = canonical_edge(edge)
+    bytes
+  end
+
+  defp canonical_edge(<<_::binary-size(32)>> = bytes), do: {:ok, bytes}
+
+  defp canonical_edge(text) when is_binary(text) do
+    case Base58.decode(text, 32) do
+      {:ok, bytes} ->
+        if Base58.encode(bytes) == text, do: {:ok, bytes}, else: :error
+
+      :error ->
+        :error
+    end
+  end
+
+  defp canonical_edge(_), do: :error
 
   defp decode_mode("holder"), do: {:ok, :holder}
   defp decode_mode("bearer"), do: {:ok, :bearer}

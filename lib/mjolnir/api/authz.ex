@@ -95,7 +95,7 @@ defmodule Mjolnir.API.Authz do
       user_id == "localhost" ->
         callback.()
 
-      owner == user_id ->
+      Mjolnir.Deploy.Owner.same?(owner, user_id) ->
         callback.()
 
       true ->

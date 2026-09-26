@@ -71,7 +71,7 @@ defmodule Mjolnir.Policy.App do
              :unset_secrets,
              :adopt
            ] do
-    if uid == oid, do: :ok, else: :error
+    if Mjolnir.Deploy.Owner.same?(uid, oid), do: :ok, else: :error
   end
 
   # Default deny

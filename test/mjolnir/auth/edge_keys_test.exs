@@ -22,11 +22,17 @@ defmodule Mjolnir.Auth.EdgeKeysTest do
     %{root: root, opts: [auth_dir: auth_dir, btrfs_root: btrfs_root, now: @now]}
   end
 
-  test "XID hashes exactly the raw 32-byte inception public", %{opts: opts} do
+  test "XID is SHA-256 of the tagged inception-key CBOR, base58 at the text boundary",
+       %{opts: opts} do
     public = :binary.list_to_bin(Enum.to_list(0..31))
 
     assert EdgeKeys.edge_xid(public) ==
-             "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+             Base.decode16!(
+               "b2b14788c0e1cc8416ca11403b68c6581e31c963962d17ccb1544bc4d18df639",
+               case: :lower
+             )
+
+    assert EdgeKeys.edge_xid_text(public) == "D2YMi3YPRtysWwhk6KwSGmVp2mpRnc52NRpWXF9v26sz"
 
     stable = EdgeKeys.generate_keypair()
     op = EdgeKeys.generate_operational()
@@ -41,12 +47,36 @@ defmodule Mjolnir.Auth.EdgeKeysTest do
       "89746964656e74696b65792d6d6a6f6c6e69722f76316d6f702d64656c65676174696f6e" <>
         "5820" <>
         Base.encode16(op.keypair.ed25519_public, case: :lower) <>
-        "656b69642d317840" <>
+        "656b69642d315820" <>
         Base.encode16(delegation.edge_xid, case: :lower) <>
         "826a656467652d70726f6f66686361702d6d696e74011864f5"
 
     assert Base.encode16(EdgeKeys.delegation_signing_bytes(delegation), case: :lower) == expected
-    assert {:ok, _} = EdgeKeys.provision(opts)
+    assert {:ok, state} = EdgeKeys.provision(opts)
+
+    identity = File.read!(Path.join(opts[:auth_dir], "identity.json")) |> Jason.decode!()
+    assert identity["version"] == 2
+    assert identity["edge_xid"] == EdgeKeys.edge_xid_text(state.stable_public)
+    refute identity["edge_xid"] =~ ~r/^[0-9a-f]{64}$/
+  end
+
+  test "a version-1 raw-key hex bundle fails closed", %{opts: opts} do
+    dir = opts[:auth_dir]
+    File.mkdir_p!(dir)
+    File.chmod!(dir, 0o700)
+
+    path = Path.join(dir, "bundle.json")
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "version" => 1,
+        "edge_xid" => "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+      })
+    )
+
+    File.chmod!(path, 0o600)
+    assert {:error, :legacy_edge_pin} = EdgeKeys.load(opts)
   end
 
   test "offline chain verifies and ordinary signing does not need the stable private", %{

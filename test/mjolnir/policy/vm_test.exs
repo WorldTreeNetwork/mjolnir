@@ -73,6 +73,14 @@ defmodule Mjolnir.Policy.VMTest do
     end
   end
 
+  test "a base58 subject matches the legacy hex spelling of the same XID" do
+    hex = "27060fd66283eb5c6c900bce5b364fa512fb4c718b6af18acc7720c424e08821"
+    text = "3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ"
+
+    assert :ok = VM.authorize(:read, %{user_id: text}, %{owner_id: hex})
+    assert :error = VM.authorize(:read, %{user_id: text}, %{owner_id: "alice"})
+  end
+
   describe "legacy VMs (nil owner_id)" do
     for action <- [:read, :exec, :stop, :snapshot, :ticket, :pty, :message] do
       test "regular user denied #{action} on legacy VM" do

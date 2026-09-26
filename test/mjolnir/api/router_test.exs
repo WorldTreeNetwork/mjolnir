@@ -421,12 +421,40 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  # 32 bytes of 0xAB, base58.
+  @deploy_owner "CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t"
+  # Different 32 bytes, base58. Used to prove a redeploy cannot retarget.
+  @other_owner "3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ"
+
   describe "POST /api/deploy" do
+    test "400 owner_required before the body is considered" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "junk-app")
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_required"
+    end
+
+    test "400 invalid_owner for a 64-hex header" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-owner-id", String.duplicate("ab", 32))
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_owner"
+    end
+
     test "400 for an invalid X-Base-Image before the stream starts" do
       conn =
         conn(:post, "/api/deploy", "this is not a tarball")
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> put_req_header("x-app-name", "junk-app")
+        |> put_req_header("x-owner-id", @deploy_owner)
         |> put_req_header("x-base-image", "../escape")
         |> Router.call(@opts)
 
@@ -439,6 +467,7 @@ defmodule Mjolnir.API.RouterTest do
         conn(:post, "/api/deploy", "this is not a tarball")
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> put_req_header("x-app-name", "junk-app")
+        |> put_req_header("x-owner-id", @deploy_owner)
         |> Router.call(@opts)
 
       assert conn.status == 400
@@ -468,6 +497,7 @@ defmodule Mjolnir.API.RouterTest do
         conn(:post, "/api/deploy", body)
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> put_req_header("x-app-name", "myapp")
+        |> put_req_header("x-owner-id", @deploy_owner)
         |> Router.call(@opts)
 
       assert conn.status == 200
@@ -480,6 +510,103 @@ defmodule Mjolnir.API.RouterTest do
       final = List.last(lines)
       assert final["ok"] == false
       assert final["stage"] == "detect"
+    end
+
+    test "409 when the stored owner is a different XID" do
+      app = "owned-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} =
+               Mjolnir.Deploy.Registry.put(app, %{
+                 release_snapshot: "snap-1",
+                 owner_id: @other_owner
+               })
+
+      on_exit(fn -> Mjolnir.Deploy.Registry.delete(app) end)
+
+      dir = Path.join(System.tmp_dir!(), "deploytar-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "myapp"))
+      File.write!(Path.join([dir, "myapp", "README.md"]), "# hi")
+      tar = Path.join(dir, "src.tgz")
+
+      :ok =
+        :erl_tar.create(
+          String.to_charlist(tar),
+          [{~c"myapp", String.to_charlist(Path.join(dir, "myapp"))}],
+          [:compressed]
+        )
+
+      body = File.read!(tar)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      conn =
+        conn(:post, "/api/deploy", body)
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", app)
+        |> put_req_header("x-owner-id", @deploy_owner)
+        |> Router.call(@opts)
+
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_mismatch"
+    end
+  end
+
+  describe "/api/forgejo-owners" do
+    setup do
+      file =
+        Path.join(
+          System.tmp_dir!(),
+          "forgejo-owners-http-#{System.unique_integer([:positive])}.json"
+        )
+
+      previous = Application.get_env(:mjolnir, :forgejo_owners_path)
+      Application.put_env(:mjolnir, :forgejo_owners_path, file)
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:mjolnir, :forgejo_owners_path, previous)
+        else
+          Application.delete_env(:mjolnir, :forgejo_owners_path)
+        end
+
+        File.rm(file)
+      end)
+
+      :ok
+    end
+
+    test "loopback links an account and resolves a repo" do
+      conn = request(:put, "/api/forgejo-owners/Acme", %{owner_id: @deploy_owner})
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/widget")
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+    end
+
+    test "a repo row overrides the account" do
+      assert request(:put, "/api/forgejo-owners/acme", %{owner_id: @deploy_owner}).status == 200
+
+      conn =
+        request(:put, "/api/forgejo-owners/acme/special", %{owner_id: @other_owner})
+
+      assert conn.status == 200
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/special")
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @other_owner
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/other")
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+    end
+
+    test "hex is rejected and an unlinked repo is 404" do
+      conn = request(:put, "/api/forgejo-owners/acme", %{owner_id: String.duplicate("ab", 32)})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_owner"
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/widget")
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_not_linked"
     end
   end
 

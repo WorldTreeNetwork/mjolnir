@@ -53,8 +53,14 @@ the endpoints node). The rules below are not config.
 ### Requirement: Edge identity is a pinned XID with rotating operational keys
 
 The edge SHALL hold a stable IdentiKey (the pin) and one or more
-operational keys under `/var/lib/mjolnir/auth` with mode `0600`. Those
-files SHALL NOT live under `btrfs_root`. The stable identity key SHALL
+operational keys under `/var/lib/mjolnir/auth` with mode `0600`. The
+pin SHALL be the identikey XID of the Ed25519 inception key: SHA-256
+of tagged CBOR signing-public-key (tag 40022) whose content is
+`[2, raw public key]`. Inside signed dCBOR that XID SHALL be the raw
+32 bytes. At a text boundary it SHALL be base58. A version-1 bundle
+that stored lowercase-hex SHA-256 of the raw key SHALL fail closed
+and SHALL NOT be rewritten in place. The key files
+SHALL NOT live under `btrfs_root`. The stable identity key SHALL
 NOT be required online for ordinary sessions. Operational keys SHALL
 sign edge proof and capability issuance. A client SHALL treat the
 configured stable XID as the trust root; mesh, DNS, and Iroh addresses
@@ -284,9 +290,8 @@ same subject, and SHALL be distinguishable from holder-bound.
 A holder-bound request SHALL include a session-key signature over
 canonical dCBOR
 `["mjolnir-login/v1", biscuit_hash, method, request_target,
-body_hash, edge_xid, nonce, exp]` as specified in seeding design
-[Decision 7](../../changes/archive/2026-09-26-add-biscuit-profiles/design.md).
-`biscuit_hash` SHALL be Blake3 of the exact presented token bytes.
+body_hash, edge_xid, nonce, exp]`. `edge_xid` in that tuple SHALL be
+the raw 32-byte edge XID, not its base58 text. `biscuit_hash` SHALL be Blake3 of the exact presented token bytes.
 `request_target` SHALL include the raw query string when present. The
 nonce SHALL be edge-issued and consumed atomically with accepting the
 effect. The edge SHALL reject wrong key, different token bytes,

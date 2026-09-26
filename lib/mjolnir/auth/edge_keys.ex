@@ -2,10 +2,13 @@ defmodule Mjolnir.Auth.EdgeKeys do
   @moduledoc """
   Stable edge identity and delegated, rotating operational keys.
 
-  The trust pin is the lowercase hexadecimal SHA-256 digest of the raw
-  32-byte Ed25519 inception public key.  It is deliberately derived from the
-  key, not from a self-asserted document label.  Operational authority is an
-  Ed25519 signature by that inception key over a canonical dCBOR tuple.
+  The trust pin is the identikey XID of the Ed25519 inception key: SHA-256
+  of the tagged CBOR signing public key (tag 40022) whose content is
+  `[2, raw 32-byte key]`. Inside a signed tuple those 32 bytes are a CBOR
+  byte string. JSON and other text boundaries store base58 of the same
+  bytes. A self-asserted document label is not the pin. Operational
+  authority is an Ed25519 signature by that inception key over a canonical
+  dCBOR tuple.
 
   Private material is kept in an atomic bundle under `:auth_dir` (default
   `/var/lib/mjolnir/auth`).  Loading the bundle never opens `stable.key`, so
@@ -26,7 +29,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
   @type delegation :: %{
           op_public: binary(),
           kid: String.t(),
-          edge_xid: String.t(),
+          edge_xid: binary(),
           purposes: [String.t()],
           nbf: non_neg_integer(),
           exp: non_neg_integer(),
@@ -48,15 +51,25 @@ defmodule Mjolnir.Auth.EdgeKeys do
     %{keypair: keypair, kid: operational_kid(keypair.ed25519_public)}
   end
 
-  @doc "The Gordian-style XID: SHA-256 of exactly the raw Ed25519 public bytes."
-  @spec edge_xid(binary() | keypair()) :: String.t()
+  # tag(40022) || array(2) || unsigned(2) || bstr(32). BCR-2024-010 hashes this.
+  @xid_cbor_prefix <<0xD9, 0x9C, 0x56, 0x82, 0x02, 0x58, 0x20>>
+  @bundle_version 2
+
+  @doc """
+  The 32-byte XID of an Ed25519 inception public key.
+
+  SHA-256 of the tagged CBOR signing-public-key, not of the raw key.
+  """
+  @spec edge_xid(binary() | keypair()) :: binary()
   def edge_xid(%{ed25519_public: public}), do: edge_xid(public)
 
   def edge_xid(<<_::binary-size(32)>> = inception_public) do
-    inception_public
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
+    :crypto.hash(:sha256, @xid_cbor_prefix <> inception_public)
   end
+
+  @doc "Base58 text form of `edge_xid/1`."
+  @spec edge_xid_text(binary() | keypair()) :: String.t()
+  def edge_xid_text(key), do: Mjolnir.Base58.encode(edge_xid(key))
 
   @doc "A deterministic selector for an operational public key. Not authority."
   @spec operational_kid(binary()) :: String.t()
@@ -72,7 +85,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
       {:text, @delegation_purpose},
       {:bytes, fetch!(delegation, :op_public)},
       {:text, fetch!(delegation, :kid)},
-      {:text, fetch!(delegation, :edge_xid)},
+      {:bytes, fetch!(delegation, :edge_xid)},
       {:array, Enum.map(fetch!(delegation, :purposes), &{:text, &1})},
       {:uint, fetch!(delegation, :nbf)},
       {:uint, fetch!(delegation, :exp)},
@@ -250,6 +263,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
       {:ok, state}
     else
       {:error, :enoent} -> {:error, :missing_operational_state}
+      {:error, :legacy_edge_pin} = error -> error
       {:error, :unsafe_auth_path} = error -> error
       {:error, :bad_permissions} = error -> error
       _ -> {:error, :invalid_operational_state}
@@ -445,7 +459,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
       {:text, @delegation_domain},
       {:text, "auth-bundle"},
       {:bytes, state.stable_public},
-      {:text, state.edge_xid},
+      {:bytes, state.edge_xid},
       {:array, delegation_items},
       {:array, supersession_items},
       {:text, state.current_kid}
@@ -491,7 +505,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
   defp validate_delegation_shape(delegation) do
     with <<_::binary-size(32)>> <- fetch!(delegation, :op_public),
          kid when is_binary(kid) and kid != "" <- fetch!(delegation, :kid),
-         xid when is_binary(xid) and byte_size(xid) == 64 <- fetch!(delegation, :edge_xid),
+         <<_::binary-size(32)>> <- fetch!(delegation, :edge_xid),
          true <- fetch!(delegation, :purposes) == @purposes,
          nbf when is_integer(nbf) and nbf >= 0 <- fetch!(delegation, :nbf),
          exp when is_integer(exp) and exp >= nbf <- fetch!(delegation, :exp),
@@ -725,8 +739,8 @@ defmodule Mjolnir.Auth.EdgeKeys do
   defp write_identity(dir, stable, established) do
     body =
       Jason.encode!(%{
-        "version" => 1,
-        "edge_xid" => edge_xid(stable),
+        "version" => @bundle_version,
+        "edge_xid" => edge_xid_text(stable),
         "stable_public" => Base.encode64(stable.ed25519_public),
         "op_established" => established
       })
@@ -756,8 +770,8 @@ defmodule Mjolnir.Auth.EdgeKeys do
 
   defp encode_bundle(state) do
     Jason.encode!(%{
-      "version" => 1,
-      "edge_xid" => state.edge_xid,
+      "version" => @bundle_version,
+      "edge_xid" => Mjolnir.Base58.encode(state.edge_xid),
       "stable_public" => Base.encode64(state.stable_public),
       "current_kid" => state.current_kid,
       "current_private" => Base.encode64(state.current_private),
@@ -768,7 +782,10 @@ defmodule Mjolnir.Auth.EdgeKeys do
   end
 
   defp decode_bundle(bytes) do
-    with {:ok, %{"version" => 1} = map} <- Jason.decode(bytes),
+    with {:ok, %{"version" => version} = map} <- Jason.decode(bytes),
+         :ok <- reject_legacy_version(version),
+         true <- version == @bundle_version,
+         {:ok, edge_xid} <- Mjolnir.Base58.decode(map["edge_xid"], 32),
          {:ok, stable_public} <- decode64(map["stable_public"]),
          {:ok, current_private} <- decode64(map["current_private"]),
          {:ok, delegations} <- map_list(map["delegations"], &decode_delegation/1),
@@ -776,7 +793,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
          true <- is_list(map["restore_ids"]) and Enum.all?(map["restore_ids"], &is_binary/1) do
       {:ok,
        %{
-         edge_xid: map["edge_xid"],
+         edge_xid: edge_xid,
          stable_public: stable_public,
          current_kid: map["current_kid"],
          current_private: current_private,
@@ -785,6 +802,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
          restore_ids: map["restore_ids"]
        }}
     else
+      {:error, :legacy_edge_pin} = error -> error
       _ -> {:error, :invalid_bundle}
     end
   end
@@ -793,7 +811,7 @@ defmodule Mjolnir.Auth.EdgeKeys do
     %{
       "op_public" => Base.encode64(record.op_public),
       "kid" => record.kid,
-      "edge_xid" => record.edge_xid,
+      "edge_xid" => Mjolnir.Base58.encode(record.edge_xid),
       "purposes" => record.purposes,
       "nbf" => record.nbf,
       "exp" => record.exp,
@@ -804,12 +822,13 @@ defmodule Mjolnir.Auth.EdgeKeys do
 
   defp decode_delegation(map) do
     with {:ok, op_public} <- decode64(map["op_public"]),
+         {:ok, edge_xid} <- Mjolnir.Base58.decode(map["edge_xid"], 32),
          {:ok, signature} <- decode64(map["signature"]) do
       {:ok,
        %{
          op_public: op_public,
          kid: map["kid"],
-         edge_xid: map["edge_xid"],
+         edge_xid: edge_xid,
          purposes: map["purposes"],
          nbf: map["nbf"],
          exp: map["exp"],
@@ -841,16 +860,22 @@ defmodule Mjolnir.Auth.EdgeKeys do
   end
 
   defp decode_identity(bytes) do
-    with {:ok, %{"version" => 1} = map} <- Jason.decode(bytes),
+    with {:ok, %{"version" => version} = map} <- Jason.decode(bytes),
+         :ok <- reject_legacy_version(version),
+         true <- version == @bundle_version,
          {:ok, public} <- decode64(map["stable_public"]),
-         true <- map["edge_xid"] == edge_xid(public),
+         {:ok, pin} <- Mjolnir.Base58.decode(map["edge_xid"], 32),
+         true <- pin == edge_xid(public),
          true <- is_boolean(map["op_established"]) do
-      {:ok,
-       %{stable_public: public, edge_xid: map["edge_xid"], established: map["op_established"]}}
+      {:ok, %{stable_public: public, edge_xid: pin, established: map["op_established"]}}
     else
+      {:error, :legacy_edge_pin} = error -> error
       _ -> {:error, :invalid_identity_state}
     end
   end
+
+  defp reject_legacy_version(1), do: {:error, :legacy_edge_pin}
+  defp reject_legacy_version(_), do: :ok
 
   defp map_list(list, mapper) when is_list(list) do
     Enum.reduce_while(list, {:ok, []}, fn item, {:ok, acc} ->

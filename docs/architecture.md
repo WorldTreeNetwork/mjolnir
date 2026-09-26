@@ -432,8 +432,9 @@ in tmux `main` on the unauthenticated ticket URL, prod API,
 `XAI_API_KEY` in tmpfs. The passkey SHALL is living as of
 `add-identikey-being-client` (folded 2026-09-20) — same-origin
 `/term` logs in at `auth.identikey.me` as the **public** PKCE client
-`mjolnir-term`, so the ID token `sub` is the 64-hex XID that
-`owner_id` compares against; it is written in
+`mjolnir-term`, so the ID token `sub` is the base58 XID that
+`owner_id` compares against (a stored 64-hex spelling of the same
+32 bytes still matches); it is written in
 [`openspec/specs/web-pty-edge/spec.md`](../openspec/specs/web-pty-edge/spec.md),
 not the honor-being spec. The `ssh_git` git-signing SHALL is living
 as of `add-vm-git-subkey` (folded 2026-09-20) — the private key is a

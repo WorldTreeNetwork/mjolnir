@@ -34,7 +34,7 @@ defmodule Mjolnir.Policy.Snapshot do
   # Resource actions: owner only
   def authorize(action, %{user_id: uid}, %{owner_id: oid})
       when action in [:read, :delete, :thaw] do
-    if uid == oid, do: :ok, else: :error
+    if Mjolnir.Deploy.Owner.same?(uid, oid), do: :ok, else: :error
   end
 
   # Default deny

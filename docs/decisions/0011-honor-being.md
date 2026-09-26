@@ -19,8 +19,11 @@ unchanged.
 1. **Friend C2; the VM is a device.** Not a second XID. Not a Sign
    key on the document. Duke may hold Elect recovery.
    `owner_id` = friend's XID = public OIDC `sub` from
-   `auth.identikey.me`. `/term` authorized by `authorize_vm` on
-   that equality.
+   `auth.identikey.me`. The text form is base58 of the 32-byte XID.
+   A row still stored as 64 lowercase hex is that same digest, and
+   authorization compares the bytes until a deploy or respawn
+   rewrites the string. Do not rehash it. `/term` is authorized by
+   `authorize_vm` on that equality.
 2. **Passkey gates `/term`, not the preview URL.** WebAuthn at
    `auth.identikey.me`. grok uses **`XAI_API_KEY` only**, injected
    to `/run/mjolnir/` tmpfs. No grok.com session. No
