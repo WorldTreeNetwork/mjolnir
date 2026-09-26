@@ -2052,7 +2052,11 @@ defmodule Mjolnir.API.Router do
          dest = deploy_src_dest(requested_name),
          {:ok, app_dir} <- extract_source(body, dest) do
       app_name = resolve_app_name(requested_name, app_dir)
-      deployer = conn.assigns[:user_id]
+      deployer =
+        Mjolnir.Deploy.Owner.resolve(
+          conn.assigns[:user_id],
+          conn |> get_req_header("x-owner-id") |> List.first()
+        )
       memory_mb = deploy_memory_mb(conn)
       custom_domain = deploy_domain(conn)
 

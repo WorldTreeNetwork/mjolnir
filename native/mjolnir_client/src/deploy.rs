@@ -49,6 +49,7 @@ pub async fn cmd_deploy(
     memory: u32,
     domain: Option<String>,
     base_image: Option<String>,
+    owner: Option<String>,
 ) -> Result<()> {
     // Resolve + validate the source directory.
     let dir = match path {
@@ -96,6 +97,9 @@ pub async fn cmd_deploy(
     }
     if let Some(ref img) = base_image {
         req = req.header("X-Base-Image", img);
+    }
+    if let Some(ref owner_id) = owner {
+        req = req.header("X-Owner-Id", owner_id);
     }
 
     let resp = req.send().await.context("deploy: failed to send request")?;

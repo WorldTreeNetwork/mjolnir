@@ -375,6 +375,10 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Owner id stamped on a localhost deploy (X-Owner-Id). Ignored by the
+        /// server unless that request is the loopback bypass.
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// Manage custom domains for deployed apps (set / rm / ls)
     #[command(next_help_heading = "Apps")]
@@ -1074,7 +1078,11 @@ async fn main() {
             base,
             api,
             token,
-        } => deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain, base).await,
+            owner,
+        } => {
+            deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain, base, owner)
+                .await
+        }
         Command::Domain { action } => match action {
             DomainAction::Set {
                 app,
