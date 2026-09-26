@@ -479,6 +479,22 @@ POST /api/snapshots/:name/thaw      [vms:spawn]    Restore memory snapshot to so
 
 Authentication: JWT bearer tokens with scope-based authorization. Scopes are space-separated strings in the token claims. Localhost bypass available for development.
 
+Next to that, direct edge auth mints a Biscuit login capability whose
+default profile is **holder-bound**, not bearer: the capability names
+an ephemeral session key and each protected request carries a
+signature over the token bytes, method, target-with-raw-query, body
+hash, edge XID, an edge-issued nonce, and an expiry. Bearer is an
+explicit, strictly narrower issuance; the mode is an
+issuer-authenticated authority-block fact, so attenuation cannot
+downgrade it, and a verified biscuit yields a one-shot allow/deny for
+that request rather than an ambient scope list — localhost bypass does
+not widen it. `Mjolnir.Auth.LoginProfile` over the shared
+`Mjolnir.Biscuit` runtime; living spec
+[`edge-auth`](../openspec/specs/edge-auth/spec.md)
+(`add-biscuit-profiles` folded 2026-09-26). The HTTP mint, the nonce
+store, and the `Mjolnir.API.Auth` wiring are later
+(`add-direct-auth-endpoints`, `add-edge-op-keys`).
+
 ---
 
 ## Technical Choices and Their Benefits
