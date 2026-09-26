@@ -761,8 +761,13 @@ Foreign-secret redeem (GitHub PAT, API keys) is ADR
 Blake3 commitment; holder-bound Biscuit; `POST /api/secrets/redeem`
 on existing `api_url`. Living spec
 [`secret-tokenator`](../openspec/specs/secret-tokenator/spec.md)
-(`add-secret-tokenator` folded 2026-09-10). Code landings are later
-(`add-biscuit-runtime`, `add-tokenator-redeem`, `add-capability-mint`,
+(`add-secret-tokenator` folded 2026-09-10). The mint/verify half has
+landed: `native/mjolnir_biscuit` + `Mjolnir.Biscuit` (binary face, no
+HTTP), living spec
+[`biscuit-runtime`](../openspec/specs/biscuit-runtime/spec.md)
+(`add-biscuit-runtime` folded 2026-09-26). Holder fingerprints there
+are identikey-auth v1 §5, *not* `IdentiKey.fingerprint/1`. Remaining
+code landings are later (`add-tokenator-redeem`, `add-capability-mint`,
 `add-capability-hop`). Protocol holder/hop/redeem SHALLs live in
 identikey-protocol
 [`identikey-capability-v1.md` §7](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md#7-secret-redemption-profile-foreign-secrets)
