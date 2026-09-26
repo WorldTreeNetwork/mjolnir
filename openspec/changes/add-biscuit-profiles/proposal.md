@@ -6,7 +6,7 @@ Bead `mjolnir-22ff.5`. Steer 2026-09-24.
 
 **Rigor:** architecture
 
-**Preparation (2026-09-24 /run):** still valid contract (advise-3 accept). Deferred this wave: inbound mint/verify artifact `mjolnir-axsb.1.3` is OPEN with no `biscuit-auth` in-tree. Do not guess a second runtime. Authority: 22ff campaign, profiles-only steer.
+**Preparation (2026-09-26 /run):** still valid contract (advise-3 accept). Inbound mint/verify is usable: `e5a6045` `native/mjolnir_biscuit` + `Mjolnir.Biscuit`, bead `mjolnir-axsb.1.3` closed. Do not add a second runtime. Authority: 22ff campaign, profiles-only steer.
 
 ## Why
 

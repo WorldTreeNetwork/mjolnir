@@ -1,10 +1,10 @@
 # Tasks
 
-- [ ] Holder-bound profile: session public key authorized at login; request signature required; stolen token fails
-- [ ] Explicit bearer profile: shorter/narrower; mode bit distinct
-- [ ] Verifier cannot downgrade holder-bound to bearer
-- [ ] Vectors: signature requirement, stolen token, attenuation, edge/audience binding, explicit bearer, expiry
-- [ ] Cite `mjolnir-axsb.1.3` as the only mint/verify; no second runtime
+- [x] Holder-bound profile: session public key authorized at login; request signature required; stolen token fails
+- [x] Explicit bearer profile: shorter/narrower; mode bit distinct
+- [x] Verifier cannot downgrade holder-bound to bearer
+- [x] Vectors: signature requirement, stolen token, attenuation, edge/audience binding, explicit bearer, expiry
+- [x] Cite `mjolnir-axsb.1.3` as the only mint/verify; no second runtime
 - [x] Advise — astra-arch-review, other-family reader for Grok; accept in `reviews/2026-09-24-advise-3.md` (Fable infra-red)
 
 ## Owed from architecture advise 2026-09-24
