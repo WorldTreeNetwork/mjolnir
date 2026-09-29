@@ -131,7 +131,7 @@ defmodule Mjolnir.Application do
     auth_config = Application.get_env(:mjolnir, :auth, [])
 
     if Keyword.get(auth_config, :issuer) do
-      [{Mjolnir.Auth.KeycloakStrategy, issuer: auth_config[:issuer], first_fetch_sync: true}]
+      [{Mjolnir.Auth.JwksStrategy, issuer: auth_config[:issuer], first_fetch_sync: true}]
     else
       []
     end

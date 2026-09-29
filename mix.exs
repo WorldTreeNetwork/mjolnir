@@ -51,7 +51,7 @@ defmodule Mjolnir.MixProject do
       # Tesla adapter config and a joken_jwks that permits it.
       {:jason, "~> 1.4"},
       {:joken, "~> 2.6"},
-      # Direct because Mjolnir.Auth.KeycloakStrategy names Tesla.Adapter.Mint
+      # Direct because Mjolnir.Auth.JwksStrategy names Tesla.Adapter.Mint
       # as the JWKS http_adapter (see that module). Both arrive transitively
       # under Req today, but the JWKS path breaks at boot — not at compile —
       # if they ever stop doing so, and castore is what makes Mint verify certs.

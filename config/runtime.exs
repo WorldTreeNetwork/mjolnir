@@ -35,9 +35,9 @@ if redirect_uri = System.get_env("MJOLNIR_AUTH_REDIRECT_URI") do
   config :mjolnir, :auth, redirect_uri: redirect_uri
 end
 
-# Hosted being: MJOLNIR_AUTH_ISSUER=https://auth.identikey.me
-# MJOLNIR_AUTH_CLIENT_ID=mjolnir-term
-# MJOLNIR_AUTH_REDIRECT_URI=https://api.vm.worldtree.network/auth/callback
+# Compiled default is already https://auth.identikey.me, client mjolnir-term,
+# redirect https://api.vm.worldtree.network/auth/callback. These env vars
+# override that. Do not point MJOLNIR_AUTH_ISSUER back at Keycloak.
 
 if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)

@@ -283,9 +283,11 @@ Mjolnir.Application (one_for_one)
 |   +-- Mjolnir.VM (another VM...)
 |   +-- ...
 |
-+-- Mjolnir.Auth.KeycloakStrategy (optional)
++-- Mjolnir.Auth.JwksStrategy (optional)
 |   JWKS key fetcher for JWT verification
 |   Only started when OIDC issuer is configured
+|   Default issuer is https://auth.identikey.me
+|   KeycloakStrategy is the deprecated alias
 |
 +-- Bandit HTTP Server
     Serves Mjolnir.API.Router on configured port (default 4000)

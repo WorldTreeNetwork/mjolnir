@@ -229,8 +229,9 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
     let config = discover(issuer).await?;
     let client = reqwest::Client::new();
 
-    // auth.identikey.me has no device-code grant. Passkey is a browser
-    // loopback (RFC 8252). Keycloak still has a device endpoint.
+    // Default issuer auth.identikey.me has no device-code grant. Passkey
+    // is a browser loopback (RFC 8252). A deprecated Keycloak issuer still
+    // advertises a device endpoint; that path is only for an explicit --issuer.
     if config.device_authorization_endpoint.is_none() {
         return loopback_login(&client, issuer, &config).await;
     }

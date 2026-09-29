@@ -6,11 +6,11 @@ Bead `mjolnir-22ff.1`. Steer 2026-09-24.
 
 **Rigor:** change (sensitive)
 
-**Preparation (2026-09-24 /run):** still valid (advise-4 accept, contract hashes in that review). Upstream: existing `KeycloakStrategy` + `JokenJwks` hook `match_signer_for_kid/2`. Authority: 22ff campaign. Ready to act.
+**Preparation (2026-09-24 /run):** still valid (advise-4 accept, contract hashes in that review). Upstream: existing `JwksStrategy` (deprecated alias `KeycloakStrategy`) + `JokenJwks` hook `match_signer_for_kid/2`. Authority: 22ff campaign. Ready to act.
 
 ## Why
 
-Elixir starts `Mjolnir.Auth.KeycloakStrategy` with `first_fetch_sync:
+Elixir starts `Mjolnir.Auth.JwksStrategy` with `first_fetch_sync:
 true`. A reboot while `auth.identikey.me` is unreachable fails boot,
 so hosted JWTs cannot be checked even when they are unexpired and the
 keys were already known. Direct-auth fallback does not help a client

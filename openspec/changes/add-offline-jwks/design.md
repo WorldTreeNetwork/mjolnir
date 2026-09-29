@@ -6,7 +6,7 @@
 
 ## Problem
 
-`Mjolnir.Auth.KeycloakStrategy` is started with `first_fetch_sync: true`
+`Mjolnir.Auth.JwksStrategy` is started with `first_fetch_sync: true`
 (`lib/mjolnir/application.ex`). JokenJwks fetches
 `{issuer}/.well-known/jwks.json` (or Keycloak certs) before the
 supervisor is ready. There is no on-disk last-known-good.

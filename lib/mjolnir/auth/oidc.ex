@@ -2,9 +2,9 @@ defmodule Mjolnir.Auth.Oidc do
   @moduledoc """
   OIDC client for `/term` login.
 
-  Authorization-code + PKCE against the configured issuer (hosted being:
-  `https://auth.identikey.me`). Device-code remains for the Keycloak-era
-  `mj login` client and is not used by `/auth/login`.
+  Authorization-code + PKCE against the configured issuer. The default
+  is `https://auth.identikey.me`. Device-code remains only for a
+  deprecated Keycloak issuer and is not used by `/auth/login`.
   """
 
   @default_client_id "mjolnir-term"

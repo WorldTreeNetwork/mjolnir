@@ -210,14 +210,13 @@ config :mjolnir, :syslog,
 # udp_host: {127, 0, 0, 1},
 # udp_port: 3164
 
-# Auth defaults
+# Auth defaults. Issuer is the hosted IdentiKey OP. Keycloak
+# (connect.identikey.io) is deprecated; set MJOLNIR_AUTH_ISSUER only to
+# point somewhere else. That old host still uses the realm certs URL.
 config :mjolnir, :auth,
   bypass_localhost: false,
-  issuer: "https://connect.identikey.io/realms/identikey",
+  issuer: "https://auth.identikey.me",
   audience: "mjolnir",
-  # Hosted being `/term` uses mjolnir-term (public PKCE) against
-  # auth.identikey.me when MJOLNIR_AUTH_ISSUER is set. Default issuer stays
-  # Keycloak so existing CLI JWTs still verify until that cutover.
   client_id: "mjolnir-term",
   redirect_uri: "https://api.vm.worldtree.network/auth/callback"
 

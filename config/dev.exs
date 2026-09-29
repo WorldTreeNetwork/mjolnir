@@ -31,5 +31,5 @@ config :mjolnir,
 
 config :mjolnir, :auth,
   bypass_localhost: true,
-  issuer: "https://connect.identikey.io/realms/identikey",
+  issuer: "https://auth.identikey.me",
   audience: "mjolnir"
