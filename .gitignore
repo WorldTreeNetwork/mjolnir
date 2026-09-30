@@ -50,3 +50,7 @@ boot-image/
 # Local agent runtime and spawned-reader artifacts
 /.omx/
 /.spawns/
+
+# Intention scratch (conductor isolate, spawn stage)
+.worktrees/
+.spawns/
