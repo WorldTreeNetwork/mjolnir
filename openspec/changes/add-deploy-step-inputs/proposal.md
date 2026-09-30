@@ -1,6 +1,6 @@
 # add-deploy-step-inputs
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 First of four build-caching changes: `add-deploy-step-inputs` →
 `add-deploy-build-sizing` → `add-deploy-build-caches` →

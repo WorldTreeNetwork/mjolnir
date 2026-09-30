@@ -1,6 +1,6 @@
 # add-deploy-build-sizing
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Second of four build-caching changes. Independent of
 `add-deploy-step-inputs`; can land in either order.
