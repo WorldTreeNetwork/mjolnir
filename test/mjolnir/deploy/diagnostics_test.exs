@@ -140,4 +140,11 @@ defmodule Mjolnir.Deploy.DiagnosticsTest do
       assert Diagnostics.summarize(%{dir: "/d", highlights: []}) =~ "no kernel-level cause"
     end
   end
+
+  describe "build_agent_loss/1" do
+    test "states the build VM memory and manifest key to raise" do
+      assert Diagnostics.build_agent_loss(8192) ==
+               "build VM stopped responding; it had 8192 MB. Raise build.memory_mb."
+    end
+  end
 end

@@ -31,5 +31,11 @@ defmodule Mjolnir.Deploy.BuildPlan do
     field(:start_command, String.t())
     field(:port, pos_integer())
     field(:base_image, String.t() | nil, default: nil)
+
+    field(
+      :build,
+      %{optional(:vcpus) => pos_integer(), optional(:memory_mb) => pos_integer()} | nil,
+      default: nil
+    )
   end
 end

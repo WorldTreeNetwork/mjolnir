@@ -1,7 +1,6 @@
 defmodule Mjolnir.Deploy.BuilderTest do
   use ExUnit.Case, async: true
 
-
   alias Mjolnir.Deploy.Builder
   alias Mjolnir.Deploy.CacheKey
 

@@ -67,6 +67,7 @@ defmodule Mjolnir.Deploy.Manifest do
   | `start_command` | yes      | command the service VM runs to start the app     |
   | `port`          | yes      | port the app binds inside the VM                 |
   | `steps`         | no       | ordered string or `{ run, inputs }` build steps  |
+  | `build`         | no       | `{ vcpus, memory_mb }` for the build VM only     |
   | `runtime`       | no       | mise runtime spec, e.g. `"rust@1.83"`            |
   | `base_image`    | no       | `@base/` name, e.g. `"ubuntu-24.04"` (6ee1)     |
 
@@ -224,6 +225,7 @@ defmodule Mjolnir.Deploy.Manifest do
     with {:ok, start_command} <- fetch_string(map, "start_command"),
          {:ok, port} <- fetch_port(map),
          {:ok, steps} <- fetch_steps(map),
+         {:ok, build} <- fetch_build(map),
          {:ok, runtime} <- fetch_optional_string(map, "runtime", ""),
          {:ok, base_image} <- fetch_optional_name(map, "base_image") do
       {:ok,
@@ -233,8 +235,47 @@ defmodule Mjolnir.Deploy.Manifest do
          steps: with_runtime_step(steps, runtime),
          start_command: start_command,
          port: port,
-         base_image: base_image
+         base_image: base_image,
+         build: build
        }}
+    end
+  end
+
+  defp fetch_build(map) do
+    case Map.get(map, "build") do
+      nil ->
+        {:ok, nil}
+
+      build when is_map(build) ->
+        allowed = MapSet.new(["vcpus", "memory_mb"])
+
+        case Enum.find(Map.keys(build), &(not MapSet.member?(allowed, &1))) do
+          nil ->
+            with {:ok, vcpus} <- fetch_positive_integer(build, "vcpus"),
+                 {:ok, memory_mb} <- fetch_positive_integer(build, "memory_mb") do
+              {:ok, %{vcpus: vcpus, memory_mb: memory_mb}}
+            end
+
+          bad_key ->
+            {:error, {:invalid_manifest, "build has unknown key #{inspect(bad_key)}"}}
+        end
+
+      other ->
+        {:error, {:invalid_manifest, "build must be a table, got #{inspect(other)}"}}
+    end
+  end
+
+  defp fetch_positive_integer(map, key) do
+    case Map.get(map, key) do
+      nil ->
+        {:ok, nil}
+
+      value when is_integer(value) and value > 0 ->
+        {:ok, value}
+
+      other ->
+        {:error,
+         {:invalid_manifest, "build.#{key} must be a positive integer, got #{inspect(other)}"}}
     end
   end
 

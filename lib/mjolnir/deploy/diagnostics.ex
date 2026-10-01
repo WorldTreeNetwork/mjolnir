@@ -124,6 +124,12 @@ defmodule Mjolnir.Deploy.Diagnostics do
     "serial console says: #{Enum.join(Enum.take(highlights, 3), " | ")} (full log at #{dir})"
   end
 
+  @doc "Operator guidance when a build VM's vsock agent disappears mid-step."
+  @spec build_agent_loss(pos_integer()) :: String.t()
+  def build_agent_loss(memory_mb) when is_integer(memory_mb) and memory_mb > 0 do
+    "build VM stopped responding; it had #{memory_mb} MB. Raise build.memory_mb."
+  end
+
   # ── internals ──────────────────────────────────────────────────────────────
 
   # ANSI CSI sequences plus the lone \r systemd uses to redraw its progress line.

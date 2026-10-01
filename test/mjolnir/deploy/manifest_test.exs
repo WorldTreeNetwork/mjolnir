@@ -327,6 +327,39 @@ defmodule Mjolnir.Deploy.ManifestTest do
     end
   end
 
+  describe "build VM sizing" do
+    test "parses optional positive build sizing fields onto the plan", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { vcpus = 6, memory_mb = 8192 }
+      """)
+
+      assert {:ok, plan} = Manifest.load(dir)
+      assert plan.build == %{vcpus: 6, memory_mb: 8192}
+    end
+
+    test "rejects malformed build tables and names an unknown key", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { memory_mb = 0, cpu_count = 4 }
+      """)
+
+      assert {:error, {:invalid_manifest, message}} = Manifest.load(dir)
+      assert message =~ "build has unknown key"
+
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { memory_mb = 0 }
+      """)
+
+      assert {:error, {:invalid_manifest, message}} = Manifest.load(dir)
+      assert message =~ "build.memory_mb must be a positive integer"
+    end
+  end
+
   describe "author drives mise themselves" do
     test "no second mise install is prepended", %{dir: dir} do
       write_manifest(dir, """

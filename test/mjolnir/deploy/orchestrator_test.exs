@@ -162,6 +162,48 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       {:build, base, _, _} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
       assert base == "deploy-node-bun"
     end
+
+    test "manifest build sizing wins over host defaults and reaches the build spawn opts", %{
+      agent: agent,
+      dir: dir
+    } do
+      plan = Map.put(@plan, :build, %{vcpus: 5, memory_mb: 8192})
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+
+      {:build, _, _, opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert opts[:spawn_opts][:vcpus] == 5
+      assert opts[:spawn_opts][:memory_mb] == 8192
+    end
+
+    test "clamps build sizing, reports it, and leaves service memory alone", %{
+      agent: agent,
+      dir: dir
+    } do
+      {:ok, progress} = start_supervised({Agent, fn -> [] end}, id: :progress)
+      plan = Map.put(@plan, :build, %{vcpus: 99, memory_mb: 99_999})
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      on_progress = fn stage, line -> Agent.update(progress, &[{stage, line} | &1]) end
+
+      assert {:ok, _} =
+               Orchestrator.deploy("app", dir,
+                 ops: ops,
+                 memory_mb: 1024,
+                 on_progress: on_progress
+               )
+
+      {:build, _, _, build_opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      {:run, _, _, _, run_opts} = Enum.find(events(agent), &match?({:run, _, _, _, _}, &1))
+      assert build_opts[:spawn_opts][:vcpus] == 6
+      assert build_opts[:spawn_opts][:memory_mb] == 16_384
+      assert run_opts[:spawn_opts][:memory_mb] == 1024
+
+      lines = progress |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "build VM: 6 vCPU, 16384 MB" in lines
+      assert "vcpus 99 -> 6 (host max)" in lines
+      assert "memory_mb 99999 -> 16384 (host max)" in lines
+    end
   end
 
   describe "plan_to_steps/3 — manifest table inputs" do
@@ -312,6 +354,26 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
 
       assert {:error, %{stage: "build"}} = Orchestrator.deploy("app", dir, ops: ops)
       refute Enum.any?(events(agent), &match?({:run, _, _, _, _}, &1))
+    end
+
+    test "names build memory when its agent disappears", %{agent: agent, dir: dir} do
+      {:ok, progress} = start_supervised({Agent, fn -> [] end}, id: :progress)
+      plan = Map.put(@plan, :build, %{memory_mb: 8192, vcpus: 4})
+
+      ops =
+        recording_ops(agent,
+          detect_result: {:ok, plan},
+          build_result:
+            {:error, {:step_failed, "cargo build", {:vsock_unavailable, :closed}, [], %{}}}
+        )
+
+      on_progress = fn stage, line -> Agent.update(progress, &[{stage, line} | &1]) end
+
+      assert {:error, %{stage: "build"}} =
+               Orchestrator.deploy("app", dir, ops: ops, on_progress: on_progress)
+
+      lines = progress |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "cause: build VM stopped responding; it had 8192 MB. Raise build.memory_mb." in lines
     end
   end
 end

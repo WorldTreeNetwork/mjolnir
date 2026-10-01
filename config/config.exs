@@ -18,6 +18,12 @@ config :mjolnir,
   # Defaults
   default_vcpus: 2,
   default_memory_mb: 512,
+  # Build VMs compile full dependency graphs and are sized independently from
+  # service VMs. Keep :default_vcpus for service VMs unchanged.
+  deploy_build_vcpus: 4,
+  deploy_build_memory_mb: 4096,
+  deploy_build_max_vcpus: 6,
+  deploy_build_max_memory_mb: 16_384,
   default_base_image: "ubuntu-24.04",
 
   # Sockets

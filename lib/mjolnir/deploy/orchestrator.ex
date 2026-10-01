@@ -45,16 +45,12 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   require Logger
 
-  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Manifest, Runtime}
+  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Diagnostics, Manifest, Runtime}
 
   @default_base_image "deploy-node-bun"
   @workdir "/app"
   @src_mount "/mnt/deploy-src"
   @default_memory_mb 256
-
-  # Build VMs, unlike service VMs, must hold a whole dependency graph plus a
-  # bundler run in memory. Overridable via :deploy_build_memory_mb.
-  @default_build_memory_mb 2048
 
   # Commands Detector emits, used to classify each step's cache-input source.
   @install_commands [
@@ -118,10 +114,20 @@ defmodule Mjolnir.Deploy.Orchestrator do
     with {:detect, {:ok, plan}} <- {:detect, ops.detect.(src_dir)},
          :ok <- emit(progress, "detect", detect_summary(plan)),
          {:translate, {:ok, steps}} <- {:translate, plan_to_steps(plan, src_dir, ops)},
+         build_size = build_size(plan),
+         :ok <- emit_build_size(progress, build_size),
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
          base_image = resolve_base_image(opts, plan),
          {:build, {:ok, build}} <-
-           {:build, ops.build.(base_image, steps, build_opts(base_image, src_dir, deployer))},
+           {:build,
+            tag_build_result(
+              ops.build.(
+                base_image,
+                steps,
+                build_opts(base_image, src_dir, deployer, build_size)
+              ),
+              build_size
+            )},
          :ok <-
            emit(
              progress,
@@ -149,6 +155,11 @@ defmodule Mjolnir.Deploy.Orchestrator do
          service_vm_id: svc.service_vm_id
        }}
     else
+      {:build, {:error, {reason, build_size}}} ->
+        Logger.error("Deploy.Orchestrator: '#{app_name}' failed at build: #{inspect(reason)}")
+        for line <- failure_lines(reason, build_size), do: emit(progress, "build", line)
+        {:error, %{stage: "build", reason: reason}}
+
       {stage, {:error, reason}} ->
         Logger.error("Deploy.Orchestrator: '#{app_name}' failed at #{stage}: #{inspect(reason)}")
         for line <- failure_lines(reason), do: emit(progress, to_string(stage), line)
@@ -162,11 +173,16 @@ defmodule Mjolnir.Deploy.Orchestrator do
   # shell command twice, and it buries the one thing that matters: what the
   # guest kernel said before it died. Lead with the cause, then the guest's own
   # words, then where the full serial log lives.
-  defp failure_lines({:step_failed, command, reason, _built, diag}) do
+  defp failure_lines(reason, build_size \\ nil)
+
+  defp failure_lines({:step_failed, command, reason, _built, diag}, build_size) do
     highlights = Map.get(diag, :highlights, [])
     dir = Map.get(diag, :diagnostics_dir)
 
-    ["error: build step failed: #{truncate(command, 120)}", "cause: #{describe(reason)}"] ++
+    [
+      "error: build step failed: #{truncate(command, 120)}",
+      "cause: #{describe(reason, build_size)}"
+    ] ++
       Enum.map(highlights, &"guest: #{truncate(&1, 200)}") ++
       cond do
         dir && highlights == [] ->
@@ -182,7 +198,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # Worth naming rather than inspecting: this one is a deliberate refusal, and
   # the operator needs to know it was a refusal and not a crash.
-  defp failure_lines({:secrets_unlock_failed, reason}) do
+  defp failure_lines({:secrets_unlock_failed, reason}, _build_size) do
     [
       "error: managed secrets never mounted (#{reason})",
       "note: the service was NOT started — /secrets would have been plain rootfs, " <>
@@ -191,17 +207,20 @@ defmodule Mjolnir.Deploy.Orchestrator do
     ]
   end
 
-  defp failure_lines(reason), do: ["error: #{inspect(reason)}"]
+  defp failure_lines(reason, _build_size), do: ["error: #{inspect(reason)}"]
 
   # The shapes worth naming. Everything else falls back to inspect/1.
-  defp describe({:vsock_unavailable, _}),
+  defp describe({:vsock_unavailable, _}, %{memory_mb: memory_mb}),
+    do: Diagnostics.build_agent_loss(memory_mb)
+
+  defp describe({:vsock_unavailable, _}, _build_size),
     do: "the build VM's guest agent stopped responding mid-step (VM died or was killed)"
 
-  defp describe({:exit_code, code, out}),
+  defp describe({:exit_code, code, out}, _build_size),
     do: "command exited #{code}: #{truncate(String.trim(to_string(out)), 300)}"
 
-  defp describe(:timeout), do: "the step exceeded its timeout"
-  defp describe(other), do: inspect(other)
+  defp describe(:timeout, _build_size), do: "the step exceeded its timeout"
+  defp describe(other, _build_size), do: inspect(other)
 
   defp truncate(s, max) do
     s = to_string(s)
@@ -382,26 +401,65 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # --- build / run option assembly -------------------------------------------
 
-  defp build_opts(base_image, src_dir, deployer) do
+  defp build_opts(base_image, src_dir, deployer, build_size) do
     [
       base_image: base_image,
       spawn_opts: %{
         extra_mounts: [%{tag: "src", shared_dir: src_dir, opts: []}],
         owner_id: deployer,
-        # Build VMs are memory-hungry in a way service VMs are not: `bun install`
-        # / `npm ci` resolve a whole dependency graph in memory, and a bundler
-        # run peaks higher still. Omitting this silently inherited
-        # :default_memory_mb (512), sized for small service VMs, and the build VM
-        # died mid-`bun install` — surfacing as {:vsock_unavailable, ...} when its
-        # agent went away, with the HOST still showing 29GB free.
-        memory_mb: build_memory_mb()
+        vcpus: build_size.vcpus,
+        memory_mb: build_size.memory_mb
       }
     ]
   end
 
-  defp build_memory_mb do
-    Application.get_env(:mjolnir, :deploy_build_memory_mb, @default_build_memory_mb)
+  # Build VMs, unlike service VMs, hold a whole dependency graph plus a
+  # bundler or compiler run in memory. Before build VMs were sized at all,
+  # they inherited :default_memory_mb (512) and died mid-`bun install`,
+  # surfacing only as {:vsock_unavailable, ...} with the host showing 29 GB
+  # free. Size comes from the manifest's `build` table, else the host's
+  # :deploy_build_* defaults, clamped to :deploy_build_max_*.
+  defp build_size(plan) do
+    requested = Map.get(plan, :build) || %{}
+    vcpus = Map.get(requested, :vcpus) || Application.get_env(:mjolnir, :deploy_build_vcpus, 4)
+
+    memory_mb =
+      Map.get(requested, :memory_mb) ||
+        Application.get_env(:mjolnir, :deploy_build_memory_mb, 4096)
+
+    max_vcpus = Application.get_env(:mjolnir, :deploy_build_max_vcpus, 6)
+    max_memory_mb = Application.get_env(:mjolnir, :deploy_build_max_memory_mb, 16_384)
+
+    %{
+      vcpus: min(vcpus, max_vcpus),
+      memory_mb: min(memory_mb, max_memory_mb),
+      requested_vcpus: vcpus,
+      requested_memory_mb: memory_mb
+    }
   end
+
+  defp emit_build_size(progress, build_size) do
+    with :ok <-
+           emit(
+             progress,
+             "build",
+             "build VM: #{build_size.vcpus} vCPU, #{build_size.memory_mb} MB"
+           ),
+         :ok <- emit_clamp(progress, "vcpus", build_size.requested_vcpus, build_size.vcpus),
+         :ok <-
+           emit_clamp(progress, "memory_mb", build_size.requested_memory_mb, build_size.memory_mb) do
+      :ok
+    end
+  end
+
+  defp emit_clamp(_progress, _key, requested, clamped) when requested == clamped, do: :ok
+
+  defp emit_clamp(progress, key, requested, clamped) do
+    emit(progress, "build", "#{key} #{requested} -> #{clamped} (host max)")
+  end
+
+  defp tag_build_result({:ok, _} = result, _build_size), do: result
+  defp tag_build_result({:error, reason}, build_size), do: {:error, {reason, build_size}}
 
   defp run_opts(app_name, memory_mb, custom_domain, deployer, ops) do
     spawn_opts =
