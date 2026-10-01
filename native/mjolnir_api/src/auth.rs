@@ -1,11 +1,14 @@
 //! OAuth 2.0 Device Authorization Grant flow + token storage.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_ISSUER: &str = "https://auth.identikey.me";
@@ -26,8 +29,20 @@ async fn discover(issuer: &str) -> Result<OidcConfig> {
         "{}/.well-known/openid-configuration",
         issuer.trim_end_matches('/')
     );
-    let config: OidcConfig = reqwest::get(&url).await?.json().await?;
+    let config: OidcConfig = http_client()?
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
     Ok(config)
+}
+
+fn http_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?)
 }
 
 // --- Device Flow ---
@@ -61,6 +76,23 @@ impl TokenResponse {
             .clone()
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| self.access_token.clone())
+    }
+
+    fn into_stored(self, issuer: String, previous_refresh: Option<String>) -> StoredToken {
+        let bearer = self.bearer();
+        let expires_at = earliest_expiry(
+            self.expires_in.map(|e| now_secs().saturating_add(e)),
+            jwt_expiry(&bearer),
+        );
+        StoredToken {
+            access_token: bearer,
+            refresh_token: self
+                .refresh_token
+                .filter(|t| !t.is_empty())
+                .or(previous_refresh),
+            expires_at,
+            issuer,
+        }
     }
 }
 
@@ -102,57 +134,127 @@ impl StoredToken {
     const EXPIRY_SKEW_SECS: u64 = 60;
 
     pub fn is_expired(&self) -> bool {
-        match self.expires_at {
-            Some(exp) => now_secs() + Self::EXPIRY_SKEW_SECS >= exp,
+        match earliest_expiry(self.expires_at, jwt_expiry(&self.access_token)) {
+            Some(exp) => now_secs().saturating_add(Self::EXPIRY_SKEW_SECS) >= exp,
             None => false,
         }
     }
 
-    fn save(&self) -> Result<()> {
+    async fn save(&self) -> Result<()> {
         let path = token_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        let _lock = lock_token(&path).await?;
+        self.save_to(&path)
+    }
+
+    /// Replace atomically: readers never observe partial JSON and the file is
+    /// private from creation, including after a refresh-token rotation.
+    fn save_to(&self, path: &Path) -> Result<()> {
+        let temp = path.with_extension(format!("{}.tmp", rand::random::<u64>()));
+        let result = (|| -> Result<()> {
+            let mut opts = private_options();
+            let mut file = opts.create_new(true).open(&temp)?;
+            file.write_all(serde_json::to_string_pretty(self)?.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temp, path)?;
+            #[cfg(unix)]
+            if let Some(parent) = path.parent() {
+                File::open(parent)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temp);
         }
-        // Restrictive permissions (user-only)
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, &json)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        result.context("could not save login credentials")
     }
 }
 
-/// Load saved token, refreshing if expired.
-pub async fn load_token() -> Option<String> {
-    let path = token_path();
-    let data = std::fs::read_to_string(&path).ok()?;
-    let mut stored: StoredToken = serde_json::from_str(&data).ok()?;
-
-    if !stored.is_expired() {
-        return Some(stored.access_token.clone());
+fn earliest_expiry(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        _ => a.or(b),
     }
+}
 
-    // Try refresh
-    if let Some(ref refresh) = stored.refresh_token {
-        if let Ok(new_token) = refresh_token(&stored.issuer, refresh).await {
-            stored.access_token = new_token.bearer();
-            stored.refresh_token = new_token.refresh_token.or(stored.refresh_token);
-            stored.expires_at = new_token.expires_in.map(|e| now_secs() + e);
-            let _ = stored.save();
-            return Some(stored.access_token.clone());
+/// This unverified claim is only a refresh hint; the API verifies the JWT.
+fn jwt_expiry(token: &str) -> Option<u64> {
+    let payload = URL_SAFE_NO_PAD.decode(token.split('.').nth(1)?).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let exp = claims.get("exp")?.as_f64()?;
+    (exp.is_finite() && exp >= 0.0).then_some(exp as u64)
+}
+
+fn private_options() -> OpenOptions {
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
+}
+
+fn lock_token_sync(path: &Path) -> Result<File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Lock a stable inode: token.json itself is replaced on every rotation.
+    let file = private_options()
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
+async fn lock_token(path: &Path) -> Result<File> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || lock_token_sync(&path)).await?
+}
+
+/// Serialize read/refresh/write across CLI processes and GUI consumers. A
+/// waiting command re-reads the winning command's rotated credential.
+async fn load_token_at(path: &Path, force: bool) -> Result<Option<String>> {
+    let _lock = lock_token(path).await?;
+    let data = match std::fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let stored: StoredToken = serde_json::from_str(&data)?;
+    if !force && !stored.is_expired() {
+        return Ok(Some(stored.access_token));
+    }
+    let refresh = stored
+        .refresh_token
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .context("Session expired without a refresh credential. Run `mj login`.")?;
+    let response = refresh_token(&stored.issuer, refresh).await?;
+    let refreshed = response.into_stored(stored.issuer, stored.refresh_token);
+    refreshed.save_to(path)?;
+    Ok(Some(refreshed.access_token))
+}
+
+async fn load_saved_token(force: bool) -> Option<String> {
+    match load_token_at(&token_path(), force).await {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("Could not renew saved login: {err:#}");
+            None
         }
     }
+}
 
-    eprintln!("Token expired. Run `mjolnir login` to re-authenticate.");
-    None
+/// Load the saved session, renewing its short-lived API token when needed.
+pub async fn load_token() -> Option<String> {
+    load_saved_token(false).await
 }
 
 async fn refresh_token(issuer: &str, refresh: &str) -> Result<TokenResponse> {
     let config = discover(issuer).await?;
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let resp = client
         .post(&config.token_endpoint)
         .form(&[
@@ -161,11 +263,17 @@ async fn refresh_token(issuer: &str, refresh: &str) -> Result<TokenResponse> {
             ("refresh_token", refresh),
         ])
         .send()
-        .await?
-        .error_for_status()?
-        .json::<TokenResponse>()
-        .await?;
-    Ok(resp)
+        .await
+        .context("login service unavailable; saved credentials kept, retry the command")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error = resp.json::<TokenErrorResponse>().await.ok();
+        if error.as_ref().is_some_and(|e| e.error == "invalid_grant") {
+            bail!("Login service no longer recognizes this session. Run `mj login`.");
+        }
+        bail!("Login service returned {status}; saved credentials kept, retry the command.");
+    }
+    Ok(resp.json::<TokenResponse>().await?)
 }
 
 /// Resolve the effective token: explicit flag > env > stored file.
@@ -182,19 +290,7 @@ pub async fn resolve_token(explicit: &Option<String>) -> Option<String> {
 /// at `mj connect` start is 5 minutes, so a laptop sleep always outlives it
 /// even if `expires_at` was not re-read.
 pub async fn refresh_stored_token() -> Option<String> {
-    let data = std::fs::read_to_string(token_path()).ok()?;
-    let mut stored: StoredToken = serde_json::from_str(&data).ok()?;
-    let refresh = stored.refresh_token.as_ref()?;
-    match refresh_token(&stored.issuer, refresh).await {
-        Ok(new_token) => {
-            stored.access_token = new_token.bearer();
-            stored.refresh_token = new_token.refresh_token.or(stored.refresh_token);
-            stored.expires_at = new_token.expires_in.map(|e| now_secs() + e);
-            let _ = stored.save();
-            Some(stored.access_token.clone())
-        }
-        Err(_) => None,
-    }
+    load_saved_token(true).await
 }
 
 // --- Login command ---
@@ -202,32 +298,18 @@ pub async fn refresh_stored_token() -> Option<String> {
 pub async fn login(issuer: Option<String>) -> Result<()> {
     let issuer = issuer.as_deref().unwrap_or(DEFAULT_ISSUER);
 
-    // Check if already logged in with a valid token
+    // An explicit issuer switch must not silently reuse another issuer's session.
     if let Ok(data) = std::fs::read_to_string(token_path()) {
         if let Ok(stored) = serde_json::from_str::<StoredToken>(&data) {
-            if !stored.is_expired() {
-                eprintln!("Already logged in. Use `mjolnir logout` first to re-authenticate.");
+            if stored.issuer == issuer && load_saved_token(false).await.is_some() {
+                eprintln!("Logged in. Saved session is active.");
                 return Ok(());
-            }
-            // Token expired — try refresh before prompting full login
-            if let Some(ref refresh) = stored.refresh_token {
-                if let Ok(new_token) = refresh_token(&stored.issuer, refresh).await {
-                    let refreshed = StoredToken {
-                        access_token: new_token.bearer(),
-                        refresh_token: new_token.refresh_token.or(stored.refresh_token),
-                        expires_at: new_token.expires_in.map(|e| now_secs() + e),
-                        issuer: stored.issuer,
-                    };
-                    refreshed.save()?;
-                    eprintln!("Token refreshed. Logged in.");
-                    return Ok(());
-                }
             }
         }
     }
 
     let config = discover(issuer).await?;
-    let client = reqwest::Client::new();
+    let client = http_client()?;
 
     // Default issuer auth.identikey.me has no device-code grant. Passkey
     // is a browser loopback (RFC 8252). A deprecated Keycloak issuer still
@@ -314,13 +396,8 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
 
         if resp.status().is_success() {
             let token_resp: TokenResponse = resp.json().await?;
-            let stored = StoredToken {
-                access_token: token_resp.bearer(),
-                refresh_token: token_resp.refresh_token,
-                expires_at: token_resp.expires_in.map(|e| now_secs() + e),
-                issuer: issuer.to_string(),
-            };
-            stored.save()?;
+            let stored = token_resp.into_stored(issuer.to_string(), None);
+            stored.save().await?;
             eprintln!("Logged in. Token saved to {}", token_path().display());
             return Ok(());
         }
@@ -357,7 +434,8 @@ async fn loopback_login(client: &reqwest::Client, issuer: &str, config: &OidcCon
     let challenge = generate_code_challenge(&verifier);
     let state = generate_code_verifier();
     let url = format!(
-        "{authz}?response_type=code&client_id={CLIENT_ID}&scope={SCOPES}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
+        "{authz}?response_type=code&client_id={CLIENT_ID}&scope={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256",
+        encode_query(SCOPES),
         encode_query(&redirect),
         encode_query(&state),
         encode_query(&challenge),
@@ -390,13 +468,8 @@ async fn loopback_login(client: &reqwest::Client, issuer: &str, config: &OidcCon
         bail!("Token exchange failed ({status}): {body}");
     }
     let token_resp: TokenResponse = resp.json().await?;
-    let stored = StoredToken {
-        access_token: token_resp.bearer(),
-        refresh_token: token_resp.refresh_token,
-        expires_at: token_resp.expires_in.map(|e| now_secs() + e),
-        issuer: issuer.to_string(),
-    };
-    stored.save()?;
+    let stored = token_resp.into_stored(issuer.to_string(), None);
+    stored.save().await?;
     eprintln!("Logged in. Token saved to {}", token_path().display());
     Ok(())
 }
@@ -419,7 +492,9 @@ fn accept_loopback(listener: std::net::TcpListener, expect_state: &str) -> Resul
     let mut code = None;
     let mut state = None;
     for pair in query.split('&') {
-        let Some((k, v)) = pair.split_once('=') else { continue };
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
         let v = percent_decode(v);
         match k {
             "code" => code = Some(v),
@@ -459,7 +534,9 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+            if let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(v);
                 i += 3;
                 continue;
@@ -474,6 +551,7 @@ fn percent_decode(s: &str) -> String {
 /// Remove stored token.
 pub fn logout() -> Result<()> {
     let path = token_path();
+    let _lock = lock_token_sync(&path)?;
     if path.exists() {
         std::fs::remove_file(&path)?;
         eprintln!("Logged out. Token removed.");
@@ -496,7 +574,7 @@ pub fn status() -> Result<()> {
 
     println!("Issuer:  {}", stored.issuer);
     if stored.is_expired() && stored.refresh_token.is_some() {
-        println!("Status:  active (will refresh automatically)");
+        println!("Status:  saved session (API token expired; renewal on next command)");
     } else if stored.is_expired() {
         println!("Status:  expired");
     } else {
@@ -552,6 +630,159 @@ mod tests {
             refresh_token: None,
             expires_at,
             issuer: "https://example".into(),
+        }
+    }
+
+    fn scratch() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mj-login-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("token.json")
+    }
+
+    fn jwt(exp: f64) -> String {
+        format!(
+            "e30.{}.signature",
+            URL_SAFE_NO_PAD.encode(format!("{{\"exp\":{exp}}}"))
+        )
+    }
+
+    #[test]
+    fn bearer_expiry_overrides_longer_access_token_lifetime_and_legacy_cache() {
+        let exp = now_secs() - 100;
+        let response: TokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "opaque", "id_token": jwt(exp as f64 + 0.9),
+            "expires_in": 3600, "refresh_token": "refresh"
+        }))
+        .unwrap();
+        let mut stored = response.into_stored("https://example".into(), None);
+        assert_eq!(stored.expires_at, Some(exp));
+        assert!(stored.is_expired());
+        stored.expires_at = Some(now_secs() + 3600);
+        assert!(stored.is_expired());
+        stored.expires_at = None;
+        assert!(stored.is_expired());
+    }
+
+    #[test]
+    fn omitted_refresh_token_preserves_saved_credential() {
+        let response: TokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "jwt", "expires_in": 3600
+        }))
+        .unwrap();
+        assert_eq!(
+            response
+                .into_stored("issuer".into(), Some("refresh".into()))
+                .refresh_token
+                .as_deref(),
+            Some("refresh")
+        );
+    }
+
+    /// Minimal local OP with one-use refresh tokens. No real credentials or
+    /// global config overrides are involved in the regression tests.
+    fn mock_issuer(status: &str, body: String) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let discovery =
+            serde_json::json!({"token_endpoint": format!("{issuer}/token")}).to_string();
+        let status = status.to_owned();
+        let thread = std::thread::spawn(move || {
+            for (status, body) in [("200 OK".to_string(), discovery), (status, body)] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&request);
+                    if let Some((headers, payload)) = text.split_once("\r\n\r\n") {
+                        let len: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if payload.len() >= len {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                if request.starts_with("POST") {
+                    assert!(request.contains("grant_type=refresh_token"));
+                    assert!(request.contains("client_id=mjolnir-cli"));
+                    assert!(request.contains("refresh_token=original-refresh"));
+                }
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        (issuer, thread)
+    }
+
+    #[tokio::test]
+    async fn concurrent_commands_refresh_once_and_persist_rotation() {
+        let bearer = jwt((now_secs() + 3600) as f64);
+        let (issuer, server) = mock_issuer(
+            "200 OK",
+            serde_json::json!({
+                "access_token": "opaque", "id_token": bearer,
+                "refresh_token": "rotated-refresh", "expires_in": 3600
+            })
+            .to_string(),
+        );
+        let path = scratch();
+        let mut stored = token(Some(0));
+        stored.issuer = issuer;
+        stored.refresh_token = Some("original-refresh".into());
+        stored.save_to(&path).unwrap();
+        let (a, b) = tokio::join!(load_token_at(&path, false), load_token_at(&path, false));
+        assert_eq!(a.unwrap(), Some(bearer.clone()));
+        assert_eq!(b.unwrap(), Some(bearer));
+        server.join().unwrap();
+        let saved: StoredToken =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.refresh_token.as_deref(), Some("rotated-refresh"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_keeps_saved_session_and_explains_recovery() {
+        for (status, error, expected) in [
+            (
+                "503 Service Unavailable",
+                "server_error",
+                "retry the command",
+            ),
+            ("400 Bad Request", "invalid_grant", "Run `mj login`"),
+        ] {
+            let (issuer, server) =
+                mock_issuer(status, serde_json::json!({"error":error}).to_string());
+            let path = scratch();
+            let mut stored = token(Some(0));
+            stored.issuer = issuer;
+            stored.refresh_token = Some("original-refresh".into());
+            stored.save_to(&path).unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let error = load_token_at(&path, false).await.unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            server.join().unwrap();
+            std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
         }
     }
 

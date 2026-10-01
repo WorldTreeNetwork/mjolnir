@@ -40,6 +40,14 @@ mj spawn                                      # returns vm_id + an Iroh ticket
 mj connect <vm_id>                            # drop into an interactive PTY
 ```
 
+`mj login` remembers this computer in the OS config directory (shown by
+`mj status`). Commands renew expired API tokens automatically; simultaneous
+commands share one refresh and save the rotated credential atomically with
+user-only permissions. `mj logout` removes the saved login. A temporary auth
+service outage keeps your credentials for a retry; a revoked session requires
+`mj login` again.
+
+
 ### Everyday commands
 
 ```bash
