@@ -66,9 +66,19 @@ defmodule Mjolnir.Deploy.Manifest do
   |-----------------|----------|--------------------------------------------------|
   | `start_command` | yes      | command the service VM runs to start the app     |
   | `port`          | yes      | port the app binds inside the VM                 |
-  | `steps`         | no       | ordered shell commands that build the app        |
+  | `steps`         | no       | ordered string or `{ run, inputs }` build steps  |
   | `runtime`       | no       | mise runtime spec, e.g. `"rust@1.83"`            |
   | `base_image`    | no       | `@base/` name, e.g. `"ubuntu-24.04"` (6ee1)     |
+
+  String steps retain the conservative behavior: the whole source tree keys
+  the layer and is copied into `/app`. A table step declares the source globs
+  it reads. For example, identikey can keep package installation independent
+  of source edits while scoping the web build to its own tree:
+
+      steps = [
+        { run = "apt-get install -y build-essential", inputs = [] },
+        { run = "cd web && npm run build", inputs = ["web/**"] }
+      ]
 
   When `runtime` is set and no step already invokes `mise`, a `mise install`
   step is prepended — otherwise `runtime` would be inert and the declared
@@ -273,16 +283,65 @@ defmodule Mjolnir.Deploy.Manifest do
         {:ok, []}
 
       steps when is_list(steps) ->
-        if Enum.all?(steps, &is_binary/1) do
-          {:ok, steps}
-        else
-          {:error, {:invalid_manifest, "steps must be a list of strings"}}
+        steps
+        |> Enum.with_index(1)
+        |> Enum.reduce_while({:ok, []}, fn {step, index}, {:ok, acc} ->
+          case validate_step(step, index) do
+            {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+            {:error, _} = error -> {:halt, error}
+          end
+        end)
+        |> case do
+          {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+          error -> error
         end
 
       other ->
-        {:error, {:invalid_manifest, "steps must be a list of strings, got #{inspect(other)}"}}
+        {:error,
+         {:invalid_manifest,
+          "steps must be a list of strings or {run, inputs} tables, got #{inspect(other)}"}}
     end
   end
+
+  defp validate_step(step, _index) when is_binary(step), do: {:ok, step}
+
+  defp validate_step(step, index) when is_map(step) do
+    allowed = MapSet.new(["run", "inputs"])
+
+    case Enum.find(Map.keys(step), &(not MapSet.member?(allowed, &1))) do
+      nil -> validate_step_fields(step, index)
+      bad_key -> invalid_step(index, "unknown key #{inspect(bad_key)}")
+    end
+  end
+
+  defp validate_step(step, index),
+    do: invalid_step(index, "must be a string or a {run, inputs} table, got #{inspect(step)}")
+
+  defp validate_step_fields(step, index) do
+    run = Map.get(step, "run")
+    inputs = Map.get(step, "inputs")
+
+    cond do
+      not is_binary(run) or String.trim(run) == "" ->
+        invalid_step(index, "key \"run\" must be a non-blank string")
+
+      not is_list(inputs) or not Enum.all?(inputs, &is_binary/1) ->
+        invalid_step(index, "key \"inputs\" must be a list of strings")
+
+      Enum.any?(inputs, &(Path.type(&1) == :absolute or invalid_relative_glob?(&1))) ->
+        invalid_step(index, "key \"inputs\" must contain globs relative to the source root")
+
+      true ->
+        {:ok, %{run: run, inputs: inputs}}
+    end
+  end
+
+  defp invalid_relative_glob?(glob) do
+    glob == "" or glob |> Path.split() |> Enum.any?(&(&1 == ".."))
+  end
+
+  defp invalid_step(index, detail),
+    do: {:error, {:invalid_manifest, "step #{index} #{detail}"}}
 
   # A declared runtime that nothing installs is a trap: the build would run
   # against whatever the base image happens to ship. Prepend the install unless
@@ -414,10 +473,13 @@ defmodule Mjolnir.Deploy.Manifest do
   defp with_runtime_step(steps, ""), do: steps
 
   defp with_runtime_step(steps, _runtime) do
-    if Enum.any?(steps, &String.starts_with?(&1, "mise")) do
+    if Enum.any?(steps, &(step_command(&1) |> String.starts_with?("mise"))) do
       steps
     else
       ["mise install" | steps]
     end
   end
+
+  defp step_command(step) when is_binary(step), do: step
+  defp step_command(%{run: run}), do: run
 end

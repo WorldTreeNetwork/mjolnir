@@ -1,7 +1,8 @@
 defmodule Mjolnir.Deploy.OrchestratorTest do
   use ExUnit.Case, async: true
 
-  alias Mjolnir.Deploy.Orchestrator
+  alias Mjolnir.Deploy.Builder.Plan
+  alias Mjolnir.Deploy.{CacheKey, Orchestrator}
 
   @plan %{
     runtime: "node@20",
@@ -163,6 +164,88 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
     end
   end
 
+  describe "plan_to_steps/3 — manifest table inputs" do
+    defp filesystem_ops do
+      %{
+        hash_file: &CacheKey.hash_file/1,
+        hash_tree: &CacheKey.hash_tree/2,
+        hash_globs: &CacheKey.hash_globs/2
+      }
+    end
+
+    test "command-only step ignores source edits and mounts no source", %{dir: dir} do
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "apt-get update", inputs: []}]
+      }
+
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      File.write!(Path.join(dir, "unrelated.txt"), "changed")
+      assert {:ok, [after_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      assert before == after_edit
+      refute before.command =~ "mount"
+      refute before.command =~ "cp "
+      assert before.command =~ "cd /app && apt-get update"
+      assert before.input_hash == CacheKey.no_inputs_hash()
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+      assert [%{status: :hit}] = Plan.compute("base", [after_edit], [cached]).layers
+    end
+
+    test "glob step changes only for matched files and copies only matches", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "web/nested"))
+      File.write!(Path.join(dir, "web/index.js"), "one")
+      File.write!(Path.join(dir, "web/nested/view.js"), "two")
+      File.write!(Path.join(dir, "server.ex"), "outside")
+
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "build-web", inputs: ["web/**"]}]
+      }
+
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert before.command =~ "cp '/mnt/deploy-src/web/index.js' '/app/web/index.js'"
+      assert before.command =~ "web/nested/view.js"
+      refute before.command =~ "server.ex"
+
+      File.write!(Path.join(dir, "server.ex"), "outside changed")
+      assert {:ok, [outside_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert outside_edit == before
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+      assert [%{status: :hit}] = Plan.compute("base", [outside_edit], [cached]).layers
+
+      File.write!(Path.join(dir, "web/index.js"), "matched changed")
+      assert {:ok, [matched_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert matched_edit.command == before.command
+      assert matched_edit.input_hash != before.input_hash
+
+      assert [%{status: :miss, miss_reason: :inputs}] =
+               Plan.compute("base", [matched_edit], [cached]).layers
+    end
+
+    test "string step keeps full-tree hash and copy behavior", %{dir: dir} do
+      plan = %{@plan | runtime: "", package_manager: nil, steps: ["make"]}
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      File.write!(Path.join(dir, "any-file"), "changed")
+      assert {:ok, [after_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      assert before.command =~ "cp -a /mnt/deploy-src/. /app/"
+      assert before.input_hash != after_edit.input_hash
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+
+      assert [%{status: :miss, miss_reason: :inputs}] =
+               Plan.compute("base", [after_edit], [cached]).layers
+    end
+  end
+
   describe "deploy/3 — managed secrets" do
     test "enrolls :managed secrets when a per-app secrets file is present", %{
       agent: agent,
@@ -190,6 +273,29 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       assert "build" in stages
       assert "run" in stages
       assert List.last(stages) == "done"
+    end
+
+    test "reports every layer's hit or miss cause to the deploying client", %{
+      agent: agent,
+      dir: dir
+    } do
+      {:ok, prog} = start_supervised({Agent, fn -> [] end}, id: :layer_prog)
+
+      layers = [
+        %{status: :hit, miss_reason: nil},
+        %{status: :miss, miss_reason: :inputs},
+        %{status: :miss, miss_reason: :parent}
+      ]
+
+      build = Map.put(build_ok(), :plan, %{layers: layers})
+      ops = recording_ops(agent, build_result: {:ok, build})
+      on_progress = fn stage, line -> Agent.update(prog, &[{stage, line} | &1]) end
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops, on_progress: on_progress)
+
+      lines = prog |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "layer 1: hit" in lines
+      assert "layer 2: miss (inputs)" in lines
+      assert "layer 3: miss (parent)" in lines
     end
 
     test "surfaces a detect failure with its stage, never building", %{agent: agent, dir: dir} do

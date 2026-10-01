@@ -106,12 +106,11 @@ defmodule Mjolnir.Deploy.Builder do
     with {:ok, existing} <- existing_layer_ids(ops, prefix) do
       plan = Plan.compute(base_layer_id, steps, existing)
       release_snapshot = release_snapshot_name(plan, base_layer_id, base_image, prefix)
+      log_cache_plan(plan)
 
       if plan.steps_to_run == [] do
         # Full cache hit: the release snapshot already exists. No VM is booted.
-        Logger.info(
-          "Deploy.Builder: full cache hit (#{plan.cache_hits} layers), release=#{release_snapshot}"
-        )
+        Logger.info("Deploy.Builder: full cache hit, release=#{release_snapshot}")
 
         {:ok, finalize(plan, release_snapshot, [])}
       else
@@ -129,8 +128,7 @@ defmodule Mjolnir.Deploy.Builder do
     boot = boot_opts(plan, base_layer_id, base_image, prefix, spawn_opts)
 
     Logger.info(
-      "Deploy.Builder: #{plan.cache_hits} hit / #{plan.cache_misses} miss; " <>
-        "resume from #{inspect(boot)}, #{length(plan.steps_to_run)} step(s) to run"
+      "Deploy.Builder: resume from #{inspect(boot)}, #{length(plan.steps_to_run)} step(s) to run"
     )
 
     case ops.spawn.(boot) do
@@ -226,6 +224,20 @@ defmodule Mjolnir.Deploy.Builder do
   end
 
   # --- planning helpers ------------------------------------------------------
+
+  defp log_cache_plan(plan) do
+    Logger.info("Deploy.Builder: #{plan.cache_hits} hit / #{plan.cache_misses} miss")
+
+    plan.layers
+    |> Enum.with_index(1)
+    |> Enum.each(fn
+      {%{status: :hit}, index} ->
+        Logger.info("Deploy.Builder: layer #{index}: hit")
+
+      {%{status: :miss, miss_reason: reason}, index} ->
+        Logger.info("Deploy.Builder: layer #{index}: miss (#{reason})")
+    end)
+  end
 
   # The boot map for the ephemeral build VM: spawn from the base image when the
   # plan resumes at the base, otherwise reflink-clone the deepest cached layer.

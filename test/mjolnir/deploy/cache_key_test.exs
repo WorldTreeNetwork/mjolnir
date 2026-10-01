@@ -202,6 +202,50 @@ defmodule Mjolnir.Deploy.CacheKeyTest do
     end
   end
 
+  describe "hash_globs/2" do
+    test "empty inputs have a fixed hash distinct from a tree hash" do
+      dir = tmp_dir("glob_none")
+      on_exit_rm(dir)
+      write(dir, "src/main.rs", "fn main() {}")
+
+      assert {:ok, no_inputs} = CacheKey.hash_globs(dir, [])
+      assert no_inputs == CacheKey.no_inputs_hash()
+      assert {:ok, tree} = CacheKey.hash_tree(dir)
+      assert no_inputs != tree
+    end
+
+    test "hashes only matched regular files, including their relative paths" do
+      dir = tmp_dir("glob_scope")
+      on_exit_rm(dir)
+      write(dir, "web/index.js", "one")
+      write(dir, "web/nested/view.js", "two")
+      write(dir, "server/main.ex", "outside")
+
+      assert {:ok, before} = CacheKey.hash_globs(dir, ["web/**"])
+
+      File.write!(Path.join(dir, "server/main.ex"), "outside changed")
+      assert {:ok, ^before} = CacheKey.hash_globs(dir, ["web/**"])
+
+      File.write!(Path.join(dir, "web/nested/view.js"), "matched changed")
+      assert {:ok, after_match} = CacheKey.hash_globs(dir, ["web/**"])
+      assert after_match != before
+
+      File.rename!(Path.join(dir, "web/index.js"), Path.join(dir, "web/renamed.js"))
+      assert {:ok, after_rename} = CacheKey.hash_globs(dir, ["web/**"])
+      assert after_rename != after_match
+    end
+
+    test "sorts and de-duplicates matches across overlapping globs" do
+      dir = tmp_dir("glob_order")
+      on_exit_rm(dir)
+      write(dir, "web/a.js", "a")
+      write(dir, "web/b.js", "b")
+
+      assert CacheKey.hash_globs(dir, ["web/b.js", "web/a.js", "web/**"]) ==
+               CacheKey.hash_globs(dir, ["web/**"])
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # hash_tree/2
   # ---------------------------------------------------------------------------

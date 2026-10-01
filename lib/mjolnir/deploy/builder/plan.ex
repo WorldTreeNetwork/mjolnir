@@ -39,13 +39,15 @@ defmodule Mjolnir.Deploy.Builder.Plan do
   @type step_input :: %{required(:command) => String.t(), required(:input_hash) => String.t()}
 
   @type status :: :hit | :miss
+  @type miss_reason :: :command | :inputs | :parent
 
   @typedoc "A planned layer: its id, the parent it was keyed against, and cache status."
   @type layer :: %{
           command: String.t(),
           cache_key: String.t(),
           parent_id: String.t(),
-          status: status()
+          status: status(),
+          miss_reason: miss_reason() | nil
         }
 
   @typedoc "A layer that must actually be built (a cache miss), in run order."
@@ -102,7 +104,22 @@ defmodule Mjolnir.Deploy.Builder.Plan do
         hit? = still_hitting and MapSet.member?(existing, cache_key)
         status = if hit?, do: :hit, else: :miss
 
-        layer = %{command: command, cache_key: cache_key, parent_id: parent_id, status: status}
+        miss_reason =
+          cond do
+            hit? -> nil
+            not still_hitting -> :parent
+            input_hash == CacheKey.no_inputs_hash() -> :command
+            true -> :inputs
+          end
+
+        layer = %{
+          command: command,
+          cache_key: cache_key,
+          parent_id: parent_id,
+          status: status,
+          miss_reason: miss_reason
+        }
+
         {[layer | acc], cache_key, hit?}
       end)
 

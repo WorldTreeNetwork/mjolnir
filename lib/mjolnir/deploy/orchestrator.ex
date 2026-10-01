@@ -70,6 +70,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
           detect: (String.t() -> {:ok, map()} | {:error, term()}),
           hash_file: (String.t() -> {:ok, String.t()} | {:error, term()}),
           hash_tree: (String.t(), keyword() -> {:ok, String.t()} | {:error, term()}),
+          hash_globs: (String.t(), [String.t()] -> {:ok, String.t()} | {:error, term()}),
           build: (String.t(), [map()], keyword() -> {:ok, map()} | {:error, term()}),
           run: (String.t(), String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           read_secrets: (String.t() -> {:ok, map()} | :none | {:error, term()})
@@ -128,6 +129,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
              "release #{build.release_snapshot} " <>
                "(#{build.cache_hits} hit / #{build.cache_misses} miss)"
            ),
+         :ok <- emit_layers(progress, build),
          :ok <- emit(progress, "run", "booting service VM"),
          {:run, {:ok, svc}} <-
            {:run,
@@ -247,9 +249,9 @@ defmodule Mjolnir.Deploy.Orchestrator do
   Translate a `BuildPlan` into `Mjolnir.Deploy.Builder` step-inputs.
 
   Each step becomes `%{command, input_hash}` where `input_hash` is computed from
-  the right source for its role (runtime spec / lockfile / source tree) and the
-  source-touching commands are wrapped with the virtiofs mount + copy prelude.
-  Exposed for unit testing. `ops` supplies `hash_file`/`hash_tree`.
+  the right source for its role (runtime spec / lockfile / source tree / table
+  step globs) and source-touching commands are wrapped with the appropriate
+  virtiofs mount + copy prelude. Exposed for unit testing.
   """
   @spec plan_to_steps(map(), String.t(), ops()) ::
           {:ok, [%{command: String.t(), input_hash: String.t()}]} | {:error, term()}
@@ -258,8 +260,8 @@ defmodule Mjolnir.Deploy.Orchestrator do
     pm = Map.get(plan, :package_manager)
     runtime = Map.get(plan, :runtime, "")
 
-    Enum.reduce_while(commands, {:ok, []}, fn command, {:ok, acc} ->
-      case step_input(command, pm, runtime, src_dir, ops) do
+    Enum.reduce_while(commands, {:ok, []}, fn declared_step, {:ok, acc} ->
+      case step_input(declared_step, pm, runtime, src_dir, ops) do
         {:ok, step} -> {:cont, {:ok, [step | acc]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -270,7 +272,17 @@ defmodule Mjolnir.Deploy.Orchestrator do
     end
   end
 
-  defp step_input(command, pm, runtime, src_dir, ops) do
+  defp step_input(%{run: command, inputs: globs}, _pm, _runtime, src_dir, ops) do
+    hash_globs = Map.get(ops, :hash_globs, &CacheKey.hash_globs/2)
+
+    with {:ok, hash} <- hash_globs.(src_dir, globs),
+         {:ok, rel_paths} <- CacheKey.matching_files(src_dir, globs) do
+      command = table_prelude(rel_paths) <> " && " <> command
+      {:ok, %{command: command, input_hash: hash}}
+    end
+  end
+
+  defp step_input(command, pm, runtime, src_dir, ops) when is_binary(command) do
     case classify(command) do
       :runtime ->
         {:ok, %{command: command, input_hash: sha_hex(runtime)}}
@@ -344,6 +356,26 @@ defmodule Mjolnir.Deploy.Orchestrator do
     mount_prelude() <> "; cp -a #{@src_mount}/. #{@workdir}/"
   end
 
+  # Table steps copy exactly the host-resolved regular files that participated
+  # in hash_globs/2. Expanding on the host avoids depending on guest-shell
+  # globstar behavior, and explicit quoted paths preserve nested layout safely.
+  defp table_prelude([]), do: "set -e; mkdir -p #{@workdir}; cd #{@workdir}"
+
+  defp table_prelude(rel_paths) do
+    copies =
+      Enum.map_join(rel_paths, "; ", fn rel_path ->
+        source = Path.join(@src_mount, rel_path)
+        destination = Path.join(@workdir, rel_path)
+
+        "mkdir -p #{shell_quote(Path.dirname(destination))}; " <>
+          "cp #{shell_quote(source)} #{shell_quote(destination)}"
+      end)
+
+    mount_prelude() <> "; " <> copies
+  end
+
+  defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+
   defp sha_hex(value) when is_binary(value) do
     :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
   end
@@ -409,11 +441,29 @@ defmodule Mjolnir.Deploy.Orchestrator do
     :ok
   end
 
+  # One progress line per layer, so `mj deploy` shows which layers were
+  # reused and, for a miss, its first cause. Builder logs the same lines;
+  # Logger output never reaches the deploying client.
+  defp emit_layers(progress, %{plan: %{layers: layers}}) when is_list(layers) do
+    layers
+    |> Enum.with_index(1)
+    |> Enum.each(fn
+      {%{status: :hit}, index} ->
+        emit(progress, "build", "layer #{index}: hit")
+
+      {%{status: :miss, miss_reason: reason}, index} ->
+        emit(progress, "build", "layer #{index}: miss (#{reason})")
+    end)
+  end
+
+  defp emit_layers(_progress, _build), do: :ok
+
   defp default_ops do
     %{
       detect: &Detector.detect/1,
       hash_file: &CacheKey.hash_file/1,
       hash_tree: &CacheKey.hash_tree/2,
+      hash_globs: &CacheKey.hash_globs/2,
       build: &Builder.build/3,
       run: &Runtime.start/4,
       read_secrets: &default_read_secrets/1

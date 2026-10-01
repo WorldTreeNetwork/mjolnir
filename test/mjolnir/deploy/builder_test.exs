@@ -1,6 +1,7 @@
 defmodule Mjolnir.Deploy.BuilderTest do
   use ExUnit.Case, async: true
 
+
   alias Mjolnir.Deploy.Builder
   alias Mjolnir.Deploy.CacheKey
 
@@ -121,6 +122,32 @@ defmodule Mjolnir.Deploy.BuilderTest do
              ] = ev
 
       assert [s1, s2, s3] == Enum.map(keys, &("deploy-" <> &1))
+    end
+  end
+
+  describe "build/3 — per-layer cache progress" do
+    test "keeps the aggregate and reports each miss's first cause", %{agent: agent} do
+      command_only = %{command: "apt-get update", input_hash: CacheKey.no_inputs_hash()}
+      input_step = %{command: "make", input_hash: "source-hash"}
+      ops = recording_ops(agent, existing: [])
+
+      assert {:ok, result} = Builder.build(@base, [command_only, input_step], ops: ops)
+      assert {result.cache_hits, result.cache_misses} == {0, 2}
+
+      assert Enum.map(result.plan.layers, &{&1.status, &1.miss_reason}) ==
+               [{:miss, :command}, {:miss, :parent}]
+    end
+
+    test "reports hits and an input-caused first miss", %{agent: agent} do
+      [first, second | _] = steps()
+      [first_key, _] = chain_keys(@base, [first, second])
+      ops = recording_ops(agent, existing: [first_key])
+
+      assert {:ok, result} = Builder.build(@base, [first, second], ops: ops)
+      assert {result.cache_hits, result.cache_misses} == {1, 1}
+
+      assert Enum.map(result.plan.layers, &{&1.status, &1.miss_reason}) ==
+               [{:hit, nil}, {:miss, :inputs}]
     end
   end
 

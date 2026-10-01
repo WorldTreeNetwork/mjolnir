@@ -51,6 +51,14 @@ defmodule Mjolnir.Deploy.Builder.PlanTest do
       assert plan.release_layer_id == k3
       assert length(plan.steps_to_run) == 3
       assert Enum.map(plan.layers, & &1.status) == [:miss, :miss, :miss]
+      assert Enum.map(plan.layers, & &1.miss_reason) == [:inputs, :parent, :parent]
+    end
+
+    test "a command-only first miss is attributed to command" do
+      command_only = [%{command: "apt-get update", input_hash: CacheKey.no_inputs_hash()}]
+      plan = Plan.compute(@base, command_only, [])
+
+      assert [%{status: :miss, miss_reason: :command}] = plan.layers
     end
   end
 
@@ -94,6 +102,7 @@ defmodule Mjolnir.Deploy.Builder.PlanTest do
       assert plan.resume_from == k1
       # k3 must still be rebuilt despite being present in the cache set.
       assert Enum.any?(plan.steps_to_run, &(&1.cache_key == k3))
+      assert Enum.map(plan.layers, & &1.miss_reason) == [nil, :inputs, :parent]
     end
   end
 

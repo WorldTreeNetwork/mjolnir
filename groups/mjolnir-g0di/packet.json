@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-g0di",
+  "node_id": "mjolnir-g0di",
+  "change_id": "add-deploy-step-inputs",
+  "capability": "deploy-build",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "model",
+    "harness": "claude",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-conductor"
+    }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "medium",
+    "fast": false,
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-implement"
+    }
+  },
+  "goal": "Implement openspec/changes/add-deploy-step-inputs (ACTIVE BUILD). Contract: its proposal.md, tasks.md and specs/deploy-build/spec.md. Read those first.\n\nToday (lib/mjolnir/deploy/orchestrator.ex:256 plan_to_steps, :292 classify) every declared manifest step that is not `mise ...` or an exact install command is keyed on the whole source tree (hash_tree) and gets the full `cp -a` source prelude (:343 source_prelude); layer keys chain via parent (lib/mjolnir/deploy/cache_key.ex:74 compute), so one edit misses every layer.\n\nLand:\n- lib/mjolnir/deploy/manifest.ex: a step is a string OR a table { run, inputs }. inputs is a list of strings (globs relative to the source root). Any other key or shape is refused before any VM boots, with the step index and the bad key. Document the new form (with the identikey example: apt step inputs = [], web step inputs = [\"web/**\"]) in the module doc's Fields section. Keep string steps working exactly as today.\n- lib/mjolnir/deploy/cache_key.ex: hash_globs(src_dir, globs) -> {:ok, hex}: sorted relative paths + contents of matching regular files; [] hashes to a fixed \"no inputs\" value distinct from any tree hash. Same fixed-width combination style as compute/3.\n- lib/mjolnir/deploy/orchestrator.ex: table steps keyed on hash_globs and given a prelude that copies ONLY the matched files into /app (preserving relative paths); inputs = [] copies nothing but still mounts nothing it does not need. String steps unchanged. Plumb the table through BuildPlan/plan_to_steps without changing the %{command, input_hash} shape the Builder consumes.\n- Per-layer progress: each layer reported hit or miss, a miss naming its first cause: command, inputs, or parent (lib/mjolnir/deploy/builder.ex:132 prints the aggregate today; lib/mjolnir/deploy/builder/plan.ex is the pure planner). Keep the aggregate line.\n- Tests in the listed test files: command-only step hits after a source edit; glob step misses only when a matched file changes; string step still misses on any edit; malformed step refused before boot; miss causes reported.\n\nCheck the matching boxes in openspec/changes/add-deploy-step-inputs/tasks.md when their tests pass. Run `mix test test/mjolnir/deploy` and `mix format --check-formatted` on the files you touched. Edit and stop. The conductor persists. Do not fold. Do not push. Do not touch sizing (build = {...}) \u2014 that is a separate node.",
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Deploy.CacheKey.compute/3",
+      "invariant": "Layer key = sha256 over fixed-width digests of parent, command, input hash. Unchanged."
+    },
+    {
+      "symbol": "Mjolnir.Deploy.Orchestrator.plan_to_steps/3",
+      "invariant": "Emits [%{command, input_hash}] for the Builder. String steps keep whole-tree key and full copy."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/deploy"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/deploy/manifest.ex",
+      "lib/mjolnir/deploy/cache_key.ex",
+      "lib/mjolnir/deploy/orchestrator.ex",
+      "lib/mjolnir/deploy/build_plan.ex",
+      "lib/mjolnir/deploy/builder.ex",
+      "lib/mjolnir/deploy/builder/plan.ex",
+      "test/mjolnir/deploy/manifest_test.exs",
+      "test/mjolnir/deploy/cache_key_test.exs",
+      "test/mjolnir/deploy/orchestrator_test.exs",
+      "test/mjolnir/deploy/builder_test.exs",
+      "test/mjolnir/deploy/builder/plan_test.exs",
+      "openspec/changes/add-deploy-step-inputs/tasks.md"
+    ],
+    "do_not": [
+      "fold",
+      "push",
+      "sizing",
+      "caches",
+      "edit other changes"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "worker"
+}

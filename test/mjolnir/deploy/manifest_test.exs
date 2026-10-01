@@ -163,10 +163,55 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert msg =~ "must not be blank"
     end
 
-    test "steps must be a list of strings", %{dir: dir} do
+    test "steps must contain strings or step tables", %{dir: dir} do
       write_manifest(dir, ~s(start_command = "./run"\nport = 8080\nsteps = [1, 2]))
       assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
-      assert msg =~ "steps must be a list of strings"
+      assert msg =~ "step 1"
+      assert msg =~ "string or a {run, inputs} table"
+    end
+
+    test "accepts and normalizes a {run, inputs} step", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = [
+        { run = "apt-get install -y git", inputs = [] },
+        { run = "cd web && npm run build", inputs = ["web/**"] }
+      ]
+      """)
+
+      assert {:ok, %BuildPlan{steps: steps}} = Manifest.load(dir)
+
+      assert steps == [
+               %{run: "apt-get install -y git", inputs: []},
+               %{run: "cd web && npm run build", inputs: ["web/**"]}
+             ]
+    end
+
+    test "rejects an unknown table key with the step index and bad key", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = ["echo ok", { run = "make", input = ["x"] }]
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "step 2"
+      assert msg =~ "unknown key"
+      assert msg =~ "input"
+    end
+
+    test "rejects missing or malformed table fields with the step index", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = [{ run = "make", inputs = "src/**" }]
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "step 1"
+      assert msg =~ "inputs"
+      assert msg =~ "list of strings"
     end
 
     test "unknown keys and tables are ignored so a newer mjolnir.toml loads", %{dir: dir} do
