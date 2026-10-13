@@ -54,3 +54,5 @@ boot-image/
 # Intention scratch (conductor isolate, spawn stage)
 .worktrees/
 .spawns/
+.omx/
+groups/*/inventory.json

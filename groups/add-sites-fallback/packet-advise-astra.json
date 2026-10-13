@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-sites-fallback-astra",
+  "node_id": "add-sites-fallback",
+  "capability": "sites-serve",
+  "change_id": "add-sites-fallback",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-sites-fallback. Architecture. Author family is Grok. You are Astra (gpt-6-astra), other-family reader after Fable 5.1 infra-red (Claude usage credits exhausted).\n\nWHY: ServeDir misses always serve the snapshot 404.html at status 404. Client-side routers 404 on every deep link. A path miss on a LIVE bound site must stay on that Host — the 307 to park.worldtree.network is only for unbound names. Default 404 chrome is a deployed park site's 404.html, not HTML compiled into the gateway. Operators override with [site].fallback.\n\nSteer miss order: (1) fallback=index.html → 200 SPA rewrite (2) fallback=404.html or snapshot 404.html → custom 404 (3) fallback=false → empty 404 (4) else park materialized 404.html body, status 404, original Host.\n\nNo living sites-serve spec yet (this change ADDs it). Related: docs/gateway-routing.md (unbound 307), docs/LEARNINGS.md 2026-09-20 mjolnir.toml unknown keys ignored.\n\nCited code (blind take):\n- native/mjolnir_gateway/src/sites_serve.rs:242-246 — miss always snapshot 404.html at 404, comment says not an SPA rewrite\n- native/mjolnir_gateway/src/sites_serve.rs:280-305 — not_found_response ServeFile 404.html, force status 404; missing file → plain Not Found\n- native/mjolnir_gateway/src/sites_serve.rs:524-537 — test missing_path_serves_404_html_with_404_status\n- native/mjolnir_gateway/src/parked.rs:7-12, 61-75 — unbound 307 to park.worldtree.network\n- lib/mjolnir/deploy/manifest.ex:29-33 — unknown keys ignored; [site] mentioned as future\n- lib/mjolnir/sites/materializer.ex:12-15 — layout fp/site/snapshots + current symlink\n\nWrite openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md.\nBLIND PASS: Why + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.",
+  "anchors": [
+    {
+      "symbol": "native/mjolnir_gateway/src/sites_serve.rs",
+      "invariant": "Miss is snapshot 404.html at 404; never 200 rewrite; never park body"
+    },
+    {
+      "symbol": "native/mjolnir_gateway/src/parked.rs",
+      "invariant": "307 is unbound-name fallthrough, not live-site miss"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement the miss path", "tracked_as": "act" },
+    { "item": "Replace unbound berth HTML", "tracked_as": "parked.rs" },
+    { "item": "Publish the park site", "tracked_as": "ops" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-sites-fallback/reviews",
+      "openspec/changes/add-sites-fallback/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Steer 2026-09-20 is on the parent bead and copied to steer.md.",
+    "Parent bead description said default SPA 200; steer overrode default chrome to park site. The change follows steer.",
+    "Fable 5.1 spawn infra-red twice this wave: Claude usage credits exhausted."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader"
+}

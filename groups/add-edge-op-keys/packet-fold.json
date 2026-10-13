@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-edge-op-keys",
+  "node_id": "add-edge-op-keys",
+  "capability": "edge-auth",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "opus-5-fold" }
+  },
+  "goal": "FOLD add-edge-op-keys. You are the designated FOLDER. This is FOLD, not a review.\n\nDo NOT write reviews. Do NOT implement. Banner is ACTIVE BUILD. Implement boxes in tasks.md are [x].\n\nApply openspec/changes/add-edge-op-keys/specs/edge-auth/spec.md onto the living openspec/specs/edge-auth/spec.md. Paste ADDED requirements. Do not delete the login-profile requirements already living there from add-biscuit-profiles.\n\nThen git mv openspec/changes/add-edge-op-keys to openspec/changes/archive/2026-09-26-add-edge-op-keys.\n\nADR 0012 already exists at docs/decisions/0012-direct-edge-auth.md. Do not rewrite it. One LEARNINGS line only if a surprise. Do not git push. Report the living spec path and archive path.",
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-edge-op-keys && test -f openspec/specs/edge-auth/spec.md && rg -q 'operational' openspec/specs/edge-auth/spec.md"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/edge-auth/spec.md",
+      "openspec/changes/add-edge-op-keys",
+      "openspec/changes/archive",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["advise", "act", "implement", "write reviews", "git push", "rewrite ADR 0012"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

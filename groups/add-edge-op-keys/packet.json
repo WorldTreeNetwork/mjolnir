@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-edge-op-keys",
+  "node_id": "add-edge-op-keys",
+  "capability": "edge-auth",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "sol-implement" }
+  },
+  "goal": "Implement add-edge-op-keys. Contract is the accepted design (reviews/2026-09-24-advise-5.md) and specs/edge-auth/spec.md in this change. Do not invent a second identity protocol.\n\nWrite docs/decisions/0012-direct-edge-auth.md: pin is the stable edge XID; discovery is address-only; no TOFU; no authlocal.identikey.me; keys not on btrfs.\n\nImplement lib/mjolnir/auth/edge_keys.ex:\n- Directory /var/lib/mjolnir/auth (config :auth_dir), 0700, private files 0600 at create and at open. Reject paths that resolve under btrfs_root.\n- Stable identity is Ed25519. Pin is the Gordian-style XID of the inception public (document the exact bytes you hash; tests pin that function).\n- Operational keys are delegated by an identikey-auth-shaped signature over dCBOR [\"identikey-mjolnir/v1\",\"op-delegation\", op_pub, kid, edge_xid, purposes, nbf, exp, no_onward]. Purposes only edge-proof and cap-mint.\n- Supersession is only [\"identikey-mjolnir/v1\",\"op-supersede\", kid, exp_now, next_kid]. exp_now is effective revocation time, not record expiry. Late receipt still revokes. next_kid does not authorize the successor.\n- Generation is not activation. Missing/corrupt op state with no stable private fails closed for direct auth.\n- Stale backup is reconciliation input only. Activation needs a fresh auth-restore attestation of the reconciled output. An old attestation must not revive a superseded kid.\n- Stolen stable private: new identity and new pin, not supersession of the leaked root.\n- Ordinary sessions do not need the stable private online.\n\nTests in test/mjolnir/auth/edge_keys_test.exs for: offline chain verify, rotation overlap, snapshot path rejection, no pin is not TOFU, tampered delegation, reused kid, root-offline restart, missing state fail-closed, stale backup, stolen root, late supersession, permission-at-open.\n\nUse a temp auth dir in tests. Do not call the network. Do not add HTTP. Do not edit add-biscuit-profiles or native/mjolnir_biscuit.\n\nCheck the open implement boxes in openspec/changes/add-edge-op-keys/tasks.md when tests pass. Edit and stop. Do not fold. Do not git push.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/secret_escrow.ex",
+      "invariant": "Host secrets stay outside btrfs_root, mode 0600"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/auth/edge_keys_test.exs"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "docs/decisions/0012-direct-edge-auth.md",
+      "lib/mjolnir/auth/edge_keys.ex",
+      "test/mjolnir/auth/edge_keys_test.exs",
+      "config/config.exs",
+      "config/test.exs",
+      "openspec/changes/add-edge-op-keys/tasks.md"
+    ],
+    "do_not": ["fold", "push", "HTTP", "edit native/mjolnir_biscuit", "edit add-biscuit-profiles"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "worker"
+}

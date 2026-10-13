@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-honor-git-remote",
+  "node_id": "add-honor-git-remote",
+  "capability": "honor-being",
+  "change_id": "add-honor-git-remote",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-honor-git-remote. ACTIVE BUILD. Banner rigor line says change; observe treats it as architecture because design.md + ADR. Author family is Grok. You are Astra (gpt-6-astra), other-family gating reader. Fable 5.1 infra-red on Claude credits.\n\nA prior fold spawn (Opus 5) incorrectly wrote reviews/2026-09-24-fold-advise.md instead of folding. That file is NOT this review. Do your own blind pass. Do not copy its verdict.\n\nWHY: The hosted being can SSH-sign commits and inject the private key, but it cannot git push to the Forgejo remote that cuts over prod. Fresh ubuntu-24.04 clone of forgejogit@mimir.worldtree.network:VirtueInnova/hypersigil-store-frontend.git is Permission denied (publickey). Respawn leaves any Forgejo key as a live write credential with no identikey row.\n\nLiving spec: openspec/specs/honor-being/spec.md. Delta: openspec/changes/add-honor-git-remote/specs/honor-being/spec.md. ADR 0011.\n\nCited code (blind take):\n- lib/mjolnir/git_signing.ex:76-96 mint/1 put_device public_key only then forgejo_register\n- lib/mjolnir/git_signing.ex around forgejo_register xid lookup and identikey_revoke_device short-circuit\n- lib/mjolnir/api/router.ex git_signing spawn param\n- scripts/hosted-being-bootstrap.sh git remote / insteadOf\n\nRE-ADVISE after send-back. Contract amended: specs/honor-being/spec.md now gates register on xid/credential_id, fail-closed revoke without token, pubkey compensation. Implementation boxes R1-R3 remain for act. Blind pass on current Why + living spec + cited code, then the revised delta.\nWrite openspec/changes/add-honor-git-remote/reviews/2026-09-24-advise-2.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.\nIf send-back, add owed boxes on tasks.md.\nREADER line: astra-arch-review. SPAWN line: parent dir of SPAWN_PROMPT_FILE.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/git_signing.ex",
+      "invariant": "Forgejo register/revoke must not leave a live write key without identikey metadata"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-honor-git-remote/reviews/2026-09-24-advise-2.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-honor-git-remote/reviews/2026-09-24-advise-2.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-honor-git-remote/reviews/2026-09-24-advise-2.md"
+  },
+  "out_of_scope": [
+    { "item": "Fold or archive", "tracked_as": "fold" },
+    { "item": "Implement leftover SHALLs", "tracked_as": "act" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-honor-git-remote/reviews",
+      "openspec/changes/add-honor-git-remote/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "ACTIVE BUILD. All original tasks.md boxes are [x].",
+    "Do not treat 2026-09-24-fold-advise.md as this advise."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "reader"
+}

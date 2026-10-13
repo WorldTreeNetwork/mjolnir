@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-honor-snapshot-key-scrub",
+  "node_id": "add-honor-snapshot-key-scrub",
+  "capability": "honor-being",
+  "change_id": "add-honor-snapshot-key-scrub",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5-fold" }
+  },
+  "goal": "FOLD add-honor-snapshot-key-scrub. You are the folder, not a reviewer. Apply the ADDED requirement Hosted snapshot does not persist XAI_API_KEY onto openspec/specs/honor-being/spec.md. Remove the living-spec note that grok config and history are unguarded. git mv to openspec/changes/archive/2026-09-20-add-honor-snapshot-key-scrub. Do not write an advise review. Do not start a line with ADVISE.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-honor-snapshot-key-scrub/specs/honor-being/spec.md",
+      "invariant": "ADDED: hosted snapshot does not persist XAI_API_KEY"
+    },
+    {
+      "symbol": "openspec/specs/honor-being/spec.md",
+      "invariant": "Replace the unguarded grok-config note with the folded SHALL"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-honor-snapshot-key-scrub && test -d openspec/changes/archive/2026-09-20-add-honor-snapshot-key-scrub && rg -q 'does not persist XAI_API_KEY' openspec/specs/honor-being/spec.md"
+  },
+  "out_of_scope": [
+    { "item": "Advise review", "tracked_as": "advise" },
+    { "item": "Live EYES grep of a production snapshot tree", "tracked_as": "demo" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/honor-being/spec.md",
+      "openspec/changes/add-honor-snapshot-key-scrub/",
+      "openspec/changes/archive/",
+      "docs/LEARNINGS.md"
+    ],
+    "do_not": ["deploy", "advise-review", "push"]
+  },
+  "inherited": [
+    "Code landed 44a60d1 and deployed. Unit tests green. Live tree EYES is demo, not a leftover implement box.",
+    "Prior Opus fold spawns wrote ADVISE by mistake. This job is living spec plus archive only."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "id": "res-act-add-honor-git-remote",
+  "node_id": "add-honor-git-remote",
+  "packet_id": "pkt-add-honor-git-remote",
+  "assignee": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok"
+    }
+  },
+  "disposition": "pass",
+  "summary": "Host Forgejo write deploy keys for ssh_git: mint registers, revoke deletes by key id before revoke_device/opaque (failed delete is an error). No token stays :not_wired. Guest git uses /run/mjolnir/git_signing_key plus baked mimir known_hosts. 13 tests green. Live throwaway key cloned, signed, pushed, then deleted (not main).",
+  "verify_command": "mix test test/mjolnir/git_signing_test.exs",
+  "verify_exit": 0,
+  "commit": null,
+  "changed_files": [
+    "lib/mjolnir/git_signing.ex",
+    "lib/mjolnir/forgejo/deploy_keys.ex",
+    "lib/mjolnir/vm.ex",
+    "config/config.exs",
+    "config/runtime.exs",
+    "test/mjolnir/git_signing_test.exs",
+    "scripts/hosted-being-bootstrap.sh",
+    "docs/runbooks/hosted-being.md",
+    "openspec/changes/add-honor-git-remote/tasks.md"
+  ],
+  "evidence": {
+    "command": "mix test test/mjolnir/git_signing_test.exs",
+    "exit_code": 0,
+    "note": "13 tests, 0 failures. Live: POST keys 201 id=6 read_only=false; git@ ls-remote/clone/signed-commit/push throwaway branch; DELETE 204; keys_count 0 afterwards."
+  },
+  "distilled": {
+    "changed_files": [
+      "lib/mjolnir/git_signing.ex",
+      "lib/mjolnir/forgejo/deploy_keys.ex",
+      "lib/mjolnir/vm.ex",
+      "config/config.exs",
+      "config/runtime.exs",
+      "test/mjolnir/git_signing_test.exs",
+      "scripts/hosted-being-bootstrap.sh",
+      "docs/runbooks/hosted-being.md",
+      "openspec/changes/add-honor-git-remote/tasks.md"
+    ],
+    "verify_command": "mix test test/mjolnir/git_signing_test.exs",
+    "verify_exit": 0,
+    "blockers": []
+  },
+  "blockers": [],
+  "notes": [
+    "Forgejo advertised ssh_url is ssh://git@mimir... (passwd user git, no forgejogit). Bootstrap keeps the spec forgejogit@ URL and url.*.insteadOf rewrites to git@.",
+    "Prod mint needs MJOLNIR_FORGEJO_TOKEN in the mjolnir unit env (not yet on mimir). Live probe used the host mirror token via ssh; guest never saw it. Did not push to main.",
+    "Worker did not commit; conductor persists."
+  ],
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok",
+    "content_hash": "sha256:52b1ceacf84c4d8e2cbde6f991d0e949d94f74e02cc28801d279430d7df837aa"
+  }
+}

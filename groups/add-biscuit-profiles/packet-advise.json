@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-biscuit-profiles",
+  "node_id": "add-biscuit-profiles",
+  "capability": "edge-auth",
+  "change_id": "add-biscuit-profiles",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-biscuit-profiles. Architecture. Author family is Grok. You are Astra (gpt-6-astra), other-family reader. Fable 5.1 infra-red on Claude credits.\n\nWHY: Direct auth mints an edge-scoped capability. If that token is a bearer JWT-shaped secret, theft is privilege. identikey-capability already named holder-bound Biscuits. This node is the Mjolnir login profile, not a second mint/verify runtime.\n\nWHAT (from proposal, not design): Default profile holder-bound — IdentiKey exchange authorizes an ephemeral session public key; every protected request proves possession. Holder fingerprint is auth-challenge v1 section 5. Bearer is an explicit issuance option: shorter lifetime, narrower authority, unambiguous mode bit so a verifier cannot treat holder-bound as bearer. Integrate with mjolnir-axsb.1.3 (mint/verify). Do not implement mint here. mjolnir-k8y.5 stays VM-spawn RBAC.\n\nNo living edge-auth spec yet. Related living: openspec/specs/secret-tokenator/spec.md (holder-bound redeem; biscuit runtime still unbuilt). Protocol: identikey-capability-v1 (sibling identikey-protocol repo).\n\nLEARNINGS: docs/LEARNINGS.md 2026-09-21 identikey fp Blake3 — holder fps stay auth-challenge v1 section 5, not IdentiKey.fingerprint/1.\n\nCited code (blind take):\n- lib/mjolnir/api/auth.ex:5-24 — no Biscuit path; JWT confers full scope set\n- openspec/specs/secret-tokenator/spec.md:7-15 — add-biscuit-runtime / mint / hop SHALLs are not living truth\n- openspec/specs/secret-tokenator/spec.md:40-42 — holder fingerprints are auth-challenge v1 section 5\n\nRE-ADVISE after send-back amend. Contract revised in design.md Decisions 4-6 and specs/edge-auth/spec.md.\nRE-ADVISE after advise-2 send-back. Contract now includes design Decisions 7-8: dCBOR login-proof encoding, raw query in request_target, Blake3 preimages, edge-issued nonce consume/fail-closed on store loss, one-shot request-bound authorization output.\nWrite openspec/changes/add-biscuit-profiles/reviews/2026-09-24-advise-3.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.\nREADER line: astra-arch-review. SPAWN line: parent dir of SPAWN_PROMPT_FILE.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/api/auth.ex",
+      "invariant": "No Biscuit verification path today"
+    },
+    {
+      "symbol": "openspec/specs/secret-tokenator/spec.md",
+      "invariant": "Biscuit mint/verify is not living truth in this repo"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-biscuit-profiles/reviews/2026-09-24-advise-3.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-biscuit-profiles/reviews/2026-09-24-advise-3.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-biscuit-profiles/reviews/2026-09-24-advise-3.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement mint/verify NIF", "tracked_as": "mjolnir-axsb.1.3" },
+    { "item": "VM-spawn RBAC biscuits", "tracked_as": "mjolnir-k8y.5" },
+    { "item": "HTTP mint at login", "tracked_as": "add-direct-auth-endpoints" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-biscuit-profiles/reviews",
+      "openspec/changes/add-biscuit-profiles/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Steer 2026-09-24: unpark axsb.1.3 as shared primitive; this node is profiles only; holder-bound default; bearer explicit.",
+    "Banner is PENDING. Accept does not unblock act until ACTIVE BUILD."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "reader"
+}

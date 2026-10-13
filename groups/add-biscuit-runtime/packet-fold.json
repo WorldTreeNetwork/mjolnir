@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-biscuit-runtime",
+  "node_id": "add-biscuit-runtime",
+  "capability": "biscuit-runtime",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "opus-5-fold" }
+  },
+  "goal": "FOLD add-biscuit-runtime. You are the designated FOLDER (Opus 5). This is FOLD, not a review.\n\nDo NOT write reviews. Do NOT send-back. Do NOT implement leftover product work.\n\nBanner is ACTIVE BUILD. Every tasks.md box is [x]. Rigor is change.\n\nFollow fold-steps.md:\n1. Admit ACTIVE BUILD.\n2. Confirm checkboxes.\n3. Apply openspec/changes/add-biscuit-runtime/specs/biscuit-runtime/spec.md onto openspec/specs/biscuit-runtime/spec.md (create the living spec; ADDED requirements).\n4. Confirm every SHALL is living in openspec/specs/.\n5. mkdir -p openspec/changes/archive && git mv openspec/changes/add-biscuit-runtime openspec/changes/archive/2026-09-26-add-biscuit-runtime\n6. Amend docs/architecture.md only if shape needs it.\n7. One LEARNINGS line only if a surprise.\n8. Report living spec paths + archive path.\n\nEdit and stop. The conductor persists. Do not git push. Do not start the next change.",
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-biscuit-runtime && test -d openspec/changes/archive/2026-09-26-add-biscuit-runtime && test -f openspec/specs/biscuit-runtime/spec.md"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/biscuit-runtime/spec.md",
+      "openspec/changes/add-biscuit-runtime",
+      "openspec/changes/archive",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["advise", "act", "implement leftover", "write reviews", "git push", "deploy"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

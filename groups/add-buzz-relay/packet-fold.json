@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-buzz-relay",
+  "node_id": "add-buzz-relay",
+  "capability": "buzz-local-client",
+  "change_id": "add-buzz-relay",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5-fold" }
+  },
+  "goal": "FOLD add-buzz-relay. You are the folder, not a reviewer. Apply fold-steps: merge MODIFIED/ADDED deltas from openspec/changes/add-buzz-relay/specs/buzz-local-client/spec.md into openspec/specs/buzz-local-client/spec.md. Do not import unbuilt SHALLs. git mv the change dir to openspec/changes/archive/2026-09-20-add-buzz-relay. LEARNINGS one line if surprise. Do not write reviews. Do not start a line with ADVISE. Do not implement leftover code.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-buzz-relay/specs/buzz-local-client/spec.md",
+      "invariant": "Deltas to fold; skip anything the live hive did not land"
+    },
+    {
+      "symbol": "openspec/specs/buzz-local-client/spec.md",
+      "invariant": "Living spec; replace MODIFIED requirement blocks wholesale"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-buzz-relay && test -d openspec/changes/archive/2026-09-20-add-buzz-relay"
+  },
+  "out_of_scope": [
+    { "item": "Provider deploy op", "tracked_as": "buzz-backend-mjolnir" },
+    { "item": "Advise review", "tracked_as": "advise" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/buzz-local-client/spec.md",
+      "openspec/changes/add-buzz-relay/",
+      "openspec/changes/archive/",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["deploy", "advise-review", "implement-leftover", "push"]
+  },
+  "inherited": [
+    "Last advise is accept (reviews/2026-09-10-re-advise.md). All owed tasks checked including DNS leave-apex.",
+    "B0 hive is live at wss://buzz.identikey.me. DNS pin was declined.",
+    "Prior Opus fold spawns wrote ADVISE by mistake. This job is archive plus living spec only."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

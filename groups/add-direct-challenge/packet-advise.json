@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-direct-challenge",
+  "node_id": "add-direct-challenge",
+  "capability": "edge-auth",
+  "change_id": "add-direct-challenge",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-direct-challenge. Architecture. Author family is Grok. You are Astra (gpt-6-astra), other-family reader. Fable 5.1 infra-red on Claude credits.\n\nWHY: Native clients must authenticate to a Mjolnir edge without OAuth redirects. A draft challenge protocol already exists (identikey-auth-challenge-v1). Inventing a v2 or stuffing session keys into Challenge would mix identity with authorization and fork Papyrus/peer auth.\n\nWHAT (from proposal, not design): Consume identikey-auth / identikey-auth-challenge-v1 unchanged for identity. Challenge.aud is the pinned edge stable XID. Bind session public key, requested operation, and channel context in a second signed authorization object. identikey-core is not the verifier. C1/C2 may be a claimant via add-managed-challenge-responder. Vectors: success, replay, expiry, wrong edge, wrong audience, altered request, holder-key substitution, transport replay.\n\nNo living edge-auth spec yet. Protocol: ~/work/IdentiKey/identikey-protocol/docs/standards/identikey-auth-challenge-v1.md (read if reachable; else the cited excerpt).\n\nLEARNINGS: docs/LEARNINGS.md 2026-09-20 add-identikey-being-client — identikey-core has no device_code; pairwise sub trap; /term is hosted PKCE. 2026-09-21 identikey fp Blake3 — holder fps stay auth-challenge v1 section 5.\n\nCited code (blind take):\n- identikey-protocol docs/standards/identikey-auth-challenge-v1.md:93-102 — Challenge is v, aud, nonce, iat, exp only\n- identikey-protocol docs/standards/identikey-auth-challenge-v1.md:215-230 — same Response bytes for self-custody and managed claimant; verifier must not infer rung\n- native/mjolnir_api/src/auth.rs:229-236 — mj login is device-code or loopback OIDC; no edge Challenge\n- lib/mjolnir/api/auth.ex:5-24 — API is JWT / localhost / sites token\n\nRE-ADVISE after advise-4 send-back. Residuals patched: gateway is the HTTPS channel authority and injects conn_id+origin SPKI over a trusted backend; verifier compares independently of the bind; N2 channel-mismatch (no consume) then N1 success then N1 replay; consumed-without-issue removed; issued vs delivered with combined-success, policy-denial, pre-commit, concurrency, and post-commit-loss scenarios. Review the current proposal Why plus living/cited code first, then compare to the revised design Decision 7 and specs/edge-auth/spec.md.\nACTIVE BUILD. Write openspec/changes/add-direct-challenge/reviews/2026-09-24-advise-5.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.\nFable 5.1 infra-red (Claude usage credits). You are the next other-family reader.\nREADER line: astra-arch-review. SPAWN line: parent dir of SPAWN_PROMPT_FILE.",
+  "anchors": [
+    {
+      "symbol": "identikey-auth-challenge-v1.md",
+      "invariant": "Challenge has no session-key or operation fields"
+    },
+    {
+      "symbol": "native/mjolnir_api/src/auth.rs",
+      "invariant": "mj login today is OIDC, not edge challenge"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-direct-challenge/reviews/2026-09-24-advise-5.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-direct-challenge/reviews/2026-09-24-advise-5.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-direct-challenge/reviews/2026-09-24-advise-5.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement HTTP endpoints", "tracked_as": "add-direct-auth-endpoints" },
+    { "item": "Add Schnorr to identikey-auth", "tracked_as": "refused" },
+    { "item": "Managed signer implementation", "tracked_as": "add-managed-challenge-responder" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-direct-challenge/reviews",
+      "openspec/changes/add-direct-challenge/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Steer 2026-09-24: identikey-auth v1 as-is; session bind is a second step; identikey-core is claimant for C1/C2 not verifier; no protocol Schnorr.",
+    "Banner is ACTIVE BUILD. Accept unblocks act for this node."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "reader"
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-sites-fallback",
+  "node_id": "add-sites-fallback",
+  "capability": "sites-serve",
+  "change_id": "add-sites-fallback",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5-fold" }
+  },
+  "goal": "FOLD add-sites-fallback. You are the folder, not a reviewer. Create living openspec/specs/sites-serve/spec.md from the ADDED deltas in openspec/changes/add-sites-fallback/specs/sites-serve/spec.md. git mv the change dir to openspec/changes/archive/2026-09-21-add-sites-fallback. LEARNINGS one line if surprise. Do not write reviews. Do not start a line with ADVISE. Do not implement leftover code.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-sites-fallback/specs/sites-serve/spec.md",
+      "invariant": "ADDED capability sites-serve; all SHALLs landed 609606b"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-sites-fallback && test -d openspec/changes/archive/2026-09-21-add-sites-fallback && test -f openspec/specs/sites-serve/spec.md && rg -q 'Bound-site misses stay on the request Host' openspec/specs/sites-serve/spec.md"
+  },
+  "out_of_scope": [
+    { "item": "Advise review", "tracked_as": "advise" },
+    { "item": "Deploy park site", "tracked_as": "ops" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/sites-serve/spec.md",
+      "openspec/changes/add-sites-fallback/",
+      "openspec/changes/archive/",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["deploy", "advise-review", "implement-leftover", "push"]
+  },
+  "inherited": [
+    "Last advise is accept (reviews/2026-09-21-re-advise.md). All owed tasks checked.",
+    "Code 609606b. Gateway sites_serve tests 19/19. Elixir fallback_policy + materializer tests green.",
+    "Prior Opus fold spawns wrote ADVISE by mistake. This job is living spec plus archive only."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

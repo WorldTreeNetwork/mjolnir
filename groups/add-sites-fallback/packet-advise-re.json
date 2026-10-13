@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-sites-fallback-re",
+  "node_id": "add-sites-fallback",
+  "capability": "sites-serve",
+  "change_id": "add-sites-fallback",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "Re-advise add-sites-fallback after send-back amend. Prior review: openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md (send-back, astra-arch-review). Author is still Grok. Fable 5.1 is credit-exhausted; you are the --after route again.\n\nWHY unchanged: live miss stays on Host; SPA / snapshot 404 / empty / park body; 307 only for unbound names.\n\nAmend answers R1–R3 in the delta and design, not in product code:\n- R1: signed SecretStore record sites/<name>/fallback; HEAD/manifest signing bytes unchanged; site-only TOML parse (dir then parent); site-wide policy; materialize sibling with current flip; rematerialize from store; failed publish leaves prior; omitted fallback deletes record; older publishers unset.\n- R2: park dir cache 60s success / 5s failure; ServeFile 404.html only; escaping current = park missing; no recursive fallback; no per-miss Elixir on warm cache.\n- R3: missing explicit target → empty 404 not park; invalid policy → empty 404; HEAD empty body same status; skip ServeDir 405/206; SPA HTML revalidate even under /_app/immutable/; no 206 rewrite; keep br/gz.\n\nR1–R3 implementation boxes stay [ ] for act after accept. This read is of the reconciled CONTRACT. Accept if the amend answers the send-back; do not require the Rust/Elixir fixes to already exist. Check Fresh architecture advise only on accept, citing this contract (9b48f63).\n\nWrite openspec/changes/add-sites-fallback/reviews/2026-09-21-re-advise.md.\nBLIND PASS: Why + cited code first, then compare to the amend. Do not implement. Do not fold. Do not flip the banner.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-sites-fallback/reviews/2026-09-21-advise.md",
+      "invariant": "Send-back R1–R3; miss order and Host pin held"
+    },
+    {
+      "symbol": "openspec/changes/add-sites-fallback/specs/sites-serve/spec.md",
+      "invariant": "Amended SHALLs for signed policy, park TTL, missing targets, HTTP"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-sites-fallback/reviews/2026-09-21-re-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-sites-fallback/reviews/2026-09-21-re-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-sites-fallback/reviews/2026-09-21-re-advise.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement R1–R3 in gateway/publish/materializer", "tracked_as": "act" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-sites-fallback/reviews",
+      "openspec/changes/add-sites-fallback/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Scaffold 68c6bc7, send-back cceaec0, amend 9b48f63.",
+    "R1–R3 stay [ ] until act. Fresh advise box is for the accepting reader."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader"
+}

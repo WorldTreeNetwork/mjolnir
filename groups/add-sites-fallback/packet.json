@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-sites-fallback",
+  "node_id": "add-sites-fallback",
+  "capability": "sites-serve",
+  "change_id": "add-sites-fallback",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "sol-implement" }
+  },
+  "goal": "ACT add-sites-fallback. Architecture accept is 6043c27 (reviews/2026-09-21-re-advise.md). Implement the miss path and policy transport. Do not fold. Do not change HEAD or snapshot-manifest signed field sets.\n\nMiss order after ServeDir 404 on a bound site:\n1. policy index.html → 200 snapshot /index.html (HTML revalidate Cache-Control even if URL is /_app/immutable/…)\n2. policy 404.html or unset+snapshot 404.html → that file at 404\n3. policy false → empty 404\n4. else park materialized 404.html at 404, original Host; missing park → empty 404\nNever 307 a live miss. ServeDir 200/304/206/405 skip fallback.\n\nR1: mj sites publish reads dir/mjolnir.toml then parent. Site-only parse (no start_command). Signed SecretStore sites/<name>/fallback. Materialize sibling file next to current in the same atomic window. Rematerialize from store. Failed publish leaves prior. Omitted fallback deletes record. Invalid TOML values refuse publish.\n\nR2: park dir cache 60s success / 5s failure. ServeFile 404.html only — no park fallback chain. Escaping current = park missing.\n\nR3: missing explicit target → empty 404 not park. Invalid sibling policy → empty 404. HEAD empty body same status. Keep br/gz. No 206 on SPA rewrite.\n\nCheck remaining [ ] boxes on tasks.md when tests prove them. Leave Fresh advise checked.\n\nWork from git HEAD. Do not revert unrelated fingerprint/Blake3 comments in sites.rs if present.",
+  "anchors": [
+    {
+      "symbol": "native/mjolnir_gateway/src/sites_serve.rs",
+      "invariant": "Miss currently always snapshot 404.html at 404"
+    },
+    {
+      "symbol": "openspec/changes/add-sites-fallback/specs/sites-serve/spec.md",
+      "invariant": "SHALLs for miss order, signed policy, park TTL, HTTP"
+    },
+    {
+      "symbol": "openspec/changes/add-sites-fallback/design.md",
+      "invariant": "Pins 1–8 plus park lookup and fallback HTTP"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd native && cargo test -p mjolnir-gateway --offline -- sites_serve -- --test-threads=1"
+  },
+  "out_of_scope": [
+    { "item": "Unbound 307 / compiled berth page", "tracked_as": "parked.rs" },
+    { "item": "Deploy the park site", "tracked_as": "ops" },
+    { "item": "Fold / archive", "tracked_as": "fold" },
+    { "item": "Change HEAD or snapshot-manifest signed fields", "tracked_as": "compat" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "native/mjolnir_gateway/src/sites_serve.rs",
+      "native/mjolnir_gateway/src/sites.rs",
+      "native/mjolnir_gateway/src/main.rs",
+      "native/mjolnir_client/src/sites.rs",
+      "lib/mjolnir/sites/materializer.ex",
+      "lib/mjolnir/sites/fallback_policy.ex",
+      "lib/mjolnir/api/sites_router.ex",
+      "test/mjolnir/sites/",
+      "openspec/changes/add-sites-fallback/tasks.md",
+      "docs/"
+    ],
+    "do_not": ["fold", "deploy", "push", "flip banner"]
+  },
+  "inherited": [
+    "Contract 9b48f63 / accept 6043c27. Do not weaken park-in-place or signed policy.",
+    "Prior Sol act spawns wrote ADVISE instead of implementing. This job is product code plus tests."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "worker"
+}

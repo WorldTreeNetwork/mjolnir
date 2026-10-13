@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-blob-door-byte-pump",
+  "node_id": "add-blob-door-byte-pump",
+  "capability": "blob-store",
+  "change_id": "add-blob-door-byte-pump",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "agt-opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-opus-5-fold" }
+  },
+  "goal": "FOLD add-blob-door-byte-pump. You are the folder, not a reviewer. Apply fold-steps: merge ADDED requirements from openspec/changes/add-blob-door-byte-pump/specs/blob-store/spec.md into openspec/specs/blob-store/spec.md (disk pump, cache is not accept including failed-fill and concurrent budget, hash-before-join, resolved cache root). Do not import unbuilt SHALLs. git mv the change dir to openspec/changes/archive/2026-09-20-add-blob-door-byte-pump. LEARNINGS one line if surprise. Do not write reviews. Do not start a line with ADVISE. Do not implement leftover code.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-blob-door-byte-pump/specs/blob-store/spec.md",
+      "invariant": "ADDED deltas to fold; all landed f18b871 + installer refuse in 270e63e"
+    },
+    {
+      "symbol": "openspec/specs/blob-store/spec.md",
+      "invariant": "Living spec; append ADDED requirement blocks; keep ADR 0003 B2-is-canonical"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-blob-door-byte-pump && test -d openspec/changes/archive/2026-09-20-add-blob-door-byte-pump && rg -q 'Object identifiers are hashes before any filesystem access' openspec/specs/blob-store/spec.md && rg -q 'Cache root is enforced on the resolved path' openspec/specs/blob-store/spec.md"
+  },
+  "out_of_scope": [
+    { "item": "Sites Plug 64 MiB / mj MAX_BODY", "tracked_as": "sites" },
+    { "item": "Advise review", "tracked_as": "advise" },
+    { "item": "Deploy the door unit", "tracked_as": "deploy" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/blob-store/spec.md",
+      "openspec/changes/add-blob-door-byte-pump/",
+      "openspec/changes/archive/",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["deploy", "advise-review", "implement-leftover", "push"]
+  },
+  "inherited": [
+    "Last advise is accept (reviews/2026-09-20-re-advise.md). All owed tasks checked including R1–R4.",
+    "Code: 0553ef0 pump, 18f4437 cache off btrfs_root, 70600cb tests, 270e63e installer resolved-path refuse (bundled with sites Blake3), f18b871 R1–R4.",
+    "Prior Opus fold spawns wrote ADVISE by mistake. This job is living spec plus archive only."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}
