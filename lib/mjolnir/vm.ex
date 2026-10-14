@@ -1946,6 +1946,10 @@ defmodule Mjolnir.VM do
       end
     end
 
+    # Re-render gateway routes. Routes.render keeps a preserved VM's route (its
+    # StateStore intent is still :running) and drops a torn-down one.
+    Mjolnir.EventBus.publish(state.id, :vm_stopped, %{reason: inspect(reason)})
+
     Logger.warning("[vm-terminate] #{state.id} done")
     :ok
   end
@@ -3024,6 +3028,12 @@ defmodule Mjolnir.VM do
     # being answered by the :running clause after handle_continue returns.
     # Forgetting this reply would hang every managed spawn until its timeout.
     if state.boot_waiter, do: GenServer.reply(state.boot_waiter, {:ok, running_state})
+
+    # Gateway.RouteReconciler re-renders custom-domain routes on this. Without
+    # it a VM resumed by Reconcile or revived by an operator came back :running
+    # while its domain stayed parked, because nothing else re-renders routes
+    # after the post-boot settle sweeps.
+    Mjolnir.EventBus.publish(state.id, :vm_started, %{})
 
     Mjolnir.Mailbox.kick(state.id)
 
