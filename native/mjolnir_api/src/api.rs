@@ -316,7 +316,7 @@ pub async fn fetch_vms(client: &reqwest::Client, base: &str) -> Result<Vec<VmSum
 }
 
 /// Resolve a VM identifier: if it looks like a UUID, use it directly.
-/// Otherwise treat it as a ticket and look up the VM ID from the list.
+/// Otherwise look it up in the list by VM ID or by ticket.
 pub async fn resolve_vm_id(
     client: &reqwest::Client,
     base: &str,
@@ -326,12 +326,18 @@ pub async fn resolve_vm_id(
     if id_or_ticket.len() == 36 && id_or_ticket.contains('-') {
         return Ok(id_or_ticket.to_string());
     }
-    // Look up by ticket
     let vms = fetch_vms(client, base).await?;
+    find_vm_id(&vms, id_or_ticket)
+        .ok_or_else(|| anyhow::anyhow!("No VM found with id or ticket {}", id_or_ticket))
+}
+
+/// Match a VM by its ID or its ticket. VM IDs are short base58 strings, not
+/// UUIDs, and a `failed` VM has no ticket — matching by ticket alone made
+/// `revive`, `forget` and `info` unable to reach any failed VM.
+fn find_vm_id(vms: &[VmSummary], id_or_ticket: &str) -> Option<String> {
     vms.iter()
-        .find(|vm| vm.ticket.as_deref() == Some(id_or_ticket))
+        .find(|vm| vm.id == id_or_ticket || vm.ticket.as_deref() == Some(id_or_ticket))
         .map(|vm| vm.id.clone())
-        .ok_or_else(|| anyhow::anyhow!("No VM found with ticket {}", id_or_ticket))
 }
 
 /// Fetch detailed info for one VM (`GET /api/vms/{id}`), as typed data.
@@ -458,4 +464,53 @@ pub async fn spawn_vm(
         .json()
         .await
         .context("failed to parse spawn response")
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    fn vm(id: &str, ticket: Option<&str>) -> VmSummary {
+        VmSummary {
+            id: id.to_string(),
+            state: if ticket.is_some() {
+                "running"
+            } else {
+                "failed"
+            }
+            .to_string(),
+            ticket: ticket.map(str::to_string),
+            guest_ip: None,
+            shell_ready: None,
+            web_url: None,
+            iroh_node_id: None,
+        }
+    }
+
+    #[test]
+    fn finds_a_failed_vm_by_its_short_id() {
+        let vms = [
+            vm("BRej1C6DQ22SqJ4cCWv19g", Some("zr4k")),
+            vm("MQ1Cf6fLpMAnNHFb22sQQh", None),
+        ];
+        assert_eq!(
+            find_vm_id(&vms, "MQ1Cf6fLpMAnNHFb22sQQh").as_deref(),
+            Some("MQ1Cf6fLpMAnNHFb22sQQh")
+        );
+    }
+
+    #[test]
+    fn still_finds_a_vm_by_ticket() {
+        let vms = [vm("BRej1C6DQ22SqJ4cCWv19g", Some("zr4k"))];
+        assert_eq!(
+            find_vm_id(&vms, "zr4k").as_deref(),
+            Some("BRej1C6DQ22SqJ4cCWv19g")
+        );
+    }
+
+    #[test]
+    fn unknown_identifier_is_none() {
+        let vms = [vm("BRej1C6DQ22SqJ4cCWv19g", Some("zr4k"))];
+        assert_eq!(find_vm_id(&vms, "nope"), None);
+    }
 }
