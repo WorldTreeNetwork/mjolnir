@@ -45,9 +45,21 @@ if hosts = System.get_env("MJOLNIR_EGRESS_ALLOW_HOSTS") do
 end
 
 if issuer = System.get_env("MJOLNIR_AUTH_ISSUER") do
+  # IdentiKey sets `aud` to the OAuth client id. `mj` is mjolnir-cli and
+  # the browser login is mjolnir-term. A comma-separated
+  # MJOLNIR_AUTH_AUDIENCE replaces this list.
+  audience =
+    case System.get_env("MJOLNIR_AUTH_AUDIENCE") do
+      value when is_binary(value) and value != "" ->
+        value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+      _ ->
+        ["mjolnir-cli", "mjolnir-term", "mjolnir"]
+    end
+
   config :mjolnir, :auth,
     issuer: issuer,
-    audience: System.get_env("MJOLNIR_AUTH_AUDIENCE", "mjolnir")
+    audience: audience
 end
 
 if client_id = System.get_env("MJOLNIR_AUTH_CLIENT_ID") do

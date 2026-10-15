@@ -222,7 +222,7 @@ config :mjolnir, :syslog,
 config :mjolnir, :auth,
   bypass_localhost: false,
   issuer: "https://auth.identikey.me",
-  audience: "mjolnir",
+  audience: ["mjolnir-cli", "mjolnir-term", "mjolnir"],
   client_id: "mjolnir-term",
   redirect_uri: "https://api.vm.worldtree.network/auth/callback"
 

@@ -24,7 +24,8 @@ defmodule Mjolnir.API.Auth do
      `?token=` into the cookie and redirects so the JWT is not left in the
      URL. Sites tokens are never accepted from query or cookie. A `sub` of
      `localhost` or `sites_token:…` is rejected. When the token carries
-     `aud` and `:audience` is configured, a mismatch is rejected.
+     `aud` and `:audience` is configured, it must name one of those
+     audiences. `:audience` is a string or a list.
 
   Sites tokens are checked *first* so that presenting one always yields the
   narrow scope, even on the operator socket.
@@ -267,36 +268,45 @@ defmodule Mjolnir.API.Auth do
 
   defp reject_reserved_sub(_), do: {:error, :reserved_sub}
 
-  # A token that names an audience must name ours. Tokens that omit `aud`
-  # still pass: requiring it would reject every session minted before the
-  # check existed. Set `:require_audience` to reject those too.
+  # A token that names an audience must name one we accept. `:audience`
+  # is the client id IdentiKey puts in `aud` (`mjolnir-cli` for `mj`,
+  # `mjolnir-term` for the browser). A single string still works.
+  # Tokens that omit `aud` still pass until `:require_audience`.
   defp audience_ok?(claims) do
-    expected =
-      Application.get_env(:mjolnir, :auth, [])
-      |> Keyword.get(:audience)
+    auth = Application.get_env(:mjolnir, :auth, [])
 
-    require? =
-      Application.get_env(:mjolnir, :auth, [])
-      |> Keyword.get(:require_audience, false)
+    audience_matches?(
+      Map.get(claims, "aud"),
+      Keyword.get(auth, :audience),
+      Keyword.get(auth, :require_audience, false)
+    )
+  end
 
-    case Map.get(claims, "aud") do
-      _ when not is_binary(expected) and not require? ->
-        :ok
+  @doc false
+  def audience_matches?(aud, expected, require? \\ false) do
+    allowed =
+      case expected do
+        nil -> []
+        value when is_binary(value) -> [value]
+        values when is_list(values) -> Enum.filter(values, &is_binary/1)
+        _ -> []
+      end
 
-      nil when require? ->
-        {:error, :audience}
+    presented =
+      case aud do
+        nil -> []
+        value when is_binary(value) -> [value]
+        values when is_list(values) -> Enum.filter(values, &is_binary/1)
+        _ -> :invalid
+      end
 
-      nil ->
-        :ok
-
-      aud when is_binary(aud) and aud == expected ->
-        :ok
-
-      auds when is_list(auds) and is_binary(expected) ->
-        if expected in auds, do: :ok, else: {:error, :audience}
-
-      _ ->
-        {:error, :audience}
+    cond do
+      presented == :invalid -> {:error, :audience}
+      presented == [] and require? -> {:error, :audience}
+      presented == [] -> :ok
+      allowed == [] -> :ok
+      Enum.any?(presented, &(&1 in allowed)) -> :ok
+      true -> {:error, :audience}
     end
   end
 

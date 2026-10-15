@@ -36,4 +36,4 @@ config :mjolnir, dev_operator: true
 config :mjolnir, :auth,
   bypass_localhost: true,
   issuer: "https://auth.identikey.me",
-  audience: "mjolnir"
+  audience: ["mjolnir-cli", "mjolnir-term", "mjolnir"]
