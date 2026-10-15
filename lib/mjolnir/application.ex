@@ -175,8 +175,13 @@ defmodule Mjolnir.Application do
   defp maybe_jwks_strategy do
     auth_config = Application.get_env(:mjolnir, :auth, [])
 
+    # The issuer (auth.identikey.me) is served by a VM on this host. A
+    # synchronous fetch during boot waits on a guest that this same boot is
+    # supposed to resume, times out, and used to take the whole release down
+    # before Bandit listened. Fetch in the background; verification fails
+    # closed until the first successful refresh.
     if Keyword.get(auth_config, :issuer) do
-      [{Mjolnir.Auth.JwksStrategy, issuer: auth_config[:issuer], first_fetch_sync: true}]
+      [{Mjolnir.Auth.JwksStrategy, issuer: auth_config[:issuer], first_fetch_sync: false}]
     else
       []
     end

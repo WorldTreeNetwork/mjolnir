@@ -7,7 +7,15 @@ defmodule Mjolnir.Auth.JwksStrategyTest do
     opts = JwksStrategy.init_opts(issuer: "https://auth.identikey.me")
 
     assert opts[:jwks_url] == "https://auth.identikey.me/.well-known/jwks.json"
-    assert opts[:http_adapter] == Tesla.Adapter.Mint
+    assert opts[:http_adapter] == Mjolnir.Auth.JwksHTTP
+    assert opts[:http_max_retries_per_fetch] == 1
+  end
+
+  test "a transport failure is the one error Joken treats as soft" do
+    assert {:error, :econnrefused} ==
+             Mjolnir.Auth.JwksHTTP.soften({:error, :timeout}, "https://auth.example/jwks")
+
+    assert {:ok, :env} == Mjolnir.Auth.JwksHTTP.soften({:ok, :env}, "https://auth.example/jwks")
   end
 
   test "a trailing slash is not part of the jwks url" do

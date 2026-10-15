@@ -39,7 +39,9 @@ defmodule Mjolnir.Auth.JwksStrategy do
 
     opts
     |> Keyword.put(:jwks_url, jwks_url)
-    |> Keyword.put_new(:http_adapter, Tesla.Adapter.Mint)
+    |> Keyword.put_new(:http_adapter, Mjolnir.Auth.JwksHTTP)
+    |> Keyword.put_new(:http_max_retries_per_fetch, 1)
+    |> Keyword.put_new(:http_delay_per_retry, 200)
   end
 
   # Keycloak's realm certs URL is not the OIDC well-known path. Kept so an
