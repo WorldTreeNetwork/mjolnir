@@ -29,6 +29,10 @@ config :mjolnir,
   pg_socket_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/sock"),
   pg_log_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/log")
 
+# Local iex only. Production runtime.exs does not set this, so a TCP
+# connection to 127.0.0.1 is not the operator on the host.
+config :mjolnir, dev_operator: true
+
 config :mjolnir, :auth,
   bypass_localhost: true,
   issuer: "https://auth.identikey.me",

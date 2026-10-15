@@ -8,19 +8,28 @@ What Mjolnir protects against, what it doesn't, and what's on the roadmap.
 
 ## Assumptions
 
-1. **The host is trusted.** Mjolnir is a single-operator system. The host
-   kernel, hypervisor, and BEAM are in the trusted computing base. A
-   compromised host has full access to all VMs.
+1. **The host is still the trusted computing base.** The kernel, the
+   hypervisor, and the BEAM can read guest memory, guest disks, and
+   vsock. A capability token does not change that. Confidential
+   computing (SEV-SNP / TDX) is the only thing that would, and it is
+   not this system.
 
-2. **The network is untrusted.** All external communication (Iroh, gateway
-   TLS) uses end-to-end encryption. The relay operator sees metadata only.
+2. **Guests are hostile.** They have code we did not write, they can
+   open sockets, and they will be able to message each other and take
+   actions. "Buggy but not malicious" is not the model.
 
-3. **Guests are semi-trusted.** VMs run user workloads that may be buggy
-   but not actively malicious. Network isolation is topological (TAP + /32
-   routes), not firewall-enforced at the host.
+3. **A place is not a principal.** A TCP connection to `127.0.0.1` is
+   not the operator. The public gateway dials loopback for site
+   fallback. The operator is the Unix socket at
+   `/run/mjolnir/operator.sock` (mode `0600`). Automation is a Biscuit
+   delegated to one repo and one operation. A human `mj` session is
+   that human's token `sub`.
 
-4. **Physical access is out of scope.** Disk encryption (LUKS for the host
-   partition) is a deployment concern, not a Mjolnir feature.
+4. **The network is untrusted.** Guest-to-guest forwarding is denied.
+   External hops use TLS or QUIC. The host still sees metadata.
+
+5. **Physical access is out of scope.** Disk encryption of the host
+   partition is a deployment concern, not a Mjolnir feature.
 
 ## What's Protected
 
@@ -32,14 +41,14 @@ What Mjolnir protects against, what it doesn't, and what's on the roadmap.
 | Unauthorized VM access | ED25519 peer identity (Iroh), JWT + ownership policy (API) |
 | Secret theft in transit | LUKS passphrase injected over Iroh QUIC (end-to-end encrypted) |
 | DNS hijacking of VM URLs | TLS certificate pinned to `*.vm.worldtree.network` |
-| API bruteforce | Localhost-only binding; remote access requires SSH key |
+| API bruteforce | Public `:4000` is firewalled. `api.vm.worldtree.network` is the gateway, token-authenticated. Peer address grants nothing |
 
 ### Against guest escape (VM → host)
 
 | Attack | Protection |
 |---|---|
 | Filesystem escape | BTRFS subvolume-per-VM; virtio-fs enforces share boundary |
-| Network escape | Dedicated TAP device per VM; /32 routing; no shared bridge |
+| Network escape | Dedicated TAP per VM. FORWARD from the guest subnet to itself is dropped. Sidecars on `10.200.0.1` are a separate allow |
 | vsock impersonation | Hypervisor-enforced CID isolation (unique per VM) |
 | Device access | `DeviceAllow` restricts to `/dev/kvm` and `/dev/net/tun` only |
 | Kernel exploit | Cloud Hypervisor is a minimal VMM (Rust, small attack surface) |
@@ -80,11 +89,13 @@ would protect runtime.
 
 ### Cross-VM network attacks
 
-VMs can reach each other via IP because the host forwards traffic for NAT.
-There is no host-side firewall between VMs.
-
-**Mitigation path**: Per-VM nftables rules or network namespace isolation.
-Not yet implemented.
+`Mjolnir.Network.ensure_guest_isolation/1` inserts a FORWARD drop for
+the guest subnet to itself, with an accept for the host sidecar
+address in front of it. Guests can still reach the host sidecars
+(Postgres, Redis, the blob door) and the public internet, and they
+share the host's egress address. Iroh is a second path that does not
+cross that FORWARD rule. A per-pair allow, installed by the host
+because a capability names it, is the next step. It is not built.
 
 ### Guest agent integrity
 

@@ -17,8 +17,31 @@ if escrow_dir = System.get_env("MJOLNIR_SECRET_ESCROW_DIR") do
   config :mjolnir, secret_escrow_dir: escrow_dir
 end
 
-if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST", "false") == "true" do
-  config :mjolnir, :auth, bypass_localhost: true
+# MJOLNIR_AUTH_BYPASS_LOCALHOST is ignored. A TCP peer on 127.0.0.1 is
+# not the operator: the public gateway dials loopback for site fallback,
+# and that splice used to inherit full control-plane scope. Break-glass
+# is the Unix socket below. Dev and test opt in separately.
+if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST") == "true" do
+  IO.warn("MJOLNIR_AUTH_BYPASS_LOCALHOST is set and has no effect")
+end
+
+if config_env() == :prod do
+  config :mjolnir,
+    operator_socket: System.get_env("MJOLNIR_OPERATOR_SOCKET", "/run/mjolnir/operator.sock")
+
+  config :mjolnir, isolate_guests: true
+end
+
+if pub = System.get_env("MJOLNIR_BISCUIT_PUBLIC_HEX") do
+  config :mjolnir, biscuit_public_hex: pub
+end
+
+if hosts = System.get_env("MJOLNIR_EGRESS_ALLOW_HOSTS") do
+  config :mjolnir,
+    egress_allow_hosts:
+      hosts
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
 end
 
 if issuer = System.get_env("MJOLNIR_AUTH_ISSUER") do

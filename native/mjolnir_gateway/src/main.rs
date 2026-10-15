@@ -558,6 +558,68 @@ where
     }
 }
 
+/// Path from the request line. `None` when the line is not a request.
+fn request_path(header_bytes: &[u8]) -> Option<String> {
+    let end = header_bytes
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(header_bytes.len());
+    let head = String::from_utf8_lossy(&header_bytes[..end]);
+    let line = head.lines().next()?;
+    let target = line.split_whitespace().nth(1)?;
+    Some(target.split('?').next()?.to_string())
+}
+
+/// The site fallback splices the visitor's TCP connection onto the API.
+/// That connection is loopback on this host, and loopback used to be the
+/// operator. Site content is `GET /…`. Control-plane paths are not.
+fn is_control_plane(path: &str) -> bool {
+    path == "/api"
+        || path.starts_with("/api/")
+        || path == "/auth"
+        || path.starts_with("/auth/")
+}
+
+async fn refuse_control_plane<W>(w: &mut W)
+where
+    W: AsyncWrite + Unpin,
+{
+    let body = b"control plane is not served on the site path\n";
+    let head = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = w.write_all(head.as_bytes()).await;
+    let _ = w.write_all(body).await;
+    let _ = w.shutdown().await;
+}
+
+async fn forward_site_or_refuse<S>(
+    mut stream: S,
+    header_buf: Vec<u8>,
+    backend: SocketAddr,
+    connect_timeout: std::time::Duration,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let path = request_path(&header_buf);
+    if path.as_deref().map(is_control_plane).unwrap_or(true) {
+        warn!(
+            path = path.as_deref().unwrap_or(""),
+            "refusing to splice a control-plane request onto the site backend"
+        );
+        refuse_control_plane(&mut stream).await;
+        return;
+    }
+    match dial_local(backend, connect_timeout).await {
+        Ok(backend_stream) => run_proxy_local(stream, backend_stream, header_buf).await,
+        Err(dial_err) => {
+            warn!("sites backend unreachable: {}", dial_err);
+            write_error_and_shutdown(&mut stream, &dial_err).await;
+        }
+    }
+}
+
 fn extract_host(header_bytes: &[u8]) -> Option<String> {
     // `read_until_headers` returns whatever the socket handed us, which is the
     // header block PLUS however much of the request BODY arrived in the same
@@ -1145,16 +1207,13 @@ async fn handle_connection<S>(
                             .await;
                             return;
                         }
-                        let connect_timeout = ctx.iroh_cfg.connect_timeout;
-                        match dial_local(backend, connect_timeout).await {
-                            Ok(backend_stream) => {
-                                run_proxy_local(stream, backend_stream, header_buf).await;
-                            }
-                            Err(dial_err) => {
-                                warn!("{}: sites backend unreachable: {}", peer, dial_err);
-                                write_error_and_shutdown(&mut stream, &dial_err).await;
-                            }
-                        }
+                        forward_site_or_refuse(
+                            stream,
+                            header_buf,
+                            backend,
+                            ctx.iroh_cfg.connect_timeout,
+                        )
+                        .await;
                         return;
                     }
                     LookupResult::Miss | LookupResult::Error => {}
@@ -1234,16 +1293,13 @@ async fn handle_connection<S>(
                             route = "sites",
                             "sites alias hit — forwarding to mjolnir backend"
                         );
-                        let connect_timeout = ctx.iroh_cfg.connect_timeout;
-                        match dial_local(backend, connect_timeout).await {
-                            Ok(backend_stream) => {
-                                run_proxy_local(stream, backend_stream, header_buf).await;
-                            }
-                            Err(dial_err) => {
-                                warn!("{}: sites backend unreachable: {}", peer, dial_err);
-                                write_error_and_shutdown(&mut stream, &dial_err).await;
-                            }
-                        }
+                        forward_site_or_refuse(
+                            stream,
+                            header_buf,
+                            backend,
+                            ctx.iroh_cfg.connect_timeout,
+                        )
+                        .await;
                         return;
                     }
                     LookupResult::Miss => {
@@ -1974,6 +2030,18 @@ mod tests {
     fn extract_host_still_works_for_a_plain_bodyless_request() {
         let req = b"GET / HTTP/1.1\r\nHost: zine.identikey.io\r\n\r\n";
         assert_eq!(extract_host(req).as_deref(), Some("zine.identikey.io"));
+    }
+
+    #[test]
+    fn site_splice_refuses_control_plane_paths() {
+        let api = b"POST /api/vms HTTP/1.1\r\nHost: zine.example\r\n\r\n";
+        assert_eq!(request_path(api).as_deref(), Some("/api/vms"));
+        assert!(is_control_plane("/api/vms"));
+        assert!(is_control_plane("/auth/login"));
+        let page = b"GET /index.html?x=1 HTTP/1.1\r\nHost: zine.example\r\n\r\n";
+        assert_eq!(request_path(page).as_deref(), Some("/index.html"));
+        assert!(!is_control_plane("/index.html"));
+        assert!(!is_control_plane("/"));
     }
 
     #[test]

@@ -328,6 +328,60 @@ defmodule Mjolnir.Network do
   end
 
   @doc """
+  Drop guest-to-guest forwarding.
+
+  Traffic from the VM subnet to the VM subnet is FORWARD (each guest is a
+  /32 via the host). Traffic to the host sidecar address is delivered
+  locally, but an ACCEPT for that address is installed first in case a
+  future route treats it as FORWARD. Returns the iptables argument lists
+  so tests can pin the order without touching the live firewall.
+  """
+  @spec guest_isolation_specs(String.t(), String.t()) :: [[String.t()]]
+  def guest_isolation_specs(subnet \\ network_range(), host_ip \\ nil) do
+    canonical = canonical_subnet(subnet)
+    host_ip = host_ip || Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+
+    [
+      ["-s", canonical, "-d", "#{host_ip}/32", "-j", "ACCEPT"],
+      ["-s", canonical, "-d", canonical, "-j", "DROP"]
+    ]
+  end
+
+  @doc """
+  Install `guest_isolation_specs/2` at the head of FORWARD.
+
+  Idempotent: a rule that is already present is not inserted again.
+  The DROP is inserted first, then the host ACCEPT is inserted at
+  position 1, so the ACCEPT stays in front of the DROP.
+  """
+  @spec ensure_guest_isolation() :: :ok | {:error, term()}
+  def ensure_guest_isolation do
+    specs = guest_isolation_specs()
+
+    Enum.reduce_while(Enum.reverse(specs), :ok, fn spec, :ok ->
+      case ensure_forward_rule(spec) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp ensure_forward_rule(spec) do
+    check = ["-C", "FORWARD" | spec]
+
+    case System.cmd("iptables", check, stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      _ ->
+        case System.cmd("iptables", ["-I", "FORWARD", "1" | spec], stderr_to_stdout: true) do
+          {_, 0} -> :ok
+          {out, code} -> {:error, {:iptables_failed, code, String.trim(out)}}
+        end
+    end
+  end
+
+  @doc """
   Ensure the VM-subnet MASQUERADE rule is installed and active.
 
   If ufw manages the firewall, reload it — our rule lives in

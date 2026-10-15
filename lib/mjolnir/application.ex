@@ -113,18 +113,63 @@ defmodule Mjolnir.Application do
           # In-flight browser logins against IdentiKey Connect (mjolnir-wrug.3)
           Mjolnir.Auth.Login,
 
-          # HTTP API
+          # Single-use nonces for holder-bound secret redeem.
+          Mjolnir.Secrets.Nonces,
+
+          # HTTP API. TCP. A loopback peer is not the operator.
           {Bandit,
            plug: Mjolnir.API.Router,
            port: api_port,
            thousand_island_options: [read_timeout: :infinity]}
-        ]
+        ] ++
+        operator_listener()
 
     opts = [strategy: :one_for_one, name: Mjolnir.Supervisor]
 
     Logger.info("Starting Mjolnir MicroVM Fabric")
     Logger.info("Starting Mjolnir Orchestrator (HTTP API on port #{api_port})")
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      chmod_operator_socket()
+      maybe_isolate_guests()
+      {:ok, pid}
+    end
+  end
+
+  defp operator_listener do
+    case Application.get_env(:mjolnir, :operator_socket) do
+      path when is_binary(path) and path != "" ->
+        File.rm(path)
+        File.mkdir_p!(Path.dirname(path))
+
+        [
+          {Bandit,
+           plug: Mjolnir.API.OperatorPipeline,
+           scheme: :http,
+           port: 0,
+           ip: {:local, path},
+           thousand_island_options: [read_timeout: :infinity]}
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp chmod_operator_socket do
+    case Application.get_env(:mjolnir, :operator_socket) do
+      path when is_binary(path) -> File.chmod(path, 0o600)
+      _ -> :ok
+    end
+  end
+
+  defp maybe_isolate_guests do
+    if Application.get_env(:mjolnir, :isolate_guests, false) do
+      case Mjolnir.Network.ensure_guest_isolation() do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("guest isolation: #{inspect(reason)}")
+      end
+    end
   end
 
   defp maybe_jwks_strategy do

@@ -375,11 +375,15 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
-        /// Owner stamped on a localhost deploy (X-Owner-Id). Canonical base58
-        /// XID. The server ignores this header unless the request is the
-        /// loopback bypass, and rejects anything that is not that spelling.
+        /// Owner stamped on an operator-socket deploy (X-Owner-Id). Canonical
+        /// base58 XID. The server ignores this header unless the request is
+        /// the operator principal, and rejects anything that is not that spelling.
         #[arg(long)]
         owner: Option<String>,
+        /// Forgejo `owner/repo`. The API resolves the IdentiKey from the
+        /// forgejo-owners map. The client does not choose the XID.
+        #[arg(long)]
+        forgejo_repo: Option<String>,
     },
     /// Manage custom domains for deployed apps (set / rm / ls)
     #[command(next_help_heading = "Apps")]
@@ -1080,9 +1084,21 @@ async fn main() {
             api,
             token,
             owner,
+            forgejo_repo,
         } => {
-            deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain, base, owner)
-                .await
+            deploy::cmd_deploy(
+                &profile,
+                &api,
+                &token,
+                path,
+                name,
+                memory,
+                domain,
+                base,
+                owner,
+                forgejo_repo,
+            )
+            .await
         }
         Command::Domain { action } => match action {
             DomainAction::Set {

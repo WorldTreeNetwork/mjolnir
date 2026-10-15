@@ -19,8 +19,10 @@ defmodule Mjolnir.Policy.Snapshot do
   """
   @spec authorize(action(), user(), resource()) :: :ok | :error
 
-  # Localhost gets full access (ops) — MUST be first
+  # Operator (the Unix socket), not a TCP peer. MUST be first.
   def authorize(_, %{user_id: "localhost"}, _), do: :ok
+
+  def authorize(_, %{user_id: "sites_token:" <> _}, _), do: :error
 
   # List: any authenticated user (results are filtered by caller)
   def authorize(:list, %{user_id: uid}, _) when is_binary(uid), do: :ok

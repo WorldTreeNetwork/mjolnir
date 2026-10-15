@@ -1106,12 +1106,25 @@ import pathlib, sys
 path, subnet = pathlib.Path(sys.argv[1]), sys.argv[2]
 anchor = '-A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
 inject = (
-    '\n# MJOLNIR VM FORWARD — accept traffic to/from VM subnet\n'
+    '\n# MJOLNIR VM FORWARD — guests reach the internet, not each other\n'
+    f'-A ufw-before-forward -s {subnet} -d {subnet} -j DROP\n'
     f'-A ufw-before-forward -s {subnet} -j ACCEPT\n'
     f'-A ufw-before-forward -d {subnet} -j ACCEPT\n'
 )
 txt = path.read_text()
 path.write_text(txt.replace(anchor, anchor + inject, 1))
+PY
+    fi
+
+    # Hosts that already had the broad ACCEPT get the DROP in front of it.
+    local drop_rule="-A ufw-before-forward -s ${vm_subnet} -d ${vm_subnet} -j DROP"
+    local accept_rule="-A ufw-before-forward -s ${vm_subnet} -j ACCEPT"
+    if grep -qF "$accept_rule" "$before" && ! grep -qF "$drop_rule" "$before"; then
+        python3 - "$before" "$drop_rule" "$accept_rule" <<'PY'
+import pathlib, sys
+path, drop, accept = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+txt = path.read_text()
+path.write_text(txt.replace(accept, drop + "\n" + accept, 1))
 PY
     fi
 
@@ -1128,6 +1141,11 @@ setup_networking_iptables() {
     if ! iptables -t nat -C POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE 2>/dev/null; then
         log_info "Adding NAT masquerade rule for $vm_subnet out $ext_iface..."
         iptables -t nat -A POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE
+    fi
+
+    if ! iptables -C FORWARD -s "$vm_subnet" -d "$vm_subnet" -j DROP 2>/dev/null; then
+        log_info "Dropping guest-to-guest FORWARD for $vm_subnet..."
+        iptables -I FORWARD 1 -s "$vm_subnet" -d "$vm_subnet" -j DROP
     fi
 
     if ! iptables -C FORWARD -s "$vm_subnet" -j ACCEPT 2>/dev/null; then

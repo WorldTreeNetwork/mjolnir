@@ -77,7 +77,7 @@ provided by SSH tunneling for remote access).
 | Mode | How it works |
 |---|---|
 | **JWT bearer** | `Authorization: Bearer <token>` verified via `Mjolnir.Auth.Token`. Token `sub` claim maps to `user_id`. |
-| **Localhost bypass** | When `MJOLNIR_AUTH_BYPASS_LOCALHOST=true`, requests from `127.0.0.1` skip JWT and get `user_id="localhost"` with full scope. Off by default in prod. |
+| **Operator socket** | `/run/mjolnir/operator.sock`, mode `0600`. `MJOLNIR_AUTH_BYPASS_LOCALHOST` does not grant a principal. |
 
 Scope-based authorization controls per-endpoint access. Resource-level
 policy (`Mjolnir.Policy.VM`, `Mjolnir.Policy.Snapshot`) enforces ownership:

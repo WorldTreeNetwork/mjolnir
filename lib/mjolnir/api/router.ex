@@ -116,8 +116,11 @@ defmodule Mjolnir.API.Router do
 
   plug(Plug.Logger)
   plug(:maybe_parse_body)
-  plug(Mjolnir.API.Auth)
+  # Vanity sites are public content. They run before Auth so a gateway
+  # splice of `GET /` does not need to be the operator. `/api` and
+  # `/auth` fall through to Auth.
   plug(Mjolnir.API.VanityHostPlug)
+  plug(Mjolnir.API.Auth)
   plug(:match)
   plug(:dispatch)
 
@@ -1121,34 +1124,42 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Send message to a VM (inter-VM messaging / coroutine wake-up)
+  # Send message to a VM (inter-VM messaging / coroutine wake-up).
+  # The sender is the authenticated principal. A body field is not.
   post "/api/vms/:id/messages" do
-    conn = require_scope(conn, "vms:exec")
+    conn =
+      if Mjolnir.API.Auth.capability?(conn) do
+        conn
+      else
+        require_scope(conn, "vms:exec")
+      end
 
     unless conn.halted do
-      authorize_vm(conn, id, :message, fn _vm ->
-        from_vm_id = conn.body_params["from_vm_id"] || "external"
+      send = fn ->
         payload = conn.body_params["payload"] || %{}
-        # Plug stringifies atoms; missing id must stay nil so Mailbox generates one.
+        sender = message_sender(conn)
 
-        # Validate from_vm_id ownership when not "external"
         authorized =
-          if from_vm_id == "external" do
-            true
-          else
-            user = %{user_id: conn.assigns[:user_id]}
+          cond do
+            Mjolnir.API.Auth.capability?(conn) ->
+              biscuit_right(conn, id, "message") == :ok
 
-            case Mjolnir.VM.get(from_vm_id) do
-              {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
-              # Not found or unreachable (mjolnir-8ie): cannot authorize the sender.
-              {:error, _} -> false
-            end
+            sender == conn.assigns[:user_id] ->
+              true
+
+            true ->
+              user = %{user_id: conn.assigns[:user_id]}
+
+              case Mjolnir.VM.get(sender) do
+                {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
+                {:error, _} -> false
+              end
           end
 
         if authorized do
           message_id = conn.body_params["id"]
 
-          case Mjolnir.VM.deliver_message(id, from_vm_id, payload, id: message_id) do
+          case Mjolnir.VM.deliver_message(id, sender, payload, id: message_id) do
             {:ok, %{message_id: mid, status: status}} ->
               json(conn, 200, %{ok: true, message_id: mid, status: status})
 
@@ -1168,19 +1179,32 @@ defmodule Mjolnir.API.Router do
         else
           json(conn, 404, %{error: "not_found"})
         end
-      end)
+      end
+
+      if Mjolnir.API.Auth.capability?(conn) do
+        send.()
+      else
+        authorize_vm(conn, id, :message, fn _vm -> send.() end)
+      end
     else
       conn
     end
   end
 
-  # Caller mailbox (non-VM). Same @mail spool; peek does not tombstone.
+  # Caller mailbox. The id is either the caller's own mailbox or a VM
+  # they may message. A client-supplied sender is not recorded.
   get "/api/mail/:id/messages" do
     conn = require_scope(conn, "vms:exec")
 
     unless conn.halted do
-      messages = Mjolnir.Mailbox.list_unacked(id)
-      json(conn, 200, %{ok: true, messages: messages})
+      conn = authorize_mailbox(conn, id)
+
+      if conn.halted do
+        conn
+      else
+        messages = Mjolnir.Mailbox.list_unacked(id)
+        json(conn, 200, %{ok: true, messages: messages})
+      end
     else
       conn
     end
@@ -1190,21 +1214,27 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:exec")
 
     unless conn.halted do
-      from_id = conn.body_params["from_vm_id"] || "external"
-      payload = conn.body_params["payload"] || %{}
-      message_id = conn.body_params["id"]
+      conn = authorize_mailbox(conn, id)
 
-      case Mjolnir.Mailbox.accept(id, from_id, payload, id: message_id) do
-        {:ok, %{message_id: mid, status: status}} ->
-          Mjolnir.Mailbox.kick(id)
-          json(conn, 200, %{ok: true, message_id: mid, status: status})
+      if conn.halted do
+        conn
+      else
+        payload = conn.body_params["payload"] || %{}
+        message_id = conn.body_params["id"]
+        sender = message_sender(conn)
 
-        {:error, :invalid_message_id} ->
-          json(conn, 400, %{error: "invalid_message_id"})
+        case Mjolnir.Mailbox.accept(id, sender, payload, id: message_id) do
+          {:ok, %{message_id: mid, status: status}} ->
+            Mjolnir.Mailbox.kick(id)
+            json(conn, 200, %{ok: true, message_id: mid, status: status})
 
-        {:error, reason} ->
-          Logger.error("Mailbox accept failed for #{id}: #{inspect(reason)}")
-          json(conn, 500, %{error: "message_delivery_failed"})
+          {:error, :invalid_message_id} ->
+            json(conn, 400, %{error: "invalid_message_id"})
+
+          {:error, reason} ->
+            Logger.error("Mailbox accept failed for #{id}: #{inspect(reason)}")
+            json(conn, 500, %{error: "message_delivery_failed"})
+        end
       end
     else
       conn
@@ -1215,24 +1245,67 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:exec")
 
     unless conn.halted do
-      ids =
-        case conn.body_params["ids"] do
-          list when is_list(list) -> Enum.filter(list, &is_binary/1)
-          _ -> []
-        end
+      conn = authorize_mailbox(conn, id)
 
-      results =
-        Enum.map(ids, fn mid ->
-          case Mjolnir.Mailbox.ack(id, mid) do
-            :ok -> %{id: mid, ok: true}
-            {:error, reason} -> %{id: mid, ok: false, error: inspect(reason)}
-          end
-        end)
-
-      json(conn, 200, %{ok: true, results: results})
+      if conn.halted do
+        conn
+      else
+        ack_mailbox(conn, id)
+      end
     else
       conn
     end
+  end
+
+  post "/api/secrets/challenge" do
+    json(conn, 200, %{nonce: Mjolnir.Secrets.Redeem.challenge()})
+  end
+
+  post "/api/secrets/redeem" do
+    case Mjolnir.Secrets.Redeem.redeem(conn.body_params) do
+      {:ok, secret} ->
+        json(conn, 200, %{value_b64: Base.encode64(secret)})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_found"})
+
+      {:error, reason} ->
+        json(conn, 401, %{error: Atom.to_string(reason)})
+    end
+  end
+
+  post "/api/egress" do
+    case Mjolnir.Secrets.Redeem.egress(conn.body_params) do
+      {:ok, status, body} ->
+        json(conn, 200, %{upstream_status: status, body_b64: Base.encode64(body)})
+
+      {:error, :host_not_allowed} ->
+        json(conn, 403, %{error: "host_not_allowed"})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_found"})
+
+      {:error, reason} ->
+        json(conn, 401, %{error: Atom.to_string(reason)})
+    end
+  end
+
+  defp ack_mailbox(conn, id) do
+    ids =
+      case conn.body_params["ids"] do
+        list when is_list(list) -> Enum.filter(list, &is_binary/1)
+        _ -> []
+      end
+
+    results =
+      Enum.map(ids, fn mid ->
+        case Mjolnir.Mailbox.ack(id, mid) do
+          :ok -> %{id: mid, ok: true}
+          {:error, reason} -> %{id: mid, ok: false, error: inspect(reason)}
+        end
+      end)
+
+    json(conn, 200, %{ok: true, results: results})
   end
 
   # Stop VM
@@ -1698,8 +1771,15 @@ defmodule Mjolnir.API.Router do
 
   # Deploy an app from a gzipped-tar source body; stream NDJSON progress.
   # See the module doc for the full request/response contract.
+  # A capability token is checked inside handle_deploy, against the app
+  # name, and does not receive vms:spawn.
   post "/api/deploy" do
-    conn = require_scope(conn, "vms:spawn")
+    conn =
+      if Mjolnir.API.Auth.capability?(conn) do
+        conn
+      else
+        require_scope(conn, "vms:spawn")
+      end
 
     # Ownership is checked inside handle_deploy: the app name is only known
     # after the uploaded source is extracted (resolve_app_name reads
@@ -2148,16 +2228,97 @@ defmodule Mjolnir.API.Router do
   @deploy_max_body 256 * 1024 * 1024
 
   defp handle_deploy(conn) do
-    case Mjolnir.Deploy.Owner.resolve(
-           conn.assigns[:user_id],
-           conn |> get_req_header("x-owner-id") |> List.first()
-         ) do
+    case resolve_deployer(conn) do
       {:error, reason} ->
         json(conn, 400, %{error: Atom.to_string(reason)})
 
       {:ok, deployer} ->
         handle_deploy_body(conn, deployer)
     end
+  end
+
+  # Operator or a deploy capability names a Forgejo repo and the API
+  # resolves the XID. The caller does not send `X-Owner-Id` for that
+  # path. A capability token must also carry `right(<app>, "deploy")`,
+  # checked once the app name is known.
+  defp resolve_deployer(conn) do
+    repo = conn |> get_req_header("x-forgejo-repo") |> List.first()
+
+    cond do
+      Mjolnir.API.Auth.capability?(conn) ->
+        with {:ok, owner} <- forgejo_owner(repo) do
+          {:ok, owner}
+        end
+
+      Mjolnir.API.Auth.operator?(conn) and is_binary(repo) and repo != "" ->
+        forgejo_owner(repo)
+
+      true ->
+        Mjolnir.Deploy.Owner.resolve(
+          conn.assigns[:user_id],
+          conn |> get_req_header("x-owner-id") |> List.first()
+        )
+    end
+  end
+
+  defp forgejo_owner(repo) when is_binary(repo) and repo != "" do
+    case Mjolnir.Deploy.ForgejoOwners.resolve(repo) do
+      {:ok, owner} -> {:ok, owner}
+      :error -> {:error, :owner_not_linked}
+    end
+  end
+
+  defp forgejo_owner(_), do: {:error, :owner_not_linked}
+
+  defp message_sender(conn) do
+    claimed = conn.body_params["from_vm_id"]
+    user_id = conn.assigns[:user_id]
+
+    cond do
+      Mjolnir.API.Auth.capability?(conn) -> "capability"
+      is_binary(claimed) and claimed != "" and claimed != "external" -> claimed
+      true -> user_id || "operator"
+    end
+  end
+
+  defp authorize_mailbox(conn, id) do
+    user = %{user_id: conn.assigns[:user_id]}
+
+    cond do
+      Mjolnir.API.Auth.operator?(conn) ->
+        conn
+
+      conn.assigns[:user_id] == id ->
+        conn
+
+      true ->
+        case Mjolnir.VM.get(id) do
+          {:ok, vm} ->
+            if Mjolnir.Policy.VM.authorize(:message, user, vm) == :ok do
+              conn
+            else
+              json(conn, 404, %{error: "not_found"})
+            end
+
+          _ ->
+            json(conn, 404, %{error: "not_found"})
+        end
+    end
+  end
+
+  defp biscuit_right(conn, resource, operation) do
+    biscuit = conn.assigns[:biscuit]
+    fp = ""
+
+    case Application.get_env(:mjolnir, :biscuit_public_hex) do
+      hex when is_binary(hex) and is_binary(biscuit) ->
+        Mjolnir.Biscuit.authorize(biscuit, hex, fp, resource, operation, false)
+
+      _ ->
+        {:error, :biscuit_unconfigured}
+    end
+  rescue
+    _ -> {:error, :biscuit_unavailable}
   end
 
   defp handle_deploy_body(conn, deployer) do
@@ -2183,9 +2344,13 @@ defmodule Mjolnir.API.Router do
           json(conn, 409, %{error: "owner_mismatch"})
 
         _ ->
-          authorize_deploy(conn, app_name, fn _entry ->
-            do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
-          end)
+          if Mjolnir.API.Auth.capability?(conn) and biscuit_right(conn, app_name, "deploy") != :ok do
+            json(conn, 403, %{error: "capability_denied"})
+          else
+            authorize_deploy(conn, app_name, fn _entry ->
+              do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
+            end)
+          end
       end
     else
       {:error, :too_large} ->

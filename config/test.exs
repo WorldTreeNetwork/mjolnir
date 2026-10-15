@@ -34,3 +34,6 @@ config :mjolnir,
 config :mjolnir, auth_dir: "/tmp/mjolnir-test/auth"
 
 config :mjolnir, :auth, bypass_localhost: true
+# Lets Plug tests act as the operator when they also set bypass_localhost.
+# A production release never sets this. Peer address alone is not enough.
+config :mjolnir, test_operator: true

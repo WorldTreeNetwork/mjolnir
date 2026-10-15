@@ -32,8 +32,12 @@ defmodule Mjolnir.Policy.VM do
   """
   @spec authorize(action(), user(), resource()) :: :ok | :error
 
-  # Localhost gets full access (ops) — MUST be first
+  # Operator (the Unix socket), not a TCP peer. MUST be first.
   def authorize(_, %{user_id: "localhost"}, _), do: :ok
+
+  # A sites token is a publish credential. It never becomes a VM principal,
+  # even if a route forgets `require_scope`.
+  def authorize(_, %{user_id: "sites_token:" <> _}, _), do: :error
 
   # Spawn/list: any authenticated user
   def authorize(:spawn, %{user_id: uid}, _) when is_binary(uid), do: :ok

@@ -28,6 +28,17 @@ defmodule Mjolnir.Policy.VMTest do
     end
   end
 
+  describe "sites tokens" do
+    test "a sites token is not a VM principal" do
+      sites = %{user_id: "sites_token:abc"}
+
+      for action <- [:spawn, :list, :read, :exec, :stop, :message] do
+        assert :error = VM.authorize(action, sites, @owned_vm)
+        assert :error = VM.authorize(action, sites, nil)
+      end
+    end
+  end
+
   describe "collection actions (spawn, list)" do
     test "any authenticated user can spawn" do
       assert :ok = VM.authorize(:spawn, @owner_user, nil)
