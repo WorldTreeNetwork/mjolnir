@@ -119,7 +119,7 @@ just bootstrap        # Bootstrap a fresh server
 
 ### How It Works
 
-The Justfile is for **server operations** — deploy, build, host management — plus the **IdentiKey Sites** recipes. Those Sites recipes still use **SSH-wrapped curl** (`ssh host "curl localhost:4000/..."`) because the API auth bypass only trusts `127.0.0.1`; the SSH tunnel makes curl appear as localhost on the server. VM and snapshot operations are **not** in the Justfile — they live in the `mj` binary, which authenticates to the public API with a bearer token and needs no SSH tunnel.
+The Justfile is for **server operations** — deploy, build, host management — plus the **IdentiKey Sites** recipes. Sites and Forge recipes SSH to the host and call `scripts/operator-curl.sh`. That uses `/run/mjolnir/operator.sock` when the release has created it, and plain `curl` to `127.0.0.1:4000` until then. TCP loopback is not a principal in the release that ignores `MJOLNIR_AUTH_BYPASS_LOCALHOST`. VM and snapshot operations are **not** in the Justfile — they live in the `mj` binary, which authenticates to the public API with a bearer token and needs no SSH tunnel.
 
 ## Build & Development Commands
 

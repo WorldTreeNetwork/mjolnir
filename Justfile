@@ -12,6 +12,9 @@ host := env("MJOLNIR_HOST", "")
 # Transport prefix: "ssh host " for remote, "" for local
 _t := if host != "" { "ssh " + host + " " } else { "" }
 _api := "http://localhost:4000"
+# Operator API curl. Uses /run/mjolnir/operator.sock when the release has
+# created it, and plain TCP until then (the previous loopback bypass).
+api_curl := if host != "" { "ssh " + host + " /opt/mjolnir/scripts/operator-curl.sh" } else { justfile_directory() + "/scripts/operator-curl.sh" }
 
 default:
     @just --list
@@ -220,20 +223,20 @@ sites-alias-remove fqdn fp site keypair_file sequence="9999999999":
 
 # Fetch the current HEAD record for a site
 sites-head fp name:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/head
+    {{api_curl}} -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/head
 
 # Fetch a manifest envelope by snapshot hash
 sites-manifest hash:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/manifests/{{hash}}
+    {{api_curl}} -s --fail-with-body {{_api}}/api/sites/manifests/{{hash}}
 
 # Fetch an OpenTimestamps receipt by snapshot hash
 sites-ots hash:
-    {{_t}}curl -s --fail-with-body --output - {{_api}}/api/sites/manifests/{{hash}}/ots
+    {{api_curl}} -s --fail-with-body --output - {{_api}}/api/sites/manifests/{{hash}}/ots
 
 # Fetch a served file from a site (debug endpoint)
 # Example: just sites-get abc123 blog index.html
 sites-get fp name path:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/files/{{path}}
+    {{api_curl}} -s --fail-with-body {{_api}}/api/sites/{{fp}}/{{name}}/files/{{path}}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Server Management
@@ -310,43 +313,43 @@ gateway-restart: _require-host
 
 # Forge: list managed hosts (running + declared)
 forge-hosts:
-    {{_t}}curl -s --fail-with-body {{_api}}/api/forge/hosts | jq .
+    {{api_curl}} -s --fail-with-body {{_api}}/api/forge/hosts | jq .
 
 # Forge: start a Host worker (defaults: transport=local, auto_apply=false)
 forge-host-add host_id transport="local":
     #!/usr/bin/env bash
     body=$(jq -n --arg h "{{host_id}}" --arg t "{{transport}}" '{host:$h, transport:$t, auto_apply:false}')
     if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-" | jq .
+        echo "$body" | ssh {{host}} "/opt/mjolnir/scripts/operator-curl.sh -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-" | jq .
     else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-  | jq .
+        echo "$body" | {{justfile_directory()}}/scripts/operator-curl.sh -s --fail-with-body -X POST {{_api}}/api/forge/hosts -H 'Content-Type: application/json' -d @-  | jq .
     fi
 
 # Forge: re-observe + diff for a host (read-only; no host changes)
 forge-plan host_id="self":
-    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/plan?host={{host_id}}" | jq .
+    {{api_curl}} -s --fail-with-body "{{_api}}/api/forge/plan?host={{host_id}}" | jq .
 
 # Forge: apply safe actions (:new, :drifted, :missing, :prune) for a host
 forge-apply host_id="self":
     #!/usr/bin/env bash
     body=$(jq -n --arg h "{{host_id}}" '{host:$h, keys:"all_safe"}')
     if [ -n "{{host}}" ]; then
-        echo "$body" | ssh {{host}} "curl -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @-" | jq .
+        echo "$body" | ssh {{host}} "/opt/mjolnir/scripts/operator-curl.sh -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @-" | jq .
     else
-        echo "$body" | curl -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @- | jq .
+        echo "$body" | {{justfile_directory()}}/scripts/operator-curl.sh -s --fail-with-body -X POST {{_api}}/api/forge/apply -H 'Content-Type: application/json' -d @- | jq .
     fi
 
 # Forge: list Store records (optionally filtered by host/kind/status)
 forge-state host_id="" kind="" status_filter="":
-    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/state?host={{host_id}}&kind={{kind}}&status={{status_filter}}" | jq .
+    {{api_curl}} -s --fail-with-body "{{_api}}/api/forge/state?host={{host_id}}&kind={{kind}}&status={{status_filter}}" | jq .
 
 # Forge: recent reconciliation events (audit feed); since="" shows last `limit`
 forge-events since="" limit="100":
-    {{_t}}curl -s --fail-with-body "{{_api}}/api/forge/events?since={{since}}&limit={{limit}}" | jq .
+    {{api_curl}} -s --fail-with-body "{{_api}}/api/forge/events?since={{since}}&limit={{limit}}" | jq .
 
 # Forge: follow the live event stream (SSE; Ctrl-C to stop). Resume with since=<id>
 forge-events-tail since="":
-    {{_t}}curl -sN "{{_api}}/api/forge/events/stream?since={{since}}"
+    {{api_curl}} -sN "{{_api}}/api/forge/events/stream?since={{since}}"
 
 # ═══════════════════════════════════════════════════════════════════════
 # MCP Smoke Tests
@@ -354,23 +357,23 @@ forge-events-tail since="":
 
 # MCP: Initialize handshake
 mcp-init:
-    {{_t}}curl -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
+    {{api_curl}} -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.1"}}}' | jq .
 
 # MCP: List all registered tools
 mcp-tools:
-    {{_t}}curl -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
+    {{api_curl}} -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | jq '.result.tools[] | .name'
 
 # MCP: Call list_vms tool
 mcp-list-vms:
-    {{_t}}curl -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
+    {{api_curl}} -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_vms","arguments":{}}}' | jq .
 
 # MCP: Run full smoke test (init + tools + list_vms)
 mcp-smoke:
     #!/usr/bin/env bash
-    _curl() { {{_t}}curl -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' -d "$1"; }
+    _curl() { {{api_curl}} -s -X POST {{_api}}/mcp -H 'Content-Type: application/json' -d "$1"; }
     echo "=== MCP Initialize ==="
     INIT=$(_curl '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.1"}}}')
     if echo "$INIT" | jq -e '.result.serverInfo' > /dev/null 2>&1; then

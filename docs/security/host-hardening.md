@@ -84,10 +84,9 @@ policy (`Mjolnir.Policy.VM`, `Mjolnir.Policy.Snapshot`) enforces ownership:
 users can only act on resources they spawned. The localhost identity has
 full access.
 
-Remote operations via the Justfile use SSH-tunneled curl:
-`ssh host "curl localhost:4000/..."`. The SSH tunnel makes curl appear as
-localhost, which is how the auth bypass works for ops. Security relies on
-SSH key management.
+Remote operations via the Justfile SSH to the host and run
+`scripts/operator-curl.sh`. The operator socket is the credential.
+Root SSH is how you reach the box. It is not, by itself, an API login.
 
 ## Lifecycle Durability
 

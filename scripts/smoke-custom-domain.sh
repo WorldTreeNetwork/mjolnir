@@ -58,10 +58,9 @@ note() { printf '  --    %s\n' "$*"; }
 # no `mjolnir` on the host PATH -- hence sourcing the env and the absolute path.
 rpc() { ssh "$HOST" "set -a; . /etc/mjolnir/env; set +a; $MJ rpc '$1'"; }
 
-# The API authenticates remote callers; MJOLNIR_AUTH_BYPASS_LOCALHOST only exempts
-# requests originating on the box. Curling from inside the ssh session sidesteps needing
-# a token here.
-api() { ssh "$HOST" "curl -sS --max-time 15 http://127.0.0.1:4000$1"; }
+# Operator curl. The socket is the principal once the release has created
+# it. Until then, TCP loopback still authenticates on the running BEAM.
+api() { ssh "$HOST" "/opt/mjolnir/scripts/operator-curl.sh -sS --max-time 15 http://127.0.0.1:4000$1"; }
 
 case "$CMD" in
 
