@@ -60,4 +60,4 @@ A site-only `[[cert]]` does not change classification. The follow-on test is tha
 
 ## Residual
 
-App first issue still appends the last two labels, even when the configured apex is longer (for example `apps.example.com`). `:gateway_apexes` can also drift from `gateway.toml`. Either can still capture a sibling site alias. That is pre-existing app-path behaviour, and this change does not widen it. Tracked as `mjolnir-5ckn`.
+App first issue appends a `[[domain]]` only for the longest apex that already covers the host, taken from `:gateway_apexes` or from a suffix already in `gateway.toml`. It does not invent the last two labels. A suffix that is not already in the file, and that would cover some other live site alias, is not added. The certificate block is still written. Fixed in `mjolnir-5ckn`.

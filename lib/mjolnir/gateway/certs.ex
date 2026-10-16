@@ -18,8 +18,9 @@ defmodule Mjolnir.Gateway.Certs do
     * writes the cert + key PEM under `/etc/mjolnir/certs/<slug>/`
       (`fullchain.pem` / `privkey.pem`), owned by the gateway user (999:988),
       key mode `0600`;
-    * ensures a `[[cert]] host=… cert=… key=…` entry and a `[[domain]]
-      suffix=<apex>` entry exist in the base `gateway.toml`;
+    * ensures a `[[cert]] host=… cert=… key=…` entry in the base
+      `gateway.toml`, and a `[[domain]]` only for the longest apex that
+      already covers the host;
     * requests a gateway reload (`systemctl reload mjolnir-gateway`, which
       SIGHUPs the gateway — no restart).
 
@@ -100,9 +101,14 @@ defmodule Mjolnir.Gateway.Certs do
 
     * `:mode` — `:origin_ca` (default) | `:acme`
     * `:cert`, `:key` — PEM strings (origin_ca)
-    * `:apex` — override the derived apex used for the `[[domain]]` block
+    * `:apex` — extra apex candidate. The longest candidate that covers the
+      host wins, including `:gateway_apexes` and suffixes already in the file.
+    * `:apexes` — replaces `:gateway_apexes` when choosing that candidate.
+    * `:alias_hosts` — live site-alias hosts. Default reads the alias index.
+      `:unreadable` refuses a new `[[domain]]`.
     * `:domain` — when `false`, do not append a `[[domain]]` block. Default
-      `true` keeps today's append. Renewal and site-alias install pass `false`.
+      `true` may append the longest covering apex. Renewal and site-alias
+      install pass `false`.
     * plus any effect/config override accepted by `effects/1`.
   """
   @spec ensure(String.t(), keyword()) :: ensure_result()
@@ -280,8 +286,6 @@ defmodule Mjolnir.Gateway.Certs do
          :ok <- eff.validate_pair.(cert, key),
          :ok <- eff.cert_covers.(cert, fqdn),
          {:ok, content} <- read_toml(eff) do
-      apex = apex_of(fqdn, opts)
-
       files_present? =
         read_matches?(eff, cert_path, cert) and read_matches?(eff, key_path, key)
 
@@ -291,7 +295,7 @@ defmodule Mjolnir.Gateway.Certs do
         with :ok <- write_cert_files(eff, dir, cert_path, key_path, cert, key) do
           content
           |> ensure_cert_block(fqdn, cert_path, key_path)
-          |> maybe_ensure_domain(apex, opts)
+          |> maybe_ensure_domain(fqdn, opts)
           |> write_and_reload(eff, fn -> :installed end)
         end
       end
@@ -425,12 +429,108 @@ defmodule Mjolnir.Gateway.Certs do
   end
 
   # Site-alias install and every renewal pass pass domain: false. App first
-  # issue leaves the flag unset, which still appends.
-  defp maybe_ensure_domain(content, apex, opts) do
+  # issue may add one [[domain]]: the longest apex that already covers the
+  # host, from :gateway_apexes or from a suffix already in this file. It
+  # does not invent the last two labels. A new suffix that would cover some
+  # other live site alias is left unwritten; the certificate block still lands.
+  defp maybe_ensure_domain(content, fqdn, opts) do
     if Keyword.get(opts, :domain, true) do
-      ensure_domain_block(content, apex)
+      case install_apex(fqdn, content, opts) do
+        nil ->
+          content
+
+        apex ->
+          if toml_has_domain?(content, apex) or captures_other_alias?(fqdn, apex, opts) do
+            content
+          else
+            ensure_domain_block(content, apex)
+          end
+      end
     else
       content
+    end
+  end
+
+  defp install_apex(fqdn, content, opts) do
+    candidates =
+      configured_apexes(opts) ++ toml_domain_suffixes(content) ++ explicit_apex(opts)
+
+    case Mjolnir.Gateway.Routes.split_fqdn(normalize_fqdn(fqdn), candidates) do
+      {:ok, {_sub, apex}} -> apex
+      {:error, :no_apex} -> nil
+    end
+  end
+
+  defp explicit_apex(opts) do
+    case Keyword.get(opts, :apex) do
+      apex when is_binary(apex) and apex != "" -> [normalize_fqdn(apex)]
+      _ -> []
+    end
+  end
+
+  defp configured_apexes(opts) do
+    list =
+      case Keyword.get(opts, :apexes) do
+        apexes when is_list(apexes) -> apexes
+        _ -> Application.get_env(:mjolnir, :gateway_apexes, [])
+      end
+
+    list
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&normalize_fqdn/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp toml_domain_suffixes(content) do
+    Enum.flat_map(chunks(content), fn chunk ->
+      case chunk_type(chunk) do
+        {"domain", true} ->
+          case chunk_get(chunk, "suffix") do
+            suffix when is_binary(suffix) and suffix != "" -> [normalize_fqdn(suffix)]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp captures_other_alias?(fqdn, apex, opts) do
+    fqdn = normalize_fqdn(fqdn)
+    apex = normalize_fqdn(apex)
+
+    case alias_hosts(opts) do
+      :error ->
+        true
+
+      {:ok, hosts} ->
+        Enum.any?(hosts, fn host ->
+          host != fqdn and (host == apex or String.ends_with?(host, "." <> apex))
+        end)
+    end
+  end
+
+  defp alias_hosts(opts) do
+    case Keyword.get(opts, :alias_hosts) do
+      :unreadable ->
+        :error
+
+      hosts when is_list(hosts) ->
+        {:ok, Enum.map(hosts, &normalize_fqdn/1)}
+
+      _ ->
+        read_alias_hosts()
+    end
+  end
+
+  defp read_alias_hosts do
+    dir = Path.join([Mjolnir.SecretStore.root(), "_index", "aliases"])
+
+    case File.ls(dir) do
+      {:ok, names} -> {:ok, Enum.map(names, &String.downcase/1)}
+      {:error, :enoent} -> {:ok, []}
+      {:error, _} -> :error
     end
   end
 

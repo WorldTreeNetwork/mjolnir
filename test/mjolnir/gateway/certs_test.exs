@@ -452,6 +452,121 @@ defmodule Mjolnir.Gateway.CertsTest do
     end
   end
 
+  describe "app first-issue apex" do
+    test "does not append a shorter parent over a longer configured apex" do
+      pid =
+        Fake.start(%{
+          "/etc/mjolnir/gateway.toml" => """
+          [[domain]]
+          suffix = "apps.example.com"
+          fallthrough = "none"
+          """
+        })
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com", "apps.example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "shop.apps.example.com")
+      assert toml =~ ~s(suffix = "apps.example.com")
+      refute toml =~ ~s(suffix = "example.com")
+    end
+
+    test "appends the long configured apex when the file does not have it yet" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["apps.example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(suffix = "apps.example.com")
+      refute toml =~ ~s(suffix = "example.com")
+    end
+
+    test "does not invent a short apex that would cover another site alias" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "shop.example.com")
+      refute toml =~ "[[domain]]"
+    end
+
+    test "does not invent the last two labels when no configured apex covers the host" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.co.uk",
+                 [cert: @cert_pem, key: @key_pem, apexes: [], alias_hosts: []] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "blog.example.co.uk")
+      refute toml =~ "[[domain]]"
+    end
+
+    test "an unreadable alias index blocks a new apex" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["apps.example.com"],
+                   alias_hosts: :unreadable
+                 ] ++ Fake.opts(pid)
+               )
+
+      refute Fake.toml(pid) =~ "[[domain]]"
+    end
+
+    test "the host's own alias does not block its configured apex" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com"],
+                   alias_hosts: ["shop.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      assert Fake.toml(pid) =~ ~s(suffix = "example.com")
+    end
+  end
+
   describe "domain: false" do
     test "a site-only install does not add an apex, before or after renewal" do
       pid =
