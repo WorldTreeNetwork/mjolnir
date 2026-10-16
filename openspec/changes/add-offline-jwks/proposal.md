@@ -8,6 +8,8 @@ Bead `mjolnir-22ff.1`. Steer 2026-09-24.
 
 **Preparation (2026-09-24 /run):** still valid (advise-4 accept, contract hashes in that review). Upstream: existing `JwksStrategy` (deprecated alias `KeycloakStrategy`) + `JokenJwks` hook `match_signer_for_kid/2`. Authority: 22ff campaign. Ready to act.
 
+**Preparation (2026-10-15 /run):** still valid. Boot no longer dies on a down issuer: `Application.maybe_jwks_strategy/0` uses `first_fetch_sync: false`, and `JwksHTTP` turns fetch errors into `{:error, :econnrefused}`. There is still no last-known JWKS on disk, so unexpired hosted tokens fail closed until a live fetch. Keep that boot behavior. The five implement tasks are the disk cache, boot-from-cache, unknown `kid`, opportunistic refresh, and the named tests. Advise R1–R9 stay accepted. Do not reopen retention: the last validated issuer document replaces the set. `:auth_dir` already defaults to `/var/lib/mjolnir/auth`. Do not edit `config/config.exs` or `edge_keys.ex`.
+
 ## Why
 
 Elixir starts `Mjolnir.Auth.JwksStrategy` with `first_fetch_sync:

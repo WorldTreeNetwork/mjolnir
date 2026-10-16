@@ -1,10 +1,10 @@
 # Tasks
 
-- [ ] Persist last-known JWKS under `/var/lib/mjolnir/auth` (`0600`, not under `btrfs_root`)
-- [ ] Boot verifies unexpired hosted JWTs from cache when the issuer is down
-- [ ] Unknown `kid` is rejected
-- [ ] Opportunistic refresh when the issuer is reachable; overlapping keys both verify
-- [ ] Tests: reboot-with-issuer-down, stale cache, overlapping kids, empty cache fail-closed
+- [x] Persist last-known JWKS under `/var/lib/mjolnir/auth` (`0600`, not under `btrfs_root`)
+- [x] Boot verifies unexpired hosted JWTs from cache when the issuer is down
+- [x] Unknown `kid` is rejected
+- [x] Opportunistic refresh when the issuer is reachable; overlapping keys both verify
+- [x] Tests: reboot-with-issuer-down, stale cache, overlapping kids, empty cache fail-closed
 - [x] Advise (architecture-adjacent auth) — accepted by astra-arch-review (Astra/Codex; author Grok), [review 4](reviews/2026-09-24-advise-4.md). Historical Fable 5.1 attempt was infra-red (Claude credits).
 
 ## Owed from Astra advise — 2026-09-24
@@ -32,3 +32,25 @@ Review: [second send-back by astra-arch-review](reviews/2026-09-24-advise-2.md).
 Review: [third send-back by astra-arch-review](reviews/2026-09-24-advise-3.md). Decision 7 resolves the architecture choices; one acceptance-scenario reconciliation remains on `mjolnir-22ff.1`. Both fresh-advise markers remain open; ACTIVE BUILD is unchanged.
 
 - [x] R9: Align the legacy unknown-kid scenario with absence from the active issuer-bound set (or explicitly establish disk-only boot), and qualify retirement across restart on successful persistence of `{B}` before restarting offline. Preserve the failed-persist scenarios as complementary cases; do not reopen the replacement or degraded-durability policy. Amended after advise-3: unknown-kid GIVEN is active-set absence; retirement-across-restart requires successful persist of `{B}` then offline restart.
+
+## Worker verification — 2026-10-15
+
+The two requested test files pass: **17 tests, 0 failures**. The sandbox refuses
+Bandit's listener with `:eperm` before the exact acceptance command reaches tests
+(retried once). The same files were run without starting the application listener:
+
+```sh
+MIX_ENV=test mix run --no-start -e 'for app <- Application.spec(:mjolnir, :applications), do: Application.ensure_all_started(app); {:ok, _} = Mjolnir.StateStore.start_link([]); Mix.Task.run("test", ["--no-start", "test/mjolnir/auth/jwks_strategy_test.exs", "test/mjolnir/auth/jwks_cache_test.exs"])'
+```
+
+The worker packet explicitly supersedes the design's failed-persist behavior:
+a failed persist preserves **both** the previous active set and previous disk
+file. Tests cover failed additions and retirements under that packet contract.
+
+Conductor re-ran the acceptance command on the host (Bandit can bind here):
+
+```sh
+mix test test/mjolnir/auth/jwks_strategy_test.exs test/mjolnir/auth/jwks_cache_test.exs
+```
+
+**17 tests, 0 failures** (seed 924557). Expected log lines (`JWKS cache unavailable`, `JWKS refresh kept last good set`) are not failures.
