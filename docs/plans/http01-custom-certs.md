@@ -45,7 +45,12 @@ The one-shot runs as the `mjolnir` user; the **running** gateway already
 serves challenges from that dir.
 
 After LE returns, `Mjolnir.Gateway.Certs.ensure/2` installs `[[cert]]` and
-reloads the gateway. PEMs never leave the host.
+reloads the gateway. An app's first issue may also append `[[domain]]`.
+A site alias, and every renewal, install `[[cert]]` only. If the gateway
+would already classify a site name as a local route or an Iroh dial, the
+API returns `409 host_routed_elsewhere` and does not call Let's Encrypt.
+Rules: ADR 0013 (`docs/decisions/0013-site-alias-certs.md`). PEMs never
+leave the host.
 
 ## Beads
 
