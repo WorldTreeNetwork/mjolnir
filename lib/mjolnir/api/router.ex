@@ -1936,55 +1936,26 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Issue a public HTTP-01 cert for a CNAME'd custom domain (mjolnir-r7b3.3).
-  # Issuance runs on the host; the client never sees PEMs. Wildcard refuse
-  # happens before the app lookup so a `*.` name is never confused with
-  # app_not_found. Ownership is the same check as :set_domain.
+  # Issue a public HTTP-01 cert (mjolnir-r7b3.3, site aliases in ADR 0013).
+  # An app custom domain owns the host. Else a live site alias issues with
+  # domain insertion off. Else 404 name_not_found. PEMs never leave the host.
   post "/api/certs/issue" do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
       case conn.body_params["fqdn"] do
         fqdn when is_binary(fqdn) and fqdn != "" ->
-          if String.starts_with?(String.trim(fqdn), "*.") do
-            json(conn, 400, %{
-              error: "wildcard_not_supported",
-              detail: "HTTP-01 cannot issue wildcards (v1)"
-            })
-          else
-            case app_for_domain(fqdn) do
-              nil ->
-                json(conn, 404, %{error: "app_not_found", fqdn: fqdn})
+          case Mjolnir.API.Certs.resolve(fqdn) do
+            {:app, entry} ->
+              authorize_app(conn, entry.app_name, :issue_cert, fn _entry ->
+                issue_json(conn, fqdn, Mjolnir.API.Certs.issue(fqdn, domain: true))
+              end)
 
-              entry ->
-                authorize_app(conn, entry.app_name, :issue_cert, fn _entry ->
-                  case Mjolnir.API.Certs.issue(fqdn) do
-                    {:ok, result} ->
-                      json(conn, 200, result)
+            {:site, _name} ->
+              issue_json(conn, fqdn, Mjolnir.API.Certs.issue(fqdn, domain: false))
 
-                    {:error, :wildcard_not_supported} ->
-                      json(conn, 400, %{
-                        error: "wildcard_not_supported",
-                        detail: "HTTP-01 cannot issue wildcards (v1)"
-                      })
-
-                    {:error, :fqdn_required} ->
-                      json(conn, 400, %{error: "fqdn is required"})
-
-                    {:error, {:issue_failed, _code, output}} ->
-                      Logger.error("Cert issue failed for #{fqdn}: #{output}")
-                      json(conn, 500, %{error: "cert_issue_failed"})
-
-                    {:error, {:ensure_failed, reason}} ->
-                      Logger.error("Cert install failed for #{fqdn}: #{inspect(reason)}")
-                      json(conn, 500, %{error: "cert_install_failed"})
-
-                    {:error, reason} ->
-                      Logger.error("Cert issue failed for #{fqdn}: #{inspect(reason)}")
-                      json(conn, 500, %{error: "cert_issue_failed"})
-                  end
-                end)
-            end
+            {:error, reason} ->
+              resolve_error(conn, reason)
           end
 
         _ ->
@@ -2012,14 +1983,9 @@ defmodule Mjolnir.API.Router do
       case Mjolnir.API.Certs.list() do
         {:ok, certs} ->
           visible =
-            if user.user_id == "localhost" do
-              certs
-            else
-              Enum.filter(certs, fn c ->
-                host = c.host || ""
-                MapSet.member?(owned_hosts, String.downcase(host))
-              end)
-            end
+            Enum.filter(certs, fn cert ->
+              Mjolnir.API.Certs.include_cert?(cert, user, owned_hosts)
+            end)
 
           json(conn, 200, %{certs: visible})
 
@@ -2136,13 +2102,60 @@ defmodule Mjolnir.API.Router do
     json(conn, 500, %{error: "secrets_failed"})
   end
 
-  defp app_for_domain(fqdn) do
-    want = fqdn |> String.trim() |> String.trim_trailing(".") |> String.downcase()
+  defp issue_json(conn, fqdn, result) do
+    case result do
+      {:ok, body} ->
+        json(conn, 200, body)
 
-    Enum.find(Mjolnir.Deploy.Registry.list(), fn e ->
-      is_binary(e.custom_domain) and
-        String.downcase(String.trim_trailing(String.trim(e.custom_domain), ".")) == want
-    end)
+      {:error, :wildcard_not_supported} ->
+        json(conn, 400, %{
+          error: "wildcard_not_supported",
+          detail: "HTTP-01 cannot issue wildcards (v1)"
+        })
+
+      {:error, :fqdn_required} ->
+        json(conn, 400, %{error: "fqdn is required"})
+
+      {:error, {:issue_failed, _code, output}} ->
+        Logger.error("Cert issue failed for #{fqdn}: #{output}")
+        json(conn, 500, %{error: "cert_issue_failed"})
+
+      {:error, {:ensure_failed, reason}} ->
+        Logger.error("Cert install failed for #{fqdn}: #{inspect(reason)}")
+        json(conn, 500, %{error: "cert_install_failed"})
+
+      {:error, reason} ->
+        Logger.error("Cert issue failed for #{fqdn}: #{inspect(reason)}")
+        json(conn, 500, %{error: "cert_issue_failed"})
+    end
+  end
+
+  defp resolve_error(conn, :wildcard_not_supported) do
+    json(conn, 400, %{
+      error: "wildcard_not_supported",
+      detail: "HTTP-01 cannot issue wildcards (v1)"
+    })
+  end
+
+  defp resolve_error(conn, :fqdn_required), do: json(conn, 400, %{error: "fqdn is required"})
+
+  defp resolve_error(conn, :name_not_found), do: json(conn, 404, %{error: "name_not_found"})
+
+  defp resolve_error(conn, :host_routed_elsewhere) do
+    json(conn, 409, %{error: "host_routed_elsewhere"})
+  end
+
+  defp resolve_error(conn, :alias_index_unreadable) do
+    json(conn, 503, %{error: "alias_index_unreadable"})
+  end
+
+  defp resolve_error(conn, :gateway_config_unreadable) do
+    json(conn, 503, %{error: "gateway_config_unreadable"})
+  end
+
+  defp resolve_error(conn, reason) do
+    Logger.error("Cert resolve failed: #{inspect(reason)}")
+    json(conn, 500, %{error: "cert_issue_failed"})
   end
 
   defp handle_adopt(conn, app) do

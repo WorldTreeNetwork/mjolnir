@@ -101,6 +101,8 @@ defmodule Mjolnir.Gateway.Certs do
     * `:mode` — `:origin_ca` (default) | `:acme`
     * `:cert`, `:key` — PEM strings (origin_ca)
     * `:apex` — override the derived apex used for the `[[domain]]` block
+    * `:domain` — when `false`, do not append a `[[domain]]` block. Default
+      `true` keeps today's append. Renewal and site-alias install pass `false`.
     * plus any effect/config override accepted by `effects/1`.
   """
   @spec ensure(String.t(), keyword()) :: ensure_result()
@@ -289,7 +291,7 @@ defmodule Mjolnir.Gateway.Certs do
         with :ok <- write_cert_files(eff, dir, cert_path, key_path, cert, key) do
           content
           |> ensure_cert_block(fqdn, cert_path, key_path)
-          |> ensure_domain_block(apex)
+          |> maybe_ensure_domain(apex, opts)
           |> write_and_reload(eff, fn -> :installed end)
         end
       end
@@ -419,6 +421,16 @@ defmodule Mjolnir.Gateway.Certs do
       content
     else
       append_block(content, render_domain_block(apex))
+    end
+  end
+
+  # Site-alias install and every renewal pass pass domain: false. App first
+  # issue leaves the flag unset, which still appends.
+  defp maybe_ensure_domain(content, apex, opts) do
+    if Keyword.get(opts, :domain, true) do
+      ensure_domain_block(content, apex)
+    else
+      content
     end
   end
 

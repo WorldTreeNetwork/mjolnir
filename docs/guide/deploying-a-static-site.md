@@ -20,7 +20,7 @@ and the gateway serves the files.
 >   --sequence "$(date +%s)000"
 > ```
 >
-> Then bind a domain (`mj domain set my-site blog.example.com --keypair-file ~/.config/mjolnir/identikey.json`), point DNS at the gateway, and get a cert (operator step today — `mj cert issue` is app-only). The flags are too many; see [Friction, and easier ways](#friction-and-easier-ways).
+> Then bind a domain (`mj domain set my-site blog.example.com --keypair-file ~/.config/mjolnir/identikey.json`), point DNS at the gateway, and `mj cert issue blog.example.com`. The flags are too many; see [Friction, and easier ways](#friction-and-easier-ways).
 
 If you need a *running process* (SvelteKit `adapter-node`, a database, secrets),
 stop here and use [Deploying a Web App](deploying-an-app.md) instead. Sites is
@@ -284,31 +284,23 @@ Point DNS at the same place your other Mjolnir-hosted names already go
 
 ### TLS
 
-`mj cert issue blog.example.com` is built for **deployed apps**, not
-Sites. It 404s `app_not_found` unless a `Deploy.Registry` app owns that
-fqdn. A Sites alias is not an app.
+After `mj domain set`, the same login that can spawn a VM issues the
+certificate:
 
-Until that is wired, TLS for a Sites domain is an operator step:
+```bash
+mj cert issue blog.example.com
+```
 
-1. **HTTP-01 on the host** (the name must already hit the gateway on
-   port 80):
+That is HTTP-01. The name must already reach the gateway on port 80.
+The install writes a `[[cert]]` for that exact host and does not add a
+`[[domain]]` apex. If the gateway would already serve the name as a
+local route or an Iroh fallthrough, the command returns
+`409 host_routed_elsewhere` and does not call Let's Encrypt. See
+[ADR 0013](../decisions/0013-site-alias-certs.md).
 
-   ```bash
-   # on the host, as the mjolnir user — PEMs never leave the box
-   /usr/local/bin/mjolnir-gateway cert issue \
-     --domain blog.example.com \
-     --email you@example.com \
-     --out /var/lib/mjolnir-gateway/issued/blog-example-com \
-     --http01-dir /var/lib/mjolnir-gateway/http-01
-   ```
-
-   Then install a `[[cert]]` in `/etc/mjolnir/gateway.toml` (or the
-   gateway's cert-ensure path) and `systemctl reload mjolnir-gateway`.
-
-2. **Cloudflare (or any reverse proxy) in front**, terminating TLS and
-   forwarding HTTP. This is the documented Phase-1 option in
-   [`identikey-sites.md`](../plans/initiatives/identikey-sites.md) §6.5.
-   Exit = re-point the CNAME.
+Cloudflare (or any reverse proxy) in front still works: it terminates
+TLS and forwards HTTP. Exit is re-pointing the CNAME. It is no longer
+required for a name the gateway can answer on port 80.
 
 Without a cert for that exact name, the TLS handshake fails *before* the
 sites resolver runs. The snapshot can be perfect and the browser still
@@ -385,7 +377,7 @@ sites token bound to that fingerprint (and site).
 | File > 64 MiB | Publish aborts for that file. |
 | Client-side router, no prerender | 404 on every deep link. Prerender, or use `mj deploy`. |
 | Serve URL printed after publish | Authenticated API path, not the public site. |
-| `mj cert issue` on a Sites domain | 404 `app_not_found`. Operator TLS, or Cloudflare. |
+| `mj cert issue` on a Sites domain | HTTP-01 for a live alias. `409 host_routed_elsewhere` when the name is already local or Iroh. |
 | Keypair left at `./identikey.json` | Easy to commit. Always `--out ~/.config/mjolnir/identikey.json`. |
 | `mix mjolnir.publish` from the site repo | Mix isn't there. Use `mj`. |
 | Publishing `src/` instead of `dist/` | It will happily upload your TypeScript. Publish the build output. |
@@ -447,12 +439,13 @@ step 2 produce something you can click. Custom domains stay for vanity.
 This needs a gateway apex whose fallthrough does not steal the name for
 Iroh, plus a cert that covers it. It is the missing half of "returns a URL."
 
-### 4. `mj cert issue` for Sites aliases (medium)
+### 4. `mj cert issue` for Sites aliases
 
-`POST /api/certs/issue` looks up `Deploy.Registry` only. After `mj domain
-set` for a site, the same command should see the alias in SecretStore and
-issue HTTP-01. Until then, TLS is an operator or Cloudflare step — the
-worst surprise in the flow, because everything else looked like it worked.
+After `mj domain set`, `mj cert issue <fqdn>` issues HTTP-01 for that
+alias. A site-only install writes `[[cert]]` and does not add
+`[[domain]]`. A name the gateway already routes locally or over Iroh is
+`409 host_routed_elsewhere`. The remaining surprise is a name that is not
+yet in DNS, because HTTP-01 needs port 80 to reach the gateway.
 
 ### 5. Don't ask for fingerprint and keypair
 

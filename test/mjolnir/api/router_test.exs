@@ -398,11 +398,217 @@ defmodule Mjolnir.API.RouterTest do
       assert Jason.decode!(conn.resp_body)["error"] == "wildcard_not_supported"
     end
 
-    test "404 when no app owns the domain" do
+    test "404 name_not_found when nothing owns the domain" do
       conn = request(:post, "/api/certs/issue", %{fqdn: "no-such-#{System.unique_integer()}.dev"})
       assert conn.status == 404
-      assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
+      assert Jason.decode!(conn.resp_body)["error"] == "name_not_found"
     end
+
+    test "a live site alias issues with domain insertion off" do
+      fqdn = "blog-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+
+      with_site_alias(fqdn, "")
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["fqdn"] == fqdn
+      assert body["status"] == "installed"
+      refute Map.has_key?(body, "cert")
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == false
+    end
+
+    test "an app custom domain issues with domain insertion on" do
+      n = System.unique_integer([:positive])
+      app = "certapp-#{n}"
+      fqdn = "shop-#{n}.example.com"
+      parent = self()
+
+      {:ok, _} =
+        Mjolnir.Deploy.Registry.put(app, %{
+          release_snapshot: "deploy-x",
+          service_vm_id: "svc-x",
+          url: "https://x",
+          port: 3000,
+          custom_domain: fqdn
+        })
+
+      write_alias!(fqdn, ~s({"fp":"abc","site":"shop"}))
+
+      on_exit(fn ->
+        Mjolnir.Deploy.Registry.delete(app)
+        File.rm(alias_path(fqdn))
+      end)
+
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == true
+    end
+
+    test "an iroh apex refuses a site alias before HTTP-01" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "host_routed_elsewhere"
+      refute_received {:issued, _}
+    end
+
+    test "a parked apex still issues" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      fallthrough = "parked"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == false
+    end
+
+    test "a local route refuses issuance" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      fallthrough = "none"
+
+      [[route]]
+      apex = "example.com"
+      subdomain = "blog-#{n}"
+      backend = "10.0.0.1:3000"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "host_routed_elsewhere"
+      refute_received {:issued, _}
+    end
+
+    test "an unreadable alias index is 503 and does not call Let's Encrypt" do
+      fqdn = "bad-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+      path = alias_path(fqdn)
+      File.mkdir_p!(path)
+      on_exit(fn -> File.rm_rf(path) end)
+
+      with_gateway_toml("")
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 503
+      assert Jason.decode!(conn.resp_body)["error"] == "alias_index_unreadable"
+      refute_received {:issued, _}
+    end
+
+    test "an unreadable gateway config is 503" do
+      fqdn = "blog-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+      write_alias!(fqdn, ~s({"fp":"abc","site":"blog"}))
+
+      dir = Path.join(System.tmp_dir!(), "mj-gw-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      Process.put(:mjolnir_gateway_toml_path, dir)
+
+      on_exit(fn ->
+        Process.delete(:mjolnir_gateway_toml_path)
+        File.rm_rf(dir)
+        File.rm(alias_path(fqdn))
+      end)
+
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 503
+      assert Jason.decode!(conn.resp_body)["error"] == "gateway_config_unreadable"
+      refute_received {:issued, _}
+    end
+  end
+
+  defp with_cert_ops(parent) do
+    prev = Process.get(:mjolnir_cert_ops)
+
+    Process.put(:mjolnir_cert_ops, %{
+      issue_cmd: fn fqdn ->
+        send(parent, {:issued, fqdn})
+        {:ok, %{cert: "CERT", key: "KEY", not_after: "2030-01-01T00:00:00Z"}}
+      end,
+      ensure: fn fqdn, _cert, _key, opts ->
+        send(parent, {:ensured, fqdn, opts})
+        {:ok, :installed}
+      end,
+      list_certs: fn -> {:ok, []} end
+    })
+
+    on_exit(fn ->
+      if prev do
+        Process.put(:mjolnir_cert_ops, prev)
+      else
+        Process.delete(:mjolnir_cert_ops)
+      end
+    end)
+  end
+
+  defp with_site_alias(fqdn, toml) do
+    write_alias!(fqdn, ~s({"fp":"abc","site":"blog"}))
+    with_gateway_toml(toml)
+
+    on_exit(fn -> File.rm(alias_path(fqdn)) end)
+  end
+
+  defp with_gateway_toml(toml) do
+    dir = Path.join(System.tmp_dir!(), "mj-gw-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "gateway.toml")
+    File.write!(path, toml)
+    Process.put(:mjolnir_gateway_toml_path, path)
+    Process.put(:mjolnir_gateway_config_d, Path.join(dir, "missing-dropins"))
+
+    on_exit(fn ->
+      Process.delete(:mjolnir_gateway_toml_path)
+      Process.delete(:mjolnir_gateway_config_d)
+      File.rm_rf(dir)
+    end)
+  end
+
+  defp alias_path(fqdn) do
+    Path.join([Mjolnir.SecretStore.root(), "_index", "aliases", fqdn])
+  end
+
+  defp write_alias!(fqdn, body) do
+    path = alias_path(fqdn)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, body)
   end
 
   describe "GET /api/certs" do

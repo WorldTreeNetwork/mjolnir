@@ -113,11 +113,29 @@ defmodule Mjolnir.SecretStore do
 
   Reads from the reverse index at `<root>/_index/aliases/<fqdn>`.
   Returns `{:ok, {fp, site_name}}` or `:not_found`.
+
+  Host-header callers treat every failure as a miss, including an unreadable
+  or unparseable index file. Certificate classification uses `read_alias/1`.
   """
   @spec lookup_alias(String.t()) :: {:ok, {String.t(), String.t()}} | :not_found
   def lookup_alias(fqdn) when is_binary(fqdn) do
-    # validate_fqdn! is allowed to raise — lookup is called on untrusted Host
-    # headers, so silently treat bad inputs as :not_found.
+    case read_alias(fqdn) do
+      {:ok, pair} -> {:ok, pair}
+      :not_found -> :not_found
+      {:error, _} -> :not_found
+    end
+  end
+
+  @doc """
+  Read the alias index strictly.
+
+  `:enoent` and an FQDN that fails `validate_fqdn!/1` are `:not_found`.
+  A readable file that does not parse is `{:error, :unreadable}`. Any other
+  `File.read` error is returned as `{:error, reason}`.
+  """
+  @spec read_alias(String.t()) ::
+          {:ok, {String.t(), String.t()}} | :not_found | {:error, term()}
+  def read_alias(fqdn) when is_binary(fqdn) do
     try do
       path = alias_index_path(fqdn)
 
@@ -125,14 +143,14 @@ defmodule Mjolnir.SecretStore do
         {:ok, contents} ->
           case parse_alias_index(contents) do
             {fp, site_name} -> {:ok, {fp, site_name}}
-            :error -> :not_found
+            :error -> {:error, :unreadable}
           end
 
         {:error, :enoent} ->
           :not_found
 
-        {:error, _} ->
-          :not_found
+        {:error, reason} ->
+          {:error, reason}
       end
     rescue
       ArgumentError -> :not_found

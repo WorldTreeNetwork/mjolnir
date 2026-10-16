@@ -2160,6 +2160,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn site_only_cert_does_not_change_classification() {
+        let mut cfg = loaded_with(vec![], vec![]);
+        cfg.extra_certs = vec![mjolnir_gateway::config::CertEntry {
+            host: "blog.example.com".into(),
+            cert_path: std::path::PathBuf::from(
+                "/etc/mjolnir/certs/blog.example.com/fullchain.pem",
+            ),
+            key_path: std::path::PathBuf::from("/etc/mjolnir/certs/blog.example.com/privkey.pem"),
+        }];
+        let table = RouteTable::from_config(&cfg);
+        assert!(matches!(
+            classify(&table, "blog.example.com"),
+            Disposition::Reject(ProxyError::DomainMismatch)
+        ));
+    }
+
     // ── Existing tests (unchanged semantics, parse_subdomain retained for BC) ─
 
     #[test]

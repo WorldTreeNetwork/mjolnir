@@ -24,7 +24,10 @@ defmodule Mjolnir.API.Certs do
 
   `issue_cmd`, `ensure`, and `list_certs` are injectable. Tests pass a fake
   `issue_cmd` that returns canned PEMs and a fake `ensure` that records the
-  install without touching `/etc` or talking to Let's Encrypt.
+  install without touching `/etc` or talking to Let's Encrypt. `ensure` is
+  4-arity `(fqdn, cert, key, opts)` so the `domain:` flag is visible.
+  `app_for_domain`, `read_alias`, and `classify` are optional ops used by
+  `resolve/2` and `renew_due/1`.
   """
 
   require Logger
@@ -41,7 +44,9 @@ defmodule Mjolnir.API.Certs do
   @typedoc "Injectable effect seam; defaults capture the real host commands."
   @type ops :: %{
           issue_cmd: (String.t() -> {:ok, map()} | {:error, term()}),
-          ensure: (String.t(), String.t(), String.t() -> {:ok, atom()} | {:error, term()}),
+          ensure:
+            (String.t(), String.t(), String.t(), keyword() ->
+               {:ok, atom()} | {:error, term()}),
           list_certs: (-> {:ok, [map()]} | {:error, term()})
         }
 
@@ -58,6 +63,7 @@ defmodule Mjolnir.API.Certs do
   def issue(fqdn, opts \\ []) when is_binary(fqdn) do
     fqdn = normalize_fqdn(fqdn)
     ops = merged_ops(opts)
+    domain? = Keyword.get(opts, :domain, true)
 
     cond do
       fqdn == "" ->
@@ -67,8 +73,77 @@ defmodule Mjolnir.API.Certs do
         {:error, :wildcard_not_supported}
 
       true ->
-        do_issue(fqdn, ops)
+        do_issue(fqdn, ops, domain?)
     end
+  end
+
+  @doc """
+  Resolve an fqdn to an app custom domain, a live site alias, or an error.
+
+  Order: empty and wildcard first, then `Deploy.Registry`, then the alias
+  index. A live alias is classified before HTTP-01. `Local` and `Iroh` are
+  `:host_routed_elsewhere`. An unreadable index is `:alias_index_unreadable`.
+  An unclassifiable base gateway config is `:gateway_config_unreadable`.
+  """
+  @spec resolve(String.t(), keyword()) ::
+          {:app, map()}
+          | {:site, String.t()}
+          | {:error, atom()}
+  def resolve(fqdn, opts \\ []) when is_binary(fqdn) do
+    fqdn = normalize_fqdn(fqdn)
+    ops = merged_ops(opts)
+    app_for = Map.get(ops, :app_for_domain, &app_for_domain/1)
+    read_alias = Map.get(ops, :read_alias, &Mjolnir.SecretStore.read_alias/1)
+    classify = Map.get(ops, :classify, &Mjolnir.Gateway.Classify.for_host/1)
+
+    cond do
+      fqdn == "" ->
+        {:error, :fqdn_required}
+
+      wildcard?(fqdn) ->
+        {:error, :wildcard_not_supported}
+
+      entry = app_for.(fqdn) ->
+        {:app, entry}
+
+      true ->
+        resolve_alias(fqdn, read_alias, classify)
+    end
+  end
+
+  @doc """
+  Find the registry entry whose custom domain is `fqdn`, or `nil`.
+
+  Normalization matches `issue/2`: trim, strip one trailing dot, downcase.
+  """
+  @spec app_for_domain(String.t()) :: map() | nil
+  def app_for_domain(fqdn) when is_binary(fqdn) do
+    want = normalize_fqdn(fqdn)
+
+    if want == "" do
+      nil
+    else
+      Enum.find(Mjolnir.Deploy.Registry.list(), fn entry ->
+        is_binary(entry.custom_domain) and normalize_fqdn(entry.custom_domain) == want
+      end)
+    end
+  end
+
+  @doc """
+  Whether a non-operator list should include this certificate.
+
+  The operator (`user_id` `"localhost"`) sees every cert. Anyone else sees an
+  owned app domain, or a host whose alias index is a hit. An unreadable index
+  omits that host. It does not raise.
+  """
+  @spec include_cert?(map(), map(), MapSet.t()) :: boolean()
+  def include_cert?(cert, user, owned_hosts) when is_map(cert) and is_map(user) do
+    host = cert_host(cert) || ""
+    down = normalize_fqdn(host)
+
+    user.user_id == "localhost" or
+      (down != "" and MapSet.member?(owned_hosts, down)) or
+      alias_hit?(host)
   end
 
   @doc """
@@ -96,8 +171,15 @@ defmodule Mjolnir.API.Certs do
             {:ok, :none}
 
           host ->
-            Logger.info("cert renew: issuing #{host}")
-            issue(host, opts)
+            case renew_allowed?(host, ops) do
+              :ok ->
+                Logger.info("cert renew: issuing #{host}")
+                issue(host, Keyword.put(opts, :domain, false))
+
+              {:error, :alias_index_unreadable} = err ->
+                Logger.error("cert renew: alias index unreadable for #{host}")
+                err
+            end
         end
 
       {:error, _} = err ->
@@ -130,10 +212,10 @@ defmodule Mjolnir.API.Certs do
 
   # --- internals -------------------------------------------------------------
 
-  defp do_issue(fqdn, ops) do
+  defp do_issue(fqdn, ops, domain?) do
     case ops.issue_cmd.(fqdn) do
       {:ok, issued} ->
-        case ops.ensure.(fqdn, issued.cert, issued.key) do
+        case ops.ensure.(fqdn, issued.cert, issued.key, domain: domain?) do
           {:ok, status} ->
             {:ok,
              %{
@@ -160,18 +242,81 @@ defmodule Mjolnir.API.Certs do
     }
   end
 
-  defp merged_ops(opts), do: Map.merge(default_ops(), Map.new(Keyword.get(opts, :ops, [])))
+  defp merged_ops(opts) do
+    from_proc = Process.get(:mjolnir_cert_ops) || %{}
+    from_env = Application.get_env(:mjolnir, :cert_ops, %{})
+
+    default_ops()
+    |> Map.merge(Map.new(from_env))
+    |> Map.merge(Map.new(from_proc))
+    |> Map.merge(Map.new(Keyword.get(opts, :ops, [])))
+  end
 
   defp default_ops do
     %{
       issue_cmd: &default_issue_cmd/1,
-      ensure: &default_ensure/3,
+      ensure: &default_ensure/4,
       list_certs: &default_list_certs/0
     }
   end
 
-  defp default_ensure(fqdn, cert, key) do
-    GatewayCerts.ensure(fqdn, cert: cert, key: key)
+  defp default_ensure(fqdn, cert, key, opts) do
+    gateway_opts = [cert: cert, key: key]
+
+    gateway_opts =
+      if Keyword.get(opts, :domain, true) do
+        gateway_opts
+      else
+        Keyword.put(gateway_opts, :domain, false)
+      end
+
+    GatewayCerts.ensure(fqdn, gateway_opts)
+  end
+
+  defp resolve_alias(fqdn, read_alias, classify) do
+    case read_alias.(fqdn) do
+      {:ok, _} ->
+        case classify.(fqdn) do
+          {:ok, kind} when kind in [:local, :iroh] ->
+            {:error, :host_routed_elsewhere}
+
+          {:ok, _} ->
+            {:site, fqdn}
+
+          {:error, _} ->
+            {:error, :gateway_config_unreadable}
+        end
+
+      :not_found ->
+        {:error, :name_not_found}
+
+      {:error, _} ->
+        {:error, :alias_index_unreadable}
+    end
+  end
+
+  # An app host does not consult the alias index. Any other host must be
+  # readable (hit or missing file) before Let's Encrypt runs. Renewal does
+  # not re-classify Local/Iroh.
+  defp renew_allowed?(host, ops) do
+    app_for = Map.get(ops, :app_for_domain, &app_for_domain/1)
+    read_alias = Map.get(ops, :read_alias, &Mjolnir.SecretStore.read_alias/1)
+
+    if app_for.(host) do
+      :ok
+    else
+      case read_alias.(host) do
+        {:error, _} -> {:error, :alias_index_unreadable}
+        _ -> :ok
+      end
+    end
+  end
+
+  defp alias_hit?(host) do
+    case Mjolnir.SecretStore.read_alias(normalize_fqdn(host)) do
+      {:ok, _} -> true
+      _ -> false
+    end
   end
 
   defp default_list_certs, do: GatewayCerts.list()

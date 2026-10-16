@@ -451,4 +451,53 @@ defmodule Mjolnir.Gateway.CertsTest do
       assert Fake.reloads(pid) == 0
     end
   end
+
+  describe "domain: false" do
+    test "a site-only install does not add an apex, before or after renewal" do
+      pid =
+        Fake.start(%{
+          "/etc/mjolnir/gateway.toml" => """
+          [[cert]]
+          host = "other.example"
+          cert = "/etc/mjolnir/certs/other.example/fullchain.pem"
+          key = "/etc/mjolnir/certs/other.example/privkey.pem"
+          """
+        })
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify(
+                 "blog.example.com",
+                 Fake.toml(pid),
+                 []
+               )
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.com",
+                 [cert: @cert_pem, key: @key_pem, domain: false] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "blog.example.com")
+      refute toml =~ "[[domain]]"
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify("blog.example.com", toml, [])
+
+      renewed = @cert_pem <> "RENEWED\n"
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.com",
+                 [cert: renewed, key: @key_pem, domain: false] ++ Fake.opts(pid)
+               )
+
+      after_renew = Fake.toml(pid)
+      refute after_renew =~ "[[domain]]"
+      assert after_renew =~ ~s(host = "blog.example.com")
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify("blog.example.com", after_renew, [])
+    end
+  end
 end
