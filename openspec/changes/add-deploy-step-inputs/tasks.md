@@ -7,5 +7,5 @@
 - [x] Progress reports each layer as hit or miss, with a reason
 - [x] Tests: command-only step hits after a source edit; glob step misses only when a matched file changes; string step still misses on any edit; malformed step refused before boot
 - [x] The `mjolnir.toml` reference (the `Deploy.Manifest` module doc; there is no docs/ page) shows `inputs = []` for an apt step and `inputs = ["web/**"]` for a web step
-- [ ] Miss cause is inferred today: a layer key is one hash, so `command` vs `inputs` cannot be told apart (a changed string-step command is reported as `inputs`). Store the command and input digests in each `deploy-*` snapshot's metadata and compare, or narrow the spec to `parent` vs `this step`
-- [ ] Table-step prelude emits one `mkdir`/`cp` per matched file inside the exec command; a large glob can exceed the 64 KB vsock frame (`mjolnir-08e`). Copy from a file list (or tar) instead of inlining paths, with a test for a 5,000-file glob
+- [x] Store command and input digests in each `deploy-*` snapshot's metadata and compare parent-step metadata to report `command`, `inputs`, or `parent`, including string-step command changes
+- [x] Copy table-step inputs from a NUL-delimited file list on a temporary mount, keeping the exec command under 64 KB; test a 5,000-file glob and selective copying (`mjolnir-08e`)

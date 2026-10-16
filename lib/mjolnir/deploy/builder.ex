@@ -60,6 +60,7 @@ defmodule Mjolnir.Deploy.Builder do
           spawn: (map() -> {:ok, map()} | {:error, term()}),
           exec: (String.t(), String.t(), keyword() -> {:ok, String.t()} | {:error, term()}),
           snapshot: (String.t(), String.t(), keyword() -> {:ok, map()} | {:error, term()}),
+          update_snapshot_metadata: (String.t(), map() -> {:ok, map()} | {:error, term()}),
           stop: (String.t() -> :ok | {:error, term()})
         }
 
@@ -171,7 +172,13 @@ defmodule Mjolnir.Deploy.Builder do
       snapshot_opts = if index == last_index, do: [skip_verify: true], else: []
 
       with {:ok, _out} <- ops.exec.(vm_id, step.command, timeout: exec_timeout),
-           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, snapshot_opts) do
+           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, snapshot_opts),
+           {:ok, _meta} <-
+             ops.update_snapshot_metadata.(snapshot_name, %{
+               "deploy_parent_id" => step.parent_id,
+               "deploy_command_digest" => step.command_digest,
+               "deploy_input_digest" => step.input_digest
+             }) do
         {:cont, {:ok, [step.cache_key | built]}}
       else
         {:error, reason} ->
@@ -267,9 +274,10 @@ defmodule Mjolnir.Deploy.Builder do
       {:ok, snapshots} ->
         ids =
           snapshots
-          |> Enum.map(&snapshot_name/1)
-          |> Enum.filter(&String.starts_with?(&1, prefix))
-          |> Enum.map(&String.replace_prefix(&1, prefix, ""))
+          |> Enum.filter(&String.starts_with?(snapshot_name(&1), prefix))
+          |> Map.new(fn metadata ->
+            {String.replace_prefix(snapshot_name(metadata), prefix, ""), metadata}
+          end)
 
         {:ok, ids}
 
@@ -302,6 +310,7 @@ defmodule Mjolnir.Deploy.Builder do
       spawn: &Mjolnir.VM.spawn/1,
       exec: &Mjolnir.VM.exec/3,
       snapshot: &Mjolnir.VM.snapshot/3,
+      update_snapshot_metadata: &Mjolnir.BTRFS.update_snapshot_metadata/2,
       stop: &Mjolnir.VM.stop/1,
       diagnostics: &Mjolnir.Deploy.Diagnostics.capture/2
     }

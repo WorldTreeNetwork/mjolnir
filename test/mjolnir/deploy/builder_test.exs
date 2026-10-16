@@ -54,6 +54,7 @@ defmodule Mjolnir.Deploy.BuilderTest do
         Agent.update(agent, &[{:snapshot, vm_id, name} | &1])
         {:ok, %{name: name}}
       end,
+      update_snapshot_metadata: fn _name, meta -> {:ok, meta} end,
       stop: fn vm_id ->
         Agent.update(agent, &[{:stop, vm_id} | &1])
         :ok
@@ -72,6 +73,40 @@ defmodule Mjolnir.Deploy.BuilderTest do
   setup do
     {:ok, agent} = start_supervised({Agent, fn -> [] end})
     %{agent: agent}
+  end
+
+  test "stamps digests and reuses string-keyed metadata to explain command changes", %{
+    agent: agent
+  } do
+    old = %{command: "make old", input_hash: "whole-tree"}
+
+    ops =
+      recording_ops(agent, [])
+      |> Map.put(:update_snapshot_metadata, fn name, meta ->
+        Agent.update(agent, &[{:metadata, name, meta} | &1])
+        {:ok, meta}
+      end)
+
+    assert {:ok, _} = Builder.build(@base, [old], ops: ops)
+    {:metadata, name, meta} = Enum.find(events(agent), &match?({:metadata, _, _}, &1))
+    assert meta["deploy_parent_id"] == @base
+    assert meta["deploy_input_digest"] == old.input_hash
+
+    assert meta["deploy_command_digest"] ==
+             Base.encode16(:crypto.hash(:sha256, old.command), case: :lower)
+
+    ops = Map.put(ops, :list_snapshots, fn -> {:ok, [Map.put(meta, "name", name)]} end)
+    assert {:ok, result} = Builder.build(@base, [%{old | command: "make new"}], ops: ops)
+    assert [%{status: :miss, miss_reason: :command}] = result.plan.layers
+  end
+
+  test "metadata failure fails the step and still tears down", %{agent: agent} do
+    ops =
+      recording_ops(agent, [])
+      |> Map.put(:update_snapshot_metadata, fn _, _ -> {:error, :eio} end)
+
+    assert {:error, {:step_failed, _, :eio, [], _}} = Builder.build(@base, steps(), ops: ops)
+    assert List.last(events(agent)) == {:stop, "build-vm-1"}
   end
 
   describe "build/3 — full cache hit" do
@@ -244,6 +279,7 @@ defmodule Mjolnir.Deploy.BuilderTest do
           Agent.update(agent, &[{:snapshot, name, opts} | &1])
           {:ok, %{name: name}}
         end,
+        update_snapshot_metadata: fn _name, meta -> {:ok, meta} end,
         stop: fn _vm -> :ok end
       }
     end

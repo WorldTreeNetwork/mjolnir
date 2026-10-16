@@ -121,7 +121,8 @@ defmodule Mjolnir.Deploy.Orchestrator do
          {:build, {:ok, build}} <-
            {:build,
             tag_build_result(
-              ops.build.(
+              build_with_inputs(
+                ops,
                 base_image,
                 steps,
                 build_opts(base_image, src_dir, deployer, build_size)
@@ -279,8 +280,10 @@ defmodule Mjolnir.Deploy.Orchestrator do
     pm = Map.get(plan, :package_manager)
     runtime = Map.get(plan, :runtime, "")
 
-    Enum.reduce_while(commands, {:ok, []}, fn declared_step, {:ok, acc} ->
-      case step_input(declared_step, pm, runtime, src_dir, ops) do
+    commands
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {declared_step, index}, {:ok, acc} ->
+      case step_input(declared_step, pm, runtime, src_dir, ops, index) do
         {:ok, step} -> {:cont, {:ok, [step | acc]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -291,17 +294,18 @@ defmodule Mjolnir.Deploy.Orchestrator do
     end
   end
 
-  defp step_input(%{run: command, inputs: globs}, _pm, _runtime, src_dir, ops) do
+  defp step_input(%{run: command, inputs: globs}, _pm, _runtime, src_dir, ops, index) do
     hash_globs = Map.get(ops, :hash_globs, &CacheKey.hash_globs/2)
 
     with {:ok, hash} <- hash_globs.(src_dir, globs),
          {:ok, rel_paths} <- CacheKey.matching_files(src_dir, globs) do
-      command = table_prelude(rel_paths) <> " && " <> command
-      {:ok, %{command: command, input_hash: hash}}
+      list_name = if globs == [], do: nil, else: "#{index}.files"
+      command = table_prelude(list_name) <> " && " <> command
+      {:ok, %{command: command, input_hash: hash, input_files: rel_paths, input_list: list_name}}
     end
   end
 
-  defp step_input(command, pm, runtime, src_dir, ops) when is_binary(command) do
+  defp step_input(command, pm, runtime, src_dir, ops, _index) when is_binary(command) do
     case classify(command) do
       :runtime ->
         {:ok, %{command: command, input_hash: sha_hex(runtime)}}
@@ -375,25 +379,45 @@ defmodule Mjolnir.Deploy.Orchestrator do
     mount_prelude() <> "; cp -a #{@src_mount}/. #{@workdir}/"
   end
 
-  # Table steps copy exactly the host-resolved regular files that participated
-  # in hash_globs/2. Expanding on the host avoids depending on guest-shell
-  # globstar behavior, and explicit quoted paths preserve nested layout safely.
-  defp table_prelude([]), do: "set -e; mkdir -p #{@workdir}; cd #{@workdir}"
+  # NUL-delimited lists live on a separate temporary share, outside the hashed source.
+  defp table_prelude(nil), do: "set -e; mkdir -p #{@workdir}; cd #{@workdir}"
 
-  defp table_prelude(rel_paths) do
-    copies =
-      Enum.map_join(rel_paths, "; ", fn rel_path ->
-        source = Path.join(@src_mount, rel_path)
-        destination = Path.join(@workdir, rel_path)
-
-        "mkdir -p #{shell_quote(Path.dirname(destination))}; " <>
-          "cp #{shell_quote(source)} #{shell_quote(destination)}"
-      end)
-
-    mount_prelude() <> "; " <> copies
+  defp table_prelude(list_name) do
+    mount_prelude() <>
+      "; mkdir -p /mnt/deploy-inputs; " <>
+      "mountpoint -q /mnt/deploy-inputs || mount -t virtiofs inputs /mnt/deploy-inputs; " <>
+      "tar -C #{@src_mount} --null -T /mnt/deploy-inputs/#{list_name} " <>
+      "-cf /tmp/deploy-#{list_name}.tar && " <>
+      "tar -C #{@workdir} -xf /tmp/deploy-#{list_name}.tar && " <>
+      "rm -f /tmp/deploy-#{list_name}.tar"
   end
 
-  defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+  defp build_with_inputs(ops, base_image, steps, opts) do
+    lists = Enum.filter(steps, &(Map.get(&1, :input_list) != nil))
+
+    if lists == [] do
+      ops.build.(base_image, steps, opts)
+    else
+      suffix = :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
+      dir = Path.join(System.tmp_dir!(), "deploy-inputs-#{suffix}")
+      File.mkdir_p!(dir)
+
+      try do
+        for step <- lists do
+          File.write!(Path.join(dir, step.input_list), Enum.map(step.input_files, &[&1, 0]))
+        end
+
+        opts =
+          update_in(opts[:spawn_opts][:extra_mounts], fn mounts ->
+            mounts ++ [%{tag: "inputs", shared_dir: dir, opts: []}]
+          end)
+
+        ops.build.(base_image, steps, opts)
+      after
+        File.rm_rf(dir)
+      end
+    end
+  end
 
   defp sha_hex(value) when is_binary(value) do
     :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)

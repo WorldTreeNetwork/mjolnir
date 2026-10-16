@@ -251,8 +251,8 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       }
 
       assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
-      assert before.command =~ "cp '/mnt/deploy-src/web/index.js' '/app/web/index.js'"
-      assert before.command =~ "web/nested/view.js"
+      assert before.command =~ "--null -T /mnt/deploy-inputs/0.files"
+      assert before.input_files == ["web/index.js", "web/nested/view.js"]
       refute before.command =~ "server.ex"
 
       File.write!(Path.join(dir, "server.ex"), "outside changed")
@@ -269,6 +269,91 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
 
       assert [%{status: :miss, miss_reason: :inputs}] =
                Plan.compute("base", [matched_edit], [cached]).layers
+    end
+
+    test "5,000-file glob uses a bounded command and copies only matches", %{
+      agent: agent,
+      dir: dir
+    } do
+      File.mkdir_p!(Path.join(dir, "web"))
+      paths = for index <- 1..5000, do: "web/file-#{index}.txt"
+      paths = paths ++ ["web/with space\nand newline.txt"]
+      for path <- paths, do: File.write!(Path.join(dir, path), path)
+      File.write!(Path.join(dir, "excluded.txt"), "excluded")
+
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "true", inputs: ["web/**"]}]
+      }
+
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      destination = Path.join(dir, "copied")
+      File.mkdir_p!(destination)
+
+      ops =
+        Map.put(ops, :build, fn _, [step], opts ->
+          assert byte_size(step.command) < 65_536
+          share = Enum.find(opts[:spawn_opts][:extra_mounts], &(&1.tag == "inputs"))
+          refute String.starts_with?(share.shared_dir, dir <> "/")
+          list = File.read!(Path.join(share.shared_dir, step.input_list))
+          assert String.split(list, <<0>>, trim: true) == Enum.sort(paths)
+          Agent.update(agent, &[{:input_share, share.shared_dir} | &1])
+          # Run the actual archive/copy part locally; mounting virtiofs is server-only.
+          [_, copy] = String.split(step.command, "; tar -C ", parts: 2)
+
+          command =
+            ("tar -C " <> copy)
+            |> String.replace("/mnt/deploy-src", "'#{dir}'")
+            |> String.replace("/mnt/deploy-inputs", "'#{share.shared_dir}'")
+            |> String.replace("/app", "'#{destination}'")
+            |> String.replace("/tmp/deploy-0.files.tar", "'#{destination}/copy.tar'")
+
+          assert {_, 0} = System.cmd("sh", ["-c", command], stderr_to_stdout: true)
+          assert {:ok, copied} = CacheKey.matching_files(destination, ["**"])
+          assert copied == Enum.sort(paths)
+          {:ok, build_ok()}
+        end)
+
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+      {:input_share, share_dir} = Enum.find(events(agent), &match?({:input_share, _}, &1))
+      refute File.exists?(share_dir)
+    end
+
+    test "empty glob matches keep a stable command and clean up lists on build failure", %{
+      agent: agent,
+      dir: dir
+    } do
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "true", inputs: ["web/**"]}]
+      }
+
+      assert {:ok, [empty]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      ops =
+        Map.put(ops, :build, fn _, [step], opts ->
+          share = Enum.find(opts[:spawn_opts][:extra_mounts], &(&1.tag == "inputs"))
+          assert File.read!(Path.join(share.shared_dir, step.input_list)) == ""
+          Agent.update(agent, &[{:input_share, share.shared_dir} | &1])
+          {:error, :build_failed}
+        end)
+
+      assert {:error, %{stage: "build", reason: :build_failed}} =
+               Orchestrator.deploy("app", dir, ops: ops)
+
+      {:input_share, share_dir} = Enum.find(events(agent), &match?({:input_share, _}, &1))
+      refute File.exists?(share_dir)
+
+      File.mkdir_p!(Path.join(dir, "web"))
+      File.write!(Path.join(dir, "web/first.txt"), "first")
+      assert {:ok, [populated]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert empty.command == populated.command
+      assert empty.input_hash != populated.input_hash
     end
 
     test "string step keeps full-tree hash and copy behavior", %{dir: dir} do

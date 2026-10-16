@@ -60,3 +60,20 @@ use today.
 - Build VM size is `add-deploy-build-sizing`.
 - Inferring `inputs` for string steps: explicit only. A later change may
   infer from detector knowledge; not tracked yet.
+
+## Preparation
+
+2026-10-15 `/run`. Outcome: **still valid**. Authority: this change is
+already ACTIVE BUILD. Bare `/run` does not widen it.
+
+Checked work is in the tree: `Deploy.Manifest` table steps,
+`CacheKey.hash_globs/2`, `plan_to_steps` selective copy, string steps
+still whole-tree, progress hit/miss lines, module-doc example. Two
+boxes stay open. `Builder.Plan.compute/3` reports `:command` only for
+the empty-inputs sentinel, so a string-step command change is labeled
+`:inputs`. `Orchestrator.table_prelude/1` still inlines one `mkdir`/`cp`
+per file (`mjolnir-08e`). No living `deploy-build` spec yet.
+
+`add-deploy-build-sizing` is folding in parallel. This act does not
+touch that change directory or `openspec/specs/`. Contract text is
+unchanged, so the existing accept stands and no fresh advise is owed.
