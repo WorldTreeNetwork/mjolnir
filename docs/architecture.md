@@ -498,6 +498,11 @@ not widen it. `Mjolnir.Auth.LoginProfile` over the shared
 store, and the `Mjolnir.API.Auth` wiring are later
 (`add-direct-auth-endpoints`, `add-edge-op-keys`).
 
+A site alias can be a certificate subject. A site-only install writes
+`[[cert]]` and does not add `[[domain]]`. A host the gateway would
+already classify as local or Iroh is refused before HTTP-01. See
+[`docs/decisions/0013-site-alias-certs.md`](decisions/0013-site-alias-certs.md).
+
 ---
 
 ## Technical Choices and Their Benefits
