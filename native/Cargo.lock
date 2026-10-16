@@ -3438,6 +3438,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
+ "identikey-auth",
  "identikey-capability",
  "serde",
  "serde_json",

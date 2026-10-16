@@ -4,6 +4,8 @@
 //! This crate keeps the JSON CLI, `COMMIT_DOMAIN`, and BEAM-facing
 //! names. No HTTP. No vsock. No second biscuit-auth mint path.
 
+pub mod direct_challenge;
+
 pub use identikey_capability::{
     append_holder_check, blake3_hash, holder_fingerprint, keypair_from_private_hex, mint_right,
     new_keypair, parse, public_from_hex, Biscuit, KeyPair, PublicKey, EMPTY_BLAKE3,

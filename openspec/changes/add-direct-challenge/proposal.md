@@ -8,6 +8,8 @@ Bead `mjolnir-22ff.3`. Steer 2026-09-24.
 
 **Preparation (2026-09-24 /run):** still valid (advise-5 accept). Inbound: identikey-auth v1 exists; channel/edge-proof owned by add-edge-op-keys (not yet implemented). Prefer act after op-keys persist exists, or keep gateway-handoff tests host-side. Authority: 22ff campaign.
 
+**Preparation (2026-10-15 /run):** still valid. `add-edge-op-keys` is archived and `Mjolnir.Auth.EdgeKeys` persists the pin. `identikey-auth` 0.1.0 is already in `native/Cargo.lock` via `identikey-capability`; no Mjolnir source calls it yet. Gateway handoff stays host-side: the verifier takes the authenticated channel inputs as arguments. HTTP issue/consume endpoints stay in `add-direct-auth-endpoints`. Contract text is unchanged, so advise-5 still covers this act.
+
 ## Why
 
 Native clients (CLI, desktop, mobile, agent, SSH, local socket) must

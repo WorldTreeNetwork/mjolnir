@@ -1,9 +1,9 @@
 # Tasks
 
-- [ ] Consume `identikey-auth` Challenge/Response as-is (`aud` = pinned edge XID)
-- [ ] Specify the second signed authorization object (session public key, operation, channel)
-- [ ] Keep identikey-core off the verify path
-- [ ] Vectors: success, replay, expiry, wrong edge, wrong audience, altered request, holder-key substitution, transport replay
+- [x] Consume `identikey-auth` Challenge/Response as-is (`aud` = pinned edge XID)
+- [x] Specify the second signed authorization object (session public key, operation, channel)
+- [x] Keep identikey-core off the verify path
+- [x] Vectors: success, replay, expiry, wrong edge, wrong audience, altered request, holder-key substitution, transport replay
 - [x] Advise — astra-arch-review, other-family reader for Grok; accepted in reviews/2026-09-24-advise-5.md (Fable infra-red).
 
 ## Owed from Astra architecture review — 2026-09-24
