@@ -1,0 +1,36 @@
+{
+  "node_id": "mjolnir-uktt.2.2",
+  "change_id": "add-sites-alias-certs",
+  "disposition": "pass",
+  "summary": "mj cert issue installs a [[cert]] for a live site alias and does not add a [[domain]]. Renewal reinstalls without appending an apex. An unreadable alias index fails before Let's Encrypt.",
+  "verify_command": "mix test test/mjolnir/api/certs_test.exs test/mjolnir/api/router_test.exs test/mjolnir/gateway/certs_test.exs test/mjolnir/gateway/classify_test.exs test/mjolnir/api/sites_token_auth_test.exs test/mjolnir/sites/alias_secret_store_test.exs && cargo test -p mjolnir-gateway --bin mjolnir-gateway site_only_cert_does_not_change_classification --manifest-path native/Cargo.toml",
+  "verify_exit": 0,
+  "commit": {
+    "sha": "bff30e9d6f67c9b92822807d66a8a4177ca02854",
+    "paths": [
+      "docs/guide/deploying-a-static-site.md",
+      "lib/mjolnir/api/certs.ex",
+      "lib/mjolnir/api/router.ex",
+      "lib/mjolnir/gateway/certs.ex",
+      "lib/mjolnir/gateway/classify.ex",
+      "lib/mjolnir/secret_store.ex",
+      "native/mjolnir_gateway/src/main.rs",
+      "test/mjolnir/api/certs_test.exs",
+      "test/mjolnir/api/router_test.exs",
+      "test/mjolnir/api/sites_token_auth_test.exs",
+      "test/mjolnir/gateway/certs_test.exs",
+      "test/mjolnir/gateway/classify_test.exs",
+      "test/mjolnir/sites/alias_secret_store_test.exs",
+      "groups/mjolnir-uktt.2.2/packet.json",
+      "openspec/changes/add-sites-alias-certs/design.md",
+      "openspec/changes/add-sites-alias-certs/proposal.md",
+      "openspec/changes/add-sites-alias-certs/tasks.md",
+      "openspec/changes/add-sites-alias-certs/specs/site-certs/spec.md"
+    ]
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "grok",
+    "content_hash": "sha256:5aca075f14bc4c7180fa7e9565e4f2873bf6527b8c559b12038ccfe8d18788db"
+  }
+}
