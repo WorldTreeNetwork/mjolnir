@@ -139,13 +139,6 @@ defmodule Mjolnir.Deploy.Manifest do
   def present?(app_dir), do: File.regular?(path(app_dir))
 
   @doc """
-  Loads `app_dir/mjolnir.toml` into a `BuildPlan`.
-
-  Returns `:none` when no manifest is present (the caller should fall back to
-  detection), `{:ok, %BuildPlan{}}` on success, or `{:error, reason}` when a
-  manifest exists but is unusable — which the caller must surface, not swallow.
-  """
-  @doc """
   Loads `[targets.<name>]`. `:none` when the file or that target is absent.
   `{:error, _}` when the target is present but unusable.
   """
@@ -182,6 +175,13 @@ defmodule Mjolnir.Deploy.Manifest do
     end
   end
 
+  @doc """
+  Loads `app_dir/mjolnir.toml` into a `BuildPlan`.
+
+  Returns `:none` when no manifest is present (the caller should fall back to
+  detection), `{:ok, %BuildPlan{}}` on success, or `{:error, reason}` when a
+  manifest exists but is unusable — which the caller must surface, not swallow.
+  """
   @spec load(String.t()) :: {:ok, BuildPlan.t()} | {:error, term()} | :none
   def load(app_dir) do
     file = path(app_dir)

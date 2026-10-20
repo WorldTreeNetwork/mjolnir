@@ -422,16 +422,6 @@ defmodule Mjolnir.BTRFS do
   defp stringify_metadata_value(v), do: v
 
   @doc """
-  Delete the iroh key from a rootfs directory to force new key generation.
-
-  This is needed when spawning a VM from a snapshot to ensure each VM gets
-  a unique iroh node ID and ticket, rather than sharing the same network
-  identity as the snapshot source.
-
-  Directly removes /etc/mjolnir/iroh.key from the rootfs directory (no mount needed
-  since the rootfs is now a BTRFS subvolume directory).
-  """
-  @doc """
   The first directory in `dirs` whose `etc/mjolnir/iroh.key` bytes equal
   `key_bytes`. Used to refuse a second guest with the same Iroh identity.
   """
@@ -443,6 +433,16 @@ defmodule Mjolnir.BTRFS do
     end)
   end
 
+  @doc """
+  Delete the iroh key from a rootfs directory to force new key generation.
+
+  This is needed when spawning a VM from a snapshot to ensure each VM gets
+  a unique iroh node ID and ticket, rather than sharing the same network
+  identity as the snapshot source.
+
+  Directly removes /etc/mjolnir/iroh.key from the rootfs directory (no mount needed
+  since the rootfs is now a BTRFS subvolume directory).
+  """
   def delete_iroh_key(rootfs_dir) do
     key_path = Path.join(rootfs_dir, "etc/mjolnir/iroh.key")
 

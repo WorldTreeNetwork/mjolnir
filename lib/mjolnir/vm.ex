@@ -1387,25 +1387,6 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp do_handle_done(state) do
-    snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
-
-    case do_snapshot(state, snapshot_name, []) do
-      {:ok, _metadata} ->
-        original_config = restore_config(state)
-        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
-        # DormantRegistry now owns this VM's persisted state; remove the
-        # running-intent record so Mjolnir.Reconcile doesn't try to resume it.
-        _ = Mjolnir.StateStore.delete(state.id)
-        Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
-        {:stop, :normal, :ok, state}
-
-      {:error, reason} ->
-        Logger.error("Failed to snapshot VM #{state.id} for done: #{inspect(reason)}")
-        {:reply, {:error, reason}, state}
-    end
-  end
-
   # Runs the vsock round-trip OFF the GenServer (mjolnir-8ie).
   #
   # Handling exec inline blocks this process's mailbox for the whole duration of
@@ -1734,6 +1715,25 @@ defmodule Mjolnir.VM do
             {:reply, {:error, :timeout}, state}
         end
       end
+    end
+  end
+
+  defp do_handle_done(state) do
+    snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
+
+    case do_snapshot(state, snapshot_name, []) do
+      {:ok, _metadata} ->
+        original_config = restore_config(state)
+        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
+        # DormantRegistry now owns this VM's persisted state; remove the
+        # running-intent record so Mjolnir.Reconcile doesn't try to resume it.
+        _ = Mjolnir.StateStore.delete(state.id)
+        Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
+        {:stop, :normal, :ok, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to snapshot VM #{state.id} for done: #{inspect(reason)}")
+        {:reply, {:error, reason}, state}
     end
   end
 
