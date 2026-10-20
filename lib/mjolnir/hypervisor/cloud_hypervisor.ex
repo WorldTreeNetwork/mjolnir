@@ -20,6 +20,22 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
 
   @impl true
   def start_vm(config) do
+    {exe, port_args} = launch_spec(config)
+
+    port =
+      Port.open(
+        {:spawn_executable, exe},
+        [:binary, :exit_status, :stderr_to_stdout, args: port_args]
+      )
+
+    {:ok, port}
+  end
+
+  @doc false
+  # Same argv `start_vm/1` passes to the port. Detach wraps it in this VM's
+  # scope. The default stays a direct exec so a deploy does not move guests
+  # that are still inside the service cgroup.
+  def launch_spec(config) do
     ch_bin = Application.get_env(:mjolnir, :cloud_hypervisor_bin, "cloud-hypervisor")
     socket_path = config.socket_path
     vm_id = config.vm_id
@@ -31,13 +47,11 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       Path.join(Path.dirname(socket_path), "cloud-hypervisor-#{vm_id}.log")
     ]
 
-    port =
-      Port.open(
-        {:spawn_executable, ch_bin},
-        [:binary, :exit_status, :stderr_to_stdout, args: args]
-      )
-
-    {:ok, port}
+    if Application.get_env(:mjolnir, :detach_vmm, false) do
+      Mjolnir.VmmScope.spawn_command(ch_bin, args, vm_id)
+    else
+      {ch_bin, args}
+    end
   end
 
   @impl true
