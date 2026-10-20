@@ -1,8 +1,8 @@
 # ADR 0014: A guest outlives an orchestrator restart
 
-**Status:** Accepted 2026-10-20
+**Status:** Decision recorded. Implementation of spawn and adopt is withheld.
 
-Review-pair: `opus-arch-review` stalled at 300s (no verdict). Astra (`gpt-6-astra`) cautioned twice. The fences Astra named are in the classifier below. Astra's third review agreed. The tradeoff she named stands: an unresolved guest waits for an operator rather than a second VMM on the same disk.
+Astra (`gpt-6-astra`) agreed on 2026-10-20 after the classifier fences. `opus-arch-review` (`claude-opus-5-5`) then returned caution, not agreement. The retry named an overlap between the unresolved-live row and the pid-reuse cold-resume row, a missing `:dormant` case, and no replacement for the Erlang port's `:exit_status` death signal. Those are unresolved. This ADR is not a license to ship `mjolnir-uepi.3` or `mjolnir-uepi.4`.
 
 ## Decision
 

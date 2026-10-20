@@ -3433,10 +3433,6 @@ defmodule Mjolnir.VM do
   # exit makes the GenServer terminate via its preserve-rootfs path, cleaning up
   # the TAP/virtiofsd/sockets while keeping the @vms subvolume for resume/1.
   defp kill_hypervisor_process(vm_id) do
-    # The scope kill is a no-op when this VM was not spawned detached.
-    # It names the per-VM scope, never mjolnir.service.
-    _ = Mjolnir.VmmScope.stop(vm_id)
-
     # Match the CH process precisely by the VM's UUID (it appears in the
     # --api-socket path) so we never touch another VM's hypervisor. Best-effort:
     # a missing match is fine (process already dead, or a unit test with no CH).
