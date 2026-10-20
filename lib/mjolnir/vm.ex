@@ -1952,6 +1952,16 @@ defmodule Mjolnir.VM do
 
   @impl true
   def terminate(reason, state) do
+    if state.hypervisor == Mjolnir.Hypervisor.CloudHypervisor and
+         Mjolnir.VmmScope.detach?(reason) do
+      Mjolnir.VmmScope.detach(state.hypervisor_port)
+      :ok
+    else
+      terminate_owned(reason, state)
+    end
+  end
+
+  defp terminate_owned(reason, state) do
     Logger.warning(
       "[vm-terminate] #{state.id} start reason=#{inspect(reason)} state=#{state.state}"
     )
@@ -2142,15 +2152,18 @@ defmodule Mjolnir.VM do
            _ = track_rootfs_for_cleanup(state, rootfs_path),
            _ = maybe_inject_guest_agent(state, rootfs_path),
            virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id),
-           {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.start(rootfs_path, virtiofsd_socket),
+           {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.prepare(rootfs_path, virtiofsd_socket),
            _ = boot_partial_put(:virtiofsd_port, virtiofsd_port),
            extra_mounts = Map.get(state.config, :extra_mounts, []),
            {:ok, extra_virtiofsd_ports} <-
-             Mjolnir.VirtioFS.start_many(socket_dir, state.id, extra_mounts),
+             Mjolnir.VirtioFS.prepare_many(socket_dir, state.id, extra_mounts),
            _ = boot_partial_put(:extra_virtiofsd_ports, extra_virtiofsd_ports),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
-           {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
+           {:ok, hv_port} <-
+             start_hypervisor(hypervisor, state.id, socket_path, serial_path, [
+               virtiofsd_port | Enum.map(extra_virtiofsd_ports, &elem(&1, 1))
+             ]),
            _ = boot_partial_put(:hv_port, hv_port),
            :ok <- wait_for_socket(socket_path),
            config <-
@@ -2447,14 +2460,12 @@ defmodule Mjolnir.VM do
     # Kill hypervisor port if started
     if partial[:hv_port] do
       try do
-        case Port.info(partial.hv_port, :os_pid) do
-          {:os_pid, os_pid} ->
-            Port.close(partial.hv_port)
-            System.cmd("kill", ["-9", to_string(os_pid)])
-
-          nil ->
-            :ok
+        case Process.get(:boot_scope_id) do
+          nil -> :ok
+          id -> Mjolnir.VmmScope.stop(id)
         end
+
+        Mjolnir.VmmScope.detach(partial.hv_port)
       rescue
         _ -> :ok
       end
@@ -2769,13 +2780,15 @@ defmodule Mjolnir.VM do
   defp track_rootfs_for_cleanup(_state, rootfs_path),
     do: boot_partial_put(:rootfs_path, rootfs_path)
 
-  defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path) do
+  defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path, daemons) do
     config = %{
       vm_id: vm_id,
       socket_path: socket_path,
-      serial_path: serial_path
+      serial_path: serial_path,
+      virtiofs_daemons: daemons
     }
 
+    Process.put(:boot_scope_id, vm_id)
     hypervisor.start_vm(config)
   end
 
@@ -3433,18 +3446,9 @@ defmodule Mjolnir.VM do
   # exit makes the GenServer terminate via its preserve-rootfs path, cleaning up
   # the TAP/virtiofsd/sockets while keeping the @vms subvolume for resume/1.
   defp kill_hypervisor_process(vm_id) do
-    # Match the CH process precisely by the VM's UUID (it appears in the
-    # --api-socket path) so we never touch another VM's hypervisor. Best-effort:
-    # a missing match is fine (process already dead, or a unit test with no CH).
-    pattern = "cloud-hypervisor.*#{vm_id}"
-
-    case System.cmd("pkill", ["-9", "-f", pattern], stderr_to_stdout: true) do
-      {_, 0} -> Logger.info("VM #{vm_id}: killed hypervisor process for reboot")
-      {_, 1} -> Logger.info("VM #{vm_id}: no hypervisor process matched for reboot")
-      {out, code} -> Logger.warning("VM #{vm_id}: pkill exited #{code}: #{String.trim(out)}")
-    end
+    Mjolnir.VmmScope.stop(vm_id)
   rescue
-    e -> Logger.warning("VM #{vm_id}: kill_hypervisor_process raised: #{inspect(e)}")
+    e -> Logger.warning("VM #{vm_id}: scope stop raised: #{inspect(e)}")
   end
 
   # Poll until the VM has no live GenServer in the registry (its terminate has

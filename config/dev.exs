@@ -5,6 +5,8 @@ config :logger, level: :info
 # Dev uses the same kernel/base images as prod (installed by bootstrap)
 # but separate VM storage and sockets to avoid conflicts
 config :mjolnir,
+  vmm_slice: "mjd-vms.slice",
+  vmm_scope_prefix: "mjd-",
   # Shared resources (read-only, installed by bootstrap)
   btrfs_root: "/var/lib/mjolnir/btrfs",
   ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",

@@ -85,6 +85,50 @@ defmodule Mjolnir.VirtioFS do
     end
   end
 
+  @doc "Build a daemon descriptor for launch inside the guest's scope."
+  def prepare(shared_dir, socket_path, tag \\ "myfs", opts \\ []) do
+    if File.dir?(shared_dir) do
+      bin =
+        Keyword.get(
+          opts,
+          :virtiofsd_bin,
+          Application.get_env(:mjolnir, :virtiofsd_bin, "virtiofsd")
+        )
+
+      mode =
+        Keyword.get(
+          opts,
+          :migration_mode,
+          Application.get_env(:mjolnir, :virtiofsd_migration_mode, "find-paths")
+        )
+
+      args =
+        [
+          "--socket-path=#{socket_path}",
+          "--shared-dir=#{shared_dir}",
+          "--cache=auto",
+          "--sandbox=none",
+          "--thread-pool-size=#{Keyword.get(opts, :thread_pool_size, @default_thread_pool_size)}"
+        ] ++
+          if(mode, do: ["--migration-mode=#{mode}"], else: [])
+
+      {:ok, %{tag: tag, socket: socket_path, argv: [bin | args]}}
+    else
+      {:error, {:shared_dir_not_found, shared_dir}}
+    end
+  end
+
+  def prepare_many(socket_dir, vm_id, mounts) do
+    Enum.reduce_while(mounts, {:ok, []}, fn mount, {:ok, acc} ->
+      sock = socket_path(socket_dir, vm_id, mount.tag)
+
+      case prepare(mount.shared_dir, sock, mount.tag, Map.get(mount, :opts, [])) do
+        {:ok, daemon} -> {:cont, {:ok, acc ++ [{mount.tag, daemon, sock}]}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   defp do_start(shared_dir, socket_path, opts) do
     # Ensure socket directory exists
     socket_dir = Path.dirname(socket_path)
@@ -172,6 +216,9 @@ defmodule Mjolnir.VirtioFS do
       Mjolnir.VirtioFS.stop(port)
   """
   @spec stop(port()) :: :ok
+  # A descriptor owns no OS process; the scope wrapper owns its daemon.
+  def stop(%{argv: _}), do: :ok
+
   def stop(port) when is_port(port) do
     Logger.debug("Stopping virtiofsd port #{inspect(port)}")
 

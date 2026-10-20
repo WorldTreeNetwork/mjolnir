@@ -3,6 +3,8 @@ import Config
 config :logger, level: :warning
 
 config :mjolnir,
+  vmm_slice: "mjt-vms.slice",
+  vmm_scope_prefix: "mjt-",
   # Tests use a separate BTRFS root (symlinked by bootstrap)
   btrfs_root: "/var/lib/mjolnir/btrfs-test",
   socket_dir: "/tmp/mjolnir-test",

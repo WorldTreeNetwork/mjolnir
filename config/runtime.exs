@@ -212,3 +212,12 @@ end
 if url = System.get_env("MJOLNIR_FORGEJO_URL") do
   config :mjolnir, forgejo_url: url
 end
+
+# Each instance must use a sibling slice and a disjoint scope prefix.
+if slice = System.get_env("MJOLNIR_VMM_SLICE") do
+  config :mjolnir, vmm_slice: slice
+end
+
+if prefix = System.get_env("MJOLNIR_VMM_SCOPE_PREFIX") do
+  config :mjolnir, vmm_scope_prefix: prefix
+end

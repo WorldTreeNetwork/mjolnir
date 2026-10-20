@@ -1,10 +1,9 @@
 defmodule Mjolnir.Cleanup do
   @moduledoc """
-  Cleans up orphaned hypervisor processes and stale files from previous runs.
-
-  Called once during application startup, before the supervision tree starts.
-  Finds hypervisor processes whose `--api-sock` points to our socket directory
-  and kills them.
+  Startup sweep. Does not kill a process because its command line contains
+  the socket directory. Socket unlink of an attached or unclassified scope
+  waits for reattach. Disks with a state record and this instance's DOWN
+  TAPs are still handled here.
   """
 
   require Logger
@@ -12,21 +11,7 @@ defmodule Mjolnir.Cleanup do
   @hypervisor_process_names ["cloud-hypervisor", "virtiofsd"]
 
   def sweep do
-    socket_dir = Application.get_env(:mjolnir, :socket_dir)
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
-
-    orphans = find_orphan_hypervisors(socket_dir)
-
-    if orphans != [] do
-      Logger.info("Found #{length(orphans)} orphaned hypervisor process(es), cleaning up")
-
-      Enum.each(orphans, fn {pid, vm_id} ->
-        Logger.info("Killing orphaned hypervisor PID #{pid} (VM #{vm_id})")
-        System.cmd("kill", [to_string(pid)])
-      end)
-    end
-
-    clean_stale_sockets(socket_dir)
     clean_stale_vms(btrfs_root)
     clean_orphan_taps()
     reap_trash()
@@ -46,78 +31,10 @@ defmodule Mjolnir.Cleanup do
   @doc false
   def hypervisor_process_names, do: @hypervisor_process_names
 
-  defp find_orphan_hypervisors(socket_dir) do
-    case System.cmd("ps", ["-eo", "pid,ppid,args"], stderr_to_stdout: true) do
-      {output, 0} ->
-        lines = String.split(output, "\n")
-
-        @hypervisor_process_names
-        |> Enum.flat_map(fn process_name ->
-          lines
-          |> Enum.filter(&String.contains?(&1, process_name))
-          |> Enum.reject(&String.contains?(&1, "grep"))
-          |> Enum.filter(&String.contains?(&1, socket_dir))
-          |> Enum.map(&parse_hypervisor_process/1)
-          |> Enum.reject(&is_nil/1)
-        end)
-
-      _ ->
-        []
-    end
-  end
-
-  defp parse_hypervisor_process(line) do
-    cond do
-      # Cloud Hypervisor: --api-socket /path/<uuid>.sock
-      match =
-          Regex.run(
-            ~r/^\s*(\d+)\s+\d+\s+.*--api-socket\s+\S*\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.sock/,
-            line
-          ) ->
-        [_, pid, vm_id] = match
-        {String.to_integer(pid), vm_id}
-
-      # Fallback: any UUID pattern in the command line (less reliable but better than nothing)
-      match =
-          Regex.run(
-            ~r/^\s*(\d+)\s+\d+\s+.*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/,
-            line
-          ) ->
-        [_, pid, vm_id] = match
-        {String.to_integer(pid), vm_id}
-
-      true ->
-        nil
-    end
-  end
-
-  defp clean_stale_sockets(socket_dir) do
-    case File.ls(socket_dir) do
-      {:ok, files} ->
-        files
-        |> Enum.filter(fn file ->
-          String.ends_with?(file, ".sock") or String.ends_with?(file, "_vsock")
-        end)
-        |> Enum.each(fn file ->
-          path = Path.join(socket_dir, file)
-          Logger.debug("Removing stale socket: #{path}")
-          File.rm(path)
-        end)
-
-      {:error, :enoent} ->
-        :ok
-    end
-  end
-
   # Delete our own DOWN TAP interfaces.
   #
-  # TAP devices are host-global — unlike hypervisor processes, sockets and
-  # rootfs subvolumes, which this module reaps through socket_dir/btrfs_root
-  # and so can never reach another BEAM's. This swept every `mj-*` interface
-  # regardless of owner, so a MIX_ENV=test BEAM starting on the same host
-  # would delete a PRODUCTION VM's TAP whenever that TAP was momentarily DOWN
-  # (mid-boot, or wedged) and cut its networking. Scoping to :tap_prefix means
-  # each BEAM only reaps interfaces it could have created (mjolnir-0ut).
+  # TAP devices are host-global. Scoping to :tap_prefix means each BEAM only
+  # reaps interfaces it could have created (mjolnir-0ut).
   defp clean_orphan_taps do
     prefix = Mjolnir.Network.tap_prefix()
     pattern = Regex.compile!("(#{Regex.escape(prefix)}[a-f0-9]+)")
@@ -159,9 +76,6 @@ defmodule Mjolnir.Cleanup do
     end
   end
 
-  # Reserved sibling/dot-dirs that live alongside VM subvolumes and must never
-  # be treated as orphan VMs (e.g. @trash is a top-level sibling, but guard
-  # against any dot-prefixed entry slipping in).
   defp reserved_entry?(entry), do: String.starts_with?(entry, ".")
 
   defp maybe_remove_vm(_vms_dir, entry) when entry in ["", "."], do: :ok
@@ -181,15 +95,10 @@ defmodule Mjolnir.Cleanup do
             )
 
           :not_found ->
-            # A genuine orphan: no intent record. Soft-delete (trash) rather than
-            # hard-delete so even a sweep mistake is recoverable from @trash.
             Logger.info("Trashing stale VM directory: #{path}")
             _ = Mjolnir.BTRFS.trash_subvolume(path)
 
           :unknown ->
-            # We could NOT consult the intent store (table missing, store down).
-            # Fail SAFE: preserve. Deleting here is exactly the "disappeared
-            # forever" hazard — never destroy data we can't prove is orphaned.
             Logger.warning(
               "Cannot consult StateStore for #{entry}; PRESERVING subvolume (fail-safe). " <>
                 "Will retry on next sweep."
@@ -198,10 +107,6 @@ defmodule Mjolnir.Cleanup do
     end
   end
 
-  # StateStore may not be running in early boot or in test contexts that don't
-  # start the full application. Return :unknown (NOT :not_found) so the caller
-  # fails safe and preserves rather than deletes — losing user data is far
-  # worse than leaving an orphan subvolume for the next sweep.
   defp safe_state_lookup(uuid) do
     Mjolnir.StateStore.get(uuid)
   rescue

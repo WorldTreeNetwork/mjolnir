@@ -1,0 +1,7 @@
+[Unit]
+Description=Mjolnir production guests
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes

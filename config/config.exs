@@ -1,6 +1,8 @@
 import Config
 
 config :mjolnir,
+  vmm_slice: "mjolnir-vms.slice",
+  vmm_scope_prefix: "mjolnir-",
   # Hypervisor
   hypervisor: Mjolnir.Hypervisor.CloudHypervisor,
 
