@@ -535,7 +535,9 @@ defmodule Mjolnir.VM do
   """
   @spec list() :: [t()]
   def list do
-    Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    # The {:resume, uuid} key is a reconcile claim, not a VM. Probing it calls
+    # StateStore.get/1 with a tuple (mjolnir-l5a8).
+    registry_vms()
     # Probe every VM concurrently. Serially this was N × up-to-5s, so a single
     # VM whose GenServer mailbox was briefly blocked (e.g. mid-heal on a wedged
     # guest) stalled the whole `GET /api/vms` response (mjolnir-l4i). Bounded
@@ -566,11 +568,16 @@ defmodule Mjolnir.VM do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp registry_vms do
+    Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.filter(fn {id, _pid} -> is_binary(id) end)
+  end
+
   # Build the :unreachable placeholder for a blocked/unresponsive VM. The
   # owner_id is read from the durable StateStore record (not the blocked
   # GenServer), so the API's owner filter still shows the VM to its owner
   # instead of hiding it (mjolnir-l4i).
-  defp unreachable_placeholder(vm_id) do
+  defp unreachable_placeholder(vm_id) when is_binary(vm_id) do
     owner =
       case Mjolnir.StateStore.get(vm_id) do
         {:ok, record} -> Map.get(record.spawn_config || %{}, "owner_id")
@@ -579,6 +586,8 @@ defmodule Mjolnir.VM do
 
     %__MODULE__{id: vm_id, state: :unreachable, owner_id: owner}
   end
+
+  defp unreachable_placeholder(_vm_id), do: nil
 
   @doc """
   List VMs that have a `:running` intent record in StateStore but no live
@@ -595,6 +604,7 @@ defmodule Mjolnir.VM do
     registered =
       Mjolnir.VMRegistry
       |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.filter(&is_binary/1)
       |> MapSet.new()
 
     Mjolnir.StateStore.list_by_intent(:running)

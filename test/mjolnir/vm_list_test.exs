@@ -56,6 +56,14 @@ defmodule Mjolnir.VMListTest do
     assert %Mjolnir.VM{state: :unreachable, owner_id: "alice"} = entry
   end
 
+  test "a resume claim key is not a VM and does not crash the list" do
+    id = "claim-#{System.unique_integer([:positive])}"
+    register_blocked({:resume, id})
+
+    list = Mjolnir.VM.list()
+    refute Enum.any?(list, fn vm -> vm.id == id or vm.id == {:resume, id} end)
+  end
+
   test "a responsive VM is returned with its real state alongside an unreachable one" do
     healthy_id = "healthy-#{System.unique_integer([:positive])}"
     blocked_id = "blocked-#{System.unique_integer([:positive])}"
