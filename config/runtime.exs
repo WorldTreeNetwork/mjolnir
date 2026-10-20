@@ -78,6 +78,12 @@ if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
 end
 
+# Default 4. Raise only after a single reconcile pass stays inside the
+# agent budget. Two overlapping passes are what overloaded the host.
+if conc = System.get_env("MJOLNIR_RECONCILE_MAX_CONCURRENCY") do
+  config :mjolnir, reconcile_max_concurrency: String.to_integer(conc)
+end
+
 case System.get_env("MJOLNIR_GATEWAY_ROUTES_ENABLED") do
   "true" -> config :mjolnir, gateway_routes_enabled: true
   "false" -> config :mjolnir, gateway_routes_enabled: false

@@ -226,6 +226,16 @@ defmodule Mjolnir.VMUnitTest do
       assert await_boot_timeout(%{secrets_mode: :managed}) == 90_000
     end
 
+    test "a moving hypervisor is left up when the agent misses the budget" do
+      assert Mjolnir.VM.boot_wait_outcome(%{log_grew: true, ch_alive: true}) == :leave
+    end
+
+    test "a silent or dead hypervisor is killed when the agent misses the budget" do
+      assert Mjolnir.VM.boot_wait_outcome(%{log_grew: false, ch_alive: true}) == :kill
+      assert Mjolnir.VM.boot_wait_outcome(%{log_grew: true, ch_alive: false}) == :kill
+      assert Mjolnir.VM.boot_wait_outcome(%{}) == :kill
+    end
+
     test "explicit :await_boot_timeout always wins" do
       assert await_boot_timeout(%{await_boot_timeout: 120_000}) == 120_000
       assert await_boot_timeout(%{secrets_mode: :managed, await_boot_timeout: 15_000}) == 15_000

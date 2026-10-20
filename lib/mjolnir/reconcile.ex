@@ -65,8 +65,9 @@ defmodule Mjolnir.Reconcile do
 
   Because a resume-mode boot failure never re-persists the record (see
   `Mjolnir.VM`'s `handle_boot_failure/5`, guarded on `not resume_mode`),
-  Reconcile is the sole writer on the failure path — the read-modify-write of
-  the counter is race-free.
+  Reconcile is the sole writer on the failure path. `run/0` is single-flight:
+  a second caller is skipped rather than queued, so two passes cannot
+  read-modify-write the same counter or boot the same UUID.
   """
 
   require Logger
@@ -108,8 +109,40 @@ defmodule Mjolnir.Reconcile do
   a large fleet from thundering-herding the host. In steady state the plan is
   empty and no tasks are spawned, so the Monitor's per-tick cost is unchanged.
   """
-  @spec run() :: :ok
+  @spec run() :: :ok | :skipped
   def run do
+    if acquire_pass() do
+      try do
+        do_run()
+      after
+        release_pass()
+      end
+    else
+      Logger.info("Reconcile: pass already running, skipping")
+      :skipped
+    end
+  end
+
+  # One pass at a time. A queued second pass would start the moment a long
+  # rehydrate finished and boot the fleet again. The lock dies with the
+  # caller, so a crashed pass does not stick.
+  @doc false
+  def acquire_pass do
+    :global.set_lock(pass_lock(), [node()], 0)
+  end
+
+  @doc false
+  def release_pass do
+    :global.del_lock(pass_lock(), [node()])
+    :ok
+  end
+
+  # ResourceId is shared. LockRequesterId is this process. :global treats
+  # the same requester id as one shared hold, so a second process must use
+  # its own pid or the lock would not exclude it.
+  defp pass_lock, do: {:mjolnir_reconcile_pass, self()}
+
+  defp do_run do
     records = StateStore.list_by_intent(:running)
     stranded = Enum.reject(records, &vm_registered?/1)
     plan = build_plan(stranded)
@@ -141,7 +174,11 @@ defmodule Mjolnir.Reconcile do
   end
 
   defp vm_registered?(%Record{uuid: uuid}) do
-    case Registry.lookup(Mjolnir.VMRegistry, uuid) do
+    registry_taken?(uuid) or registry_taken?({:resume, uuid})
+  end
+
+  defp registry_taken?(key) do
+    case Registry.lookup(Mjolnir.VMRegistry, key) do
       [_ | _] -> true
       [] -> false
     end
@@ -241,8 +278,16 @@ defmodule Mjolnir.Reconcile do
     # is left :running for the next pass, exactly like a returned {:error, _}.
     try do
       case Mjolnir.VM.resume(record) do
+        {:ok, :booting} ->
+          Logger.info("Reconcile: VM #{uuid} still booting; hypervisor left up")
+
         {:ok, _vm} ->
           Logger.info("Reconcile: VM #{uuid} resumed")
+
+        # The VM registered between plan and start. Not a failed boot, and
+        # counting it would retire a healthy guest after enough overlaps.
+        {:error, {:already_started, _pid}} ->
+          Logger.info("Reconcile: VM #{uuid} already started")
 
         {:error, reason} ->
           record_failure(record, "resume failed: #{inspect(reason)}")

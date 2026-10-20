@@ -79,8 +79,8 @@ defmodule Mjolnir.Application do
           # with Bandit — and that is the goal. Stranded :running records surface
           # in /api/vms as state=recovering until each VM re-registers, so the
           # API stays honest while rehydration proceeds. Reconcile.run/0 resumes
-          # with bounded concurrency, and Health.Monitor re-runs it every 30s as
-          # a safety net if this initial pass misses any.
+          # with bounded concurrency. Health.Monitor re-runs it every 30s as a
+          # safety net, and skips when a pass is already in flight.
           %{
             id: Mjolnir.StartupReconcile,
             start: {Task, :start_link, [&Mjolnir.Reconcile.run/0]},

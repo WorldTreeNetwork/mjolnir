@@ -234,6 +234,43 @@ defmodule Mjolnir.ReconcileTest do
       :ok
     end
 
+    test "a second caller skips while a pass is held" do
+      parent = self()
+
+      holder =
+        spawn(fn ->
+          true = Reconcile.acquire_pass()
+          send(parent, :held)
+
+          receive do
+            :release -> Reconcile.release_pass()
+          end
+        end)
+
+      assert_receive :held, 1_000
+      assert Reconcile.run() == :skipped
+      send(holder, :release)
+      ref = Process.monitor(holder)
+      assert_receive {:DOWN, ^ref, :process, ^holder, _}, 1_000
+      assert Reconcile.run() == :ok
+    end
+
+    test "an in-flight resume claim is not started again", ctx do
+      uuid = "12121212-3434-5656-7878-909090909090"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      :ok = Mjolnir.StateStore.put(Record.new(uuid, :running))
+      {:ok, _} = Registry.register(Mjolnir.VMRegistry, {:resume, uuid}, nil)
+
+      assert :ok = Reconcile.run()
+
+      assert {:ok, record} = Mjolnir.StateStore.get(uuid)
+      assert record.intent == :running
+      refute record.runtime["resume_failures"]
+
+      Registry.unregister(Mjolnir.VMRegistry, {:resume, uuid})
+    end
+
     test "finalizes to :stopped instead of resuming, and preserves the rootfs", ctx do
       uuid = "11112222-3333-4444-5555-666677778888"
       rootfs = Path.join([ctx.btrfs_root, "@vms", uuid])
