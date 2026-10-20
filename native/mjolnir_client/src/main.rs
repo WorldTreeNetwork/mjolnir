@@ -615,13 +615,19 @@ enum DomainAction {
 
 #[derive(Subcommand)]
 enum SecretsAction {
-    /// Merge a secret into the app's host-escrowed file
+    /// Merge secrets into the app's host-escrowed file (one write)
     Set {
         /// Deployed app name (e.g. hypersigil-api)
         app: String,
-        /// KEY or KEY=VALUE
-        spec: String,
-        /// Read the value from stdin (no echo, no argv)
+        /// KEY (prompt), KEY=VALUE, or several KEY=VALUE
+        #[arg(
+            required = true,
+            num_args = 1..,
+            value_name = "SPEC",
+            value_parser = secrets::parse_secret_spec
+        )]
+        specs: Vec<String>,
+        /// Read the value from stdin (one KEY, no echo, no argv)
         #[arg(long)]
         stdin: bool,
         /// Mjolnir API base URL
@@ -889,7 +895,10 @@ enum HostsCmd {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => exit_cli_parse(err),
+    };
     let profile = config::resolve_profile(&cli.profile);
     let json = cli.json;
 
@@ -1166,11 +1175,11 @@ async fn main() {
         Command::Secrets { action } => match action {
             SecretsAction::Set {
                 app,
-                spec,
+                specs,
                 stdin,
                 api,
                 token,
-            } => secrets::cmd_secrets_set(&profile, &api, &token, &app, &spec, stdin, json).await,
+            } => secrets::cmd_secrets_set(&profile, &api, &token, &app, &specs, stdin, json).await,
             SecretsAction::Ls { app, api, token } => {
                 secrets::cmd_secrets_ls(&profile, &api, &token, &app, json).await
             }
@@ -1363,6 +1372,21 @@ async fn main() {
     }
 }
 
+/// Print a clap error and exit. Secrets usage errors are scrubbed first so a
+/// `KEY=VALUE` spec never reaches the terminal.
+fn exit_cli_parse(err: clap::Error) -> ! {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.iter().any(|arg| arg == "secrets") {
+        let mut rendered = secrets::redact_secret_values(&err.to_string(), &argv);
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        eprint!("{rendered}");
+        std::process::exit(err.exit_code());
+    }
+    err.exit();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1392,6 +1416,59 @@ mod tests {
             }
             _ => panic!("expected Message"),
         }
+    }
+
+    #[test]
+    fn secrets_set_accepts_several_specs() {
+        let cli = Cli::try_parse_from(["mjolnir", "secrets", "set", "app", "A=1", "B=2", "--json"])
+            .unwrap();
+        match cli.command {
+            Command::Secrets {
+                action:
+                    SecretsAction::Set {
+                        app, specs, stdin, ..
+                    },
+            } => {
+                assert_eq!(app, "app");
+                assert_eq!(specs, ["A=1", "B=2"]);
+                assert!(!stdin);
+                assert!(cli.json);
+            }
+            _ => panic!("expected secrets set"),
+        }
+    }
+
+    #[test]
+    fn secrets_set_keeps_stdin_on_one_key() {
+        let cli =
+            Cli::try_parse_from(["mjolnir", "secrets", "set", "app", "TOKEN", "--stdin"]).unwrap();
+        match cli.command {
+            Command::Secrets {
+                action: SecretsAction::Set { specs, stdin, .. },
+            } => {
+                assert_eq!(specs, ["TOKEN"]);
+                assert!(stdin);
+            }
+            _ => panic!("expected secrets set"),
+        }
+    }
+
+    #[test]
+    fn secrets_invalid_spec_error_contains_the_value_before_redaction() {
+        let sentinel = "sentinel-value-9f3a";
+        let spec = format!("={sentinel}");
+        let argv = ["mjolnir", "secrets", "set", "app", spec.as_str()];
+        let err = match Cli::try_parse_from(argv) {
+            Ok(_) => panic!("empty key should fail to parse"),
+            Err(err) => err,
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(sentinel),
+            "fixture must leak before redaction: {rendered}"
+        );
+        let redacted = secrets::redact_secret_values(&rendered, &argv[1..]);
+        assert!(!redacted.contains(sentinel), "{redacted}");
     }
 
     #[test]
