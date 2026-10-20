@@ -202,4 +202,121 @@ defmodule Mjolnir.VmmScope do
     Path.join(:code.priv_dir(:mjolnir), "vmm_watch.py")
     |> File.read!()
   end
+
+  @doc """
+  Current systemd state of this instance's scope.
+
+  `:gone` is not-loaded. `:unknown` means systemd could not be asked.
+  A loaded unit in another slice is `:foreign` and must not be stopped.
+  """
+  def liveness(id) do
+    {slice, _} = namespace()
+    unit = scope_name(id)
+
+    case systemctl([
+           "show",
+           unit,
+           "--property=LoadState",
+           "--property=ActiveState",
+           "--property=Slice"
+         ]) do
+      {:ok, output} ->
+        props = parse_properties(output)
+
+        cond do
+          props["LoadState"] in [nil, "", "not-found"] -> :gone
+          props["LoadState"] == "loaded" and not member?(props, slice) -> :foreign
+          props["ActiveState"] == "active" and member?(props, slice) -> :active
+          props["ActiveState"] == "failed" -> :failed
+          props["ActiveState"] == "inactive" -> :inactive
+          true -> :gone
+        end
+
+      # No systemd on this host: there is no scope. A command that ran and
+      # failed is different — the unit might still be alive.
+      {:error, :missing} ->
+        :gone
+
+      {:error, _} ->
+        :unknown
+    end
+  end
+
+  @doc "Clear a loaded non-active unit name so a cold resume is not refused."
+  def reset_failed(id) do
+    case systemctl(["reset-failed", scope_name(id)]) do
+      {:ok, _} -> :ok
+      {:error, _} -> :ok
+    end
+  end
+
+  @doc """
+  Scopes in this instance's slice. `{:error, :unlisted}` means the list
+  could not be read, so the caller must not delete sockets or stop units.
+  """
+  def list_scopes do
+    {_, prefix} = namespace()
+
+    case systemctl([
+           "list-units",
+           "--all",
+           "--type=scope",
+           "--plain",
+           "--no-legend",
+           "--no-pager"
+         ]) do
+      {:ok, output} ->
+        scopes =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.flat_map(fn line ->
+            case String.split(line) do
+              [unit, _load, active | _] ->
+                case id_from_unit(unit, prefix) do
+                  {:ok, id} -> [{id, active}]
+                  :error -> []
+                end
+
+              _ ->
+                []
+            end
+          end)
+
+        {:ok, scopes}
+
+      {:error, _} ->
+        {:error, :unlisted}
+    end
+  end
+
+  @doc false
+  def id_from_unit(unit, prefix) when is_binary(unit) and is_binary(prefix) do
+    if String.ends_with?(unit, ".scope") do
+      base = String.replace_suffix(unit, ".scope", "")
+
+      if String.starts_with?(base, prefix) do
+        {:ok, String.replace_prefix(base, prefix, "")}
+      else
+        :error
+      end
+    else
+      :error
+    end
+  end
+
+  @doc false
+  def socket_protected?(filename, active_ids) when is_binary(filename) and is_list(active_ids) do
+    Enum.any?(active_ids, fn id ->
+      String.starts_with?(filename, id <> ".") or String.starts_with?(filename, id <> "_")
+    end)
+  end
+
+  defp systemctl(args) do
+    case System.cmd("systemctl", args, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
+      {output, code} -> {:error, {:status, code, output}}
+    end
+  rescue
+    _ -> {:error, :missing}
+  end
 end

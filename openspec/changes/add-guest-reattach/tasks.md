@@ -17,4 +17,4 @@
 - [x] Owed (advise-4 C2): systemd `failed` is a death like inactive; before cold resume the BEAM clears a loaded non-active unit of that name (`reset-failed` or `CollectMode=inactive-or-failed`) so the restart is not refused; scenario: OOM-killed scope `failed`, intent `:running`, policy not `:never` → cold-resumed, `resume_failures` not grown by a name collision
 - [x] Owed (advise-4 N1–N2, non-blocking, written with C1): keep the API socket, vsock UDS, and virtiofsd sockets of an attached or not-yet-classified scope; watcher history is exit status or systemd Result, because scope units have no `ExecMainStatus`
 - [x] `mjolnir-uepi.3` spawns the VMM outside `mjolnir.service` and adds the watcher
-- [ ] `mjolnir-uepi.4` reattaches from the watcher record without a second LUKS unlock
+- [x] `mjolnir-uepi.4` reattaches from the watcher record without a second LUKS unlock

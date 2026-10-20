@@ -80,8 +80,10 @@ defmodule Mjolnir.Reconcile do
 
   @type plan_entry ::
           {:resume, Record.t(), rootfs_path :: String.t()}
+          | {:attach, Record.t(), rootfs_path :: String.t()}
           | {:missing_rootfs, Record.t(), expected_path :: String.t()}
           | {:finalize, Record.t(), rootfs_path :: String.t()}
+          | {:backoff, Record.t(), rootfs_path :: String.t()}
 
   # Guest-written exit evidence, read from the stopped VM's subvolume when
   # finalizing a :never record. Non-decisional — see the moduledoc. Path is
@@ -143,9 +145,14 @@ defmodule Mjolnir.Reconcile do
   defp pass_lock, do: {:mjolnir_reconcile_pass, self()}
 
   defp do_run do
+    prepare_scopes()
     records = StateStore.list_by_intent(:running)
     stranded = Enum.reject(records, &vm_registered?/1)
-    plan = build_plan(stranded)
+
+    scopes =
+      Map.new(stranded, fn record -> {record.uuid, Mjolnir.VmmScope.liveness(record.uuid)} end)
+
+    plan = build_plan(stranded, scopes)
 
     case plan do
       [] ->
@@ -173,6 +180,58 @@ defmodule Mjolnir.Reconcile do
     :ok
   end
 
+  # Stop scopes that are not a live :running guest, and delete sockets that
+  # do not belong to an active scope. If the scope list cannot be read, do
+  # neither: an unlisted slice is not a license to reap.
+  defp prepare_scopes do
+    case Mjolnir.VmmScope.list_scopes() do
+      {:error, :unlisted} ->
+        :ok
+
+      {:ok, scopes} ->
+        active = for {id, "active"} <- scopes, do: id
+        stop_finished_or_orphan(active)
+        drop_unprotected_sockets(active)
+    end
+  rescue
+    exception ->
+      Logger.warning("Reconcile: scope prepare skipped: #{inspect(exception)}")
+      :ok
+  end
+
+  defp stop_finished_or_orphan(active_ids) do
+    Enum.each(active_ids, fn id ->
+      case StateStore.get(id) do
+        {:ok, %Record{intent: intent}} when intent in [:stopped, :dormant, :failed] ->
+          _ = Mjolnir.VmmScope.stop(id)
+
+        :not_found ->
+          _ = Mjolnir.VmmScope.stop(id)
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
+  defp drop_unprotected_sockets(active_ids) do
+    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+
+    case File.ls(socket_dir) do
+      {:ok, files} ->
+        Enum.each(files, fn file ->
+          stale = String.ends_with?(file, ".sock") or String.ends_with?(file, "_vsock")
+
+          if stale and not Mjolnir.VmmScope.socket_protected?(file, active_ids) do
+            File.rm(Path.join(socket_dir, file))
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+  end
+
   defp vm_registered?(%Record{uuid: uuid}) do
     registry_taken?(uuid) or registry_taken?({:resume, uuid})
   end
@@ -198,21 +257,39 @@ defmodule Mjolnir.Reconcile do
   booting real VMs.
   """
   @spec build_plan([Record.t()]) :: [plan_entry()]
-  def build_plan(records) do
+  def build_plan(records), do: build_plan(records, %{})
+
+  @doc """
+  Same plan, with each id's scope liveness (`:active`, `:inactive`, `:failed`,
+  `:gone`, `:foreign`, `:unknown`). Missing ids are `:gone`, which is what a
+  unit test describes when no scope was started.
+
+  An `:active` scope is attached. It is not resumed and it is not finalized,
+  including when `restart_policy` is `:never`. `:unknown` and `:foreign` wait.
+  """
+  @spec build_plan([Record.t()], %{optional(String.t()) => atom()}) :: [plan_entry()]
+  def build_plan(records, scopes) when is_map(scopes) do
     Enum.map(records, fn record ->
-      path = rootfs_path(record.uuid)
-
-      cond do
-        restart_policy(record) == :never and not revive_authorized?(record) ->
-          {:finalize, record, path}
-
-        File.exists?(path) ->
-          {:resume, record, path}
-
-        true ->
-          {:missing_rootfs, record, path}
-      end
+      decide(record, rootfs_path(record.uuid), Map.get(scopes, record.uuid, :gone))
     end)
+  end
+
+  defp decide(record, path, :active), do: {:attach, record, path}
+
+  defp decide(record, path, scope) when scope in [:unknown, :foreign],
+    do: {:backoff, record, path}
+
+  defp decide(record, path, scope) when scope in [:inactive, :failed, :gone] do
+    cond do
+      restart_policy(record) == :never and not revive_authorized?(record) ->
+        {:finalize, record, path}
+
+      File.exists?(path) ->
+        {:resume, record, path}
+
+      true ->
+        {:missing_rootfs, record, path}
+    end
   end
 
   @doc """
@@ -270,31 +347,41 @@ defmodule Mjolnir.Reconcile do
     Path.join([btrfs_root, subdir, uuid])
   end
 
-  defp execute({:resume, %Record{uuid: uuid} = record, _path}) do
-    # resume/1 blocks on `GenServer.call(:await_boot, 60_000)`, which *exits*
-    # (not returns an error) on timeout. Because we run under Task.async_stream,
-    # an un-caught exit would propagate and abort every other VM's resume in the
-    # batch — so isolate each VM: a single stuck boot is logged and the record
-    # is left :running for the next pass, exactly like a returned {:error, _}.
+  defp execute({:attach, %Record{uuid: uuid} = record, _path}) do
     try do
-      case Mjolnir.VM.resume(record) do
-        {:ok, :booting} ->
-          Logger.info("Reconcile: VM #{uuid} still booting; hypervisor left up")
+      case Mjolnir.VM.adopt(record) do
+        {:ok, _} ->
+          Logger.info("Reconcile: VM #{uuid} attached")
 
-        {:ok, _vm} ->
-          Logger.info("Reconcile: VM #{uuid} resumed")
-
-        # The VM registered between plan and start. Not a failed boot, and
-        # counting it would retire a healthy guest after enough overlaps.
         {:error, {:already_started, _pid}} ->
           Logger.info("Reconcile: VM #{uuid} already started")
 
+        {:error, :unit_active} ->
+          Logger.info("Reconcile: VM #{uuid} scope already active; not a resume failure")
+
         {:error, reason} ->
-          record_failure(record, "resume failed: #{inspect(reason)}")
+          record_failure(record, "attach failed: #{inspect(reason)}")
       end
     catch
       kind, reason ->
-        record_failure(record, "resume #{kind}: #{inspect(reason)}")
+        record_failure(record, "attach #{kind}: #{inspect(reason)}")
+    end
+  end
+
+  defp execute({:backoff, %Record{uuid: uuid}, _path}) do
+    Logger.info("Reconcile: VM #{uuid} scope could not be classified; left untouched")
+  end
+
+  defp execute({:resume, %Record{uuid: uuid} = record, path}) do
+    case Mjolnir.VmmScope.liveness(uuid) do
+      :active ->
+        execute({:attach, record, path})
+
+      _ ->
+        # A failed or inactive unit keeps the name loaded. Clear it before
+        # systemd-run, or the start is refused and would count as a boot failure.
+        _ = Mjolnir.VmmScope.reset_failed(uuid)
+        resume_record(record)
     end
   end
 
@@ -335,6 +422,37 @@ defmodule Mjolnir.Reconcile do
       "rootfs missing at #{path} (data lost — cannot resume)",
       fn -> "Reconcile: VM #{uuid} rootfs is gone; " end
     )
+  end
+
+  defp resume_record(%Record{uuid: uuid} = record) do
+    # resume/1 blocks on `GenServer.call(:await_boot, 60_000)`, which *exits*
+    # (not returns an error) on timeout. Because we run under Task.async_stream,
+    # an un-caught exit would propagate and abort every other VM's resume in the
+    # batch — so isolate each VM: a single stuck boot is logged and the record
+    # is left :running for the next pass, exactly like a returned {:error, _}.
+    try do
+      case Mjolnir.VM.resume(record) do
+        {:ok, :booting} ->
+          Logger.info("Reconcile: VM #{uuid} still booting; hypervisor left up")
+
+        {:ok, _vm} ->
+          Logger.info("Reconcile: VM #{uuid} resumed")
+
+        # The VM registered between plan and start. Not a failed boot, and
+        # counting it would retire a healthy guest after enough overlaps.
+        {:error, {:already_started, _pid}} ->
+          Logger.info("Reconcile: VM #{uuid} already started")
+
+        {:error, :unit_active} ->
+          Logger.info("Reconcile: VM #{uuid} scope already active; not a resume failure")
+
+        {:error, reason} ->
+          record_failure(record, "resume failed: #{inspect(reason)}")
+      end
+    catch
+      kind, reason ->
+        record_failure(record, "resume #{kind}: #{inspect(reason)}")
+    end
   end
 
   # Bump the record's consecutive-failure counter and, if it crosses the

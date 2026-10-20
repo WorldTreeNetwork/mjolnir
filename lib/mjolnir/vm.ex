@@ -1107,6 +1107,47 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  Adopt a guest whose scope is already active. Does not boot and does not
+  unlock LUKS. The caller keeps the same id and the same disk.
+
+  Named `adopt` because `attach/1` is the operator console hint.
+  """
+  @spec adopt(Mjolnir.StateStore.Record.t()) :: {:ok, t()} | {:error, term()}
+  def adopt(%Mjolnir.StateStore.Record{uuid: uuid} = record) do
+    case Registry.register(Mjolnir.VMRegistry, {:resume, uuid}, nil) do
+      {:error, {:already_registered, pid}} ->
+        {:error, {:already_started, pid}}
+
+      {:ok, _} ->
+        try do
+          do_attach(record)
+        after
+          Registry.unregister(Mjolnir.VMRegistry, {:resume, uuid})
+        end
+    end
+  end
+
+  defp do_attach(%Mjolnir.StateStore.Record{} = record) do
+    opts =
+      record
+      |> resume_opts()
+      |> Map.put(:attach, true)
+      |> Map.delete(:resume)
+      |> Map.put(:boot_budget_ms, 5_000)
+
+    case DynamicSupervisor.start_child(Mjolnir.VMSupervisor, {__MODULE__, opts}) do
+      {:ok, pid} ->
+        case GenServer.call(pid, :await_boot, 10_000) do
+          {:ok, vm} -> {:ok, vm}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Resume a VM from a persisted StateStore record. Used by `Mjolnir.Reconcile`
   at boot. Skips rootfs clone (uses existing `@vms/<uuid>` subvolume) and
   skips guest-agent injection. Network/identity/iroh are re-pushed
@@ -1129,10 +1170,9 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp do_resume(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg}) do
-    opts = %{
+  defp resume_opts(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg} = record) do
+    %{
       id: uuid,
-      resume: true,
       base_image: Map.get(cfg, "base_image"),
       vcpus: Map.get(cfg, "vcpus"),
       memory_mb: Map.get(cfg, "memory_mb"),
@@ -1148,13 +1188,47 @@ defmodule Mjolnir.VM do
           _ -> :none
         end,
       vsock_cid: stamped_cid(%{vsock_cid: Map.get(cfg, "vsock_cid")}),
-      # Carried across the resume so a VM that survives one rehydration doesn't
-      # quietly lose its lifetime policy and become revivable on the next one.
-      # (Reconcile refuses to resume a :never record at all, so this is belt to
-      # that braces — it also covers Mjolnir.VM.revive/1, which goes through
-      # resume/1 by an operator's explicit choice.)
-      restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy"))
+      # Carried across rehydration so a :never VM does not become revivable
+      # because the policy was dropped. Reconcile still refuses to boot a
+      # dead :never record. Attach does not boot either.
+      restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy")),
+      extra_mounts: decode_extra_mounts(Map.get(cfg, "extra_mounts")),
+      metadata: record.metadata || %{}
     }
+  end
+
+  defp decode_extra_mounts(mounts) when is_list(mounts) do
+    Enum.flat_map(mounts, fn
+      %{"tag" => tag, "path" => path} = mount when is_binary(tag) and is_binary(path) ->
+        [%{tag: tag, shared_dir: path, opts: mount["opts"] || []}]
+
+      %{tag: tag, shared_dir: path} = mount when is_binary(tag) and is_binary(path) ->
+        [mount]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp decode_extra_mounts(_), do: []
+
+  defp encode_extra_mounts(mounts) when is_list(mounts) do
+    Enum.flat_map(mounts, fn
+      %{tag: tag, shared_dir: path} = mount when is_binary(tag) and is_binary(path) ->
+        [%{"tag" => tag, "path" => path, "opts" => mount[:opts] || []}]
+
+      %{"tag" => tag, "path" => path} = mount when is_binary(tag) and is_binary(path) ->
+        [mount]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp encode_extra_mounts(_), do: []
+
+  defp do_resume(%Mjolnir.StateStore.Record{} = record) do
+    opts = Map.put(resume_opts(record), :resume, true)
 
     # Resume keeps its historical 60s floor (an existing subvolume + guest
     # drift re-push is heavier than a fresh boot); managed re-open of the
@@ -1290,7 +1364,13 @@ defmodule Mjolnir.VM do
       boot_budget_ms: opts[:boot_budget_ms]
     }
 
-    continue = if is_binary(opts[:thaw]), do: :thaw, else: :boot
+    continue =
+      cond do
+        opts[:attach] -> :attach
+        is_binary(opts[:thaw]) -> :thaw
+        true -> :boot
+      end
+
     {:ok, state, {:continue, continue}}
   end
 
@@ -1309,6 +1389,29 @@ defmodule Mjolnir.VM do
 
         {:stop, :normal, %{state | state: :failed}}
     end
+  end
+
+  def handle_continue(:attach, state) do
+    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+    socket_path = Path.join(socket_dir, "#{state.id}.sock")
+    vsock_path = state.hypervisor.vsock_path(socket_dir, state.id)
+
+    new_state = %{
+      state
+      | state: :running,
+        socket_path: socket_path,
+        vsock_path: vsock_path
+    }
+
+    # The scope is already up. Polling it is the death signal. There is no
+    # port, and LUKS is not unlocked again.
+    Process.send_after(self(), :poll_scope, 5_000)
+
+    if new_state.boot_waiter do
+      GenServer.reply(new_state.boot_waiter, {:ok, new_state})
+    end
+
+    {:noreply, %{new_state | boot_waiter: nil}}
   end
 
   def handle_continue(:boot, state) do
@@ -1885,6 +1988,25 @@ defmodule Mjolnir.VM do
     # finish here as well, or the VM transitions twice.
     {:noreply, state}
   end
+
+  def handle_info(:poll_scope, %{state: :running} = state) do
+    case Mjolnir.VmmScope.liveness(state.id) do
+      :active ->
+        Process.send_after(self(), :poll_scope, 5_000)
+        {:noreply, state}
+
+      # systemd could not be asked. Do not treat that as a death.
+      :unknown ->
+        Process.send_after(self(), :poll_scope, 5_000)
+        {:noreply, state}
+
+      dead ->
+        Logger.warning("VM #{state.id} scope is #{dead}")
+        {:stop, {:hypervisor_exit, dead}, %{state | state: :stopped}}
+    end
+  end
+
+  def handle_info(:poll_scope, state), do: {:noreply, state}
 
   def handle_info(:poll_late_boot, %{late_boot: true} = state) do
     now = System.monotonic_time(:millisecond)
@@ -3601,6 +3723,12 @@ defmodule Mjolnir.VM do
       # looking restartable, which is exactly the I5 violation this prevents.
       "restart_policy" => Atom.to_string(state.restart_policy)
     }
+
+    spawn_config =
+      case encode_extra_mounts(Map.get(state.config, :extra_mounts, [])) do
+        [] -> spawn_config
+        mounts -> Map.put(spawn_config, "extra_mounts", mounts)
+      end
 
     spawn_config =
       case cid_or_nil(state.config) do

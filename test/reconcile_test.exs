@@ -126,6 +126,35 @@ defmodule Mjolnir.ReconcileTest do
       end
     end
 
+    test "an active scope is attached, including restart_policy never" do
+      uuid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+      record = Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:attach, ^record, _}] = Reconcile.build_plan([record], %{uuid => :active})
+    end
+
+    test "a failed scope is a death: always resumes, never finalizes", ctx do
+      always_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+      never_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", always_id]))
+
+      always = Record.new(always_id, :running, spawn_config: %{"restart_policy" => "always"})
+      never = Record.new(never_id, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:resume, ^always, _}] =
+               Reconcile.build_plan([always], %{always_id => :failed})
+
+      assert [{:finalize, ^never, _}] =
+               Reconcile.build_plan([never], %{never_id => :failed})
+    end
+
+    test "an unclassifiable scope is not resumed and not finalized" do
+      uuid = "12121212-1212-1212-1212-121212121212"
+      record = Record.new(uuid, :running)
+
+      assert [{:backoff, ^record, _}] = Reconcile.build_plan([record], %{uuid => :unknown})
+    end
+
     test "restart_policy=always resumes, as before", ctx do
       uuid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
       File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))

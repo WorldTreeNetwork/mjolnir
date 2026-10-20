@@ -178,6 +178,16 @@ defmodule Mjolnir.VmmScopeTest do
              )
   end
 
+  test "active scope sockets are kept and foreign units are not our ids" do
+    assert VmmScope.socket_protected?("abc.sock", ["abc"])
+    assert VmmScope.socket_protected?("abc_vsock", ["abc"])
+    assert VmmScope.socket_protected?("abc_repo_virtiofs.sock", ["abc"])
+    refute VmmScope.socket_protected?("abcd.sock", ["abc"])
+    refute VmmScope.socket_protected?("other.sock", ["abc"])
+    assert {:ok, "abc-123"} == VmmScope.id_from_unit("mjt-abc-123.scope", "mjt-")
+    assert :error == VmmScope.id_from_unit("mjolnir-abc-123.scope", "mjt-")
+  end
+
   test "startup sweep never ps-kills or deletes unclassified guest resources" do
     source = File.read!("lib/mjolnir/cleanup.ex")
     refute source =~ "System.cmd(\"ps\""
