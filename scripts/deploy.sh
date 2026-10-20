@@ -229,6 +229,11 @@ fi
 # dummy-mjolnir holds 10.200.0.1/32. TAP guests ARP that interface.
 # Sidecars bind it. This does not fall back to lo.
 echo ""
+echo "--- Ensuring host modules and guest NAT ---"
+ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-modules.sh"
+ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-nat.sh --install-unit"
+
+echo ""
 echo "--- Ensuring host API address (dummy-mjolnir) ---"
 ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-api-addr.sh --install-unit"
 

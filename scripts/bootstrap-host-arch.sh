@@ -578,6 +578,13 @@ install_host_ghostty_terminfo() {
 setup_networking() {
     log_section "Setting Up VM Networking (nftables)"
 
+    local modules nat
+    modules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-modules.sh"
+    if [[ ! -f "$modules" ]]; then
+        modules="$MJOLNIR_CODE/scripts/ensure-host-modules.sh"
+    fi
+    bash "$modules"
+
     local vm_subnet="10.200.0.0/10"
 
     # Enable IP forwarding
@@ -645,6 +652,16 @@ NFTEOF
         log_success "Host API address on dummy-mjolnir (mjolnir-hotel-ip.service)"
     else
         log_warn "Hotel address was not assigned. Sidecars fail closed until dummy.ko loads for the running kernel."
+    fi
+
+    nat="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-nat.sh"
+    if [[ ! -f "$nat" ]]; then
+        nat="$MJOLNIR_CODE/scripts/ensure-host-nat.sh"
+    fi
+    if bash "$nat" --install-unit; then
+        log_success "Guest masquerade persisted (mjolnir-nat.service)"
+    else
+        log_warn "Guest masquerade was not installed. VM egress waits until iptables can load."
     fi
 
     log_success "VM networking configured (subnet: $vm_subnet, nftables)"
@@ -745,10 +762,6 @@ setup_systemd_service() {
     for d in btrfs sockets boot; do
         [[ -d "$MJOLNIR_ROOT/$d" ]] && chown mjolnir:mjolnir "$MJOLNIR_ROOT/$d"
     done
-
-    # ProtectSystem=strict requires every ReadWritePaths entry to exist.
-    # Ubuntu units list /etc/ufw; Arch does not ship it.
-    mkdir -p /etc/ufw
 
     cp "$MJOLNIR_CODE/systemd/mjolnir.service" /etc/systemd/system/mjolnir.service
 

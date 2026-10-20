@@ -964,6 +964,13 @@ setup_networking() {
     fi
     log_info "External interface: $ext_iface"
 
+    local modules
+    modules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-modules.sh"
+    if [[ ! -f "$modules" ]]; then
+        modules="$MJOLNIR_CODE/scripts/ensure-host-modules.sh"
+    fi
+    bash "$modules"
+
     # Reserved host-from-guest address (same as :host_api_ip). Assigned by
     # ensure_host_api_addr on dummy-mjolnir and persisted across reboot.
     # allocate_ip refuses this address.

@@ -8,6 +8,12 @@ ARP: `:host_api_ip`, default **`10.200.0.1`** (dummy interface
 `/32` at boot (`scripts/ensure-host-api-addr.sh`). Sidecar installers
 install and start that unit before they bind. If `dummy` cannot be
 created, the assign fails and the address stays off `lo`.
+`scripts/ensure-host-modules.sh` writes
+`/etc/modules-load.d/mjolnir.conf` so the next boot loads kvm, tun,
+vhost_vsock, and dummy for the installed kernel.
+`mjolnir-nat.service` puts the guest masquerade back. It does not
+start `nftables.service`: the packaged `nftables.conf` drops
+forwarded traffic.
 
 That is the affordance: **universal host services**, not a container
 you had to compose next to the VM. Spawn a VM, read the locator,
