@@ -1,36 +1,32 @@
 # ADR 0014: A guest outlives an orchestrator restart
 
-**Status:** Decision recorded. Implementation of spawn and adopt is withheld.
+**Status:** Accepted 2026-10-20 by opus-arch-review (advise-5). The decision and the contract are accepted. `mjolnir-uepi.3` and `mjolnir-uepi.4` are still the implementation. Not shipped.
 
-Astra (`gpt-6-astra`) agreed on 2026-10-20 after the classifier fences. `opus-arch-review` (`claude-opus-5-5`) then returned caution, not agreement. The retry named an overlap between the unresolved-live row and the pid-reuse cold-resume row, a missing `:dormant` case, and no replacement for the Erlang port's `:exit_status` death signal. Those are unresolved. This ADR is not a license to ship `mjolnir-uepi.3` or `mjolnir-uepi.4`.
+The 2026-10-20 steer replaces the parked classifier. A systemd watcher outside `mjolnir.service` records every scope transition, including while the BEAM is down, and does not restart guests. The BEAM is the only restarter. On the way up it reattaches living scopes, cold-resumes scopes the watcher saw die only after the scope is inactive or `failed` and the unit name is clear, finishes interrupted stop or dormancy by stopping the scope, and does not boot a `:failed` guest. The watcher event replaces port `:exit_status`. `:dormant` is a real case. Unresolved is the existing resume-failure backoff, not a permanent state. The earlier Opus caution (starttime row versus cold-resume, missing `:dormant`, no death signal) is what this revision closes. Spawn and adopt stay later nodes.
 
 ## Decision
 
-Cloud Hypervisor, virtiofsd, and the TAP for each guest run in a per-VM systemd scope under the sibling slice `mjolnir-vms.slice`. That slice is not part of `mjolnir.service`. `KillMode=control-group` on the Elixir service therefore does not reap guests. The BEAM does not own those processes as Erlang ports.
+Cloud Hypervisor and every virtiofsd for that guest, including `extra_mounts`, run in one systemd scope. The slice name and the scope-name prefix are per instance, derived from config the same way `tap_prefix` is. Production uses `mjolnir-<id>.scope` under `mjolnir-vms.slice`. A BEAM classifies and stops only scopes in its own slice. The TAP is a netdev keyed by that scope id. The BEAM deletes or recreates it. It is not a member of the scope. The scope ends when cloud-hypervisor exits. The scope name is the child id.
 
-Detach is a third teardown outcome, beside stop and preserve-rootfs. Orchestrator shutdown detaches: it drops its handles and does not signal the scope. `VM.stop` still kills that scope. Preserve-rootfs still means the disk is kept when a boot fails. Detach is not preserve: the guest keeps running.
+Detach is a third teardown outcome, beside stop and preserve-rootfs. Orchestrator shutdown detaches: it drops its handles and does not signal the slice. `VM.stop` kills that scope only. Preserve-rootfs still means the disk is kept when a boot fails.
 
-On startup, Cleanup classifies each VMM before it deletes sockets or TAPs, and before the async Reconcile task. The rootfs sweep already preserves a subvolume when the StateStore cannot be read. This classifier does the same for processes.
+A systemd unit outside `mjolnir.service` watches that instance's slice and records active, inactive, failed, and exit status or systemd Result where available, including while the BEAM is down. Scope units have no `ExecMainStatus`. It does not restart guests. The BEAM is the only restarter. While the BEAM is up, a watcher event is the death signal. The port `:exit_status` is not.
 
-Checked in this order:
+Liveness is systemd's current state of that instance's scope. The watcher supplies history. If the record says active and systemd says the unit is inactive, `failed`, or not loaded, that is a death with unknown exit status. `failed` is a death the same way inactive is. Before a cold resume the BEAM clears a loaded non-active unit of that name, so the restart is not refused because the name is still loaded.
 
-- The store cannot be read: touch nothing. Do not kill, adopt, delete a socket, or delete a TAP.
-- The process is alive and the intent is `:stopped` or `:failed`: do not adopt and do not kill. Leave the scope, and do not delete its sockets or TAP. This wins over `restart_policy`. An operator stops it.
-- The process is alive, the pidfile nonce matches the record, and `/proc/<pid>` starttime matches the starttime stored on the record, and the intent is `:running` or `restart_policy: :never`: adopt. Protect that guest's sockets, disk, and TAP from the rest of the sweep. A `:never` guest still has to pass the nonce and starttime checks.
-- The process is alive but the nonce or the starttime does not match: do not adopt and do not start a replacement. Protect its sockets, disk, and TAP. Leave it unresolved.
-- There is no record, and the store was readable: kill. That is a true orphan.
-- The record says `:running` and the process is confirmed dead (pid gone, or starttime mismatch on a pid that now belongs to someone else): cold resume.
-- Reconnect fails but the process is still alive: do not cold-boot. Leave the scope running, keep its sockets and TAP, and retry attach. A second VMM is not started on that disk.
+On startup the BEAM reads the watcher before it deletes sockets or TAPs, before Reconcile, and before any process kill. It does not delete the cloud-hypervisor API socket, the vsock UDS, or the virtiofsd sockets of a scope classified as attach, or of a scope not yet classified. `Cleanup.sweep` does not kill a process because its command line contains the socket directory. A slice member is stopped only by these rules:
 
-Identity is a pidfile in a root-owned directory plus the same nonce and the `/proc` starttime written on the StateStore record at spawn. A cmdline that mentions the socket directory is not identity. PID reuse fails the starttime check. A nonce that does not match the record is not adopted, and it is not a license to boot another VMM on that disk.
+- The StateStore cannot be read: touch nothing. No kill, no cold resume, no socket or TAP delete.
+- The watcher record file is absent or unparseable, and systemd says the scope is active with intent `:running`: attach. That does not count toward retirement and does not stop the scope. A missing entry in a readable file is not this case.
+- No record, and the store was readable: stop that scope. That is a true orphan.
+- The scope is alive and the intent is `:running`: attach, from startup or from a Health.Monitor tick. Do not cold-resume. A refused start because the unit is already active does not count as a resume failure. No `vm.boot`. No second LUKS unlock. `extra_mounts` stay on the record. `:never` is a restart policy, not an intent. Orchestrator shutdown and a crash of that VM's GenServer detach. `VM.stop` stops the scope.
+- The watcher saw the scope die, systemd says the unit is gone, inactive, or `failed`, or a readable record has no entry and the unit is not active: hand the guest to Reconcile after the scope is inactive or `failed` and a loaded non-active unit of that name has been cleared. `:never` finalizes and does not boot unless revive is authorized.
+- Intent `:stopped` or `:dormant` and the scope is alive: stop the scope. Do not boot.
+- Intent `:failed` and the scope is alive: stop the scope. Do not boot.
+- A pid that is not in that scope is not the guest.
+- Anything else: backoff with the existing resume-failure limit, then `:failed`. It does not stay unresolved.
 
-`:attach` is a boot continue beside `:boot` and `:thaw`. It reopens the API socket and the vsock. It does not call `vm.boot`. It does not run the managed LUKS unlock again. The volume is already open. `extra_mounts` are stored on the running record so an adopted CI VM can name the virtiofsd processes it already has.
-
-A `restart_policy: :never` guest that is still alive, and that passes the nonce and starttime checks, is adopted before Reconcile's finalize step. That exception does not cover a `:stopped` or `:failed` intent. Finalize runs only when that guest's process is confirmed dead. "Not in the registry" is not "dead" once the VMM can outlive the BEAM.
-
-An Elixir-only deploy does not reboot guests. A guest-agent update still reboots the guests that must pick up the new binary, and the deploy path says so.
-
-Cold boot remains the fallback for power loss and for a VMM that is confirmed dead. Attachment failure while the process is alive is not a cold boot.
+The first restart after this is deployed still reaps guests that were started inside `mjolnir.service`. That is the cutover. There is no runtime off switch. After it, an Elixir-only deploy does not reboot guests that are in the slice. A guest-agent update still reboots the guests that must pick up the new binary, and the deploy path says so.
 
 ## Probe (mjolnir-uepi.1)
 

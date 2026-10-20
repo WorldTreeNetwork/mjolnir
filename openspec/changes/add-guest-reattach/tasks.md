@@ -1,5 +1,20 @@
 # Tasks
 
-- [ ] Review-pair accepts ADR 0014 (opus-arch-review, then Astra, author vendor xai skipped).
-- [ ] `mjolnir-uepi.3` spawns the VMM outside `mjolnir.service`.
-- [ ] `mjolnir-uepi.4` adopts before Reconcile and attaches without a second LUKS unlock.
+- [x] Fresh advise after preparation
+- [x] Owed (advise 2026-10-20 R1): spec requirement that startup kills a slice member only through classification, never by ps-arg match (`Cleanup.sweep` kill); true-orphan scenario (no record, store readable → stop scope)
+- [x] Owed (advise 2026-10-20 R2): fail-safe requirement and scenario — StateStore or watcher record unreadable → no kill, no cold-resume, no socket/TAP delete for slice members; backoff
+- [x] Owed (advise 2026-10-20 R3): pin liveness to the current systemd state of `mjolnir-<id>.scope`; watcher supplies history and exit status; record-active-but-unit-gone (host reboot, watcher gap) scenario → cold-resume
+- [x] Owed (advise 2026-10-20 R4): scope name in spec; interrupted `:stopped` and `:dormant` scenarios; live-death scenario; name or drop the Off switch and state the cutover restart cost
+- [x] Owed (advise-2 S1): readable record + no entry for that id + unit gone/inactive + intent `:running` → death, unknown status, cold-resume; cutover scenario (reaped guests come back by cold resume); watcher record survives host reboot; "cannot be read" = absent/unparseable file, not absent entry
+- [x] Owed (advise-2 S2): every spec "cold-resumed" routes through Reconcile's plan (`restart_policy: :never` finalizes unless revive authorized); `:never`-died-during-outage scenario; ADR attach row names `:never` as restart policy, not intent
+- [x] Owed (advise-2 S3): unreadable watcher record must not end in stopping a living scope — attach systemd-active `:running` scopes regardless (recommended), or exclude unreadable-record backoff from retirement; scenario past the retirement limit
+- [x] Owed (advise-2 S4): stop/dormancy persist `:stopped`/`:dormant` before signaling the scope; TAP keyed by scope id and deleted/recreated by the BEAM (not a scope member); every virtiofsd incl. `extra_mounts` in the scope; no gap between startup read and live subscription
+- [x] ADR 0014 amended to the watcher steer; ratification waits on accept
+- [x] Owed (advise-3 B1): Reconcile from any caller (startup or `Health.Monitor` tick) attaches, not resumes, a `:running` record whose scope systemd reports active; a refused scope start (unit already active) does not count toward retirement; name which `terminate/2` exits detach vs stop the scope; scenario: GenServer exits with BEAM up, scope stays active → attached, not booted, `resume_failures` unchanged
+- [x] Owed (advise-3 B2): resolve unreadable-watcher-record + unit-gone vs "SHALL NOT stay unresolved forever" — (a, recommended) unit gone/inactive is a death with unknown status regardless of record readability → Reconcile's plan; or (b) the wait counts toward retirement; scenario either way
+- [x] Owed (advise-3 N1–N3): ADR line 9 drops TAP from the scope (match spec); drop ADR attach-row clause "`restart_policy` is not asking us to finish a stop"; reword or uncheck the ADR-amend box above ("amended; ratified on accept")
+- [x] Owed (advise-4 C1): slice and scope prefix are per instance (derived from config like `tap_prefix`); a BEAM subscribes to, classifies, and stops only scopes in its own slice; scenario: a second BEAM with another namespace on the host does not stop a scope in another instance's slice. Spec and ADR.
+- [x] Owed (advise-4 C2): systemd `failed` is a death like inactive; before cold resume the BEAM clears a loaded non-active unit of that name (`reset-failed` or `CollectMode=inactive-or-failed`) so the restart is not refused; scenario: OOM-killed scope `failed`, intent `:running`, policy not `:never` → cold-resumed, `resume_failures` not grown by a name collision
+- [x] Owed (advise-4 N1–N2, non-blocking, written with C1): keep the API socket, vsock UDS, and virtiofsd sockets of an attached or not-yet-classified scope; watcher history is exit status or systemd Result, because scope units have no `ExecMainStatus`
+- [ ] `mjolnir-uepi.3` spawns the VMM outside `mjolnir.service` and adds the watcher
+- [ ] `mjolnir-uepi.4` reattaches from the watcher record without a second LUKS unlock
