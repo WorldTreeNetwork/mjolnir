@@ -297,6 +297,8 @@ Mjolnir.Application (one_for_one)
 
 Each VM is a GenServer that owns its hypervisor process as a Port. If the hypervisor crashes, the Port sends an exit signal, and the GenServer cleans up (TAP device, routes, sockets, rootfs). Transient restart means VMs exit `:normal` on boot failure (preventing restart loops) — they're intentionally ephemeral.
 
+Guests live in a per-instance systemd scope outside `mjolnir.service`. A witness records scope state and does not restart guests. The BEAM reattaches an active scope and cold-resumes a dead one. See `docs/decisions/0014-guest-outlives-orchestrator.md`.
+
 ### Rust Guest Agent
 
 The guest agent binary (`mjolnir-agent`) runs inside every VM and serves two concurrent subsystems:
