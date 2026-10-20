@@ -1,6 +1,7 @@
 [Unit]
 Description=Mjolnir blob door (recrypt layout on B2)
-After=network.target
+After=network.target mjolnir-hotel-ip.service
+Requires=mjolnir-hotel-ip.service
 Documentation=docs/runbooks/blob-door.md
 
 [Service]

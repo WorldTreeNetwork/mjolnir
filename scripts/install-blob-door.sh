@@ -29,10 +29,8 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if ! ip addr show dummy-mjolnir 2>/dev/null | grep -q "inet ${HOST_IP}/32"; then
-    echo "Error: ${HOST_IP}/32 is not assigned on dummy-mjolnir. Fail closed." >&2
-    exit 1
-fi
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$HERE/ensure-host-api-addr.sh" --install-unit
 
 echo "=== Building mjolnir-blob-door ==="
 export PATH="${HOME}/.cargo/bin:/root/.cargo/bin:${PATH}"

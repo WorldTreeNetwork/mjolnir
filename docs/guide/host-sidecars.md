@@ -4,7 +4,10 @@ A Mjolnir guest is a real Linux machine on a TAP network. The host
 runs a few **sidecars** on a reserved address that every guest can
 ARP: `:host_api_ip`, default **`10.200.0.1`** (dummy interface
 `dummy-mjolnir`, not loopback — TAP `/32` guests cannot hit
-`127.0.0.1` on the host).
+`127.0.0.1` on the host). `mjolnir-hotel-ip.service` assigns that
+`/32` at boot (`scripts/ensure-host-api-addr.sh`). Sidecar installers
+install and start that unit before they bind. If `dummy` cannot be
+created, the assign fails and the address stays off `lo`.
 
 That is the affordance: **universal host services**, not a container
 you had to compose next to the VM. Spawn a VM, read the locator,

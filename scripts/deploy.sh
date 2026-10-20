@@ -225,6 +225,13 @@ if $BUILD_ROOTFS; then
     ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent sudo bash scripts/build-rootfs-${DISTRO}.sh $REMOTE_BTRFS/@base/${DISTRO}"
 fi
 
+# --- Host API address (before sidecars; does not restart Elixir) ---
+# dummy-mjolnir holds 10.200.0.1/32. TAP guests ARP that interface.
+# Sidecars bind it. This does not fall back to lo.
+echo ""
+echo "--- Ensuring host API address (dummy-mjolnir) ---"
+ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-api-addr.sh --install-unit"
+
 # --- Blob door sidecar (always; does not restart Elixir) ---
 # Host process on 10.200.0.1:7222. Same rsync as everything else; cargo is
 # incremental after the first build. Never a just verb — just deploy.

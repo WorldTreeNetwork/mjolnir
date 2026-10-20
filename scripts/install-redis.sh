@@ -27,26 +27,37 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if ! ip addr show dummy-mjolnir 2>/dev/null | grep -q "inet ${HOST_IP}/32"; then
-    echo "Error: ${HOST_IP}/32 is not assigned on dummy-mjolnir. Fail closed." >&2
-    exit 1
-fi
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$HERE/ensure-host-api-addr.sh" --install-unit
+
+# Mask only a unit the package actually shipped. `systemctl mask` on a
+# missing name creates a /dev/null symlink and hides a later real unit.
+mask_packaged_unit() {
+    local unit="$1"
+    if [[ -e "/usr/lib/systemd/system/${unit}" || -e "/lib/systemd/system/${unit}" ]]; then
+        systemctl disable --now "$unit" 2>/dev/null || true
+        systemctl mask "$unit"
+    fi
+}
 
 echo "=== Installing redis-server package ==="
 export DEBIAN_FRONTEND=noninteractive
 if command -v apt-get >/dev/null; then
     apt-get install -y redis-server
-    systemctl disable --now redis-server 2>/dev/null || true
-    systemctl mask redis-server 2>/dev/null || true
 elif command -v pacman >/dev/null; then
+    # Arch's redis package is Valkey. It ships user `valkey` and
+    # valkey.service, and /usr/bin/redis-server is a symlink to valkey-server.
     pacman -S --needed --noconfirm redis
-    systemctl disable --now redis 2>/dev/null || true
-    systemctl mask redis 2>/dev/null || true
     BIN="${REDIS_BIN:-/usr/bin/redis-server}"
 else
     echo "Error: no apt-get or pacman" >&2
     exit 1
 fi
+
+mask_packaged_unit redis-server.service
+mask_packaged_unit redis.service
+mask_packaged_unit valkey.service
+mask_packaged_unit valkey-sentinel.service
 
 if [[ ! -x "$BIN" ]]; then
     echo "Error: redis-server not at $BIN" >&2
@@ -54,8 +65,12 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 if ! id redis >/dev/null 2>&1; then
-    echo "Error: redis user missing" >&2
-    exit 1
+    nologin="/usr/sbin/nologin"
+    if [[ ! -x "$nologin" ]]; then
+        nologin="/usr/bin/nologin"
+    fi
+    useradd --system --no-create-home --shell "$nologin" \
+        --comment "Mjolnir redis sidecar" redis
 fi
 
 install -d -m 0750 -o redis -g redis "$DATA_DIR"

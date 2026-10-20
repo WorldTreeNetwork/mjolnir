@@ -634,26 +634,18 @@ NFTEOF
         log_success "nftables rules loaded"
     else
         log_warn "Failed to load nftables NAT immediately (missing nf_nat/dummy.ko is common if the running kernel != /lib/modules)."
-        log_warn "Hotel IP fallback: 10.200.0.1/32 on lo. Reboot onto a matching kernel for dummy.ko + masquerade."
     fi
 
-    mkdir -p /etc/systemd/system
-    cat > /etc/systemd/system/mjolnir-hotel-ip.service << 'UNIT'
-[Unit]
-Description=Mjolnir hotel IP 10.200.0.1
-After=network-pre.target
-Before=mjolnir.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/bash -c 'if modprobe dummy 2>/dev/null; then ip link add dummy-mjolnir type dummy 2>/dev/null || true; ip link set dummy-mjolnir up; ip addr replace 10.200.0.1/32 dev dummy-mjolnir; else ip addr replace 10.200.0.1/32 dev lo; fi'
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    systemctl daemon-reload
-    systemctl enable --now mjolnir-hotel-ip.service
+    local ensure
+    ensure="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-api-addr.sh"
+    if [[ ! -f "$ensure" ]]; then
+        ensure="$MJOLNIR_CODE/scripts/ensure-host-api-addr.sh"
+    fi
+    if bash "$ensure" --install-unit; then
+        log_success "Host API address on dummy-mjolnir (mjolnir-hotel-ip.service)"
+    else
+        log_warn "Hotel address was not assigned. Sidecars fail closed until dummy.ko loads for the running kernel."
+    fi
 
     log_success "VM networking configured (subnet: $vm_subnet, nftables)"
 }
