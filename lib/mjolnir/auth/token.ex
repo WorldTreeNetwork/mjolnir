@@ -4,6 +4,7 @@ defmodule Mjolnir.Auth.Token do
 
   When an issuer is configured, tokens are verified against that issuer's
   JWKS (`Mjolnir.Auth.JwksStrategy`). Validates `exp` and `iss`.
+  `Mjolnir.API.Auth` checks `aud`. A configured audience requires the claim.
   """
 
   use Joken.Config

@@ -79,7 +79,9 @@ just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 
 Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still builds and restarts Elixir exactly as before.
 
-**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface:
+**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface.
+
+`mj login` on a Mac (and on Linux with `DISPLAY` or `WAYLAND_DISPLAY`, and not over SSH) is loopback authorization code + PKCE. `mj login --device`, SSH (`SSH_CONNECTION` or `SSH_TTY`), and a non-macOS session with no display print a device code and do not open a browser. The device request is `client_id` and `scope=openid` only. The OP registration for `mjolnir-cli` has to allow the device grant or that path returns `unauthorized_client`. Offline checks stay the last-known JWKS. A configured `:audience` requires `aud`. `mjolnir-term` stays the browser code flow. Two `mj` processes share the lock beside `token.json` when they refresh.
 
 ```bash
 mj spawn                               # Spawn a VM (--snapshot <name>, --memory <mb>, --connect)

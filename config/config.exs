@@ -219,6 +219,7 @@ config :mjolnir, :syslog,
 # Auth defaults. Issuer is the hosted IdentiKey OP. Keycloak
 # (connect.identikey.io) is deprecated; set MJOLNIR_AUTH_ISSUER only to
 # point somewhere else. That old host still uses the realm certs URL.
+# A set audience requires `aud`. A token that omits it fails at the API.
 config :mjolnir, :auth,
   bypass_localhost: false,
   issuer: "https://auth.identikey.me",

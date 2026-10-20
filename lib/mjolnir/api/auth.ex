@@ -23,9 +23,10 @@ defmodule Mjolnir.API.Auth do
      set an Authorization header (mjolnir-wrug.1). `GET /term/:id` stashes
      `?token=` into the cookie and redirects so the JWT is not left in the
      URL. Sites tokens are never accepted from query or cookie. A `sub` of
-     `localhost` or `sites_token:…` is rejected. When the token carries
-     `aud` and `:audience` is configured, it must name one of those
-     audiences. `:audience` is a string or a list.
+     `localhost` or `sites_token:…` is rejected. When `:audience` is
+     configured, the token must carry `aud` naming one of those clients.
+     `:require_audience` set to false accepts a token that omits `aud`.
+     A wrong `aud` still fails. `:audience` is a string or a list.
 
   Sites tokens are checked *first* so that presenting one always yields the
   narrow scope, even on the operator socket.
@@ -270,17 +271,36 @@ defmodule Mjolnir.API.Auth do
 
   # A token that names an audience must name one we accept. `:audience`
   # is the client id IdentiKey puts in `aud` (`mjolnir-cli` for `mj`,
-  # `mjolnir-term` for the browser). A single string still works.
-  # Tokens that omit `aud` still pass until `:require_audience`.
+  # `mjolnir-term` for the browser). A configured audience requires the
+  # claim. `:require_audience` false is the only way to accept an omission.
   defp audience_ok?(claims) do
     auth = Application.get_env(:mjolnir, :auth, [])
 
     audience_matches?(
       Map.get(claims, "aud"),
       Keyword.get(auth, :audience),
-      Keyword.get(auth, :require_audience, false)
+      audience_required?(auth)
     )
   end
+
+  @doc false
+  def audience_required?(auth) when is_list(auth) do
+    case Keyword.fetch(auth, :require_audience) do
+      {:ok, require?} -> require?
+      :error -> audience_configured?(Keyword.get(auth, :audience))
+    end
+  end
+
+  defp audience_configured?(value) when is_binary(value), do: value != ""
+
+  defp audience_configured?(values) when is_list(values) do
+    Enum.any?(values, fn
+      value when is_binary(value) -> value != ""
+      _ -> false
+    end)
+  end
+
+  defp audience_configured?(_), do: false
 
   @doc false
   def audience_matches?(aud, expected, require? \\ false) do

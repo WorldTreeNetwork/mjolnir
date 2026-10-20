@@ -420,6 +420,11 @@ enum Command {
         /// Mjolnir API base URL (saved to config)
         #[arg(long)]
         api: Option<String>,
+        /// Print a code and approve it in a browser on another machine.
+        /// SSH and a Linux session with no display do this without the flag.
+        /// A Mac still opens a local browser unless this is set.
+        #[arg(long)]
+        device: bool,
     },
     /// Remove stored credentials
     Logout,
@@ -1224,13 +1229,17 @@ async fn main() {
         },
 
         // --- Auth ---
-        Command::Login { issuer, api } => {
+        Command::Login {
+            issuer,
+            api,
+            device,
+        } => {
             if let Some(ref url) = api {
                 if let Err(e) = config::set("api", url) {
                     eprintln!("Warning: failed to save API config: {}", e);
                 }
             }
-            match auth::login(issuer).await {
+            match auth::login(issuer, device).await {
                 Ok(()) => {
                     eprintln!();
                     config::show();

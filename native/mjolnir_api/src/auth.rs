@@ -1,4 +1,10 @@
-//! OAuth 2.0 Device Authorization Grant flow + token storage.
+//! `mj login` stores an OIDC token from the issuer.
+//!
+//! A machine with a browser uses authorization code and PKCE on loopback.
+//! `--device`, an SSH session, or a non-macOS session with no display uses
+//! the device authorization grant and does not send PKCE. Renewal of a
+//! saved token stays on the refresh grant. The lock beside `token.json`
+//! keeps two processes from rotating it at once.
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -295,7 +301,7 @@ pub async fn refresh_stored_token() -> Option<String> {
 
 // --- Login command ---
 
-pub async fn login(issuer: Option<String>) -> Result<()> {
+pub async fn login(issuer: Option<String>, device: bool) -> Result<()> {
     let issuer = issuer.as_deref().unwrap_or(DEFAULT_ISSUER);
 
     // An explicit issuer switch must not silently reuse another issuer's session.
@@ -311,31 +317,65 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
     let config = discover(issuer).await?;
     let client = http_client()?;
 
-    // Default issuer auth.identikey.me has no device-code grant. Passkey
-    // is a browser loopback (RFC 8252). A deprecated Keycloak issuer still
-    // advertises a device endpoint; that path is only for an explicit --issuer.
-    if config.device_authorization_endpoint.is_none() {
-        return loopback_login(&client, issuer, &config).await;
+    // Loopback stays the default after the issuer advertises a device
+    // endpoint. A Mac has no DISPLAY and still has a browser.
+    if use_device_grant(device, &LoginSurface::from_process()) {
+        let endpoint = config
+            .device_authorization_endpoint
+            .as_deref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "This issuer has no device login. Run `mj login` on a machine with a browser."
+                )
+            })?;
+        return device_login(&client, issuer, &config.token_endpoint, endpoint).await;
     }
 
-    let device_endpoint = config
-        .device_authorization_endpoint
-        .clone()
-        .expect("checked above");
+    loopback_login(&client, issuer, &config).await
+}
 
-    // Generate PKCE code verifier + challenge (S256)
-    let code_verifier = generate_code_verifier();
-    let code_challenge = generate_code_challenge(&code_verifier);
+/// Where this process is running, for choosing loopback or the device grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LoginSurface {
+    ssh: bool,
+    display: bool,
+    macos: bool,
+}
 
-    // Step 1: Request device code
+impl LoginSurface {
+    fn from_process() -> Self {
+        Self {
+            ssh: env_nonempty("SSH_CONNECTION") || env_nonempty("SSH_TTY"),
+            display: env_nonempty("DISPLAY") || env_nonempty("WAYLAND_DISPLAY"),
+            macos: cfg!(target_os = "macos"),
+        }
+    }
+}
+
+fn env_nonempty(key: &str) -> bool {
+    std::env::var(key).is_ok_and(|value| !value.is_empty())
+}
+
+/// `--device`, SSH, or a non-macOS session with no display.
+fn use_device_grant(explicit: bool, surface: &LoginSurface) -> bool {
+    if explicit || surface.ssh {
+        return true;
+    }
+    if surface.macos {
+        return false;
+    }
+    !surface.display
+}
+
+async fn device_login(
+    client: &reqwest::Client,
+    issuer: &str,
+    token_endpoint: &str,
+    device_endpoint: &str,
+) -> Result<()> {
     let resp = client
-        .post(&device_endpoint)
-        .form(&[
-            ("client_id", CLIENT_ID),
-            ("scope", SCOPES),
-            ("code_challenge", code_challenge.as_str()),
-            ("code_challenge_method", "S256"),
-        ])
+        .post(device_endpoint)
+        .form(&[("client_id", CLIENT_ID), ("scope", SCOPES)])
         .send()
         .await?;
 
@@ -346,32 +386,20 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
     }
 
     let device_resp: DeviceAuthResponse = serde_json::from_str(&body)?;
+    let verify = device_resp
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&device_resp.verification_uri);
 
-    // Step 2: Show user code
     eprintln!();
-    eprintln!("Open this URL in your browser:");
+    eprintln!("Open this URL in a browser on a machine where you can use your passkey:");
     eprintln!();
-    eprintln!(
-        "  {}",
-        device_resp
-            .verification_uri_complete
-            .as_deref()
-            .unwrap_or(&device_resp.verification_uri)
-    );
+    eprintln!("  {verify}");
     eprintln!();
     eprintln!("  Code: {}", device_resp.user_code);
     eprintln!();
-
-    // Try to open browser automatically
-    if let Some(ref uri) = device_resp.verification_uri_complete {
-        let _ = open::that(uri);
-    } else {
-        let _ = open::that(&device_resp.verification_uri);
-    }
-
     eprintln!("Waiting for authorization...");
 
-    // Step 3: Poll for token
     let interval = std::time::Duration::from_secs(device_resp.interval.unwrap_or(5));
     let deadline = now_secs() + device_resp.expires_in;
 
@@ -379,20 +407,15 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
         tokio::time::sleep(interval).await;
 
         if now_secs() >= deadline {
-            bail!("Device code expired. Run `mjolnir login` again.");
+            bail!("Device code expired. Run `mj login` again.");
         }
 
         let mut params = HashMap::new();
         params.insert("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
         params.insert("client_id", CLIENT_ID);
-        params.insert("device_code", &device_resp.device_code);
-        params.insert("code_verifier", &code_verifier);
+        params.insert("device_code", device_resp.device_code.as_str());
 
-        let resp = client
-            .post(&config.token_endpoint)
-            .form(&params)
-            .send()
-            .await?;
+        let resp = client.post(token_endpoint).form(&params).send().await?;
 
         if resp.status().is_success() {
             let token_resp: TokenResponse = resp.json().await?;
@@ -402,7 +425,6 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
             return Ok(());
         }
 
-        // Parse error response
         let body = resp.text().await?;
         let err: TokenErrorResponse = serde_json::from_str(&body).unwrap_or(TokenErrorResponse {
             error: "unknown".into(),
@@ -416,7 +438,7 @@ pub async fn login(issuer: Option<String>) -> Result<()> {
                 continue;
             }
             "access_denied" => bail!("Authorization denied."),
-            "expired_token" => bail!("Device code expired. Run `mjolnir login` again."),
+            "expired_token" => bail!("Device code expired. Run `mj login` again."),
             other => bail!("Auth error: {}", other),
         }
     }
@@ -644,6 +666,32 @@ mod tests {
             "e30.{}.signature",
             URL_SAFE_NO_PAD.encode(format!("{{\"exp\":{exp}}}"))
         )
+    }
+
+    #[test]
+    fn device_grant_is_ssh_headless_or_the_flag() {
+        let mac = LoginSurface {
+            ssh: false,
+            display: false,
+            macos: true,
+        };
+        assert!(!use_device_grant(false, &mac));
+        assert!(use_device_grant(true, &mac));
+        assert!(use_device_grant(false, &LoginSurface { ssh: true, ..mac }));
+
+        let linux = LoginSurface {
+            ssh: false,
+            display: true,
+            macos: false,
+        };
+        assert!(!use_device_grant(false, &linux));
+        assert!(use_device_grant(
+            false,
+            &LoginSurface {
+                display: false,
+                ..linux
+            }
+        ));
     }
 
     #[test]
