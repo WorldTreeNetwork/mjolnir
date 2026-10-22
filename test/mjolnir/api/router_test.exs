@@ -398,11 +398,217 @@ defmodule Mjolnir.API.RouterTest do
       assert Jason.decode!(conn.resp_body)["error"] == "wildcard_not_supported"
     end
 
-    test "404 when no app owns the domain" do
+    test "404 name_not_found when nothing owns the domain" do
       conn = request(:post, "/api/certs/issue", %{fqdn: "no-such-#{System.unique_integer()}.dev"})
       assert conn.status == 404
-      assert Jason.decode!(conn.resp_body)["error"] == "app_not_found"
+      assert Jason.decode!(conn.resp_body)["error"] == "name_not_found"
     end
+
+    test "a live site alias issues with domain insertion off" do
+      fqdn = "blog-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+
+      with_site_alias(fqdn, "")
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["fqdn"] == fqdn
+      assert body["status"] == "installed"
+      refute Map.has_key?(body, "cert")
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == false
+    end
+
+    test "an app custom domain issues with domain insertion on" do
+      n = System.unique_integer([:positive])
+      app = "certapp-#{n}"
+      fqdn = "shop-#{n}.example.com"
+      parent = self()
+
+      {:ok, _} =
+        Mjolnir.Deploy.Registry.put(app, %{
+          release_snapshot: "deploy-x",
+          service_vm_id: "svc-x",
+          url: "https://x",
+          port: 3000,
+          custom_domain: fqdn
+        })
+
+      write_alias!(fqdn, ~s({"fp":"abc","site":"shop"}))
+
+      on_exit(fn ->
+        Mjolnir.Deploy.Registry.delete(app)
+        File.rm(alias_path(fqdn))
+      end)
+
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == true
+    end
+
+    test "an iroh apex refuses a site alias before HTTP-01" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "host_routed_elsewhere"
+      refute_received {:issued, _}
+    end
+
+    test "a parked apex still issues" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      fallthrough = "parked"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 200
+      assert_received {:ensured, ^fqdn, opts}
+      assert opts[:domain] == false
+    end
+
+    test "a local route refuses issuance" do
+      n = System.unique_integer([:positive])
+      fqdn = "blog-#{n}.example.com"
+      parent = self()
+
+      toml = """
+      [[domain]]
+      suffix = "example.com"
+      fallthrough = "none"
+
+      [[route]]
+      apex = "example.com"
+      subdomain = "blog-#{n}"
+      backend = "10.0.0.1:3000"
+      """
+
+      with_site_alias(fqdn, toml)
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "host_routed_elsewhere"
+      refute_received {:issued, _}
+    end
+
+    test "an unreadable alias index is 503 and does not call Let's Encrypt" do
+      fqdn = "bad-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+      path = alias_path(fqdn)
+      File.mkdir_p!(path)
+      on_exit(fn -> File.rm_rf(path) end)
+
+      with_gateway_toml("")
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 503
+      assert Jason.decode!(conn.resp_body)["error"] == "alias_index_unreadable"
+      refute_received {:issued, _}
+    end
+
+    test "an unreadable gateway config is 503" do
+      fqdn = "blog-#{System.unique_integer([:positive])}.example.com"
+      parent = self()
+      write_alias!(fqdn, ~s({"fp":"abc","site":"blog"}))
+
+      dir = Path.join(System.tmp_dir!(), "mj-gw-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      Process.put(:mjolnir_gateway_toml_path, dir)
+
+      on_exit(fn ->
+        Process.delete(:mjolnir_gateway_toml_path)
+        File.rm_rf(dir)
+        File.rm(alias_path(fqdn))
+      end)
+
+      with_cert_ops(parent)
+
+      conn = request(:post, "/api/certs/issue", %{fqdn: fqdn})
+      assert conn.status == 503
+      assert Jason.decode!(conn.resp_body)["error"] == "gateway_config_unreadable"
+      refute_received {:issued, _}
+    end
+  end
+
+  defp with_cert_ops(parent) do
+    prev = Process.get(:mjolnir_cert_ops)
+
+    Process.put(:mjolnir_cert_ops, %{
+      issue_cmd: fn fqdn ->
+        send(parent, {:issued, fqdn})
+        {:ok, %{cert: "CERT", key: "KEY", not_after: "2030-01-01T00:00:00Z"}}
+      end,
+      ensure: fn fqdn, _cert, _key, opts ->
+        send(parent, {:ensured, fqdn, opts})
+        {:ok, :installed}
+      end,
+      list_certs: fn -> {:ok, []} end
+    })
+
+    on_exit(fn ->
+      if prev do
+        Process.put(:mjolnir_cert_ops, prev)
+      else
+        Process.delete(:mjolnir_cert_ops)
+      end
+    end)
+  end
+
+  defp with_site_alias(fqdn, toml) do
+    write_alias!(fqdn, ~s({"fp":"abc","site":"blog"}))
+    with_gateway_toml(toml)
+
+    on_exit(fn -> File.rm(alias_path(fqdn)) end)
+  end
+
+  defp with_gateway_toml(toml) do
+    dir = Path.join(System.tmp_dir!(), "mj-gw-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "gateway.toml")
+    File.write!(path, toml)
+    Process.put(:mjolnir_gateway_toml_path, path)
+    Process.put(:mjolnir_gateway_config_d, Path.join(dir, "missing-dropins"))
+
+    on_exit(fn ->
+      Process.delete(:mjolnir_gateway_toml_path)
+      Process.delete(:mjolnir_gateway_config_d)
+      File.rm_rf(dir)
+    end)
+  end
+
+  defp alias_path(fqdn) do
+    Path.join([Mjolnir.SecretStore.root(), "_index", "aliases", fqdn])
+  end
+
+  defp write_alias!(fqdn, body) do
+    path = alias_path(fqdn)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, body)
   end
 
   describe "GET /api/certs" do
@@ -421,12 +627,53 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  # 32 bytes of 0xAB, base58.
+  @deploy_owner "CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t"
+  # Different 32 bytes, base58. Used to prove a redeploy cannot retarget.
+  @other_owner "3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ"
+
   describe "POST /api/deploy" do
+    test "400 owner_required before the body is considered" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "junk-app")
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_required"
+    end
+
+    test "400 invalid_owner for a 64-hex header" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-owner-id", String.duplicate("ab", 32))
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_owner"
+    end
+
+    test "400 for an invalid X-Base-Image before the stream starts" do
+      conn =
+        conn(:post, "/api/deploy", "this is not a tarball")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", "junk-app")
+        |> put_req_header("x-owner-id", @deploy_owner)
+        |> put_req_header("x-base-image", "../escape")
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid X-Base-Image"
+    end
+
     test "400 for a body that is not a gzipped tar" do
       conn =
         conn(:post, "/api/deploy", "this is not a tarball")
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> put_req_header("x-app-name", "junk-app")
+        |> put_req_header("x-owner-id", @deploy_owner)
         |> Router.call(@opts)
 
       assert conn.status == 400
@@ -456,6 +703,7 @@ defmodule Mjolnir.API.RouterTest do
         conn(:post, "/api/deploy", body)
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> put_req_header("x-app-name", "myapp")
+        |> put_req_header("x-owner-id", @deploy_owner)
         |> Router.call(@opts)
 
       assert conn.status == 200
@@ -468,6 +716,103 @@ defmodule Mjolnir.API.RouterTest do
       final = List.last(lines)
       assert final["ok"] == false
       assert final["stage"] == "detect"
+    end
+
+    test "409 when the stored owner is a different XID" do
+      app = "owned-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} =
+               Mjolnir.Deploy.Registry.put(app, %{
+                 release_snapshot: "snap-1",
+                 owner_id: @other_owner
+               })
+
+      on_exit(fn -> Mjolnir.Deploy.Registry.delete(app) end)
+
+      dir = Path.join(System.tmp_dir!(), "deploytar-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(dir, "myapp"))
+      File.write!(Path.join([dir, "myapp", "README.md"]), "# hi")
+      tar = Path.join(dir, "src.tgz")
+
+      :ok =
+        :erl_tar.create(
+          String.to_charlist(tar),
+          [{~c"myapp", String.to_charlist(Path.join(dir, "myapp"))}],
+          [:compressed]
+        )
+
+      body = File.read!(tar)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      conn =
+        conn(:post, "/api/deploy", body)
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-app-name", app)
+        |> put_req_header("x-owner-id", @deploy_owner)
+        |> Router.call(@opts)
+
+      assert conn.status == 409
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_mismatch"
+    end
+  end
+
+  describe "/api/forgejo-owners" do
+    setup do
+      file =
+        Path.join(
+          System.tmp_dir!(),
+          "forgejo-owners-http-#{System.unique_integer([:positive])}.json"
+        )
+
+      previous = Application.get_env(:mjolnir, :forgejo_owners_path)
+      Application.put_env(:mjolnir, :forgejo_owners_path, file)
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:mjolnir, :forgejo_owners_path, previous)
+        else
+          Application.delete_env(:mjolnir, :forgejo_owners_path)
+        end
+
+        File.rm(file)
+      end)
+
+      :ok
+    end
+
+    test "loopback links an account and resolves a repo" do
+      conn = request(:put, "/api/forgejo-owners/Acme", %{owner_id: @deploy_owner})
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/widget")
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+    end
+
+    test "a repo row overrides the account" do
+      assert request(:put, "/api/forgejo-owners/acme", %{owner_id: @deploy_owner}).status == 200
+
+      conn =
+        request(:put, "/api/forgejo-owners/acme/special", %{owner_id: @other_owner})
+
+      assert conn.status == 200
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/special")
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @other_owner
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/other")
+      assert Jason.decode!(conn.resp_body)["owner_id"] == @deploy_owner
+    end
+
+    test "hex is rejected and an unlinked repo is 404" do
+      conn = request(:put, "/api/forgejo-owners/acme", %{owner_id: String.duplicate("ab", 32)})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_owner"
+
+      conn = request(:get, "/api/forgejo-owners/resolve?repo=acme/widget")
+      assert conn.status == 404
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_not_linked"
     end
   end
 
@@ -609,6 +954,49 @@ defmodule Mjolnir.API.RouterTest do
     test "a non-metadata query param is not treated as a selector" do
       conn = request(:get, "/api/vms?dormant=true")
       assert vm_ids(conn) == ["meta-a", "meta-b", "meta-c"]
+    end
+  end
+
+  describe "caller mailbox REST" do
+    setup do
+      root =
+        Path.join(System.tmp_dir!(), "mjolnir-mail-api-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(root)
+      previous = Application.get_env(:mjolnir, :btrfs_root)
+      Application.put_env(:mjolnir, :btrfs_root, root)
+
+      on_exit(fn ->
+        Application.put_env(:mjolnir, :btrfs_root, previous)
+        File.rm_rf(root)
+      end)
+
+      %{box: "caller-#{System.unique_integer([:positive])}"}
+    end
+
+    test "POST then GET peeks without tombstone", %{box: box} do
+      conn =
+        request(:post, "/api/mail/#{box}/messages", %{
+          "id" => "r1",
+          "from_vm_id" => "guest",
+          "payload" => %{"reply" => true}
+        })
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["message_id"] == "r1"
+
+      conn = request(:get, "/api/mail/#{box}/messages")
+      assert conn.status == 200
+      listed = Jason.decode!(conn.resp_body)["messages"]
+      assert Enum.any?(listed, &(&1["message_id"] == "r1"))
+
+      conn = request(:post, "/api/mail/#{box}/ack", %{"ids" => ["r1"]})
+      assert conn.status == 200
+
+      conn = request(:get, "/api/mail/#{box}/messages")
+      listed = Jason.decode!(conn.resp_body)["messages"]
+      refute Enum.any?(listed, &(&1["message_id"] == "r1"))
     end
   end
 end

@@ -4,7 +4,16 @@ A Mjolnir guest is a real Linux machine on a TAP network. The host
 runs a few **sidecars** on a reserved address that every guest can
 ARP: `:host_api_ip`, default **`10.200.0.1`** (dummy interface
 `dummy-mjolnir`, not loopback — TAP `/32` guests cannot hit
-`127.0.0.1` on the host).
+`127.0.0.1` on the host). `mjolnir-hotel-ip.service` assigns that
+`/32` at boot (`scripts/ensure-host-api-addr.sh`). Sidecar installers
+install and start that unit before they bind. If `dummy` cannot be
+created, the assign fails and the address stays off `lo`.
+`scripts/ensure-host-modules.sh` writes
+`/etc/modules-load.d/mjolnir.conf` so the next boot loads kvm, tun,
+vhost_vsock, and dummy for the installed kernel.
+`mjolnir-nat.service` puts the guest masquerade back. It does not
+start `nftables.service`: the packaged `nftables.conf` drops
+forwarded traffic.
 
 That is the affordance: **universal host services**, not a container
 you had to compose next to the VM. Spawn a VM, read the locator,
@@ -69,8 +78,10 @@ curl -sS "$url/storage/blob/b3/$hash" -o out
 ```
 
 Routes: `PUT/GET/HEAD /storage/blob/b3/{hash}` and optional `.obao`.
-Mismatch → 400. Same bytes again → 200, no extra B2 version. PUT cap
-64 MiB. Do not send GiB through `deliver_message`.
+Mismatch → 400. Same bytes again → 200, no extra B2 version. The
+door streams to host SSD (`/var/lib/mjolnir/blobs`, outside
+`btrfs_root`) and write-throughs to B2; 1 TiB safety rail, 64 GiB
+cache budget. Do not send GiB through `deliver_message`.
 
 Operator / deploy / Sites cutover: [blob-door runbook](../runbooks/blob-door.md).
 Living spec: [`blob-store`](../../openspec/specs/blob-store/spec.md).

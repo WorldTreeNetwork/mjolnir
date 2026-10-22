@@ -15,6 +15,7 @@ mod cert;
 mod config;
 mod connect;
 mod deploy;
+mod dev_manifest;
 mod domain;
 mod forge;
 mod forge_tui;
@@ -64,6 +65,15 @@ enum Command {
         /// Spawn from a named base image under @base/ (mutually exclusive with --snapshot)
         #[arg(long, conflicts_with = "snapshot")]
         base: Option<String>,
+        /// Read `[targets.NAME]` from mjolnir.toml and spawn that VM
+        #[arg(long, value_name = "NAME")]
+        target: Option<String>,
+        /// Directory containing mjolnir.toml (only with --target; default: .)
+        #[arg(long, default_value = ".")]
+        path: String,
+        /// With --target, print the start script and do not spawn
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List running VMs
     List {
@@ -195,6 +205,9 @@ enum Command {
         id: String,
         /// JSON payload, e.g. '{"key":"val"}'
         payload: String,
+        /// Producer message id. Same id retried is a host duplicate, not a second turn.
+        #[arg(long = "id")]
+        message_id: Option<String>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
@@ -353,12 +366,24 @@ enum Command {
         /// Bind a custom domain during deploy
         #[arg(long)]
         domain: Option<String>,
+        /// Base image for the build VM (overrides mjolnir.toml `base_image`)
+        #[arg(long)]
+        base: Option<String>,
         /// Mjolnir API base URL
         #[arg(long)]
         api: Option<String>,
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Owner stamped on an operator-socket deploy (X-Owner-Id). Canonical
+        /// base58 XID. The server ignores this header unless the request is
+        /// the operator principal, and rejects anything that is not that spelling.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Forgejo `owner/repo`. The API resolves the IdentiKey from the
+        /// forgejo-owners map. The client does not choose the XID.
+        #[arg(long)]
+        forgejo_repo: Option<String>,
     },
     /// Manage custom domains for deployed apps (set / rm / ls)
     #[command(next_help_heading = "Apps")]
@@ -395,6 +420,11 @@ enum Command {
         /// Mjolnir API base URL (saved to config)
         #[arg(long)]
         api: Option<String>,
+        /// Print a code and approve it in a browser on another machine.
+        /// SSH and a Linux session with no display do this without the flag.
+        /// A Mac still opens a local browser unless this is set.
+        #[arg(long)]
+        device: bool,
     },
     /// Remove stored credentials
     Logout,
@@ -590,13 +620,19 @@ enum DomainAction {
 
 #[derive(Subcommand)]
 enum SecretsAction {
-    /// Merge a secret into the app's host-escrowed file
+    /// Merge secrets into the app's host-escrowed file (one write)
     Set {
         /// Deployed app name (e.g. hypersigil-api)
         app: String,
-        /// KEY or KEY=VALUE
-        spec: String,
-        /// Read the value from stdin (no echo, no argv)
+        /// KEY (prompt), KEY=VALUE, or several KEY=VALUE
+        #[arg(
+            required = true,
+            num_args = 1..,
+            value_name = "SPEC",
+            value_parser = secrets::parse_secret_spec
+        )]
+        specs: Vec<String>,
+        /// Read the value from stdin (one KEY, no echo, no argv)
         #[arg(long)]
         stdin: bool,
         /// Mjolnir API base URL
@@ -864,7 +900,10 @@ enum HostsCmd {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => exit_cli_parse(err),
+    };
     let profile = config::resolve_profile(&cli.profile);
     let json = cli.json;
 
@@ -877,7 +916,24 @@ async fn main() {
             memory,
             snapshot,
             base,
-        } => api::cmd_spawn(&profile, &api, &token, connect, &memory, &snapshot, &base).await,
+            target,
+            path,
+            dry_run,
+        } => {
+            api::cmd_spawn(
+                &profile,
+                &api,
+                &token,
+                connect,
+                &memory,
+                &snapshot,
+                &base,
+                target.as_deref(),
+                &path,
+                dry_run,
+            )
+            .await
+        }
         Command::List {
             dormant,
             filter,
@@ -922,9 +978,21 @@ async fn main() {
         Command::Message {
             id,
             payload,
+            message_id,
             api,
             token,
-        } => api::cmd_message(&profile, &api, &token, &id, &payload, json).await,
+        } => {
+            api::cmd_message(
+                &profile,
+                &api,
+                &token,
+                &id,
+                &payload,
+                message_id.as_deref(),
+                json,
+            )
+            .await
+        }
         Command::Doctor {
             id,
             fix,
@@ -1026,9 +1094,26 @@ async fn main() {
             name,
             memory,
             domain,
+            base,
             api,
             token,
-        } => deploy::cmd_deploy(&profile, &api, &token, path, name, memory, domain).await,
+            owner,
+            forgejo_repo,
+        } => {
+            deploy::cmd_deploy(
+                &profile,
+                &api,
+                &token,
+                path,
+                name,
+                memory,
+                domain,
+                base,
+                owner,
+                forgejo_repo,
+            )
+            .await
+        }
         Command::Domain { action } => match action {
             DomainAction::Set {
                 app,
@@ -1095,11 +1180,11 @@ async fn main() {
         Command::Secrets { action } => match action {
             SecretsAction::Set {
                 app,
-                spec,
+                specs,
                 stdin,
                 api,
                 token,
-            } => secrets::cmd_secrets_set(&profile, &api, &token, &app, &spec, stdin, json).await,
+            } => secrets::cmd_secrets_set(&profile, &api, &token, &app, &specs, stdin, json).await,
             SecretsAction::Ls { app, api, token } => {
                 secrets::cmd_secrets_ls(&profile, &api, &token, &app, json).await
             }
@@ -1144,13 +1229,17 @@ async fn main() {
         },
 
         // --- Auth ---
-        Command::Login { issuer, api } => {
+        Command::Login {
+            issuer,
+            api,
+            device,
+        } => {
             if let Some(ref url) = api {
                 if let Err(e) = config::set("api", url) {
                     eprintln!("Warning: failed to save API config: {}", e);
                 }
             }
-            match auth::login(issuer).await {
+            match auth::login(issuer, device).await {
                 Ok(()) => {
                     eprintln!();
                     config::show();
@@ -1289,5 +1378,122 @@ async fn main() {
     if let Err(e) = result {
         eprintln!("Error: {:?}", e);
         std::process::exit(1);
+    }
+}
+
+/// Print a clap error and exit. Secrets usage errors are scrubbed first so a
+/// `KEY=VALUE` spec never reaches the terminal.
+fn exit_cli_parse(err: clap::Error) -> ! {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.iter().any(|arg| arg == "secrets") {
+        let mut rendered = secrets::redact_secret_values(&err.to_string(), &argv);
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        eprint!("{rendered}");
+        std::process::exit(err.exit_code());
+    }
+    err.exit();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn message_producer_id_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "mjolnir",
+            "message",
+            "--id",
+            "turn-1",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            r#"{"type":"turn"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Message {
+                id,
+                payload,
+                message_id,
+                ..
+            } => {
+                assert_eq!(message_id.as_deref(), Some("turn-1"));
+                assert_eq!(id, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+                assert_eq!(payload, r#"{"type":"turn"}"#);
+            }
+            _ => panic!("expected Message"),
+        }
+    }
+
+    #[test]
+    fn secrets_set_accepts_several_specs() {
+        let cli = Cli::try_parse_from(["mjolnir", "secrets", "set", "app", "A=1", "B=2", "--json"])
+            .unwrap();
+        match cli.command {
+            Command::Secrets {
+                action:
+                    SecretsAction::Set {
+                        app, specs, stdin, ..
+                    },
+            } => {
+                assert_eq!(app, "app");
+                assert_eq!(specs, ["A=1", "B=2"]);
+                assert!(!stdin);
+                assert!(cli.json);
+            }
+            _ => panic!("expected secrets set"),
+        }
+    }
+
+    #[test]
+    fn secrets_set_keeps_stdin_on_one_key() {
+        let cli =
+            Cli::try_parse_from(["mjolnir", "secrets", "set", "app", "TOKEN", "--stdin"]).unwrap();
+        match cli.command {
+            Command::Secrets {
+                action: SecretsAction::Set { specs, stdin, .. },
+            } => {
+                assert_eq!(specs, ["TOKEN"]);
+                assert!(stdin);
+            }
+            _ => panic!("expected secrets set"),
+        }
+    }
+
+    #[test]
+    fn secrets_invalid_spec_error_contains_the_value_before_redaction() {
+        let sentinel = "sentinel-value-9f3a";
+        let spec = format!("={sentinel}");
+        let argv = ["mjolnir", "secrets", "set", "app", spec.as_str()];
+        let err = match Cli::try_parse_from(argv) {
+            Ok(_) => panic!("empty key should fail to parse"),
+            Err(err) => err,
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(sentinel),
+            "fixture must leak before redaction: {rendered}"
+        );
+        let redacted = secrets::redact_secret_values(&rendered, &argv[1..]);
+        assert!(!redacted.contains(sentinel), "{redacted}");
+    }
+
+    #[test]
+    fn message_without_producer_id_parses() {
+        let cli = Cli::try_parse_from([
+            "mjolnir",
+            "message",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            r#"{"type":"turn"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Message { message_id, .. } => {
+                assert_eq!(message_id, None);
+            }
+            _ => panic!("expected Message"),
+        }
     }
 }

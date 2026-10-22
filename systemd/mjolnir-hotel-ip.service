@@ -1,0 +1,13 @@
+[Unit]
+Description=Mjolnir host API address (dummy-mjolnir)
+After=network-pre.target
+Before=mjolnir.service mjolnir-redis.service mjolnir-blob-door.service
+Documentation=docs/guide/host-sidecars.md
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/mjolnir-ensure-host-api-addr
+
+[Install]
+WantedBy=multi-user.target

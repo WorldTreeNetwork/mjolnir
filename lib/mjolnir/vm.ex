@@ -57,6 +57,8 @@ defmodule Mjolnir.VM do
     # window where a created VM exists unlabelled — a crash in that window would
     # strand a VM its creator can no longer recognise as its own.
     metadata: %{},
+    # XIDs allowed to open the terminal and nothing else. Not owners.
+    pty_invites: [],
     # Monitor refs of exec Tasks currently running against this VM.
     #
     # A guest busy with a long command is the HEALTHIEST possible state, but it
@@ -124,7 +126,19 @@ defmodule Mjolnir.VM do
     boot_waiter: nil,
     # Named memory snapshot this GenServer is thawing from (`nil` on a
     # normal spawn). Set by `thaw/1` via spawn_with_id.
-    thaw_name: nil
+    thaw_name: nil,
+    # How long wait_for_boot polls the guest agent. Resume sets this to the
+    # caller's budget (60s, 90s for managed secrets). Nil keeps the 30s
+    # fresh-spawn default.
+    boot_budget_ms: nil,
+    # Set when the agent missed the budget but the hypervisor log was still
+    # growing. The process stays :booting, the hypervisor stays up, and
+    # :poll_late_boot finishes or reaps it. Reconcile is told {:ok, :booting}
+    # so the slot is released and the miss is not a resume failure.
+    late_boot: false,
+    late_boot_log_bytes: 0,
+    late_boot_quiet_ms: nil,
+    late_boot_deadline_ms: nil
   ]
 
   @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
@@ -171,6 +185,7 @@ defmodule Mjolnir.VM do
           optional(:extra_mounts) => list(extra_mount()),
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
           optional(:identity) => Mjolnir.Identity.t(),
+          optional(:git_signing) => boolean(),
           optional(:restart_policy) => :always | :never,
           optional(:await_boot_timeout) => timeout(),
           optional(:id) => vm_id(),
@@ -216,10 +231,39 @@ defmodule Mjolnir.VM do
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
-    with :ok <- reject_memory_snapshot_spawn(opts) do
-      do_spawn(Map.put(opts, :id, UUID.uuid4()))
+    with :ok <- reject_memory_snapshot_spawn(opts),
+         :ok <- reject_live_iroh_identity(opts) do
+      do_spawn(Map.put(opts, :id, Mjolnir.VmId.generate()))
     end
   end
+
+  # preserve_iroh_key keeps the snapshot's node id so the ticket URL stays
+  # put. A second running guest with that same key makes the relay drop
+  # both ("another endpoint connected with the same endpoint id").
+  defp reject_live_iroh_identity(%{preserve_iroh_key: true, snapshot: snapshot} = _opts)
+       when is_binary(snapshot) do
+    btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    snap_key = Path.join([btrfs_root, "@snapshots", snapshot, "etc/mjolnir/iroh.key"])
+
+    case File.read(snap_key) do
+      {:ok, bytes} ->
+        holder =
+          list()
+          |> Enum.filter(&(&1.state == :running and is_binary(&1.rootfs_path)))
+          |> Enum.map(& &1.rootfs_path)
+          |> then(&Mjolnir.BTRFS.find_rootfs_with_iroh_key(bytes, &1))
+
+        case holder && Enum.find(list(), &(&1.rootfs_path == holder)) do
+          nil -> :ok
+          vm -> {:error, {:iroh_identity_in_use, vm.id, vm.ticket}}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp reject_live_iroh_identity(_opts), do: :ok
 
   defp do_spawn(opts) do
     vm_id = opts.id
@@ -281,7 +325,7 @@ defmodule Mjolnir.VM do
   """
   @spec status(vm_id()) :: :booting | :running | :stopped | {:error, :not_found}
   def status(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, :status)
@@ -299,7 +343,7 @@ defmodule Mjolnir.VM do
   """
   @spec get(vm_id()) :: {:ok, t()} | {:error, :not_found | :unreachable}
   def get(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           {:ok,
@@ -321,12 +365,28 @@ defmodule Mjolnir.VM do
     end
   end
 
+  @doc "Allow `xid` to open this VM's terminal without becoming the owner."
+  @spec grant_pty(vm_id(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def grant_pty(vm_id, xid) when is_binary(xid) do
+    GenServer.call(via_tuple(vm_id), {:grant_pty, xid})
+  catch
+    :exit, _ -> {:error, :not_found}
+  end
+
+  @doc "Remove a terminal invite."
+  @spec revoke_pty(vm_id(), String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def revoke_pty(vm_id, xid) when is_binary(xid) do
+    GenServer.call(via_tuple(vm_id), {:revoke_pty, xid})
+  catch
+    :exit, _ -> {:error, :not_found}
+  end
+
   @doc """
   Stop a VM gracefully.
   """
   @spec stop(vm_id()) :: :ok | {:error, term()}
   def stop(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         timeout = Application.get_env(:mjolnir, :vm_stop_timeout_ms, 10_000)
 
@@ -385,7 +445,7 @@ defmodule Mjolnir.VM do
   """
   @spec freeze(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def freeze(vm_id, name, opts \\ []) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, {:freeze, name, opts}, 300_000)
 
@@ -423,7 +483,7 @@ defmodule Mjolnir.VM do
   end
 
   defp ensure_id_free(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [] -> :ok
       _ -> {:error, {:vm_running, vm_id, :registered}}
     end
@@ -475,7 +535,9 @@ defmodule Mjolnir.VM do
   """
   @spec list() :: [t()]
   def list do
-    Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    # The {:resume, uuid} key is a reconcile claim, not a VM. Probing it calls
+    # StateStore.get/1 with a tuple (mjolnir-l5a8).
+    registry_vms()
     # Probe every VM concurrently. Serially this was N × up-to-5s, so a single
     # VM whose GenServer mailbox was briefly blocked (e.g. mid-heal on a wedged
     # guest) stalled the whole `GET /api/vms` response (mjolnir-l4i). Bounded
@@ -506,11 +568,16 @@ defmodule Mjolnir.VM do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp registry_vms do
+    Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.filter(fn {id, _pid} -> is_binary(id) end)
+  end
+
   # Build the :unreachable placeholder for a blocked/unresponsive VM. The
   # owner_id is read from the durable StateStore record (not the blocked
   # GenServer), so the API's owner filter still shows the VM to its owner
   # instead of hiding it (mjolnir-l4i).
-  defp unreachable_placeholder(vm_id) do
+  defp unreachable_placeholder(vm_id) when is_binary(vm_id) do
     owner =
       case Mjolnir.StateStore.get(vm_id) do
         {:ok, record} -> Map.get(record.spawn_config || %{}, "owner_id")
@@ -519,6 +586,8 @@ defmodule Mjolnir.VM do
 
     %__MODULE__{id: vm_id, state: :unreachable, owner_id: owner}
   end
+
+  defp unreachable_placeholder(_vm_id), do: nil
 
   @doc """
   List VMs that have a `:running` intent record in StateStore but no live
@@ -535,6 +604,7 @@ defmodule Mjolnir.VM do
     registered =
       Mjolnir.VMRegistry
       |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.filter(&is_binary/1)
       |> MapSet.new()
 
     Mjolnir.StateStore.list_by_intent(:running)
@@ -579,7 +649,7 @@ defmodule Mjolnir.VM do
   """
   @spec retire(vm_id()) :: :ok | {:error, :not_found | :running}
   def retire(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         {:error, :running}
 
@@ -601,7 +671,7 @@ defmodule Mjolnir.VM do
   """
   @spec revive(vm_id()) :: :ok | {:error, term()}
   def revive(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         # The VM has a LIVE GenServer, so Mjolnir.Reconcile skips it and a flip
         # of StateStore intent is a no-op. The failure mode here is "process
@@ -718,7 +788,7 @@ defmodule Mjolnir.VM do
   """
   @spec forget(vm_id()) :: :ok | {:error, :not_found | :running | term()}
   def forget(vm_id) when is_binary(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{_pid, _}] ->
         {:error, :running}
 
@@ -751,7 +821,7 @@ defmodule Mjolnir.VM do
   """
   @spec console(vm_id()) :: {:ok, String.t()} | {:error, term()}
   def console(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -774,7 +844,7 @@ defmodule Mjolnir.VM do
   """
   @spec get_ticket(vm_id()) :: {:ok, String.t()} | {:error, :not_ready | :not_found}
   def get_ticket(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -798,7 +868,7 @@ defmodule Mjolnir.VM do
   @spec connection_info(vm_id()) ::
           {:ok, String.t(), String.t()} | {:error, :not_ready | :not_found}
   def connection_info(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         state = GenServer.call(pid, :get_state)
 
@@ -829,7 +899,7 @@ defmodule Mjolnir.VM do
   """
   @spec await_pty(vm_id(), timeout()) :: {:ok, String.t()} | {:error, :timeout | :not_found}
   def await_pty(vm_id, timeout \\ 30_000) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, {:await_pty, timeout}, timeout + 5_000)
 
@@ -877,7 +947,7 @@ defmodule Mjolnir.VM do
   """
   @spec authorize_inject_peer(vm_id(), String.t()) :: :ok | {:error, term()}
   def authorize_inject_peer(vm_id, peer_node_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] -> GenServer.call(pid, {:authorize_inject_peer, peer_node_id})
       [] -> {:error, :not_found}
     end
@@ -893,7 +963,7 @@ defmodule Mjolnir.VM do
   @spec deliver_message(vm_id(), String.t(), term(), keyword()) :: {:ok, map()} | {:error, term()}
   def deliver_message(target_vm_id, from_vm_id, payload, opts \\ []) do
     cond do
-      Registry.lookup(Mjolnir.VMRegistry, target_vm_id) != [] ->
+      registered(target_vm_id) != [] ->
         accept_and_kick(target_vm_id, from_vm_id, payload, opts)
 
       match?({:ok, _}, Mjolnir.DormantRegistry.lookup(target_vm_id)) ->
@@ -929,7 +999,7 @@ defmodule Mjolnir.VM do
   """
   @spec handle_done(vm_id()) :: :ok | {:error, term()}
   def handle_done(vm_id) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, :handle_done, 60_000)
 
@@ -1019,7 +1089,7 @@ defmodule Mjolnir.VM do
   end
 
   defp call_vm(vm_id, msg, timeout) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [{pid, _}] ->
         try do
           GenServer.call(pid, msg, timeout)
@@ -1047,21 +1117,78 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
+  Adopt a guest whose scope is already active. Does not boot and does not
+  unlock LUKS. The caller keeps the same id and the same disk.
+
+  Named `adopt` because `attach/1` is the operator console hint.
+  """
+  @spec adopt(Mjolnir.StateStore.Record.t()) :: {:ok, t()} | {:error, term()}
+  def adopt(%Mjolnir.StateStore.Record{uuid: uuid} = record) do
+    case Registry.register(Mjolnir.VMRegistry, {:resume, uuid}, nil) do
+      {:error, {:already_registered, pid}} ->
+        {:error, {:already_started, pid}}
+
+      {:ok, _} ->
+        try do
+          do_attach(record)
+        after
+          Registry.unregister(Mjolnir.VMRegistry, {:resume, uuid})
+        end
+    end
+  end
+
+  defp do_attach(%Mjolnir.StateStore.Record{} = record) do
+    opts =
+      record
+      |> resume_opts()
+      |> Map.put(:attach, true)
+      |> Map.delete(:resume)
+      |> Map.put(:boot_budget_ms, 5_000)
+
+    case DynamicSupervisor.start_child(Mjolnir.VMSupervisor, {__MODULE__, opts}) do
+      {:ok, pid} ->
+        case GenServer.call(pid, :await_boot, 10_000) do
+          {:ok, vm} -> {:ok, vm}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Resume a VM from a persisted StateStore record. Used by `Mjolnir.Reconcile`
   at boot. Skips rootfs clone (uses existing `@vms/<uuid>` subvolume) and
   skips guest-agent injection. Network/identity/iroh are re-pushed
   idempotently to recover from any guest drift.
   """
   @spec resume(Mjolnir.StateStore.Record.t()) :: {:ok, t()} | {:error, term()}
-  def resume(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg}) do
-    opts = %{
+  def resume(%Mjolnir.StateStore.Record{uuid: uuid} = record) do
+    # Claim before start_child. Registry registration is atomic; the VM's own
+    # via-name is a different key and is taken only once start_link runs.
+    case Registry.register(Mjolnir.VMRegistry, {:resume, uuid}, nil) do
+      {:error, {:already_registered, pid}} ->
+        {:error, {:already_started, pid}}
+
+      {:ok, _} ->
+        try do
+          do_resume(record)
+        after
+          Registry.unregister(Mjolnir.VMRegistry, {:resume, uuid})
+        end
+    end
+  end
+
+  defp resume_opts(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg} = record) do
+    %{
       id: uuid,
-      resume: true,
       base_image: Map.get(cfg, "base_image"),
       vcpus: Map.get(cfg, "vcpus"),
       memory_mb: Map.get(cfg, "memory_mb"),
       enable_iroh: Map.get(cfg, "enable_iroh"),
       owner_id: Map.get(cfg, "owner_id"),
+      pty_invites: Map.get(cfg, "pty_invites") || [],
       ssh_public_key: Map.get(cfg, "ssh_public_key"),
       secrets_mode:
         case Map.get(cfg, "secrets_mode") do
@@ -1070,25 +1197,63 @@ defmodule Mjolnir.VM do
           "ephemeral" -> :ephemeral
           _ -> :none
         end,
-      # Carried across the resume so a VM that survives one rehydration doesn't
-      # quietly lose its lifetime policy and become revivable on the next one.
-      # (Reconcile refuses to resume a :never record at all, so this is belt to
-      # that braces — it also covers Mjolnir.VM.revive/1, which goes through
-      # resume/1 by an operator's explicit choice.)
-      restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy"))
+      vsock_cid: stamped_cid(%{vsock_cid: Map.get(cfg, "vsock_cid")}),
+      # Carried across rehydration so a :never VM does not become revivable
+      # because the policy was dropped. Reconcile still refuses to boot a
+      # dead :never record. Attach does not boot either.
+      restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy")),
+      extra_mounts: decode_extra_mounts(Map.get(cfg, "extra_mounts")),
+      metadata: record.metadata || %{}
     }
+  end
+
+  defp decode_extra_mounts(mounts) when is_list(mounts) do
+    Enum.flat_map(mounts, fn
+      %{"tag" => tag, "path" => path} = mount when is_binary(tag) and is_binary(path) ->
+        [%{tag: tag, shared_dir: path, opts: mount["opts"] || []}]
+
+      %{tag: tag, shared_dir: path} = mount when is_binary(tag) and is_binary(path) ->
+        [mount]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp decode_extra_mounts(_), do: []
+
+  defp encode_extra_mounts(mounts) when is_list(mounts) do
+    Enum.flat_map(mounts, fn
+      %{tag: tag, shared_dir: path} = mount when is_binary(tag) and is_binary(path) ->
+        [%{"tag" => tag, "path" => path, "opts" => mount[:opts] || []}]
+
+      %{"tag" => tag, "path" => path} = mount when is_binary(tag) and is_binary(path) ->
+        [mount]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp encode_extra_mounts(_), do: []
+
+  defp do_resume(%Mjolnir.StateStore.Record{} = record) do
+    opts = Map.put(resume_opts(record), :resume, true)
+
+    # Resume keeps its historical 60s floor (an existing subvolume + guest
+    # drift re-push is heavier than a fresh boot); managed re-open of the
+    # snapshot-carried LUKS volume can still push past it, so take the max.
+    # The inner wait uses this budget. The call waits a little longer so a
+    # still-booting VM can reply {:ok, :booting} before the call exits.
+    resume_timeout = max(60_000, await_boot_timeout(opts))
+    opts = Map.put(opts, :boot_budget_ms, resume_timeout)
 
     case DynamicSupervisor.start_child(
            Mjolnir.VMSupervisor,
            {__MODULE__, opts}
          ) do
       {:ok, pid} ->
-        # Resume keeps its historical 60s floor (an existing subvolume + guest
-        # drift re-push is heavier than a fresh boot); managed re-open of the
-        # snapshot-carried LUKS volume can still push past it, so take the max.
-        resume_timeout = max(60_000, await_boot_timeout(opts))
-
-        case GenServer.call(pid, :await_boot, resume_timeout) do
+        case GenServer.call(pid, :await_boot, resume_timeout + 5_000) do
           {:ok, vm} -> {:ok, vm}
           {:error, reason} -> {:error, reason}
         end
@@ -1122,13 +1287,14 @@ defmodule Mjolnir.VM do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    opts = Map.update!(opts, :id, &Mjolnir.VmId.storage_id/1)
 
-    case store_identity(opts) do
-      :ok ->
-        init_state(opts)
-
+    with :ok <- store_identity(opts),
+         :ok <- store_git_signing(opts) do
+      init_state(opts)
+    else
       {:error, reason} ->
-        Logger.error("VM #{opts.id} refused spawn: identity store failed (#{inspect(reason)})")
+        Logger.error("VM #{opts.id} refused spawn: opaque store failed (#{inspect(reason)})")
 
         {:stop, :normal}
     end
@@ -1138,6 +1304,29 @@ defmodule Mjolnir.VM do
     case opts[:identity] do
       nil -> :ok
       identity -> Mjolnir.Identity.put(opts.id, identity)
+    end
+  end
+
+  # New vm_id mints a new key. Never copy `_opaque` from another id.
+  defp store_git_signing(opts) do
+    case opts[:git_signing] do
+      nil ->
+        :ok
+
+      false ->
+        :ok
+
+      true ->
+        case Mjolnir.GitSigning.mint(opts.id) do
+          {:ok, _pub} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      %{copy_from: _} ->
+        {:error, :cannot_copy_git_signing}
+
+      %{from_vm_id: _} ->
+        {:error, :cannot_copy_git_signing}
     end
   end
 
@@ -1163,6 +1352,7 @@ defmodule Mjolnir.VM do
       ssh_public_key: ssh_key,
       enable_iroh: enable_iroh,
       owner_id: opts[:owner_id],
+      pty_invites: opts[:pty_invites] || [],
       # secrets_mode flows from spawn opts (router/resume already mapped it to an
       # atom). Without this it defaulted to :none, silently disabling
       # :persistent/:managed for every API-spawned VM.
@@ -1180,10 +1370,17 @@ defmodule Mjolnir.VM do
       # its config through JSON, so a policy that only matched the atom would be
       # silently downgraded to :always on the way back.
       restart_policy: normalize_restart_policy(opts[:restart_policy]),
-      thaw_name: opts[:thaw]
+      thaw_name: opts[:thaw],
+      boot_budget_ms: opts[:boot_budget_ms]
     }
 
-    continue = if is_binary(opts[:thaw]), do: :thaw, else: :boot
+    continue =
+      cond do
+        opts[:attach] -> :attach
+        is_binary(opts[:thaw]) -> :thaw
+        true -> :boot
+      end
+
     {:ok, state, {:continue, continue}}
   end
 
@@ -1204,6 +1401,29 @@ defmodule Mjolnir.VM do
     end
   end
 
+  def handle_continue(:attach, state) do
+    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+    socket_path = Path.join(socket_dir, "#{state.id}.sock")
+    vsock_path = state.hypervisor.vsock_path(socket_dir, state.id)
+
+    new_state = %{
+      state
+      | state: :running,
+        socket_path: socket_path,
+        vsock_path: vsock_path
+    }
+
+    # The scope is already up. Polling it is the death signal. There is no
+    # port, and LUKS is not unlocked again.
+    Process.send_after(self(), :poll_scope, 5_000)
+
+    if new_state.boot_waiter do
+      GenServer.reply(new_state.boot_waiter, {:ok, new_state})
+    end
+
+    {:noreply, %{new_state | boot_waiter: nil}}
+  end
+
   def handle_continue(:boot, state) do
     case do_boot(state) do
       {:ok, new_state} ->
@@ -1212,6 +1432,11 @@ defmodule Mjolnir.VM do
         # :running — but it must NOT happen on this process, or the mailbox
         # stays shut for its whole 60s bound (mjolnir-y32).
         start_secrets_unlock(new_state)
+
+      {:still_booting, st} ->
+        Logger.warning("VM #{st.id} still booting; hypervisor left up")
+        Process.send_after(self(), :poll_late_boot, 1_000)
+        {:noreply, st}
 
       {:error, reason} ->
         Logger.error("VM #{state.id} failed to boot: #{inspect(reason)}")
@@ -1226,9 +1451,28 @@ defmodule Mjolnir.VM do
     {:reply, {:ok, state}, state}
   end
 
+  def handle_call(:await_boot, _from, %{late_boot: true} = state) do
+    # Reconcile releases its slot. This process keeps polling.
+    {:reply, {:ok, :booting}, state}
+  end
+
   def handle_call(:await_boot, from, %{state: :booting} = state) do
     # Store the caller to reply later when boot completes
     {:noreply, Map.put(state, :boot_waiter, from)}
+  end
+
+  def handle_call({:grant_pty, xid}, _from, state) when is_binary(xid) do
+    invites = Enum.uniq([xid | state.pty_invites || []])
+    state = %{state | pty_invites: invites}
+    persist_running_state(state)
+    {:reply, {:ok, invites}, state}
+  end
+
+  def handle_call({:revoke_pty, xid}, _from, state) when is_binary(xid) do
+    invites = Enum.reject(state.pty_invites || [], &(&1 == xid))
+    state = %{state | pty_invites: invites}
+    persist_running_state(state)
+    {:reply, {:ok, invites}, state}
   end
 
   def handle_call(:status, _from, state) do
@@ -1253,25 +1497,6 @@ defmodule Mjolnir.VM do
 
       :ok ->
         do_handle_done(state)
-    end
-  end
-
-  defp do_handle_done(state) do
-    snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
-
-    case do_snapshot(state, snapshot_name, []) do
-      {:ok, _metadata} ->
-        original_config = restore_config(state)
-        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
-        # DormantRegistry now owns this VM's persisted state; remove the
-        # running-intent record so Mjolnir.Reconcile doesn't try to resume it.
-        _ = Mjolnir.StateStore.delete(state.id)
-        Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
-        {:stop, :normal, :ok, state}
-
-      {:error, reason} ->
-        Logger.error("Failed to snapshot VM #{state.id} for done: #{inspect(reason)}")
-        {:reply, {:error, reason}, state}
     end
   end
 
@@ -1606,6 +1831,25 @@ defmodule Mjolnir.VM do
     end
   end
 
+  defp do_handle_done(state) do
+    snapshot_name = "dormant-#{state.id}-#{System.os_time(:second)}"
+
+    case do_snapshot(state, snapshot_name, []) do
+      {:ok, _metadata} ->
+        original_config = restore_config(state)
+        Mjolnir.DormantRegistry.register(state.id, snapshot_name, original_config, state.owner_id)
+        # DormantRegistry now owns this VM's persisted state; remove the
+        # running-intent record so Mjolnir.Reconcile doesn't try to resume it.
+        _ = Mjolnir.StateStore.delete(state.id)
+        Mjolnir.EventBus.publish(state.id, :vm_dormant, %{snapshot: snapshot_name})
+        {:stop, :normal, :ok, state}
+
+      {:error, reason} ->
+        Logger.error("Failed to snapshot VM #{state.id} for done: #{inspect(reason)}")
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl true
   def handle_info({:EXIT, pid, reason}, %{hypervisor_pid: pid} = state) do
     Logger.warning("Hypervisor process exited: #{inspect(reason)}")
@@ -1755,6 +1999,65 @@ defmodule Mjolnir.VM do
     {:noreply, state}
   end
 
+  def handle_info(:poll_scope, %{state: :running} = state) do
+    case Mjolnir.VmmScope.liveness(state.id) do
+      :active ->
+        Process.send_after(self(), :poll_scope, 5_000)
+        {:noreply, state}
+
+      # systemd could not be asked. Do not treat that as a death.
+      :unknown ->
+        Process.send_after(self(), :poll_scope, 5_000)
+        {:noreply, state}
+
+      dead ->
+        Logger.warning("VM #{state.id} scope is #{dead}")
+        {:stop, {:hypervisor_exit, dead}, %{state | state: :stopped}}
+    end
+  end
+
+  def handle_info(:poll_scope, state), do: {:noreply, state}
+
+  def handle_info(:poll_late_boot, %{late_boot: true} = state) do
+    now = System.monotonic_time(:millisecond)
+
+    case try_ping_agent(state.vsock_path) do
+      {:ok, :full} ->
+        case complete_guest_setup(state) do
+          {:ok, new_state} ->
+            start_secrets_unlock(new_state)
+
+          {:error, reason} ->
+            Logger.error("VM #{state.id} late boot failed: #{inspect(reason)}")
+            {:stop, :normal, %{state | state: :failed, late_boot: false}}
+        end
+
+      _other ->
+        size = ch_log_size(state)
+        grew = size > state.late_boot_log_bytes
+        quiet_since = if grew, do: now, else: state.late_boot_quiet_ms || now
+        stalled = now - quiet_since >= 15_000
+        expired = is_integer(state.late_boot_deadline_ms) and now >= state.late_boot_deadline_ms
+
+        cond do
+          stalled or (expired and not grew) ->
+            Logger.error("VM #{state.id} late boot stopped making progress")
+            abandon_late_boot(state)
+            {:stop, :normal, %{state | state: :failed, late_boot: false}}
+
+          true ->
+            Process.send_after(self(), :poll_late_boot, 1_000)
+
+            {:noreply,
+             %{
+               state
+               | late_boot_log_bytes: max(size, state.late_boot_log_bytes),
+                 late_boot_quiet_ms: quiet_since
+             }}
+        end
+    end
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -1781,6 +2084,16 @@ defmodule Mjolnir.VM do
 
   @impl true
   def terminate(reason, state) do
+    if state.hypervisor == Mjolnir.Hypervisor.CloudHypervisor and
+         Mjolnir.VmmScope.detach?(reason) do
+      Mjolnir.VmmScope.detach(state.hypervisor_port)
+      :ok
+    else
+      terminate_owned(reason, state)
+    end
+  end
+
+  defp terminate_owned(reason, state) do
     Logger.warning(
       "[vm-terminate] #{state.id} start reason=#{inspect(reason)} state=#{state.state}"
     )
@@ -1838,6 +2151,10 @@ defmodule Mjolnir.VM do
 
         :not_found ->
           _ = Mjolnir.Identity.delete(state.id)
+          # Forgejo write-key delete → revoke_device → opaque. A failed
+          # Forgejo delete stops the chain (opaque stays). No host token
+          # is :not_wired (dev/test reconcile find), not a fake delete.
+          _ = Mjolnir.GitSigning.revoke(state.id)
       end
     end
 
@@ -1852,6 +2169,10 @@ defmodule Mjolnir.VM do
           _ = Mjolnir.Mailbox.drop_mailbox(state.id)
       end
     end
+
+    # Re-render gateway routes. Routes.render keeps a preserved VM's route (its
+    # StateStore intent is still :running) and drops a torn-down one.
+    Mjolnir.EventBus.publish(state.id, :vm_stopped, %{reason: inspect(reason)})
 
     Logger.warning("[vm-terminate] #{state.id} done")
     :ok
@@ -1888,8 +2209,30 @@ defmodule Mjolnir.VM do
   # ============================================================================
 
   defp via_tuple(vm_id) do
-    {:via, Registry, {Mjolnir.VMRegistry, vm_id}}
+    {:via, Registry, {Mjolnir.VMRegistry, Mjolnir.VmId.storage_id(vm_id)}}
   end
+
+  # Exact registry name first, then the base58 spelling of a legacy UUID.
+  # A process started before this boot is registered under the canonical id.
+  defp registered(vm_id) do
+    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+      [] ->
+        alt = Mjolnir.VmId.storage_id(vm_id)
+        if alt == vm_id, do: [], else: Registry.lookup(Mjolnir.VMRegistry, alt)
+
+      found ->
+        found
+    end
+  end
+
+  defp stamped_cid(%{vsock_cid: cid}) when is_integer(cid) and cid >= 3 and cid < 0xFFFFFFFF,
+    do: cid
+
+  defp stamped_cid(_), do: nil
+
+  defp cid_or_nil(%{vsock_cid: cid}) when is_integer(cid), do: cid
+  defp cid_or_nil(config) when is_map(config), do: Map.get(config, :vsock_cid)
+  defp cid_or_nil(_), do: nil
 
   # Fail-open to :always. See the comment at the call site in init/1: an
   # unrecognised policy becoming :never would strand VMs silently.
@@ -1906,7 +2249,7 @@ defmodule Mjolnir.VM do
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
       vcpu_count: opts[:vcpus] || Application.get_env(:mjolnir, :default_vcpus),
       mem_size_mib: opts[:memory_mb] || Application.get_env(:mjolnir, :default_memory_mb),
-      vsock_cid: Mjolnir.Vsock.cid(opts.id),
+      vsock_cid: stamped_cid(opts) || Mjolnir.Vsock.cid(opts.id),
       snapshot: opts[:snapshot],
       preserve_iroh_key: opts[:preserve_iroh_key] || false,
       resume: opts[:resume] || false,
@@ -1941,15 +2284,18 @@ defmodule Mjolnir.VM do
            _ = track_rootfs_for_cleanup(state, rootfs_path),
            _ = maybe_inject_guest_agent(state, rootfs_path),
            virtiofsd_socket = Mjolnir.VirtioFS.socket_path(socket_dir, state.id),
-           {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.start(rootfs_path, virtiofsd_socket),
+           {:ok, virtiofsd_port} <- Mjolnir.VirtioFS.prepare(rootfs_path, virtiofsd_socket),
            _ = boot_partial_put(:virtiofsd_port, virtiofsd_port),
            extra_mounts = Map.get(state.config, :extra_mounts, []),
            {:ok, extra_virtiofsd_ports} <-
-             Mjolnir.VirtioFS.start_many(socket_dir, state.id, extra_mounts),
+             Mjolnir.VirtioFS.prepare_many(socket_dir, state.id, extra_mounts),
            _ = boot_partial_put(:extra_virtiofsd_ports, extra_virtiofsd_ports),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
-           {:ok, hv_port} <- start_hypervisor(hypervisor, state.id, socket_path, serial_path),
+           {:ok, hv_port} <-
+             start_hypervisor(hypervisor, state.id, socket_path, serial_path, [
+               virtiofsd_port | Enum.map(extra_virtiofsd_ports, &elem(&1, 1))
+             ]),
            _ = boot_partial_put(:hv_port, hv_port),
            :ok <- wait_for_socket(socket_path),
            config <-
@@ -1964,108 +2310,25 @@ defmodule Mjolnir.VM do
              }),
            :ok <- configure_vm(hypervisor, socket_path, config),
            :ok <- hypervisor.start_instance(socket_path),
-           :ok <- wait_for_boot(vsock_path, state),
-           # In resume mode, probe what's already configured in the guest so we
-           # can skip idempotent re-pushes that would otherwise restart iroh,
-           # rewrite hostname, etc. Fresh spawns get an empty probe ⇒ always push.
-           probe = probe_resume_state_safe(state, vsock_path),
-           :ok <-
-             maybe_configure_network(
-               state,
-               probe,
-               vsock_path,
-               net_config.guest_ip
-             ) do
-        # Inject SSH public key if provided — skip in resume mode if the guest's
-        # authorized_keys already matches what we'd push.
-        if state.ssh_public_key do
-          case maybe_configure_ssh(state, probe, vsock_path, state.ssh_public_key) do
-            :ok -> Logger.info("SSH keys ok for VM #{state.id}")
-            :skipped -> Logger.info("SSH keys match, skipped for VM #{state.id}")
-            {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
-          end
-        end
+           :ok <- remember_rootfs(rootfs_path),
+           :ok <- wait_for_boot(vsock_path, state, hv_port) do
+        booted = %{
+          state
+          | socket_path: socket_path,
+            vsock_path: vsock_path,
+            serial_path: serial_path,
+            rootfs_path: rootfs_path,
+            net_config: net_config,
+            hypervisor_port: hv_port,
+            virtiofsd_port: virtiofsd_port,
+            extra_virtiofsd_ports: extra_virtiofsd_ports
+        }
 
-        # Inject VM identity (vm_id + API URL for in-VM snapshot trigger)
-        api_port = Application.get_env(:mjolnir, :api_port, 4000)
-        host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
-        api_url = "http://#{host_ip}:#{api_port}"
-        blob_door_url = "http://#{host_ip}:7222"
-
-        case maybe_configure_identity(state, probe, vsock_path, state.id, api_url, blob_door_url) do
-          :ok -> Logger.info("VM identity ok for VM #{state.id}")
-          :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
-          {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
-        end
-
-        # Buzz nsec: re-inject every boot (buzz.env is tmpfs). Never log values.
-        case maybe_inject_agent_identity(state, vsock_path) do
-          :ok ->
-            Logger.info("Agent identity injected for VM #{state.id}")
-
-          :skipped ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Agent identity inject failed for VM #{state.id}: #{inspect(reason)}")
-        end
-
-        # Tell guest agent whether to start Iroh. Skip the reconfigure in resume
-        # mode if the guest already reports iroh ready — this avoids restarting
-        # the iroh daemon and tearing down an otherwise-working endpoint.
-        case maybe_configure_iroh(state, probe, vsock_path, state.enable_iroh) do
-          :ok ->
-            Logger.info(
-              "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
-            )
-
-          :skipped ->
-            Logger.info("Iroh already ready on resume, skipped for VM #{state.id}")
-
-          {:error, reason} ->
-            Logger.warning("configure_iroh failed: #{inspect(reason)}")
-        end
-
-        # Only wait for Iroh if enabled
-        iroh_info =
-          if state.enable_iroh do
-            await_iroh_ready(vsock_path, 5_000)
-          else
-            nil
-          end
-
-        # The secrets_mode: :managed unlock USED to run here, inline. It now
-        # runs off-process after do_boot returns — see start_secrets_unlock/1
-        # and mjolnir-y32. do_boot's job ends at "the guest is reachable";
-        # deciding when the VM becomes :running is handle_continue's.
-
-        # Start persistent vsock connection for command execution
-        {:ok, vsock_conn} =
-          Mjolnir.Vsock.Connection.start_link(%{
-            vm_id: state.id,
-            socket_path: vsock_path
-          })
-
-        Process.delete(:boot_partial)
-
-        {:ok,
-         %{
-           state
-           | socket_path: socket_path,
-             vsock_path: vsock_path,
-             vsock_conn: vsock_conn,
-             serial_path: serial_path,
-             rootfs_path: rootfs_path,
-             net_config: net_config,
-             hypervisor_port: hv_port,
-             virtiofsd_port: virtiofsd_port,
-             extra_virtiofsd_ports: extra_virtiofsd_ports,
-             iroh_node_id: iroh_info[:node_id],
-             iroh_json: iroh_info[:ticket],
-             ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
-             pty_ready: iroh_info != nil
-         }}
+        complete_guest_setup(booted)
       else
+        {:error, :still_booting} ->
+          {:still_booting, adopt_live_boot(state, socket_path, vsock_path, serial_path)}
+
         error ->
           handle_boot_failure(state, error, socket_path, vsock_path, serial_path)
           error
@@ -2076,6 +2339,175 @@ defmodule Mjolnir.VM do
     e ->
       cleanup_partial_boot(state.hypervisor, nil, nil, nil)
       {:error, {:boot_exception, e}}
+  end
+
+  # Guest setup after the agent answers. Shared by the fast path and by a
+  # late boot that kept the hypervisor when the agent missed the budget.
+  defp complete_guest_setup(%__MODULE__{} = state) do
+    restore_boot_partial(state)
+    vsock_path = state.vsock_path
+
+    # In resume mode, probe what's already configured so we can skip
+    # idempotent re-pushes that would restart iroh. Fresh spawns probe empty.
+    probe = probe_resume_state_safe(state, vsock_path)
+
+    with :ok <-
+           maybe_configure_network(state, probe, vsock_path, state.net_config.guest_ip) do
+      if state.ssh_public_key do
+        case maybe_configure_ssh(state, probe, vsock_path, state.ssh_public_key) do
+          :ok -> Logger.info("SSH keys ok for VM #{state.id}")
+          :skipped -> Logger.info("SSH keys match, skipped for VM #{state.id}")
+          {:error, reason} -> Logger.warning("SSH key injection failed: #{inspect(reason)}")
+        end
+      end
+
+      api_port = Application.get_env(:mjolnir, :api_port, 4000)
+      host_ip = Application.get_env(:mjolnir, :host_api_ip, "10.200.0.1")
+      api_url = "http://#{host_ip}:#{api_port}"
+      blob_door_url = "http://#{host_ip}:7222"
+
+      case maybe_configure_identity(state, probe, vsock_path, state.id, api_url, blob_door_url) do
+        :ok -> Logger.info("VM identity ok for VM #{state.id}")
+        :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
+        {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
+      end
+
+      case maybe_inject_agent_identity(state, vsock_path) do
+        :ok ->
+          Logger.info("Agent identity injected for VM #{state.id}")
+
+        :skipped ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Agent identity inject failed for VM #{state.id}: #{inspect(reason)}")
+      end
+
+      case maybe_inject_git_signing(state, vsock_path) do
+        :ok ->
+          Logger.info("Git signing key injected for VM #{state.id}")
+
+        :skipped ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Git signing inject failed for VM #{state.id}: #{inspect(reason)}")
+      end
+
+      case maybe_configure_iroh(state, probe, vsock_path, state.enable_iroh) do
+        :ok ->
+          Logger.info(
+            "Iroh #{if state.enable_iroh, do: "enabled", else: "disabled"} for VM #{state.id}"
+          )
+
+        :skipped ->
+          Logger.info("Iroh already ready on resume, skipped for VM #{state.id}")
+
+        {:error, reason} ->
+          Logger.warning("configure_iroh failed: #{inspect(reason)}")
+      end
+
+      iroh_info =
+        if state.enable_iroh do
+          await_iroh_ready(vsock_path, 5_000)
+        else
+          nil
+        end
+
+      {:ok, vsock_conn} =
+        Mjolnir.Vsock.Connection.start_link(%{
+          vm_id: state.id,
+          socket_path: vsock_path
+        })
+
+      Process.delete(:boot_partial)
+      Process.delete(:boot_rootfs_path)
+
+      {:ok,
+       %{
+         state
+         | vsock_conn: vsock_conn,
+           iroh_node_id: iroh_info[:node_id],
+           iroh_json: iroh_info[:ticket],
+           ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
+           pty_ready: iroh_info != nil,
+           late_boot: false
+       }}
+    else
+      error ->
+        handle_boot_failure(state, error, state.socket_path, state.vsock_path, state.serial_path)
+        error
+    end
+  end
+
+  defp abandon_late_boot(state) do
+    partial = %{
+      hv_port: state.hypervisor_port,
+      virtiofsd_port: state.virtiofsd_port,
+      extra_virtiofsd_ports: state.extra_virtiofsd_ports || [],
+      net_config: state.net_config
+    }
+
+    partial =
+      if state.resume_mode, do: partial, else: Map.put(partial, :rootfs_path, state.rootfs_path)
+
+    Process.put(:boot_partial, partial)
+
+    handle_boot_failure(
+      state,
+      {:error, :boot_timeout},
+      state.socket_path,
+      state.vsock_path,
+      state.serial_path
+    )
+  end
+
+  defp restore_boot_partial(state) do
+    partial =
+      Map.merge(Process.get(:boot_partial, %{}), %{
+        hv_port: state.hypervisor_port,
+        virtiofsd_port: state.virtiofsd_port,
+        extra_virtiofsd_ports: state.extra_virtiofsd_ports,
+        net_config: state.net_config
+      })
+
+    partial =
+      if state.resume_mode or partial[:rootfs_path] do
+        partial
+      else
+        Map.put(partial, :rootfs_path, state.rootfs_path)
+      end
+
+    Process.put(:boot_partial, partial)
+  end
+
+  defp remember_rootfs(path) do
+    Process.put(:boot_rootfs_path, path)
+    :ok
+  end
+
+  # The agent missed the budget, but cloud-hypervisor is alive and its log
+  # grew. Keep every resource that cleanup would otherwise destroy.
+  defp adopt_live_boot(state, socket_path, vsock_path, serial_path) do
+    partial = Process.get(:boot_partial, %{})
+    Process.delete(:boot_partial)
+    now = System.monotonic_time(:millisecond)
+
+    %{
+      state
+      | socket_path: socket_path,
+        vsock_path: vsock_path,
+        serial_path: serial_path,
+        rootfs_path: Process.get(:boot_rootfs_path),
+        net_config: partial[:net_config],
+        hypervisor_port: partial[:hv_port],
+        virtiofsd_port: partial[:virtiofsd_port],
+        extra_virtiofsd_ports: partial[:extra_virtiofsd_ports] || [],
+        late_boot: true,
+        late_boot_log_bytes: ch_log_size(state),
+        late_boot_quiet_ms: now,
+        late_boot_deadline_ms: now + 60_000
+    }
   end
 
   # On a boot failure, decide whether the freshly-cloned rootfs should be kept.
@@ -2160,14 +2592,12 @@ defmodule Mjolnir.VM do
     # Kill hypervisor port if started
     if partial[:hv_port] do
       try do
-        case Port.info(partial.hv_port, :os_pid) do
-          {:os_pid, os_pid} ->
-            Port.close(partial.hv_port)
-            System.cmd("kill", ["-9", to_string(os_pid)])
-
-          nil ->
-            :ok
+        case Process.get(:boot_scope_id) do
+          nil -> :ok
+          id -> Mjolnir.VmmScope.stop(id)
         end
+
+        Mjolnir.VmmScope.detach(partial.hv_port)
       rescue
         _ -> :ok
       end
@@ -2482,13 +2912,15 @@ defmodule Mjolnir.VM do
   defp track_rootfs_for_cleanup(_state, rootfs_path),
     do: boot_partial_put(:rootfs_path, rootfs_path)
 
-  defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path) do
+  defp start_hypervisor(hypervisor, vm_id, socket_path, serial_path, daemons) do
     config = %{
       vm_id: vm_id,
       socket_path: socket_path,
-      serial_path: serial_path
+      serial_path: serial_path,
+      virtiofs_daemons: daemons
     }
 
+    Process.put(:boot_scope_id, vm_id)
     hypervisor.start_vm(config)
   end
 
@@ -2515,36 +2947,90 @@ defmodule Mjolnir.VM do
     hypervisor.configure_vm(socket_path, config)
   end
 
-  defp wait_for_boot(vsock_path, _state, timeout \\ 30_000) do
+  @doc false
+  # Called when the agent budget is exhausted. A growing hypervisor log and a
+  # live process mean the guest is slow, not dead.
+  def boot_wait_outcome(%{log_grew: true, ch_alive: true}), do: :leave
+  def boot_wait_outcome(_), do: :kill
+
+  defp boot_budget(%{boot_budget_ms: ms}) when is_integer(ms) and ms > 0, do: ms
+  defp boot_budget(_state), do: 30_000
+
+  defp wait_for_boot(vsock_path, state, hv_port \\ nil) do
+    timeout = boot_budget(state)
     start_time = System.monotonic_time(:millisecond)
+    log_path = ch_log_path(state)
     # Two-phase wait works for both legacy and initramfs modes:
     # - Legacy: first ping returns :full → done immediately
     # - Initramfs: first ping returns :boot → wait for :full after switch_root
-    wait_for_agent(vsock_path, timeout, start_time)
+    wait_for_agent(vsock_path, timeout, start_time, log_path, file_size(log_path), hv_port)
   end
 
-  defp wait_for_agent(vsock_path, timeout, start_time) do
+  defp wait_for_agent(vsock_path, timeout, start_time, log_path, start_size, hv_port) do
     elapsed = System.monotonic_time(:millisecond) - start_time
 
-    if elapsed > timeout do
-      {:error, :boot_timeout}
-    else
-      case try_ping_agent(vsock_path) do
-        {:ok, :full} ->
-          Logger.debug("Guest agent (full) responded after #{elapsed}ms")
-          :ok
+    case try_ping_agent(vsock_path) do
+      {:ok, :full} ->
+        Logger.debug("Guest agent (full) responded after #{elapsed}ms")
+        :ok
 
-        {:ok, :boot} ->
-          Logger.debug("Boot agent responded after #{elapsed}ms, waiting for full agent")
-          Process.sleep(500)
-          wait_for_agent(vsock_path, timeout, start_time)
+      {:ok, :boot} ->
+        Process.sleep(500)
+        wait_for_agent(vsock_path, timeout, start_time, log_path, start_size, hv_port)
 
-        {:error, _reason} ->
-          Process.sleep(500)
-          wait_for_agent(vsock_path, timeout, start_time)
-      end
+      {:error, _reason} when elapsed > timeout ->
+        outcome =
+          boot_wait_outcome(%{
+            log_grew: file_size(log_path) > start_size,
+            ch_alive: port_alive?(hv_port)
+          })
+
+        case outcome do
+          :leave ->
+            Logger.warning(
+              "Guest agent missed #{timeout}ms but the hypervisor log is still moving"
+            )
+
+            {:error, :still_booting}
+
+          :kill ->
+            {:error, :boot_timeout}
+        end
+
+      {:error, _reason} ->
+        Process.sleep(500)
+        wait_for_agent(vsock_path, timeout, start_time, log_path, start_size, hv_port)
     end
   end
+
+  defp ch_log_path(state) do
+    socket_dir = Application.get_env(:mjolnir, :socket_dir, "/tmp/mjolnir")
+    Path.join(socket_dir, "cloud-hypervisor-#{state.id}.log")
+  end
+
+  defp ch_log_size(state), do: file_size(ch_log_path(state))
+
+  defp file_size(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} -> size
+      _ -> 0
+    end
+  end
+
+  defp port_alive?(port) when is_port(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, pid} when is_integer(pid) ->
+        match?(
+          {_, 0},
+          System.cmd("kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
+        )
+
+      _ ->
+        false
+    end
+  end
+
+  defp port_alive?(_port), do: false
 
   defp await_iroh_ready(vsock_path, timeout) do
     # Poll the guest agent for Iroh status
@@ -2793,6 +3279,33 @@ defmodule Mjolnir.VM do
     end
   end
 
+  defp maybe_inject_git_signing(%__MODULE__{id: vm_id}, vsock_path) do
+    case Mjolnir.GitSigning.get(vm_id) do
+      {:ok, pem} ->
+        request = Mjolnir.GitSigning.inject_request(pem)
+
+        case vsock_request(vsock_path, request, 10_000) do
+          {:ok, %{"ok" => true}} ->
+            :ok
+
+          {:ok, %{"ok" => false, "error" => err}} ->
+            {:error, {:git_signing_inject_rejected, err}}
+
+          {:ok, _other} ->
+            {:error, :unexpected_git_signing_response}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      :not_found ->
+        :skipped
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # Watchdog slack over the 60s vsock bound inside maybe_unlock_secrets/2. Only
   # reached when the worker is stuck somewhere that bound does not cover.
   @secrets_unlock_watchdog_ms 90_000
@@ -2871,6 +3384,12 @@ defmodule Mjolnir.VM do
     # being answered by the :running clause after handle_continue returns.
     # Forgetting this reply would hang every managed spawn until its timeout.
     if state.boot_waiter, do: GenServer.reply(state.boot_waiter, {:ok, running_state})
+
+    # Gateway.RouteReconciler re-renders custom-domain routes on this. Without
+    # it a VM resumed by Reconcile or revived by an operator came back :running
+    # while its domain stayed parked, because nothing else re-renders routes
+    # after the post-boot settle sweeps.
+    Mjolnir.EventBus.publish(state.id, :vm_started, %{})
 
     Mjolnir.Mailbox.kick(state.id)
 
@@ -3059,18 +3578,9 @@ defmodule Mjolnir.VM do
   # exit makes the GenServer terminate via its preserve-rootfs path, cleaning up
   # the TAP/virtiofsd/sockets while keeping the @vms subvolume for resume/1.
   defp kill_hypervisor_process(vm_id) do
-    # Match the CH process precisely by the VM's UUID (it appears in the
-    # --api-socket path) so we never touch another VM's hypervisor. Best-effort:
-    # a missing match is fine (process already dead, or a unit test with no CH).
-    pattern = "cloud-hypervisor.*#{vm_id}"
-
-    case System.cmd("pkill", ["-9", "-f", pattern], stderr_to_stdout: true) do
-      {_, 0} -> Logger.info("VM #{vm_id}: killed hypervisor process for reboot")
-      {_, 1} -> Logger.info("VM #{vm_id}: no hypervisor process matched for reboot")
-      {out, code} -> Logger.warning("VM #{vm_id}: pkill exited #{code}: #{String.trim(out)}")
-    end
+    Mjolnir.VmmScope.stop(vm_id)
   rescue
-    e -> Logger.warning("VM #{vm_id}: kill_hypervisor_process raised: #{inspect(e)}")
+    e -> Logger.warning("VM #{vm_id}: scope stop raised: #{inspect(e)}")
   end
 
   # Poll until the VM has no live GenServer in the registry (its terminate has
@@ -3081,7 +3591,7 @@ defmodule Mjolnir.VM do
   end
 
   defp do_wait_until_deregistered(vm_id, deadline) do
-    case Registry.lookup(Mjolnir.VMRegistry, vm_id) do
+    case registered(vm_id) do
       [] ->
         true
 
@@ -3139,11 +3649,12 @@ defmodule Mjolnir.VM do
           # No host-side fsync needed: guest sync is performed above, and
           # btrfs subvolume snapshot is atomic at the filesystem level.
 
-          # Create the snapshot (subvolume snapshot + metadata)
-          BTRFS.create_snapshot(state.id, name,
-            source_vm_id: state.id,
-            owner_id: opts[:owner_id] || state.owner_id
-          )
+          with :ok <- maybe_scrub_hosted_key(state, name) do
+            BTRFS.create_snapshot(state.id, name,
+              source_vm_id: state.id,
+              owner_id: opts[:owner_id] || state.owner_id
+            )
+          end
         after
           # Step 6: Always resume
           case state.hypervisor.resume_instance(state.socket_path) do
@@ -3157,6 +3668,23 @@ defmodule Mjolnir.VM do
 
       error ->
         error
+    end
+  end
+
+  defp maybe_scrub_hosted_key(state, name) do
+    if Mjolnir.HonorBeing.KeyScrub.hosted_snapshot_name?(name) do
+      rootfs = state.rootfs_path || Mjolnir.Reconcile.rootfs_path(state.id)
+
+      case Mjolnir.HonorBeing.KeyScrub.scrub_rootfs(rootfs) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Hosted-being key scrub failed for #{state.id}: #{inspect(reason)}")
+          {:error, {:key_scrub_failed, reason}}
+      end
+    else
+      :ok
     end
   end
 
@@ -3190,21 +3718,36 @@ defmodule Mjolnir.VM do
   @doc false
   @spec build_running_record(t()) :: Mjolnir.StateStore.Record.t()
   def build_running_record(state) do
+    spawn_config = %{
+      "vcpus" => state.config.vcpu_count,
+      "memory_mb" => state.config.mem_size_mib,
+      "base_image" => state.config.base_image,
+      "enable_iroh" => state.enable_iroh,
+      "owner_id" => state.owner_id,
+      "pty_invites" => state.pty_invites || [],
+      "ssh_public_key" => state.ssh_public_key,
+      "secrets_mode" => Atom.to_string(state.secrets_mode),
+      # Reconcile reads this back to decide whether a stranded record may be
+      # rehydrated. It has to be on the FIRST record written, not added later:
+      # a crash between boot and a second write would leave a :never VM
+      # looking restartable, which is exactly the I5 violation this prevents.
+      "restart_policy" => Atom.to_string(state.restart_policy)
+    }
+
+    spawn_config =
+      case encode_extra_mounts(Map.get(state.config, :extra_mounts, [])) do
+        [] -> spawn_config
+        mounts -> Map.put(spawn_config, "extra_mounts", mounts)
+      end
+
+    spawn_config =
+      case cid_or_nil(state.config) do
+        cid when is_integer(cid) -> Map.put(spawn_config, "vsock_cid", cid)
+        _ -> spawn_config
+      end
+
     Mjolnir.StateStore.Record.new(state.id, :running,
-      spawn_config: %{
-        "vcpus" => state.config.vcpu_count,
-        "memory_mb" => state.config.mem_size_mib,
-        "base_image" => state.config.base_image,
-        "enable_iroh" => state.enable_iroh,
-        "owner_id" => state.owner_id,
-        "ssh_public_key" => state.ssh_public_key,
-        "secrets_mode" => Atom.to_string(state.secrets_mode),
-        # Reconcile reads this back to decide whether a stranded record may be
-        # rehydrated. It has to be on the FIRST record written, not added later:
-        # a crash between boot and a second write would leave a :never VM
-        # looking restartable, which is exactly the I5 violation this prevents.
-        "restart_policy" => Atom.to_string(state.restart_policy)
-      },
+      spawn_config: spawn_config,
       identity: %{
         "iroh_node_id" => state.iroh_node_id,
         "hostname" => nil,

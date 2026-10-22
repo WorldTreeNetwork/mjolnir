@@ -1,7 +1,8 @@
 defmodule Mjolnir.Sites.MaterializerTest do
   use ExUnit.Case, async: false
 
-  alias Mjolnir.Sites.{Crypto, Manifest, Materializer, Publisher, Store}
+  alias Mjolnir.SecretStore
+  alias Mjolnir.Sites.{Crypto, FallbackPolicy, Manifest, Materializer, Publisher, Store}
   alias Mjolnir.Sites.Manifest.Entry
 
   @fp "9W3eTrPJoS4R2kXuB6Ny"
@@ -100,6 +101,31 @@ defmodule Mjolnir.Sites.MaterializerTest do
   end
 
   describe "materialize/4" do
+    test "rebuilds the sibling fallback policy from the durable record" do
+      hash = publish!(%{"/index.html" => "hi"})
+
+      record = %FallbackPolicy{
+        fallback: :index,
+        sequence: 1,
+        identikey_fp: @fp,
+        site_name: @site,
+        created_at: ~U[2026-09-21 00:00:00Z],
+        signature: nil
+      }
+
+      path = Path.join([SecretStore.root(), @fp, "sites", @site, "fallback"])
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, FallbackPolicy.serialize(record))
+      on_exit(fn -> File.rm_rf(Path.join(SecretStore.root(), @fp)) end)
+
+      assert {:ok, _dir} = Materializer.materialize(@fp, @site, hash)
+      assert File.read!(Path.join(Materializer.site_dir(@fp, @site), "fallback")) == "index.html"
+
+      File.rm!(path)
+      assert {:ok, _dir} = Materializer.materialize(@fp, @site, hash)
+      refute File.exists?(Path.join(Materializer.site_dir(@fp, @site), "fallback"))
+    end
+
     test "writes plaintext files at their manifest paths" do
       hash =
         publish!(%{

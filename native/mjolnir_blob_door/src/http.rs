@@ -1,37 +1,32 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
-use axum::http::{Method, StatusCode};
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::Router;
-use bytes::Bytes;
+use futures_util::StreamExt;
+use tokio_util::io::ReaderStream;
 
-use crate::put::{put_bytes, put_outboard, PutError, PutOutcome};
+use crate::cache::DiskCache;
+use crate::hash_from_base58;
+use crate::pump::{pump_body, PumpError};
+use crate::put::{put_file, PutError, PutOutcome};
 use crate::store::{object_key, outboard_key, CanonicalStore, StoreError};
-use crate::{hash_from_base58, DEFAULT_MAX_BYTES};
 
 pub struct AppState<S> {
     pub store: Arc<S>,
-    pub max_bytes: usize,
-}
-
-impl<S> Default for AppState<S>
-where
-    S: Default,
-{
-    fn default() -> Self {
-        Self {
-            store: Arc::new(S::default()),
-            max_bytes: DEFAULT_MAX_BYTES,
-        }
-    }
+    pub cache: Arc<DiskCache>,
+    pub max_bytes: u64,
 }
 
 pub fn router<S: CanonicalStore + 'static>(state: AppState<S>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/storage/blob/b3/{hash}", any(object::<S>))
+        .layer(DefaultBodyLimit::disable())
         .with_state(Arc::new(state))
 }
 
@@ -45,19 +40,30 @@ fn split_obao(hash: &str) -> (&str, bool) {
         .unwrap_or((hash, false))
 }
 
+fn content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+}
+
 async fn object<S: CanonicalStore>(
     State(state): State<Arc<AppState<S>>>,
     Path(hash): Path<String>,
-    method: Method,
-    body: Bytes,
+    req: Request,
 ) -> Response {
     let (hash, obao) = split_obao(&hash);
+    let valid_hash = hash_from_base58(hash).is_some();
     let hash = hash.to_string();
+    let method = req.method().clone();
+    let headers = req.headers().clone();
+    let body = req.into_body();
 
     match method.as_str() {
-        "PUT" => put_one(state, &hash, obao, body).await,
-        "GET" => get_one(state, &hash, obao).await,
-        "HEAD" if !obao => head_one(state, &hash).await,
+        "PUT" => put_one(state, &hash, obao, headers, body).await,
+        "GET" if valid_hash => get_one(state, &hash, obao).await,
+        "HEAD" if valid_hash && !obao => head_one(state, &hash).await,
+        "GET" | "HEAD" if !valid_hash => (StatusCode::BAD_REQUEST, "hash").into_response(),
         _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
     }
 }
@@ -66,22 +72,68 @@ async fn put_one<S: CanonicalStore>(
     state: Arc<AppState<S>>,
     hash: &str,
     obao: bool,
-    body: Bytes,
+    headers: HeaderMap,
+    body: Body,
 ) -> Response {
-    if body.len() > state.max_bytes {
-        return (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response();
+    if let Some(n) = content_length(&headers) {
+        if n > state.max_bytes {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response();
+        }
     }
     let Some(claimed) = hash_from_base58(hash) else {
         return (StatusCode::BAD_REQUEST, "hash").into_response();
     };
-    let result = if obao {
-        put_outboard(state.store.as_ref(), &claimed, &body).await
-    } else {
-        put_bytes(state.store.as_ref(), &claimed, &body).await
+
+    let mut incoming = match state.cache.create_incoming().await {
+        Ok(inc) => inc,
+        Err(e) if e.kind() == std::io::ErrorKind::StorageFull => {
+            return (StatusCode::INSUFFICIENT_STORAGE, "disk full").into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "incoming create");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "cache").into_response();
+        }
     };
+
+    let mut hasher = blake3::Hasher::new();
+    let hash_opt = if obao { None } else { Some(&mut hasher) };
+    let len = match pump_body(body, incoming.file(), hash_opt, state.max_bytes).await {
+        Ok(n) => n,
+        Err(PumpError::TooLarge) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "too large").into_response();
+        }
+        Err(e) if e.is_full() => {
+            return (StatusCode::INSUFFICIENT_STORAGE, "disk full").into_response();
+        }
+        Err(PumpError::Io(e)) => {
+            tracing::error!(error = %e, "pump");
+            return (StatusCode::BAD_GATEWAY, "read").into_response();
+        }
+    };
+
+    if !obao {
+        let actual = *hasher.finalize().as_bytes();
+        if actual != claimed {
+            return (StatusCode::BAD_REQUEST, "hash mismatch").into_response();
+        }
+    }
+
+    if let Err(e) = incoming.close().await {
+        tracing::error!(error = %e, "incoming close");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "cache").into_response();
+    }
+
+    let result = put_file(state.store.as_ref(), hash, &incoming.path, len, obao).await;
     match result {
-        Ok(PutOutcome::Created) => StatusCode::CREATED.into_response(),
-        Ok(PutOutcome::AlreadyPresent) => StatusCode::OK.into_response(),
+        Ok(outcome) => {
+            if let Err(e) = state.cache.promote(&mut incoming, hash, obao, len).await {
+                tracing::warn!(error = %e, "cache promote");
+            }
+            match outcome {
+                PutOutcome::Created => StatusCode::CREATED.into_response(),
+                PutOutcome::AlreadyPresent => StatusCode::OK.into_response(),
+            }
+        }
         Err(PutError::HashMismatch) => (StatusCode::BAD_REQUEST, "hash mismatch").into_response(),
         Err(PutError::NotConfirmed) => {
             (StatusCode::SERVICE_UNAVAILABLE, "not confirmed").into_response()
@@ -91,22 +143,161 @@ async fn put_one<S: CanonicalStore>(
 }
 
 async fn get_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str, obao: bool) -> Response {
+    if let Some((file, len)) = state.cache.open_cached(hash, obao).await {
+        return file_response(file, len);
+    }
+
     let key = if obao {
         outboard_key(hash)
     } else {
         object_key(hash)
     };
-    match state.store.get(&key).await {
-        Ok(bytes) => bytes.into_response(),
+    match state.store.get_stream(&key).await {
+        Ok((len, upstream)) if len > state.cache.budget() && len > 0 => {
+            // Too big to retain; still pump to the client.
+            stream_response(len, upstream)
+        }
+        Ok((len, upstream)) => {
+            tee_and_cache(state.cache.clone(), hash.to_string(), obao, len, upstream).await
+        }
         Err(StoreError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(StoreError::Backend(s)) => (StatusCode::BAD_GATEWAY, s).into_response(),
     }
 }
 
 async fn head_one<S: CanonicalStore>(state: Arc<AppState<S>>, hash: &str) -> Response {
+    if let Some((_file, len)) = state.cache.open_cached(hash, false).await {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, len)
+            .body(Body::empty())
+            .unwrap_or_else(|_| StatusCode::OK.into_response());
+    }
     match state.store.head(&object_key(hash)).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(len) => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_LENGTH, len)
+            .body(Body::empty())
+            .unwrap_or_else(|_| StatusCode::OK.into_response()),
         Err(StoreError::NotFound) => StatusCode::NOT_FOUND.into_response(),
         Err(StoreError::Backend(s)) => (StatusCode::BAD_GATEWAY, s).into_response(),
     }
+}
+
+fn file_response(file: tokio::fs::File, len: u64) -> Response {
+    let stream = ReaderStream::new(file);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .header(CONTENT_LENGTH, len)
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn tee_and_cache(
+    cache: Arc<DiskCache>,
+    hash: String,
+    obao: bool,
+    len: u64,
+    mut upstream: crate::store::BlobStream,
+) -> Response {
+    let mut incoming = match cache.create_incoming().await {
+        Ok(inc) => inc,
+        Err(_) => {
+            // Cache unusable — still stream from origin.
+            let stream = async_stream::stream! {
+                while let Some(item) = upstream.next().await {
+                    yield item;
+                }
+            };
+            return stream_response(len, stream);
+        }
+    };
+    let incoming_path = incoming.path.clone();
+    let mut file = incoming.take_file().expect("incoming file");
+    // Incoming Drop would delete the path when this function returns
+    // (before the body stream runs). Mark persist; FillGuard lives
+    // inside the stream so a dropped / unpolled body still unlinks.
+    incoming.persist();
+    let guard = FillGuard {
+        path: incoming_path.clone(),
+        keep: false,
+    };
+
+    let cache2 = cache.clone();
+    let stream = async_stream::stream! {
+        use tokio::io::AsyncWriteExt;
+        let mut guard = guard;
+        let mut ok = true;
+        let mut written = 0u64;
+        while let Some(item) = upstream.next().await {
+            match item {
+                Ok(bytes) => {
+                    if ok && file.write_all(&bytes).await.is_err() {
+                        ok = false;
+                    }
+                    written += bytes.len() as u64;
+                    yield Ok::<bytes::Bytes, std::io::Error>(bytes);
+                }
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            }
+        }
+        if ok {
+            if let Err(e) = cache2.finish_fill(&mut file).await {
+                tracing::warn!(error = %e, "discarding incomplete cache fill");
+                drop(file);
+                return;
+            }
+            drop(file);
+            if len > 0 && written != len {
+                return;
+            }
+            if cache2
+                .commit_fill(&incoming_path, &hash, obao, written)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                guard.keep = true;
+            }
+        } else {
+            drop(file);
+        }
+    };
+    stream_response(len, stream)
+}
+
+/// Unlinks a GET-fill incoming file unless `keep` is set (successful commit).
+struct FillGuard {
+    path: std::path::PathBuf,
+    keep: bool,
+}
+
+impl Drop for FillGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn stream_response<St>(len: u64, stream: St) -> Response
+where
+    St: futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send + 'static,
+{
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/octet-stream");
+    if len > 0 {
+        builder = builder.header(CONTENT_LENGTH, len);
+    }
+    builder
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

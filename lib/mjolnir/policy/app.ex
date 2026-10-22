@@ -36,6 +36,7 @@ defmodule Mjolnir.Policy.App do
           | :issue_cert
           | :set_secrets
           | :unset_secrets
+          | :adopt
   @type user :: %{user_id: String.t()} | nil
   @type resource :: %{owner_id: String.t() | nil} | nil
 
@@ -47,8 +48,10 @@ defmodule Mjolnir.Policy.App do
   """
   @spec authorize(action(), user(), resource()) :: :ok | :error
 
-  # Localhost gets full access (ops) — MUST be first
+  # Operator (the Unix socket), not a TCP peer. MUST be first.
   def authorize(_, %{user_id: "localhost"}, _), do: :ok
+
+  def authorize(_, %{user_id: "sites_token:" <> _}, _), do: :error
 
   # Deploying a NEW app and listing are collection actions: any authenticated
   # user. Ownership is stamped at creation, exactly as VM spawn does.
@@ -67,9 +70,10 @@ defmodule Mjolnir.Policy.App do
              :remove_domain,
              :issue_cert,
              :set_secrets,
-             :unset_secrets
+             :unset_secrets,
+             :adopt
            ] do
-    if uid == oid, do: :ok, else: :error
+    if Mjolnir.Deploy.Owner.same?(uid, oid), do: :ok, else: :error
   end
 
   # Default deny

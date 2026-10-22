@@ -12,6 +12,11 @@ defmodule Mjolnir.API.Certs do
   After Let's Encrypt returns a cert, `Mjolnir.Gateway.Certs.ensure/2` installs
   a `[[cert]]` entry. PEMs never leave the host.
 
+  `renew_due/1` is the daily pass (`systemd/mjolnir-cert-renew.timer`). It
+  re-issues at most one `[[cert]]` whose `not_after` is inside 30 days, the
+  soonest first. The gateway's own 12-hour loop only renews the worldtree
+  DNS-01 certificate and does not look at these files.
+
   Wildcards (`*.`) are refused — HTTP-01 cannot prove them. v1 has no
   `--wildcard` flag.
 
@@ -19,7 +24,10 @@ defmodule Mjolnir.API.Certs do
 
   `issue_cmd`, `ensure`, and `list_certs` are injectable. Tests pass a fake
   `issue_cmd` that returns canned PEMs and a fake `ensure` that records the
-  install without touching `/etc` or talking to Let's Encrypt.
+  install without touching `/etc` or talking to Let's Encrypt. `ensure` is
+  4-arity `(fqdn, cert, key, opts)` so the `domain:` flag is visible.
+  `app_for_domain`, `read_alias`, and `classify` are optional ops used by
+  `resolve/2` and `renew_due/1`.
   """
 
   require Logger
@@ -30,11 +38,15 @@ defmodule Mjolnir.API.Certs do
   @default_issued_dir "/var/lib/mjolnir-gateway/issued"
   @gateway_bin "/usr/local/bin/mjolnir-gateway"
   @default_email "duke@worldtree.io"
+  # Same window as the gateway's primary ACME loop (`renew_before_secs`).
+  @renew_before_seconds 30 * 24 * 60 * 60
 
   @typedoc "Injectable effect seam; defaults capture the real host commands."
   @type ops :: %{
           issue_cmd: (String.t() -> {:ok, map()} | {:error, term()}),
-          ensure: (String.t(), String.t(), String.t() -> {:ok, atom()} | {:error, term()}),
+          ensure:
+            (String.t(), String.t(), String.t(), keyword() ->
+               {:ok, atom()} | {:error, term()}),
           list_certs: (-> {:ok, [map()]} | {:error, term()})
         }
 
@@ -51,6 +63,7 @@ defmodule Mjolnir.API.Certs do
   def issue(fqdn, opts \\ []) when is_binary(fqdn) do
     fqdn = normalize_fqdn(fqdn)
     ops = merged_ops(opts)
+    domain? = Keyword.get(opts, :domain, true)
 
     cond do
       fqdn == "" ->
@@ -60,7 +73,126 @@ defmodule Mjolnir.API.Certs do
         {:error, :wildcard_not_supported}
 
       true ->
-        do_issue(fqdn, ops)
+        do_issue(fqdn, ops, domain?)
+    end
+  end
+
+  @doc """
+  Resolve an fqdn to an app custom domain, a live site alias, or an error.
+
+  Order: empty and wildcard first, then `Deploy.Registry`, then the alias
+  index. A live alias is classified before HTTP-01. `Local` and `Iroh` are
+  `:host_routed_elsewhere`. An unreadable index is `:alias_index_unreadable`.
+  An unclassifiable base gateway config is `:gateway_config_unreadable`.
+  """
+  @spec resolve(String.t(), keyword()) ::
+          {:app, map()}
+          | {:site, String.t()}
+          | {:error, atom()}
+  def resolve(fqdn, opts \\ []) when is_binary(fqdn) do
+    fqdn = normalize_fqdn(fqdn)
+    ops = merged_ops(opts)
+    app_for = Map.get(ops, :app_for_domain, &app_for_domain/1)
+    read_alias = Map.get(ops, :read_alias, &Mjolnir.SecretStore.read_alias/1)
+    classify = Map.get(ops, :classify, &Mjolnir.Gateway.Classify.for_host/1)
+
+    cond do
+      fqdn == "" ->
+        {:error, :fqdn_required}
+
+      wildcard?(fqdn) ->
+        {:error, :wildcard_not_supported}
+
+      entry = app_for.(fqdn) ->
+        {:app, entry}
+
+      true ->
+        resolve_alias(fqdn, read_alias, classify)
+    end
+  end
+
+  @doc """
+  Find the registry entry whose custom domain is `fqdn`, or `nil`.
+
+  Normalization matches `issue/2`: trim, strip one trailing dot, downcase.
+  """
+  @spec app_for_domain(String.t()) :: map() | nil
+  def app_for_domain(fqdn) when is_binary(fqdn) do
+    want = normalize_fqdn(fqdn)
+
+    if want == "" do
+      nil
+    else
+      Enum.find(Mjolnir.Deploy.Registry.list(), fn entry ->
+        is_binary(entry.custom_domain) and normalize_fqdn(entry.custom_domain) == want
+      end)
+    end
+  end
+
+  @doc """
+  Whether a non-operator list should include this certificate.
+
+  The operator (`user_id` `"localhost"`) sees every cert. Anyone else sees an
+  owned app domain, or a host whose alias index is a hit. An unreadable index
+  omits that host. It does not raise.
+  """
+  @spec include_cert?(map(), map(), MapSet.t()) :: boolean()
+  def include_cert?(cert, user, owned_hosts) when is_map(cert) and is_map(user) do
+    host = cert_host(cert) || ""
+    down = normalize_fqdn(host)
+
+    user.user_id == "localhost" or
+      (down != "" and MapSet.member?(owned_hosts, down)) or
+      alias_hit?(host)
+  end
+
+  @doc """
+  Re-issue at most one installed `[[cert]]` that expires within 30 days.
+
+  Already-expired certificates count. An unreadable `not_after` counts, so a
+  certificate we cannot date does not sit there forever. Wildcards are skipped.
+  When several are due, the soonest (or undated) one is the only one issued
+  this call — the timer runs daily, so the rest drain one per day instead of
+  hitting Let's Encrypt all at once.
+
+  Returns `{:ok, :none}` or the same map as `issue/2`.
+  """
+  @spec renew_due(keyword()) :: {:ok, :none | map()} | {:error, term()}
+  def renew_due(opts \\ []) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    within = Keyword.get(opts, :within_seconds, @renew_before_seconds)
+    ops = merged_ops(opts)
+
+    case ops.list_certs.() do
+      {:ok, certs} ->
+        case next_due(certs, now, within) do
+          nil ->
+            Logger.info("cert renew: none due")
+            {:ok, :none}
+
+          host ->
+            case renew_allowed?(host, ops) do
+              :ok ->
+                Logger.info("cert renew: issuing #{host}")
+                issue(host, Keyword.put(opts, :domain, false))
+
+              {:error, :alias_index_unreadable} = err ->
+                Logger.error("cert renew: alias index unreadable for #{host}")
+                err
+            end
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc "Like `renew_due/1`, but raises on `{:error, _}` so a systemd oneshot fails."
+  @spec renew_due!(keyword()) :: :none | map()
+  def renew_due!(opts \\ []) do
+    case renew_due(opts) do
+      {:ok, result} -> result
+      {:error, reason} -> raise "cert renewal failed: #{inspect(reason)}"
     end
   end
 
@@ -80,10 +212,10 @@ defmodule Mjolnir.API.Certs do
 
   # --- internals -------------------------------------------------------------
 
-  defp do_issue(fqdn, ops) do
+  defp do_issue(fqdn, ops, domain?) do
     case ops.issue_cmd.(fqdn) do
       {:ok, issued} ->
-        case ops.ensure.(fqdn, issued.cert, issued.key) do
+        case ops.ensure.(fqdn, issued.cert, issued.key, domain: domain?) do
           {:ok, status} ->
             {:ok,
              %{
@@ -110,18 +242,81 @@ defmodule Mjolnir.API.Certs do
     }
   end
 
-  defp merged_ops(opts), do: Map.merge(default_ops(), Map.new(Keyword.get(opts, :ops, [])))
+  defp merged_ops(opts) do
+    from_proc = Process.get(:mjolnir_cert_ops) || %{}
+    from_env = Application.get_env(:mjolnir, :cert_ops, %{})
+
+    default_ops()
+    |> Map.merge(Map.new(from_env))
+    |> Map.merge(Map.new(from_proc))
+    |> Map.merge(Map.new(Keyword.get(opts, :ops, [])))
+  end
 
   defp default_ops do
     %{
       issue_cmd: &default_issue_cmd/1,
-      ensure: &default_ensure/3,
+      ensure: &default_ensure/4,
       list_certs: &default_list_certs/0
     }
   end
 
-  defp default_ensure(fqdn, cert, key) do
-    GatewayCerts.ensure(fqdn, cert: cert, key: key)
+  defp default_ensure(fqdn, cert, key, opts) do
+    gateway_opts = [cert: cert, key: key]
+
+    gateway_opts =
+      if Keyword.get(opts, :domain, true) do
+        gateway_opts
+      else
+        Keyword.put(gateway_opts, :domain, false)
+      end
+
+    GatewayCerts.ensure(fqdn, gateway_opts)
+  end
+
+  defp resolve_alias(fqdn, read_alias, classify) do
+    case read_alias.(fqdn) do
+      {:ok, _} ->
+        case classify.(fqdn) do
+          {:ok, kind} when kind in [:local, :iroh] ->
+            {:error, :host_routed_elsewhere}
+
+          {:ok, _} ->
+            {:site, fqdn}
+
+          {:error, _} ->
+            {:error, :gateway_config_unreadable}
+        end
+
+      :not_found ->
+        {:error, :name_not_found}
+
+      {:error, _} ->
+        {:error, :alias_index_unreadable}
+    end
+  end
+
+  # An app host does not consult the alias index. Any other host must be
+  # readable (hit or missing file) before Let's Encrypt runs. Renewal does
+  # not re-classify Local/Iroh.
+  defp renew_allowed?(host, ops) do
+    app_for = Map.get(ops, :app_for_domain, &app_for_domain/1)
+    read_alias = Map.get(ops, :read_alias, &Mjolnir.SecretStore.read_alias/1)
+
+    if app_for.(host) do
+      :ok
+    else
+      case read_alias.(host) do
+        {:error, _} -> {:error, :alias_index_unreadable}
+        _ -> :ok
+      end
+    end
+  end
+
+  defp alias_hit?(host) do
+    case Mjolnir.SecretStore.read_alias(normalize_fqdn(host)) do
+      {:ok, _} -> true
+      _ -> false
+    end
   end
 
   defp default_list_certs, do: GatewayCerts.list()
@@ -190,6 +385,97 @@ defmodule Mjolnir.API.Certs do
 
       _ ->
         nil
+    end
+  end
+
+  defp next_due(certs, now, within) do
+    certs
+    |> Enum.map(&cert_host/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reject(&wildcard?/1)
+    |> Enum.filter(&due?(&1, cert_not_after(certs, &1), now, within))
+    |> Enum.sort_by(&expiry_unix(cert_not_after(certs, &1)))
+    |> List.first()
+  end
+
+  defp cert_host(c), do: Map.get(c, :host) || Map.get(c, "host")
+
+  defp cert_not_after(certs, host) do
+    certs
+    |> Enum.find(fn c -> cert_host(c) == host end)
+    |> then(fn c -> Map.get(c, :not_after) || Map.get(c, "not_after") end)
+  end
+
+  defp due?(_host, not_after, now, within) do
+    case expiry(not_after) do
+      {:ok, dt} -> DateTime.diff(dt, now, :second) <= within
+      :error -> true
+    end
+  end
+
+  defp expiry_unix(not_after) do
+    case expiry(not_after) do
+      {:ok, dt} -> DateTime.to_unix(dt)
+      :error -> 0
+    end
+  end
+
+  defp expiry(%DateTime{} = dt), do: {:ok, dt}
+
+  defp expiry(secs) when is_integer(secs) do
+    case DateTime.from_unix(secs) do
+      {:ok, dt} -> {:ok, dt}
+      _ -> :error
+    end
+  end
+
+  defp expiry(stamp) when is_binary(stamp) do
+    stamp = stamp |> String.trim() |> String.replace_prefix("notAfter=", "")
+
+    case DateTime.from_iso8601(stamp) do
+      {:ok, dt, _} ->
+        {:ok, dt}
+
+      _ ->
+        openssl_time(stamp)
+    end
+  end
+
+  defp expiry(_), do: :error
+
+  # `openssl x509 -enddate`: "Sep 22 22:42:17 2026 GMT" (day may be space-padded).
+  defp openssl_time(stamp) do
+    case Regex.run(
+           ~r/\A([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+GMT\z/,
+           stamp
+         ) do
+      [_, mon, day, hour, min, sec, year] ->
+        with {:ok, month} <- month_number(mon),
+             {:ok, naive} <-
+               NaiveDateTime.new(
+                 String.to_integer(year),
+                 month,
+                 String.to_integer(day),
+                 String.to_integer(hour),
+                 String.to_integer(min),
+                 String.to_integer(sec)
+               ) do
+          DateTime.from_naive(naive, "Etc/UTC")
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp month_number(mon) do
+    months = ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+    case Enum.find_index(months, &(&1 == mon)) do
+      nil -> :error
+      idx -> {:ok, idx + 1}
     end
   end
 

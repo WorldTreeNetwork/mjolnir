@@ -9,12 +9,7 @@ defmodule Mjolnir.Sites.CryptoTest do
     assert byte_size(Crypto.blake3_hash("hello")) == 32
   end
 
-  @tag :skip
-  test "blake3_hash empty-string known-answer vector (re-enable when real Blake3 lands)" do
-    # Official Blake3 test vector: hash of empty bytes.
-    # SKIPPED until the SHA-256 placeholder in Sites.Crypto is replaced with a
-    # real Blake3 binding (waiting on a working rustler/Rust toolchain combo or
-    # the recrypt Rust integration).
+  test "blake3_hash empty-string known-answer vector" do
     expected =
       Base.decode16!("AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262",
         case: :upper

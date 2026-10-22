@@ -77,17 +77,16 @@ provided by SSH tunneling for remote access).
 | Mode | How it works |
 |---|---|
 | **JWT bearer** | `Authorization: Bearer <token>` verified via `Mjolnir.Auth.Token`. Token `sub` claim maps to `user_id`. |
-| **Localhost bypass** | When `MJOLNIR_AUTH_BYPASS_LOCALHOST=true`, requests from `127.0.0.1` skip JWT and get `user_id="localhost"` with full scope. Off by default in prod. |
+| **Operator socket** | `/run/mjolnir/operator.sock`, mode `0600`. `MJOLNIR_AUTH_BYPASS_LOCALHOST` does not grant a principal. |
 
 Scope-based authorization controls per-endpoint access. Resource-level
 policy (`Mjolnir.Policy.VM`, `Mjolnir.Policy.Snapshot`) enforces ownership:
 users can only act on resources they spawned. The localhost identity has
 full access.
 
-Remote operations via the Justfile use SSH-tunneled curl:
-`ssh host "curl localhost:4000/..."`. The SSH tunnel makes curl appear as
-localhost, which is how the auth bypass works for ops. Security relies on
-SSH key management.
+Remote operations via the Justfile SSH to the host and run
+`scripts/operator-curl.sh`. The operator socket is the credential.
+Root SSH is how you reach the box. It is not, by itself, an API login.
 
 ## Lifecycle Durability
 

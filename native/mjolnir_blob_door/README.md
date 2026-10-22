@@ -20,8 +20,16 @@ GET          /health
 Accepted = HeadObject/GET on B2 succeeded after a hash-checked write.
 Re-PUT of the same bytes is a no-op (no extra version). No DELETE.
 
-v1 holds the body in RAM up to `BLOB_DOOR_MAX_BYTES` (default 64 MiB).
-Larger objects need a later streaming slice.
+PUT/GET stream through a host-disk cache (`BLOB_DOOR_CACHE_DIR`,
+default `/var/lib/mjolnir/blobs`, 64 GiB budget). That directory is
+outside `btrfs_root` so snapshots cannot pin cache extents. Accept
+is still HeadObject on B2. `BLOB_DOOR_MAX_BYTES` defaults to 1 TiB;
+ENOSPC is 507. The cache is not the archive.
+
+Tests: `cargo test -p mjolnir-blob-door` (MemoryStore + disk cache, no
+B2). Live B2: source `/etc/mjolnir/blob-door.env` then
+`BLOB_DOOR_B2_TEST=1 cargo test -p mjolnir-blob-door --test b2`.
+Add `BLOB_DOOR_B2_LARGE=1` for the 65 MiB multipart case.
 
 Build (Linux host for production; macOS is fine for `cargo test`):
 

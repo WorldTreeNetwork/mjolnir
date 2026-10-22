@@ -1,15 +1,18 @@
 # vm-freeze
 
 What is built. Folded from
-[`add-vm-freeze-thaw`](../../changes/archive/2026-09-04-add-vm-freeze-thaw/proposal.md)
-on 2026-09-04.
+[`add-vm-freeze-thaw`](../../changes/archive/2026-09-10-add-vm-freeze-thaw/proposal.md)
+on 2026-09-10.
 
 ## Purpose
 
-Named memory snapshots as distinct operator verbs. `mj freeze` parks a
-VM (filesystem + guest RAM) and tears the source VMM and virtiofsd
-down. `mj thaw` restores the same VM id. Filesystem `mj snapshot
-create` stays unchanged. Spawn from a memory snapshot refuses.
+Operators park a running VM into a named memory snapshot
+(`mj freeze` / `POST /api/vms/:id/freeze`) and restore the **same
+VM id** (`mj thaw` / `POST /api/snapshots/:name/thaw`). The source
+VMM and virtiofsd are torn down; `vm.snapshot` is terminal for
+virtio-fs, so filesystem `mj snapshot create` stays filesystem-only.
+The catalog reports `kind` (`filesystem` | `memory`). Spawn from a
+memory snapshot is refused.
 
 ## Requirements
 

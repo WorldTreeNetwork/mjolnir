@@ -31,13 +31,7 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       Path.join(Path.dirname(socket_path), "cloud-hypervisor-#{vm_id}.log")
     ]
 
-    port =
-      Port.open(
-        {:spawn_executable, ch_bin},
-        [:binary, :exit_status, :stderr_to_stdout, args: args]
-      )
-
-    {:ok, port}
+    Mjolnir.VmmScope.start(vm_id, [ch_bin | args], Map.get(config, :virtiofs_daemons, []))
   end
 
   @impl true
@@ -140,41 +134,18 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
       end
     end
 
-    # Kill Cloud Hypervisor if still running
-    if state.hypervisor_port do
-      mark.("ch kill begin")
+    # Exact Slice= is checked inside stop. A missing systemctl or a unit
+    # this BEAM does not own must not abort TAP and socket teardown.
+    case Mjolnir.VmmScope.stop(state.id) do
+      :ok ->
+        :ok
 
-      case Port.info(state.hypervisor_port, :os_pid) do
-        {:os_pid, os_pid} ->
-          safe_port_close(state.hypervisor_port)
-          System.cmd("kill", ["-9", to_string(os_pid)])
-          mark.("ch killed (pid=#{os_pid})")
-
-        nil ->
-          mark.("ch already dead")
-      end
+      error ->
+        Logger.warning("[ch-cleanup] #{state.id} scope stop: #{inspect(error)}")
     end
 
-    # Stop virtiofsd if running
-    if state.virtiofsd_port do
-      mark.("virtiofsd stop begin")
-      Mjolnir.VirtioFS.stop(state.virtiofsd_port)
-      mark.("virtiofsd stopped")
-    end
-
-    # Stop extra virtiofsd instances if running
+    Mjolnir.VmmScope.detach(state.hypervisor_port)
     extra_ports = state.extra_virtiofsd_ports || []
-
-    if extra_ports != [] do
-      mark.("extra virtiofsd stop begin")
-
-      Enum.each(extra_ports, fn {tag, port, _sock} ->
-        mark.("extra virtiofsd[#{tag}] stop")
-        Mjolnir.VirtioFS.stop(port)
-      end)
-
-      mark.("extra virtiofsd stopped")
-    end
 
     # Clean up virtiofsd socket
     if state.id do
@@ -239,14 +210,6 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
     e ->
       Logger.warning("Cleanup error for VM #{state.id}: #{inspect(e)}")
       :ok
-  end
-
-  defp safe_port_close(port) do
-    try do
-      Port.close(port)
-    rescue
-      ArgumentError -> :ok
-    end
   end
 
   @impl true

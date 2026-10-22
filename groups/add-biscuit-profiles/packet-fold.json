@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-biscuit-profiles",
+  "node_id": "add-biscuit-profiles",
+  "capability": "edge-auth",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "opus-5-fold" }
+  },
+  "goal": "FOLD add-biscuit-profiles. You are the designated FOLDER. This is FOLD, not a review.\n\nDo NOT write reviews. Do NOT implement. Banner is ACTIVE BUILD. Every tasks.md box is [x].\n\nApply openspec/changes/add-biscuit-profiles/specs/edge-auth/spec.md onto openspec/specs/edge-auth/spec.md. Create that living spec if missing. Paste ADDED requirements; do not drop SHALL text.\n\nThen: mkdir -p openspec/changes/archive && git mv openspec/changes/add-biscuit-profiles openspec/changes/archive/2026-09-26-add-biscuit-profiles\n\nAmend docs/architecture.md only if the login-profile shape needs a sentence. One LEARNINGS line only if a surprise.\n\nDo not edit lib/ or native/. Do not git push. Report living spec path and archive path.",
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-biscuit-profiles && test -f openspec/specs/edge-auth/spec.md"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/edge-auth/spec.md",
+      "openspec/changes/add-biscuit-profiles",
+      "openspec/changes/archive",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md"
+    ],
+    "do_not": ["advise", "act", "implement", "write reviews", "git push"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

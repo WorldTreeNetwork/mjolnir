@@ -88,9 +88,24 @@ defmodule Mjolnir.Sites.Storage.Recrypt do
 
   @impl true
   def has_chunk?(bao_hash58) do
+    # Downloads the ciphertext. Recording register must call `chunk_present?/1`.
     case get_chunk(bao_hash58) do
       {:ok, _} -> true
       _ -> false
+    end
+  end
+
+  @impl true
+  def chunk_present?(bao_hash58) do
+    case base_url() do
+      {:ok, base} ->
+        case head_object("#{base}/storage/blob/b3/#{bao_hash58}") do
+          :ok -> true
+          _ -> false
+        end
+
+      _ ->
+        false
     end
   end
 
@@ -119,6 +134,28 @@ defmodule Mjolnir.Sites.Storage.Recrypt do
          ) do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         :ok
+
+      {:ok, %Req.Response{status: status, body: resp}} ->
+        {:error, {:http_status, status, resp}}
+
+      {:error, reason} ->
+        {:error, {:http_error, reason}}
+    end
+  end
+
+  defp head_object(url) do
+    case Req.request(
+           method: :head,
+           url: url,
+           receive_timeout: @default_timeout_ms,
+           retry: false,
+           decode_body: false
+         ) do
+      {:ok, %Req.Response{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %Req.Response{status: 404}} ->
+        :not_found
 
       {:ok, %Req.Response{status: status, body: resp}} ->
         {:error, {:http_status, status, resp}}

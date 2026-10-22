@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "id": "res-act-add-buzz-local-runtime-2026-09-10",
+  "node_id": "add-buzz-local-runtime",
+  "packet_id": "pkt-act-add-buzz-local-runtime-2026-09-10",
+  "assignee": {
+    "id": "grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "grok-4.6"
+    }
+  },
+  "disposition": "pass",
+  "summary": "OTP Buzz facade is the named Nostr wake producer (running mentions stay on the relay; dormant ingest \u2192 Admit \u2192 deliver_message; last hop is NIP-01). identikey-admit crate landed in identikey-protocol (Apache-2.0 OR BSD-2-Clause-Patent, no identikey-core). Mjolnir.Admit stays the v1 Elixir evaluator (no NIF). 11 mix + 12 cargo tests green.",
+  "verify_command": "mix test test/mjolnir/admit_test.exs",
+  "verify_exit": 0,
+  "changed_files": [
+    "lib/mjolnir/admit.ex",
+    "lib/mjolnir/application.ex",
+    "lib/mjolnir/buzz/facade.ex",
+    "lib/mjolnir/buzz/nostr.ex",
+    "test/mjolnir/admit_test.exs",
+    "test/mjolnir/buzz/facade_test.exs",
+    "test/mjolnir/buzz/nostr_test.exs",
+    "openspec/changes/add-buzz-local-runtime/tasks.md"
+  ],
+  "blockers": [],
+  "notes": {
+    "identikey_protocol_sha": "093ceb13148d5fb5267ad309ecdfea15f2637d9e",
+    "identikey_protocol_crate": "identikey-admit",
+    "cargo_verify": "cargo test -p identikey-admit",
+    "cargo_verify_exit": 0
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "grok-4.6",
+    "content_hash": "sha256:d95ffbd24e9fbec59d3386f1c4db041a7023d892aa92e7b96fe3f3500ab6697a"
+  }
+}

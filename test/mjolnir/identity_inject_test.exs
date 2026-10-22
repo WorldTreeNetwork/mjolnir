@@ -71,6 +71,25 @@ defmodule Mjolnir.IdentityInjectTest do
              })
   end
 
+  test "parse_params keeps auth_tag and extra env for buzz.env" do
+    assert {:ok, id} =
+             Identity.parse_params(%{
+               "private_key_nsec" => "nsec1ok",
+               "relay_url" => "wss://x",
+               "auth_tag" => "[\"auth\",\"abc\"]",
+               "env" => %{
+                 "OPENAI_COMPAT_BASE_URL" => "http://10.200.0.1:8020/v1",
+                 "BUZZ_PRIVATE_KEY" => "nsec1attacker"
+               }
+             })
+
+    entries = Identity.env_entries(id)
+    assert entries["BUZZ_AUTH_TAG"] == "[\"auth\",\"abc\"]"
+    assert entries["OPENAI_COMPAT_BASE_URL"] == "http://10.200.0.1:8020/v1"
+    assert entries["NOSTR_PRIVATE_KEY"] == "nsec1ok"
+    assert entries["BUZZ_PRIVATE_KEY"] == "nsec1ok"
+  end
+
   test "vsock request carries identity entries and is not a host artifact", ctx do
     msg = Protocol.inject_identity_request(ctx.identity, request_id: "req-id")
     assert msg["type"] == "inject_identity"

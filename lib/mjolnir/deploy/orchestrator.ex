@@ -45,16 +45,12 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   require Logger
 
-  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Manifest, Runtime}
+  alias Mjolnir.Deploy.{Builder, CacheKey, Detector, Diagnostics, Manifest, Runtime}
 
   @default_base_image "deploy-node-bun"
   @workdir "/app"
   @src_mount "/mnt/deploy-src"
   @default_memory_mb 256
-
-  # Build VMs, unlike service VMs, must hold a whole dependency graph plus a
-  # bundler run in memory. Overridable via :deploy_build_memory_mb.
-  @default_build_memory_mb 2048
 
   # Commands Detector emits, used to classify each step's cache-input source.
   @install_commands [
@@ -70,6 +66,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
           detect: (String.t() -> {:ok, map()} | {:error, term()}),
           hash_file: (String.t() -> {:ok, String.t()} | {:error, term()}),
           hash_tree: (String.t(), keyword() -> {:ok, String.t()} | {:error, term()}),
+          hash_globs: (String.t(), [String.t()] -> {:ok, String.t()} | {:error, term()}),
           build: (String.t(), [map()], keyword() -> {:ok, map()} | {:error, term()}),
           run: (String.t(), String.t(), map(), keyword() -> {:ok, map()} | {:error, term()}),
           read_secrets: (String.t() -> {:ok, map()} | :none | {:error, term()})
@@ -92,8 +89,9 @@ defmodule Mjolnir.Deploy.Orchestrator do
     - `:memory_mb` — service VM memory. Default `#{@default_memory_mb}`.
     - `:custom_domain` — explicit fqdn to assign on first deploy (preserved
       across redeploys thereafter by `Runtime.start`).
-    - `:base_image` — deploy base image / base layer id. Default
-      `#{inspect(@default_base_image)}` (gge.1.10).
+    - `:base_image` — deploy base image / base layer id. Wins over
+      `mjolnir.toml` `base_image`. When both are omitted, default
+      `#{inspect(@default_base_image)}` (gge.1.10 / mjolnir-6ee1).
     - `:on_progress` — `(stage :: String.t(), line :: String.t() -> any)` invoked
       as each stage advances. Defaults to a no-op. The HTTP endpoint wires this to
       the NDJSON progress stream.
@@ -110,16 +108,27 @@ defmodule Mjolnir.Deploy.Orchestrator do
     deployer = Keyword.get(opts, :deployer)
     memory_mb = Keyword.get(opts, :memory_mb, @default_memory_mb)
     custom_domain = Keyword.get(opts, :custom_domain)
-    base_image = Keyword.get(opts, :base_image, @default_base_image)
 
     Logger.info("Deploy.Orchestrator: deploying '#{app_name}' from #{src_dir}")
 
     with {:detect, {:ok, plan}} <- {:detect, ops.detect.(src_dir)},
          :ok <- emit(progress, "detect", detect_summary(plan)),
          {:translate, {:ok, steps}} <- {:translate, plan_to_steps(plan, src_dir, ops)},
+         build_size = build_size(plan),
+         :ok <- emit_build_size(progress, build_size),
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
+         base_image = resolve_base_image(opts, plan),
          {:build, {:ok, build}} <-
-           {:build, ops.build.(base_image, steps, build_opts(base_image, src_dir, deployer))},
+           {:build,
+            tag_build_result(
+              build_with_inputs(
+                ops,
+                base_image,
+                steps,
+                build_opts(base_image, src_dir, deployer, build_size)
+              ),
+              build_size
+            )},
          :ok <-
            emit(
              progress,
@@ -127,6 +136,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
              "release #{build.release_snapshot} " <>
                "(#{build.cache_hits} hit / #{build.cache_misses} miss)"
            ),
+         :ok <- emit_layers(progress, build),
          :ok <- emit(progress, "run", "booting service VM"),
          {:run, {:ok, svc}} <-
            {:run,
@@ -146,6 +156,11 @@ defmodule Mjolnir.Deploy.Orchestrator do
          service_vm_id: svc.service_vm_id
        }}
     else
+      {:build, {:error, {reason, build_size}}} ->
+        Logger.error("Deploy.Orchestrator: '#{app_name}' failed at build: #{inspect(reason)}")
+        for line <- failure_lines(reason, build_size), do: emit(progress, "build", line)
+        {:error, %{stage: "build", reason: reason}}
+
       {stage, {:error, reason}} ->
         Logger.error("Deploy.Orchestrator: '#{app_name}' failed at #{stage}: #{inspect(reason)}")
         for line <- failure_lines(reason), do: emit(progress, to_string(stage), line)
@@ -159,11 +174,16 @@ defmodule Mjolnir.Deploy.Orchestrator do
   # shell command twice, and it buries the one thing that matters: what the
   # guest kernel said before it died. Lead with the cause, then the guest's own
   # words, then where the full serial log lives.
-  defp failure_lines({:step_failed, command, reason, _built, diag}) do
+  defp failure_lines(reason, build_size \\ nil)
+
+  defp failure_lines({:step_failed, command, reason, _built, diag}, build_size) do
     highlights = Map.get(diag, :highlights, [])
     dir = Map.get(diag, :diagnostics_dir)
 
-    ["error: build step failed: #{truncate(command, 120)}", "cause: #{describe(reason)}"] ++
+    [
+      "error: build step failed: #{truncate(command, 120)}",
+      "cause: #{describe(reason, build_size)}"
+    ] ++
       Enum.map(highlights, &"guest: #{truncate(&1, 200)}") ++
       cond do
         dir && highlights == [] ->
@@ -179,7 +199,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # Worth naming rather than inspecting: this one is a deliberate refusal, and
   # the operator needs to know it was a refusal and not a crash.
-  defp failure_lines({:secrets_unlock_failed, reason}) do
+  defp failure_lines({:secrets_unlock_failed, reason}, _build_size) do
     [
       "error: managed secrets never mounted (#{reason})",
       "note: the service was NOT started — /secrets would have been plain rootfs, " <>
@@ -188,17 +208,20 @@ defmodule Mjolnir.Deploy.Orchestrator do
     ]
   end
 
-  defp failure_lines(reason), do: ["error: #{inspect(reason)}"]
+  defp failure_lines(reason, _build_size), do: ["error: #{inspect(reason)}"]
 
   # The shapes worth naming. Everything else falls back to inspect/1.
-  defp describe({:vsock_unavailable, _}),
+  defp describe({:vsock_unavailable, _}, %{memory_mb: memory_mb}),
+    do: Diagnostics.build_agent_loss(memory_mb)
+
+  defp describe({:vsock_unavailable, _}, _build_size),
     do: "the build VM's guest agent stopped responding mid-step (VM died or was killed)"
 
-  defp describe({:exit_code, code, out}),
+  defp describe({:exit_code, code, out}, _build_size),
     do: "command exited #{code}: #{truncate(String.trim(to_string(out)), 300)}"
 
-  defp describe(:timeout), do: "the step exceeded its timeout"
-  defp describe(other), do: inspect(other)
+  defp describe(:timeout, _build_size), do: "the step exceeded its timeout"
+  defp describe(other, _build_size), do: inspect(other)
 
   defp truncate(s, max) do
     s = to_string(s)
@@ -206,6 +229,25 @@ defmodule Mjolnir.Deploy.Orchestrator do
   end
 
   # --- step translation ------------------------------------------------------
+
+  # `--base` / rpc `:base_image` wins; then the manifest pin; then today's
+  # Node-specialised default. Do not flip the global default to ubuntu-24.04
+  # (mjolnir-6ee1): inferred SvelteKit apps still want bun on PATH.
+  defp resolve_base_image(opts, plan) do
+    case Keyword.get(opts, :base_image) do
+      img when is_binary(img) and img != "" ->
+        img
+
+      _ ->
+        case plan_base_image(plan) do
+          img when is_binary(img) and img != "" -> img
+          _ -> @default_base_image
+        end
+    end
+  end
+
+  defp plan_base_image(%{base_image: img}) when is_binary(img) and img != "", do: img
+  defp plan_base_image(_), do: nil
 
   # The one operator-facing line describing what we decided to build. A manifest
   # app has no package_manager (nil) and may declare no runtime, so the inferred
@@ -227,9 +269,9 @@ defmodule Mjolnir.Deploy.Orchestrator do
   Translate a `BuildPlan` into `Mjolnir.Deploy.Builder` step-inputs.
 
   Each step becomes `%{command, input_hash}` where `input_hash` is computed from
-  the right source for its role (runtime spec / lockfile / source tree) and the
-  source-touching commands are wrapped with the virtiofs mount + copy prelude.
-  Exposed for unit testing. `ops` supplies `hash_file`/`hash_tree`.
+  the right source for its role (runtime spec / lockfile / source tree / table
+  step globs) and source-touching commands are wrapped with the appropriate
+  virtiofs mount + copy prelude. Exposed for unit testing.
   """
   @spec plan_to_steps(map(), String.t(), ops()) ::
           {:ok, [%{command: String.t(), input_hash: String.t()}]} | {:error, term()}
@@ -238,8 +280,10 @@ defmodule Mjolnir.Deploy.Orchestrator do
     pm = Map.get(plan, :package_manager)
     runtime = Map.get(plan, :runtime, "")
 
-    Enum.reduce_while(commands, {:ok, []}, fn command, {:ok, acc} ->
-      case step_input(command, pm, runtime, src_dir, ops) do
+    commands
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {declared_step, index}, {:ok, acc} ->
+      case step_input(declared_step, pm, runtime, src_dir, ops, index) do
         {:ok, step} -> {:cont, {:ok, [step | acc]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -250,7 +294,18 @@ defmodule Mjolnir.Deploy.Orchestrator do
     end
   end
 
-  defp step_input(command, pm, runtime, src_dir, ops) do
+  defp step_input(%{run: command, inputs: globs}, _pm, _runtime, src_dir, ops, index) do
+    hash_globs = Map.get(ops, :hash_globs, &CacheKey.hash_globs/2)
+
+    with {:ok, hash} <- hash_globs.(src_dir, globs),
+         {:ok, rel_paths} <- CacheKey.matching_files(src_dir, globs) do
+      list_name = if globs == [], do: nil, else: "#{index}.files"
+      command = table_prelude(list_name) <> " && " <> command
+      {:ok, %{command: command, input_hash: hash, input_files: rel_paths, input_list: list_name}}
+    end
+  end
+
+  defp step_input(command, pm, runtime, src_dir, ops, _index) when is_binary(command) do
     case classify(command) do
       :runtime ->
         {:ok, %{command: command, input_hash: sha_hex(runtime)}}
@@ -324,32 +379,111 @@ defmodule Mjolnir.Deploy.Orchestrator do
     mount_prelude() <> "; cp -a #{@src_mount}/. #{@workdir}/"
   end
 
+  # NUL-delimited lists live on a separate temporary share, outside the hashed source.
+  defp table_prelude(nil), do: "set -e; mkdir -p #{@workdir}; cd #{@workdir}"
+
+  defp table_prelude(list_name) do
+    mount_prelude() <>
+      "; mkdir -p /mnt/deploy-inputs; " <>
+      "mountpoint -q /mnt/deploy-inputs || mount -t virtiofs inputs /mnt/deploy-inputs; " <>
+      "tar -C #{@src_mount} --null -T /mnt/deploy-inputs/#{list_name} " <>
+      "-cf /tmp/deploy-#{list_name}.tar && " <>
+      "tar -C #{@workdir} -xf /tmp/deploy-#{list_name}.tar && " <>
+      "rm -f /tmp/deploy-#{list_name}.tar"
+  end
+
+  defp build_with_inputs(ops, base_image, steps, opts) do
+    lists = Enum.filter(steps, &(Map.get(&1, :input_list) != nil))
+
+    if lists == [] do
+      ops.build.(base_image, steps, opts)
+    else
+      suffix = :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
+      dir = Path.join(System.tmp_dir!(), "deploy-inputs-#{suffix}")
+      File.mkdir_p!(dir)
+
+      try do
+        for step <- lists do
+          File.write!(Path.join(dir, step.input_list), Enum.map(step.input_files, &[&1, 0]))
+        end
+
+        opts =
+          update_in(opts[:spawn_opts][:extra_mounts], fn mounts ->
+            mounts ++ [%{tag: "inputs", shared_dir: dir, opts: []}]
+          end)
+
+        ops.build.(base_image, steps, opts)
+      after
+        File.rm_rf(dir)
+      end
+    end
+  end
+
   defp sha_hex(value) when is_binary(value) do
     :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
   end
 
   # --- build / run option assembly -------------------------------------------
 
-  defp build_opts(base_image, src_dir, deployer) do
+  defp build_opts(base_image, src_dir, deployer, build_size) do
     [
       base_image: base_image,
       spawn_opts: %{
         extra_mounts: [%{tag: "src", shared_dir: src_dir, opts: []}],
         owner_id: deployer,
-        # Build VMs are memory-hungry in a way service VMs are not: `bun install`
-        # / `npm ci` resolve a whole dependency graph in memory, and a bundler
-        # run peaks higher still. Omitting this silently inherited
-        # :default_memory_mb (512), sized for small service VMs, and the build VM
-        # died mid-`bun install` — surfacing as {:vsock_unavailable, ...} when its
-        # agent went away, with the HOST still showing 29GB free.
-        memory_mb: build_memory_mb()
+        vcpus: build_size.vcpus,
+        memory_mb: build_size.memory_mb
       }
     ]
   end
 
-  defp build_memory_mb do
-    Application.get_env(:mjolnir, :deploy_build_memory_mb, @default_build_memory_mb)
+  # Build VMs, unlike service VMs, hold a whole dependency graph plus a
+  # bundler or compiler run in memory. Before build VMs were sized at all,
+  # they inherited :default_memory_mb (512) and died mid-`bun install`,
+  # surfacing only as {:vsock_unavailable, ...} with the host showing 29 GB
+  # free. Size comes from the manifest's `build` table, else the host's
+  # :deploy_build_* defaults, clamped to :deploy_build_max_*.
+  defp build_size(plan) do
+    requested = Map.get(plan, :build) || %{}
+    vcpus = Map.get(requested, :vcpus) || Application.get_env(:mjolnir, :deploy_build_vcpus, 4)
+
+    memory_mb =
+      Map.get(requested, :memory_mb) ||
+        Application.get_env(:mjolnir, :deploy_build_memory_mb, 4096)
+
+    max_vcpus = Application.get_env(:mjolnir, :deploy_build_max_vcpus, 6)
+    max_memory_mb = Application.get_env(:mjolnir, :deploy_build_max_memory_mb, 16_384)
+
+    %{
+      vcpus: min(vcpus, max_vcpus),
+      memory_mb: min(memory_mb, max_memory_mb),
+      requested_vcpus: vcpus,
+      requested_memory_mb: memory_mb
+    }
   end
+
+  defp emit_build_size(progress, build_size) do
+    with :ok <-
+           emit(
+             progress,
+             "build",
+             "build VM: #{build_size.vcpus} vCPU, #{build_size.memory_mb} MB"
+           ),
+         :ok <- emit_clamp(progress, "vcpus", build_size.requested_vcpus, build_size.vcpus),
+         :ok <-
+           emit_clamp(progress, "memory_mb", build_size.requested_memory_mb, build_size.memory_mb) do
+      :ok
+    end
+  end
+
+  defp emit_clamp(_progress, _key, requested, clamped) when requested == clamped, do: :ok
+
+  defp emit_clamp(progress, key, requested, clamped) do
+    emit(progress, "build", "#{key} #{requested} -> #{clamped} (host max)")
+  end
+
+  defp tag_build_result({:ok, _} = result, _build_size), do: result
+  defp tag_build_result({:error, reason}, build_size), do: {:error, {reason, build_size}}
 
   defp run_opts(app_name, memory_mb, custom_domain, deployer, ops) do
     spawn_opts =
@@ -389,11 +523,29 @@ defmodule Mjolnir.Deploy.Orchestrator do
     :ok
   end
 
+  # One progress line per layer, so `mj deploy` shows which layers were
+  # reused and, for a miss, its first cause. Builder logs the same lines;
+  # Logger output never reaches the deploying client.
+  defp emit_layers(progress, %{plan: %{layers: layers}}) when is_list(layers) do
+    layers
+    |> Enum.with_index(1)
+    |> Enum.each(fn
+      {%{status: :hit}, index} ->
+        emit(progress, "build", "layer #{index}: hit")
+
+      {%{status: :miss, miss_reason: reason}, index} ->
+        emit(progress, "build", "layer #{index}: miss (#{reason})")
+    end)
+  end
+
+  defp emit_layers(_progress, _build), do: :ok
+
   defp default_ops do
     %{
       detect: &Detector.detect/1,
       hash_file: &CacheKey.hash_file/1,
       hash_tree: &CacheKey.hash_tree/2,
+      hash_globs: &CacheKey.hash_globs/2,
       build: &Builder.build/3,
       run: &Runtime.start/4,
       read_secrets: &default_read_secrets/1

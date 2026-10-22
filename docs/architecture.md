@@ -283,9 +283,11 @@ Mjolnir.Application (one_for_one)
 |   +-- Mjolnir.VM (another VM...)
 |   +-- ...
 |
-+-- Mjolnir.Auth.KeycloakStrategy (optional)
++-- Mjolnir.Auth.JwksStrategy (optional)
 |   JWKS key fetcher for JWT verification
 |   Only started when OIDC issuer is configured
+|   Default issuer is https://auth.identikey.me
+|   KeycloakStrategy is the deprecated alias
 |
 +-- Bandit HTTP Server
     Serves Mjolnir.API.Router on configured port (default 4000)
@@ -294,6 +296,8 @@ Mjolnir.Application (one_for_one)
 `Mjolnir.Cleanup` is a supervised process that runs `sweep/0` at startup to kill orphaned Cloud Hypervisor processes (and any legacy Firecracker processes from prior deployments), clean stale TAP devices, and remove leftover sockets/directories from previous crashes.
 
 Each VM is a GenServer that owns its hypervisor process as a Port. If the hypervisor crashes, the Port sends an exit signal, and the GenServer cleans up (TAP device, routes, sockets, rootfs). Transient restart means VMs exit `:normal` on boot failure (preventing restart loops) — they're intentionally ephemeral.
+
+Guests live in a per-instance systemd scope outside `mjolnir.service`. A witness records scope state and does not restart guests. The BEAM reattaches an active scope and cold-resumes a dead one. See `docs/decisions/0014-guest-outlives-orchestrator.md`.
 
 ### Rust Guest Agent
 
@@ -393,7 +397,7 @@ No bridge device needed. Each VM has its own TAP with a /32 route. The host acts
 BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 |
 +-- @base/                  Declared OS-root catalog (ADR 0009)
-|   ubuntu-24.04/           Default for mj spawn and mj deploy
+|   ubuntu-24.04/           Default for mj spawn (deploy default waits on remove-deploy-node-bun)
 |   ci-ubuntu-24.04/        Forgejo runner
 |   buzz-agent/             Bodies
 |   arch/                   Optional; not a default
@@ -404,15 +408,56 @@ BTRFS filesystem (virtio-fs + BTRFS subvolumes)
 |                           Mounted in guest as: root=myfs rootfstype=virtiofs rw
 |
 +-- @snapshots/
-    {name}/                 Frozen machines (named snapshots, deploy-* layers)
+    {name}/                 Named filesystem snapshots (BTRFS subvolume clones)
+    {name}.mem/             Memory-park artifacts (`state.json` + RAM) when kind is memory
 ```
 
 `@base/` is a **declared catalog of OS roots**, not a pile of
 toolchain images. Pins vs aliases, unmanaged names, and rebuild
 rules: [`docs/decisions/0009-base-image-catalog.md`](decisions/0009-base-image-catalog.md)
-(`add-base-images`). Toolchains live in `mise` layers or snapshots,
-not extra `@base/` debootstraps. `deploy-node-bun` is retired by
+(ADR 0009; `add-base-images` folded 2026-09-10). Living spec:
+[`openspec/specs/base-images/spec.md`](../openspec/specs/base-images/spec.md).
+Toolchains live in `mise` layers or snapshots, not extra `@base/`
+debootstraps. `deploy-node-bun` is retired by
 `remove-deploy-node-bun` (not this pointer).
+
+A **hosted being** is a long-lived vibe-coder VM: a *device* of a
+friend's C2 identikey (`credentials.kind = ssh_git`), not a new
+`@base/` name. ADR
+[`0011`](decisions/0011-honor-being.md) (`add-honor-being`, advise
+accept 2026-09-10, architecture folded 2026-09-20; “Honor” was a
+mis-transcription of hosted).
+Passkey at `auth.identikey.me` gates wrug `/term`; grok uses
+`XAI_API_KEY` in tmpfs; git is SSH-signed from opaque inject;
+write remote is Forgejo on mimir. Living spec:
+[`openspec/specs/honor-being/spec.md`](../openspec/specs/honor-being/spec.md),
+seeded by `add-honor-dev-preview` (folded 2026-09-19) — grok + Vite
+in tmux `main` on the unauthenticated ticket URL, prod API,
+`XAI_API_KEY` in tmpfs. The passkey SHALL is living as of
+`add-identikey-being-client` (folded 2026-09-20) — same-origin
+`/term` logs in at `auth.identikey.me` as the **public** PKCE client
+`mjolnir-term`, so the ID token `sub` is the base58 XID that
+`owner_id` compares against (a stored 64-hex spelling of the same
+32 bytes still matches); it is written in
+[`openspec/specs/web-pty-edge/spec.md`](../openspec/specs/web-pty-edge/spec.md),
+not the honor-being spec. The `ssh_git` git-signing SHALL is living
+as of `add-vm-git-subkey` (folded 2026-09-20) — the private key is a
+SecretStore opaque blob injected to the fixed guest path
+`/run/mjolnir/git_signing_key`, deliberately *not* routed through
+`Identity.env_entries/1` (`BUZZ_PRIVATE_KEY`), so a respawn can mint
+a new device without rewriting `git config user.signingkey`. The
+Forgejo write-remote SHALL is living as of `add-honor-git-remote`
+(folded 2026-09-24) — the host registers that same `ssh_git` pubkey
+as a **repository write deploy key** on
+`VirtueInnova/hypersigil-store-frontend` (the guest never holds a
+Forgejo token), gated on a consented identikey `ssh_git` row whose
+`xid`/`credential_id` are persisted *before* the grant exists. Revoke
+runs Forgejo delete → `revoke_device` → opaque delete and fails
+**closed**: a missing host token after a key was registered leaves
+the opaque and device metadata in place rather than reporting
+success, so a forgotten live write credential is the one outcome the
+order rules out. The CORS SHALL is not living yet; it waits on
+`update-hypersigil-store-cors`.
 
 Why virtio-fs + BTRFS subvolumes? Cloud Hypervisor supports virtio-fs, which lets the host share a directory tree directly into the guest without a block device. BTRFS subvolumes give us O(1) copy-on-write cloning (via `btrfs subvolume snapshot`), so VM creation is instant regardless of rootfs size, and storage is efficiently shared until pages diverge.
 
@@ -430,9 +475,35 @@ DELETE /api/vms/:id                 [vms:stop]     Stop VM
 GET  /api/vms/:id/ticket            [shell:connect] Iroh ticket
 GET  /api/vms/:id/node-id           [shell:connect] Iroh node ID
 POST /api/vms/:id/await-shell       [shell:connect] Wait for shell
+POST /api/vms/:id/snapshots         [snapshots:create] Filesystem snapshot (VM keeps serving)
+POST /api/vms/:id/freeze            [snapshots:create] Memory park; source VMM torn down
+GET  /api/snapshots                 [snapshots:read]  List (`kind`: filesystem | memory)
+GET  /api/snapshots/:name           [snapshots:read]  Show (`kind`)
+POST /api/snapshots/:name/thaw      [vms:spawn]    Restore memory snapshot to source_vm_id
 ```
 
 Authentication: JWT bearer tokens with scope-based authorization. Scopes are space-separated strings in the token claims. Localhost bypass available for development.
+
+Next to that, direct edge auth mints a Biscuit login capability whose
+default profile is **holder-bound**, not bearer: the capability names
+an ephemeral session key and each protected request carries a
+signature over the token bytes, method, target-with-raw-query, body
+hash, edge XID, an edge-issued nonce, and an expiry. Bearer is an
+explicit, strictly narrower issuance; the mode is an
+issuer-authenticated authority-block fact, so attenuation cannot
+downgrade it, and a verified biscuit yields a one-shot allow/deny for
+that request rather than an ambient scope list — localhost bypass does
+not widen it. `Mjolnir.Auth.LoginProfile` over the shared
+`Mjolnir.Biscuit` runtime; living spec
+[`edge-auth`](../openspec/specs/edge-auth/spec.md)
+(`add-biscuit-profiles` folded 2026-09-26). The HTTP mint, the nonce
+store, and the `Mjolnir.API.Auth` wiring are later
+(`add-direct-auth-endpoints`, `add-edge-op-keys`).
+
+A site alias can be a certificate subject. A site-only install writes
+`[[cert]]` and does not add `[[domain]]`. A host the gateway would
+already classify as local or Iroh is refused before HTTP-01. See
+[`docs/decisions/0013-site-alias-certs.md`](decisions/0013-site-alias-certs.md).
 
 ---
 
@@ -446,7 +517,7 @@ Authentication: JWT bearer tokens with scope-based authorization. Scopes are spa
 | ~125ms boot, ~5MB overhead | VMs feel instant. Can run hundreds on a single host. |
 | Minimal device model | Reduced attack surface. No PCI, no USB, no GPU — just virtio. |
 | virtio-fs for rootfs sharing | BTRFS subvolumes mounted directly into guests. No ext4 image files. |
-| Native snapshotting | Future: pause VM, save memory+CPU state, resume anywhere. |
+| Native snapshotting | `mj freeze` parks RAM+fs and tears the source VMM down (`vm.snapshot` is terminal for virtio-fs). `mj thaw` restores the same VM id. |
 | vsock for host-guest | Direct communication without networking. Low latency, no TCP overhead. |
 
 Docker gives you process isolation (cgroups + namespaces). Cloud Hypervisor gives you hardware isolation (KVM + reduced VMM). For running untrusted code — especially AI agents with full system access — hardware isolation is non-negotiable.
@@ -603,17 +674,21 @@ BTRFS reflink already enables instant filesystem snapshots:
 
 This captures workspace state (files, installed packages, project data) without needing memory snapshots. For development environments and AI agent workspaces, this is sufficient.
 
-### Full State Snapshots (Future)
+### Full State Snapshots (same-host freeze/thaw)
 
-Cloud Hypervisor supports native memory + CPU state snapshots via `vm.pause` + state serialization. Combined with BTRFS filesystem snapshots, this enables true pause/resume:
+Cloud Hypervisor `vm.snapshot` is terminal for virtio-fs: the source
+VMM does not resume. Operators therefore get distinct verbs, not a
+`--memory` flag on filesystem snapshot. Living spec:
+[`vm-freeze`](../openspec/specs/vm-freeze/spec.md).
 
-```elixir
-# Pause VM, save everything (memory + filesystem)
-{:ok, snap} = Mjolnir.VM.snapshot("vm-123")
-
-# Resume exact execution state, possibly on a different host
-{:ok, vm} = Mjolnir.VM.restore(snap, target_node: :"mjolnir@host2")
 ```
+mj freeze <id> <name>   # park RAM+fs; source VM stops
+mj thaw <name>          # restore the same VM id
+```
+
+Filesystem `POST /api/vms/:id/snapshots` / `mj snapshot create` is
+unchanged. Spawn from a memory snapshot is refused. Cross-host restore
+(`target_node:`) is still later.
 
 ### Cross-Host Migration
 
@@ -692,10 +767,46 @@ Blob door `:7222` (`blob_door_url`), orchestrator API `:4000`
 (`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`),
 Redis `:6379` (provisioned `REDIS_URL`, ADR
 [`0007`](decisions/0007-host-sidecar-redis.md)).
+Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
+`:app_log`) are ADR
+[`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2
+stays; host ingest is UDP. Living spec
+[`typed-log`](../openspec/specs/typed-log/spec.md) (`add-log-lsp`
+folded 2026-09-10: `generateSchema` + `mjolnir-log-lsp`).
+
+Deploy secrets (`mj secrets set|ls|unset`) merge
+`/var/lib/mjolnir/deploy/secrets/<slug>.json` at service-VM spawn.
+Living spec [`deploy-secrets`](../openspec/specs/deploy-secrets/spec.md)
+(`add-deploy-secrets-cli` folded 2026-09-10). Unix `0600 root:root` is
+hygiene, not confidentiality — see
+[`secrets-architecture.md`](secrets-architecture.md#what-0600-means-steer-2026-09-10).
+Not recrypt, not biscuit, not live-guest inject.
+
+Foreign-secret redeem (GitHub PAT, API keys) is ADR
+[`0008`](decisions/0008-secret-tokenator.md): opaque vault + salted
+Blake3 commitment; holder-bound Biscuit; `POST /api/secrets/redeem`
+on existing `api_url`. Living spec
+[`secret-tokenator`](../openspec/specs/secret-tokenator/spec.md)
+(`add-secret-tokenator` folded 2026-09-10). The mint/verify half has
+landed: `native/mjolnir_biscuit` + `Mjolnir.Biscuit` (binary face, no
+HTTP), living spec
+[`biscuit-runtime`](../openspec/specs/biscuit-runtime/spec.md)
+(`add-biscuit-runtime` folded 2026-09-26). Holder fingerprints there
+are identikey-auth v1 §5, *not* `IdentiKey.fingerprint/1`. Remaining
+code landings are later (`add-tokenator-redeem`, `add-capability-mint`,
+`add-capability-hop`). Protocol holder/hop/redeem SHALLs live in
+identikey-protocol
+[`identikey-capability-v1.md` §7](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md#7-secret-redemption-profile-foreign-secrets)
+(secret-redemption profile; `update-identikey-capability` folded
+2026-09-10). Do not copy those SHALLs into `openspec/specs/`.
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing
-MinIO. iroh-blobs as working-set/transmit is later.
+MinIO. iroh-blobs as working-set/transmit is later. A recording
+index (`add-recording-blob`, folded 2026-10-21) is one JSON row at
+`<sites_root>/recordings/<hash58>.json` beside ciphertext the door
+already holds. It is not a second byte store, not a VM, and not an
+unwrap.
 
 A LAN-reachable Recrypt share (change `add-lan-file-server`,
 capability `lan-files`) is a guest HTTP surface, not a new sidecar
@@ -710,8 +821,11 @@ The local Buzz client fabric (living spec
 [`0002`](decisions/0002-buzz-local-client-fabric.md)) takes the first cut:
 OTP mailboxes on the host are the body-control queue; Nostr stays the Buzz
 event log; admission happens before thaw; the agent nsec is an opaque
-SecretStore blob, not a VM-record field. Remaining runtime SHALLs live in
-`add-buzz-local-runtime`. Channel mobility below is still later.
+SecretStore blob, not a VM-record field. Host Nostr facade
+(`Mjolnir.Buzz.Facade`) is the named wake producer; last hop is
+conformant Nostr; `identikey-admit` is the portable crate
+(`add-buzz-local-runtime` folded 2026-09-10). Channel mobility below
+is still later.
 
 Host Postgres as a **declared tenant hotel** (Hypersigil first) is ADR
 [`0005`](decisions/0005-host-sidecar-tenant-hotel.md), change
@@ -797,7 +911,8 @@ iex> Mjolnir.VM.stop(vm.id)
   btrfs/
     @base/ubuntu-24.04/             Base rootfs (BTRFS subvolume, directory tree)
     @vms/{uuid}/                    Per-VM rootfs (BTRFS subvolume, CoW clone)
-    @snapshots/{name}/              Named snapshots (BTRFS subvolume clones)
+    @snapshots/{name}/              Named filesystem snapshots (BTRFS subvolume clones)
+    @snapshots/{name}.mem/          Memory-park artifacts (kind memory)
 
 /tmp/mjolnir/
   {uuid}.sock                       Cloud Hypervisor API socket (Unix domain)

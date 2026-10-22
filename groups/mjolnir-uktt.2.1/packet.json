@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-uktt.2.1",
+  "node_id": "mjolnir-uktt.2.1",
+  "change_id": "add-site-cert-subject",
+  "capability": "site-certs",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "grok" }
+  },
+  "goal": "Record ADR 0013 and point the HTTP-01 plan and Sites initiative §6.5 at it. Do not change the issuer.",
+  "anchors": [
+    { "symbol": "docs/decisions/0013-site-alias-certs.md", "invariant": "Site-only install is [[cert]] only; renewal never appends a missing [[domain]]; Local or Iroh is 409 before HTTP-01" }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f docs/decisions/0013-site-alias-certs.md && rg -q 'host_routed_elsewhere' docs/decisions/0013-site-alias-certs.md && rg -q 'alias_index_unreadable' docs/decisions/0013-site-alias-certs.md && rg -q '0013-site-alias-certs' docs/plans/http01-custom-certs.md && rg -q '0013-site-alias-certs' docs/plans/initiatives/identikey-sites.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement issuance", "tracked_as": "mjolnir-uktt.2.2" },
+    { "item": "App short-apex residual", "tracked_as": "mjolnir-5ckn" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "docs/decisions/0013-site-alias-certs.md",
+      "docs/plans/http01-custom-certs.md",
+      "docs/plans/initiatives/identikey-sites.md",
+      "openspec/changes/add-site-cert-subject/tasks.md"
+    ],
+    "do_not": ["deploy", "push", "implement issuer"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "role": "worker"
+}

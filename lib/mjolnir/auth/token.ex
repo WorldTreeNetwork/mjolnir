@@ -2,13 +2,14 @@ defmodule Mjolnir.Auth.Token do
   @moduledoc """
   JWT verification using Joken + JokenJwks.
 
-  When a Keycloak issuer is configured, tokens are verified against the JWKS.
-  Validates `exp`, `iss`, and `aud` claims.
+  When an issuer is configured, tokens are verified against that issuer's
+  JWKS (`Mjolnir.Auth.JwksStrategy`). Validates `exp` and `iss`.
+  `Mjolnir.API.Auth` checks `aud`. A configured audience requires the claim.
   """
 
   use Joken.Config
 
-  add_hook(JokenJwks, strategy: Mjolnir.Auth.KeycloakStrategy)
+  add_hook(JokenJwks, strategy: Mjolnir.Auth.JwksStrategy)
 
   @impl true
   def token_config do

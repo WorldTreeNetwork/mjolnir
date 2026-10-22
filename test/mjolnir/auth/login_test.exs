@@ -6,8 +6,11 @@ defmodule Mjolnir.Auth.LoginTest do
   describe "safe_next/1" do
     test "accepts a term path with optional session" do
       id = "01234567-89ab-cdef-0123-456789abcdef"
-      assert Login.safe_next("/term/#{id}") == "/term/#{id}"
-      assert Login.safe_next("/term/#{id}?session=main") == "/term/#{id}?session=main"
+      canonical = Mjolnir.VmId.storage_id(id)
+      assert Login.safe_next("/term/#{id}") == "/term/#{canonical}"
+
+      assert Login.safe_next("/term/#{canonical}?session=main") ==
+               "/term/#{canonical}?session=main"
     end
 
     test "refuses open redirects and API paths" do
@@ -22,6 +25,11 @@ defmodule Mjolnir.Auth.LoginTest do
   describe "Oidc.classify_token/1" do
     test "a token is success" do
       assert {:ok, "jwt-here"} = Oidc.classify_token(%{"access_token" => "jwt-here"})
+    end
+
+    test "id_token is preferred for the code flow" do
+      assert {:ok, "id.jwt"} =
+               Oidc.classify_token(%{"id_token" => "id.jwt", "access_token" => "at"})
     end
 
     test "authorization_pending is pending" do

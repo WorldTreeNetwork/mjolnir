@@ -54,12 +54,37 @@ defmodule Mjolnir.Health.Host do
   defp heal_kvm do
     case System.cmd("modprobe", ["kvm"], stderr_to_stdout: true) do
       {_, 0} ->
-        System.cmd("modprobe", ["kvm_intel"], stderr_to_stdout: true)
-        :ok
+        # /dev/kvm appears only after the vendor module. An AMD host
+        # stays dark if we stop at kvm_intel.
+        load_kvm_vendor()
 
       {out, code} ->
         Logger.warning("modprobe kvm failed (#{code}): #{out}")
         {:error, {:modprobe_failed, code}}
+    end
+  end
+
+  defp load_kvm_vendor do
+    preferred =
+      case File.read("/proc/cpuinfo") do
+        {:ok, info} ->
+          if String.contains?(info, "AuthenticAMD"), do: "kvm_amd", else: "kvm_intel"
+
+        _ ->
+          "kvm_intel"
+      end
+
+    other = if preferred == "kvm_amd", do: "kvm_intel", else: "kvm_amd"
+
+    case System.cmd("modprobe", [preferred], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      _ ->
+        case System.cmd("modprobe", [other], stderr_to_stdout: true) do
+          {_, 0} -> :ok
+          {out, code} -> {:error, {:modprobe_failed, code, String.trim(out)}}
+        end
     end
   end
 

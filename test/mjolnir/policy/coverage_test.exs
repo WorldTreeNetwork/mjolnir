@@ -35,7 +35,17 @@ defmodule Mjolnir.Policy.CoverageTest do
     # app name is known from the uploaded source), and the /api/apps list filter
     "authorize_app",
     "authorize_deploy",
-    "Policy.App.filter_readable"
+    # PUT /api/apps/:app checks ownership inside handle_adopt/6.
+    "handle_adopt",
+    "Policy.App.filter_readable",
+    # Forgejo owner links are an operator map, not a tenant resource.
+    # `require_localhost` is the gate: a JWT caller cannot write or read it.
+    "require_localhost",
+    # Mailbox id is the caller or a VM they may message.
+    "authorize_mailbox",
+    # Holder-bound redeem and the egress proxy. The handler proves the
+    # holder; a TCP peer is not a scope.
+    "Secrets.Redeem"
   ]
 
   test "all non-whitelisted endpoints have policy enforcement" do

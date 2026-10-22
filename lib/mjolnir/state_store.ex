@@ -66,8 +66,8 @@ defmodule Mjolnir.StateStore do
   @doc "Look up a record by VM UUID."
   @spec get(String.t()) :: {:ok, Record.t()} | :not_found
   def get(uuid) when is_binary(uuid) do
-    case :ets.lookup(@table, uuid) do
-      [{^uuid, record}] -> {:ok, record}
+    case :ets.lookup(@table, resident_key(uuid)) do
+      [{_key, record}] -> {:ok, record}
       [] -> :not_found
     end
   end
@@ -94,13 +94,16 @@ defmodule Mjolnir.StateStore do
   @spec merge_metadata(String.t(), map()) ::
           {:ok, Record.t()} | :not_found | {:error, term()}
   def merge_metadata(uuid, metadata) when is_binary(uuid) and is_map(metadata) do
-    GenServer.call(__MODULE__, {:merge_metadata, uuid, Record.normalize_metadata(metadata)})
+    GenServer.call(
+      __MODULE__,
+      {:merge_metadata, resident_key(uuid), Record.normalize_metadata(metadata)}
+    )
   end
 
   @doc "Delete a record from disk and cache. Idempotent — no error if already gone."
   @spec delete(String.t()) :: :ok | {:error, term()}
   def delete(uuid) when is_binary(uuid) do
-    GenServer.call(__MODULE__, {:delete, uuid})
+    GenServer.call(__MODULE__, {:delete, resident_key(uuid)})
   end
 
   @doc """
@@ -117,7 +120,7 @@ defmodule Mjolnir.StateStore do
   """
   @spec delete_if_match(String.t(), pos_integer()) :: :ok | {:error, :conflict} | {:error, term()}
   def delete_if_match(uuid, generation) when is_binary(uuid) and is_integer(generation) do
-    GenServer.call(__MODULE__, {:delete_if_match, uuid, generation})
+    GenServer.call(__MODULE__, {:delete_if_match, resident_key(uuid), generation})
   end
 
   @doc "All records currently in the cache, in unspecified order."
@@ -354,7 +357,22 @@ defmodule Mjolnir.StateStore do
 
   # Returns %{uuid => reason} for files left in place because this binary does
   # not speak their schema version.
+  # Prefer the key that is actually loaded. A legacy UUID resolves to the
+  # base58 record written by `Mjolnir.VmId.Migrate` without renaming a
+  # caller that stored some other string under that exact key.
+  defp resident_key(id) when is_binary(id) do
+    alt = Mjolnir.VmId.storage_id(id)
+
+    cond do
+      :ets.member(@table, id) -> id
+      alt != id and :ets.member(@table, alt) -> alt
+      true -> id
+    end
+  end
+
   defp load_from_disk do
+    Mjolnir.VmId.Migrate.run()
+
     case File.ls(state_path()) do
       {:ok, entries} ->
         entries

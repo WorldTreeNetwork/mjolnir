@@ -28,6 +28,17 @@ defmodule Mjolnir.Policy.VMTest do
     end
   end
 
+  describe "sites tokens" do
+    test "a sites token is not a VM principal" do
+      sites = %{user_id: "sites_token:abc"}
+
+      for action <- [:spawn, :list, :read, :exec, :stop, :message] do
+        assert :error = VM.authorize(action, sites, @owned_vm)
+        assert :error = VM.authorize(action, sites, nil)
+      end
+    end
+  end
+
   describe "collection actions (spawn, list)" do
     test "any authenticated user can spawn" do
       assert :ok = VM.authorize(:spawn, @owner_user, nil)
@@ -54,6 +65,31 @@ defmodule Mjolnir.Policy.VMTest do
         assert :error = VM.authorize(unquote(action), @other_user, @owned_vm)
       end
     end
+  end
+
+  describe "terminal invites" do
+    test "an invitee can open the PTY and nothing else" do
+      mark = %{user_id: "mark-xid"}
+      vm = %{owner_id: "user-123", pty_invites: ["mark-xid"]}
+
+      assert :ok = VM.authorize(:pty, mark, vm)
+
+      for action <- [:read, :exec, :stop, :snapshot, :ticket, :message, :grant_pty] do
+        assert :error = VM.authorize(action, mark, vm)
+      end
+    end
+
+    test "a stranger without an invite is still denied the PTY" do
+      assert :error = VM.authorize(:pty, @other_user, @owned_vm)
+    end
+  end
+
+  test "a base58 subject matches the legacy hex spelling of the same XID" do
+    hex = "27060fd66283eb5c6c900bce5b364fa512fb4c718b6af18acc7720c424e08821"
+    text = "3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ"
+
+    assert :ok = VM.authorize(:read, %{user_id: text}, %{owner_id: hex})
+    assert :error = VM.authorize(:read, %{user_id: text}, %{owner_id: "alice"})
   end
 
   describe "legacy VMs (nil owner_id)" do

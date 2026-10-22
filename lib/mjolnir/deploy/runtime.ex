@@ -105,6 +105,48 @@ defmodule Mjolnir.Deploy.Runtime do
 
     Logger.info("Deploy.Runtime: starting service '#{app_name}' from #{release_snapshot}")
 
+    prev = previous_entry(ops, app_name)
+
+    if stateful_refuses_redeploy?(prev, opts) do
+      {:error, :stateful_app_refuses_redeploy}
+    else
+      do_start(
+        ops,
+        app_name,
+        release_snapshot,
+        port,
+        boot,
+        workdir,
+        domain,
+        ticket_timeout,
+        custom_domain_opt,
+        owner_id_opt,
+        secrets_mode,
+        unit
+      )
+    end
+  end
+
+  defp stateful_refuses_redeploy?(prev, opts) do
+    stateful? = is_map(prev) and Map.get(prev, :stateful) == true
+    force? = Keyword.get(opts, :force, false) == true
+    stateful? and not force?
+  end
+
+  defp do_start(
+         ops,
+         app_name,
+         release_snapshot,
+         port,
+         boot,
+         workdir,
+         domain,
+         ticket_timeout,
+         custom_domain_opt,
+         owner_id_opt,
+         secrets_mode,
+         unit
+       ) do
     case ops.spawn.(boot) do
       {:ok, vm} ->
         vm_id = Map.fetch!(vm, :id)
@@ -206,7 +248,10 @@ defmodule Mjolnir.Deploy.Runtime do
       # Same preservation rule as custom_domain: an omitted owner_id is wiped,
       # and a wiped owner makes Policy.App treat the app as legacy/unowned,
       # locking its real owner out of their own redeploys (mjolnir-xuv).
-      owner_id = owner_id_opt || Map.get(prev_entry || %{}, :owner_id)
+      # `stamp/2` also refuses to replace a base58 XID with `localhost`
+      # or a hex spelling.
+      owner_id =
+        Mjolnir.Deploy.Owner.stamp(owner_id_opt, Map.get(prev_entry || %{}, :owner_id))
 
       # `port` is recorded so the gateway local-route generator
       # (Mjolnir.Gateway.Routes) can build a backend without re-deriving it.
@@ -216,7 +261,8 @@ defmodule Mjolnir.Deploy.Runtime do
         url: url,
         port: port,
         custom_domain: custom_domain,
-        owner_id: owner_id
+        owner_id: owner_id,
+        stateful: Map.get(prev_entry || %{}, :stateful, false) == true
       }
 
       case ops.registry_put.(app_name, attrs) do

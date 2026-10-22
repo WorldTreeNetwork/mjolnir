@@ -3,6 +3,8 @@ import Config
 config :logger, level: :warning
 
 config :mjolnir,
+  vmm_slice: "mjt-vms.slice",
+  vmm_scope_prefix: "mjt-",
   # Tests use a separate BTRFS root (symlinked by bootstrap)
   btrfs_root: "/var/lib/mjolnir/btrfs-test",
   socket_dir: "/tmp/mjolnir-test",
@@ -25,6 +27,15 @@ config :mjolnir,
   # Post-snapshot guest health-verify + in-place reboot recovery (mjolnir-l4i)
   # probes a real guest agent over vsock; disable it under test so snapshot
   # paths don't depend on (or block on) a live guest.
-  snapshot_verify_guest: false
+  snapshot_verify_guest: false,
+  blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
+  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit")
+
+# Edge-key tests pass a per-test auth_dir. This fallback is still outside the
+# test BTRFS tree and prevents accidental use of the production path.
+config :mjolnir, auth_dir: "/tmp/mjolnir-test/auth"
 
 config :mjolnir, :auth, bypass_localhost: true
+# Lets Plug tests act as the operator when they also set bypass_localhost.
+# A production release never sets this. Peer address alone is not enough.
+config :mjolnir, test_operator: true

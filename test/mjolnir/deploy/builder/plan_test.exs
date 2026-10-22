@@ -27,6 +27,55 @@ defmodule Mjolnir.Deploy.Builder.PlanTest do
     keys
   end
 
+  defp cached_metadata(steps) do
+    Plan.compute(@base, steps, []).layers
+    |> Map.new(fn layer ->
+      {layer.cache_key,
+       %{
+         "deploy_parent_id" => layer.parent_id,
+         "deploy_command_digest" => layer.command_digest,
+         "deploy_input_digest" => layer.input_digest
+       }}
+    end)
+  end
+
+  test "compares stored command and input digests for string and table steps" do
+    for hash <- ["whole-tree", "glob-inputs", CacheKey.no_inputs_hash()] do
+      old = %{command: "make old", input_hash: hash}
+      cached = cached_metadata([old])
+
+      assert [%{miss_reason: :command}] =
+               Plan.compute(@base, [%{old | command: "make new"}], cached).layers
+
+      assert [%{miss_reason: :inputs}] =
+               Plan.compute(@base, [%{old | input_hash: "changed"}], cached).layers
+
+      assert [%{miss_reason: :command}] =
+               Plan.compute(@base, [%{command: "make new", input_hash: "changed"}], cached).layers
+    end
+  end
+
+  test "missing keys miss even with matching metadata, and downstream keys stay parent misses" do
+    [first, second | _] = steps()
+    cached = cached_metadata([first, second])
+    changed = [%{first | command: "changed"}, second]
+
+    assert [%{miss_reason: :command}, %{miss_reason: :parent}] =
+             Plan.compute(@base, changed, cached).layers
+
+    [{_, meta} | _] = Map.to_list(cached_metadata([first]))
+    assert [%{status: :miss}] = Plan.compute(@base, [first], %{"absent-key" => meta}).layers
+  end
+
+  test "a matching command in historical siblings proves inputs changed" do
+    old = %{command: "make", input_hash: "old"}
+    other = %{command: "other", input_hash: "older"}
+    cached = Map.merge(cached_metadata([old]), cached_metadata([other]))
+
+    assert [%{miss_reason: :inputs}] =
+             Plan.compute(@base, [%{old | input_hash: "new"}], cached).layers
+  end
+
   describe "compute/3 — empty inputs" do
     test "no steps degenerates to release == base, nothing to run" do
       plan = Plan.compute(@base, [], [])
@@ -51,6 +100,14 @@ defmodule Mjolnir.Deploy.Builder.PlanTest do
       assert plan.release_layer_id == k3
       assert length(plan.steps_to_run) == 3
       assert Enum.map(plan.layers, & &1.status) == [:miss, :miss, :miss]
+      assert Enum.map(plan.layers, & &1.miss_reason) == [:inputs, :parent, :parent]
+    end
+
+    test "a command-only first miss is attributed to command" do
+      command_only = [%{command: "apt-get update", input_hash: CacheKey.no_inputs_hash()}]
+      plan = Plan.compute(@base, command_only, [])
+
+      assert [%{status: :miss, miss_reason: :command}] = plan.layers
     end
   end
 
@@ -94,6 +151,7 @@ defmodule Mjolnir.Deploy.Builder.PlanTest do
       assert plan.resume_from == k1
       # k3 must still be rebuilt despite being present in the cache set.
       assert Enum.any?(plan.steps_to_run, &(&1.cache_key == k3))
+      assert Enum.map(plan.layers, & &1.miss_reason) == [nil, :inputs, :parent]
     end
   end
 

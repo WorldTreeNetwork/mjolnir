@@ -153,7 +153,8 @@ defmodule Mjolnir.API.SitesTokenAuthTest do
       for {method, path} <- [
             {:post, "/api/vms"},
             {:get, "/api/vms"},
-            {:get, "/api/snapshots"}
+            {:get, "/api/snapshots"},
+            {:post, "/api/certs/issue"}
           ] do
         conn = call(method, path, "", token: token)
 

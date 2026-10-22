@@ -6,11 +6,54 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::config::SitesResolver;
+
+pub const PARK_HOST: &str = "park.worldtree.network";
+
+#[derive(Debug)]
+struct CachedPark {
+    dir: Option<PathBuf>,
+    expires_at: Instant,
+}
+
+#[derive(Debug, Default)]
+pub struct ParkSnapshotCache {
+    entry: Mutex<Option<CachedPark>>,
+}
+
+impl ParkSnapshotCache {
+    pub async fn resolve(&self, resolver: &SitesResolver) -> Option<PathBuf> {
+        let mut entry = self.entry.lock().await;
+        let now = Instant::now();
+        if let Some(cached) = entry.as_ref() {
+            if cached.expires_at > now {
+                return cached.dir.clone();
+            }
+        }
+        let dir = match lookup(resolver, PARK_HOST).await {
+            LookupResult::Hit(_, site) => {
+                let current = site.current_dir(&resolver.sites_root);
+                crate::sites_serve::resolve_snapshot_dir(&resolver.sites_root, &current).await
+            }
+            LookupResult::Miss | LookupResult::Error => None,
+        };
+        let ttl = if dir.is_some() {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(5)
+        };
+        *entry = Some(CachedPark {
+            dir: dir.clone(),
+            expires_at: now + ttl,
+        });
+        dir
+    }
+}
 
 /// The `(identikey_fp, site_name)` pair an alias resolves to, already validated
 /// as safe to use as filesystem path components (see [`validate_component`]).
@@ -323,5 +366,55 @@ mod tests {
         // We don't care about the result — just that mockito matched the URL.
         let _ = lookup(&resolver, "foo bar.io").await;
         _m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn park_failure_is_negative_cached() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock(
+                "GET",
+                "/api/sites/aliases/lookup?host=park.worldtree.network",
+            )
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+        let resolver = resolver_for(&server.url());
+        let cache = ParkSnapshotCache::default();
+        assert!(cache.resolve(&resolver).await.is_none());
+        assert!(cache.resolve(&resolver).await.is_none());
+        mock.assert_async().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn park_success_is_cached_as_contained_snapshot_directory() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock(
+                "GET",
+                "/api/sites/aliases/lookup?host=park.worldtree.network",
+            )
+            .with_status(200)
+            .with_body(r#"{"identikey_fp":"parkfp","site_name":"park"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let tmp = tempfile::tempdir().unwrap();
+        let snapshot = tmp.path().join("parkfp/park/snapshots/h1");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("404.html"), b"park").unwrap();
+        std::os::unix::fs::symlink(&snapshot, tmp.path().join("parkfp/park/current")).unwrap();
+        let resolver = SitesResolver {
+            api_url: server.url(),
+            backend: "127.0.0.1:4000".parse().unwrap(),
+            sites_root: tmp.path().to_path_buf(),
+        };
+        let cache = ParkSnapshotCache::default();
+        let canonical = tokio::fs::canonicalize(&snapshot).await.unwrap();
+        assert_eq!(cache.resolve(&resolver).await.as_deref(), Some(canonical.as_path()));
+        assert_eq!(cache.resolve(&resolver).await.as_deref(), Some(canonical.as_path()));
+        mock.assert_async().await;
     }
 }

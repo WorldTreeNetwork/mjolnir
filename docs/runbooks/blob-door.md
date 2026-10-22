@@ -32,7 +32,15 @@ GET          /health
 
 `{hash}` is base58 Blake3 of the stored bytes. Door refuses a
 mismatch. Re-PUT of the same bytes is a no-op (no extra B2 version).
-Ack only after HeadObject/GET on B2. v1 RAM cap 64 MiB.
+Ack only after HeadObject/GET on B2. The door is a **write-through
+caching proxy**: it pumps the body onto host SSD
+(`/var/lib/mjolnir/blobs`, 64 GiB budget) and uploads from
+that file. That path is **outside** `btrfs_root` — same reason
+escrow is not on the data volume. A cache on BTRFS would be
+CoW-pinned by every snapshot and fill the disk monotonically.
+Accept is still B2, not the local file. Per-object ceiling 1 TiB
+(`BLOB_DOOR_MAX_BYTES`); disk full is 507. Cache is not the
+archive — wiping it does not lose accepted objects.
 
 ## From a VM
 
@@ -67,8 +75,15 @@ Taskmaster or a guest.
 
 ## Sites
 
-`Mjolnir.Sites.Storage.Recrypt` already speaks these routes. Point
-`MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222` and set
-`:sites_storage_backend` to the Recrypt adapter. Default remains
-local BTRFS until that cutover (`mjolnir-u8v7.4`). Do not send chunks
-through recrypt-server `POST /files`.
+`Mjolnir.Sites.Storage.Recrypt` speaks these routes. Content hashes and
+IdentiKey fingerprints are real Blake3 (`mjolnir-b3`). Cutover:
+
+```
+MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222
+MJOLNIR_BLAKE3_BIN=/opt/mjolnir/bin/mjolnir-b3
+```
+
+in `/etc/mjolnir/env`, then restart Elixir (bounces VMs). Default
+without that env is still local BTRFS. Do not send chunks through
+recrypt-server `POST /files`. Already-published sites keep serving
+from materialized plaintext until republished.

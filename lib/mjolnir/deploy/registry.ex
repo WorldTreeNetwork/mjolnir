@@ -34,6 +34,7 @@ defmodule Mjolnir.Deploy.Registry do
             custom_domain: String.t() | nil,
             port: pos_integer() | nil,
             owner_id: String.t() | nil,
+            stateful: boolean(),
             updated_at: integer()
           }
 
@@ -55,7 +56,10 @@ defmodule Mjolnir.Deploy.Registry do
       # regular users and allows only localhost, matching Policy.VM's treatment
       # of nil-owner VMs. Back-fill rather than relaxing the policy.
       :owner_id,
-      :updated_at
+      :updated_at,
+      # Adopted stateful app (B0 hive, etc.). Deploy.Runtime refuses cutover
+      # unless `:force`. Default false so existing JSON files stay deployable.
+      stateful: false
     ]
   end
 
@@ -165,6 +169,7 @@ defmodule Mjolnir.Deploy.Registry do
       custom_domain: Map.get(attrs, :custom_domain),
       port: Map.get(attrs, :port),
       owner_id: Map.get(attrs, :owner_id),
+      stateful: Map.get(attrs, :stateful, false) == true,
       updated_at: Map.get(attrs, :updated_at, System.os_time(:second))
     }
   end
@@ -209,6 +214,7 @@ defmodule Mjolnir.Deploy.Registry do
       "custom_domain" => entry.custom_domain,
       "port" => entry.port,
       "owner_id" => entry.owner_id,
+      "stateful" => entry.stateful,
       "updated_at" => entry.updated_at
     })
   end
@@ -228,6 +234,7 @@ defmodule Mjolnir.Deploy.Registry do
          # nil here means a pre-ownership entry. Policy.App treats that as
          # "localhost only" rather than "anyone", so a legacy file fails closed.
          owner_id: Map.get(map, "owner_id"),
+         stateful: Map.get(map, "stateful", false) == true,
          updated_at: updated_at
        }}
     else

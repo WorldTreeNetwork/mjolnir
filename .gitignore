@@ -22,6 +22,10 @@ native/target/
 .DS_Store
 Thumbs.db
 
+# TypeScript / bun packages
+**/node_modules/
+packages/*/dist/
+
 # Test/Dev
 /cover/
 /doc/
@@ -42,3 +46,13 @@ boot-image/
 *.db
 .beads-credential-key
 .metacoding
+
+# Local agent runtime and spawned-reader artifacts
+/.omx/
+/.spawns/
+
+# Intention scratch (conductor isolate, spawn stage)
+.worktrees/
+.spawns/
+.omx/
+groups/*/inventory.json

@@ -5,6 +5,8 @@ config :logger, level: :info
 # Dev uses the same kernel/base images as prod (installed by bootstrap)
 # but separate VM storage and sockets to avoid conflicts
 config :mjolnir,
+  vmm_slice: "mjd-vms.slice",
+  vmm_scope_prefix: "mjd-",
   # Shared resources (read-only, installed by bootstrap)
   btrfs_root: "/var/lib/mjolnir/btrfs",
   ch_kernel_path: "/var/lib/mjolnir/vmlinux-ch",
@@ -15,6 +17,8 @@ config :mjolnir,
 
   # Deploy registry kept under the project so the dev BEAM needs no /var/lib perms.
   deploy_state_dir: Path.join(File.cwd!(), ".mjolnir-dev/deploy/registry"),
+  blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
+  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit"),
 
   # Auto-inject current guest agent — path relative to project root (works for any checkout location)
   guest_agent_bin:
@@ -27,7 +31,11 @@ config :mjolnir,
   pg_socket_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/sock"),
   pg_log_dir: Path.join(File.cwd!(), ".mjolnir-dev/pg/log")
 
+# Local iex only. Production runtime.exs does not set this, so a TCP
+# connection to 127.0.0.1 is not the operator on the host.
+config :mjolnir, dev_operator: true
+
 config :mjolnir, :auth,
   bypass_localhost: true,
-  issuer: "https://connect.identikey.io/realms/identikey",
-  audience: "mjolnir"
+  issuer: "https://auth.identikey.me",
+  audience: ["mjolnir-cli", "mjolnir-term", "mjolnir"]

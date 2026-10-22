@@ -104,4 +104,42 @@ defmodule Mjolnir.Sites.AliasSecretStoreTest do
     # Now lookup via the live global store reads the restored file
     assert {:ok, {^fp, "blog"}} = SecretStore.lookup_alias(fqdn)
   end
+
+  test "read_alias reports a missing file and a bad name as not_found" do
+    assert :not_found = SecretStore.read_alias("missing-#{System.unique_integer()}.example.com")
+    assert :not_found = SecretStore.lookup_alias("not a host")
+    assert :not_found = SecretStore.read_alias("not a host")
+  end
+
+  test "read_alias treats an unparseable file as unreadable and lookup stays a miss", %{
+    tmp: tmp
+  } do
+    fqdn = "parse-#{System.unique_integer([:positive])}.example.com"
+    path = Path.join([tmp, "_index", "aliases", fqdn])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "%%%")
+
+    assert {:error, :unreadable} = SecretStore.read_alias(fqdn)
+    assert :not_found = SecretStore.lookup_alias(fqdn)
+  end
+
+  test "read_alias returns the filesystem error when the index path is a directory", %{tmp: tmp} do
+    fqdn = "dir-#{System.unique_integer([:positive])}.example.com"
+    path = Path.join([tmp, "_index", "aliases", fqdn])
+    File.mkdir_p!(path)
+
+    assert {:error, :eisdir} = SecretStore.read_alias(fqdn)
+    assert :not_found = SecretStore.lookup_alias(fqdn)
+  end
+
+  test "a legacy colon record is still a hit" do
+    fqdn = "legacy-#{System.unique_integer([:positive])}.example.com"
+    path = Path.join([SecretStore.root(), "_index", "aliases", fqdn])
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "fpvalue:sitename")
+    on_exit(fn -> File.rm(path) end)
+
+    assert {:ok, {"fpvalue", "sitename"}} = SecretStore.read_alias(fqdn)
+    assert {:ok, {"fpvalue", "sitename"}} = SecretStore.lookup_alias(fqdn)
+  end
 end

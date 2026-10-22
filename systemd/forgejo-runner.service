@@ -9,6 +9,9 @@ Type=simple
 WorkingDirectory=/var/lib/mjolnir/runner
 ExecStart=/usr/local/bin/forgejo-runner-mjolnir daemon --config /var/lib/mjolnir/runner/config.yaml
 Environment=MJOLNIR_API_BASE=http://127.0.0.1:4000
+# Dial the operator socket when it exists. Absent (this BEAM, pre-restart),
+# the runner keeps using TCP loopback. See act/container/mjolnir/vm.go.
+Environment=MJOLNIR_OPERATOR_SOCKET=/run/mjolnir/operator.sock
 Environment=FORGEJO_HOST_URL=http://10.255.255.1:3000
 Restart=on-failure
 RestartSec=5

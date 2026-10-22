@@ -22,6 +22,13 @@ defmodule Mjolnir.API.Router do
         single top-level directory, else `"app"`.
       * `X-Memory-MB` — service VM memory. Default `256`.
       * `X-Domain` — optional custom-domain fqdn to assign on first deploy.
+      * `X-Base-Image` — optional `@base/` name (`mj deploy --base`). Overrides
+        `mjolnir.toml` `base_image`. Omitted: the manifest pin, else
+        `deploy-node-bun`.
+      * `X-Owner-Id` — loopback only. Canonical base58 XID stamped as
+        `owner_id`. A missing or non-canonical value is `400` before the body
+        is read. A signed-in caller is stamped as their `sub`; the header is
+        ignored. Redeploying an app owned by a different XID is `409`.
     * **Response**: `200` with `Content-Type: application/x-ndjson`, a stream of
       newline-delimited JSON objects. Progress lines are `{"stage": ..., "line":
       ...}` (stages: `detect`, `build`, `run`, `done`, or a failing stage name).
@@ -43,6 +50,16 @@ defmodule Mjolnir.API.Router do
   ### `DELETE /api/apps/:app/domain`
 
     * **Response**: `200` `{"app", "removed": true}`; `404` if not deployed.
+
+  ### `PUT /api/apps/:app`
+
+    * **Body**: `{"service_vm_id": "<uuid>", "port": 3000}` and optional
+      `release_snapshot`, `force`. Binds an **existing** running VM as a
+      named app. Does not spawn or stop a VM. Marks the entry `stateful`
+      so a later `mj deploy` refuses cutover unless `force`.
+    * **Response**: `200` `{app, service_vm_id, port, release_snapshot,
+      stateful}`. `404` `vm_not_found`. `409` `app_exists` or
+      `stateful_vm_mismatch`.
 
   ### `GET /api/apps`
 
@@ -99,8 +116,11 @@ defmodule Mjolnir.API.Router do
 
   plug(Plug.Logger)
   plug(:maybe_parse_body)
-  plug(Mjolnir.API.Auth)
+  # Vanity sites are public content. They run before Auth so a gateway
+  # splice of `GET /` does not need to be the operator. `/api` and
+  # `/auth` fall through to Auth.
   plug(Mjolnir.API.VanityHostPlug)
+  plug(Mjolnir.API.Auth)
   plug(:match)
   plug(:dispatch)
 
@@ -114,44 +134,53 @@ defmodule Mjolnir.API.Router do
     json(conn, 200, %{status: "ok"})
   end
 
-  # IdentiKey Connect login (device-code, same client as `mj login`).
+  # Passkey login at auth.identikey.me (authorization-code + PKCE).
   get "/auth/login" do
     next = Mjolnir.Auth.Login.safe_next(conn.query_params["next"])
 
     case Mjolnir.Auth.Login.begin(next) do
-      {:ok, started} ->
+      {:ok, url} ->
         conn
-        |> put_resp_content_type("text/html; charset=utf-8")
-        |> send_resp(200, Mjolnir.API.LoginPage.render(started))
+        |> put_resp_header("location", url)
+        |> send_resp(302, "")
 
       {:error, reason} ->
         Logger.error("IdentiKey login failed to start: #{inspect(reason)}")
 
         json(conn, 502, %{
           error: "identikey_unavailable",
-          message: "IdentiKey Connect did not start a login"
+          message: "IdentiKey did not start a login"
         })
     end
   end
 
-  get "/auth/wait/:id" do
-    case Mjolnir.Auth.Login.poll(id) do
-      {:ok, token, next} ->
-        conn
-        |> put_resp_cookie(Mjolnir.API.Auth.term_cookie(), token,
-          http_only: true,
-          secure: true,
-          same_site: "Lax",
-          path: "/",
-          max_age: 12 * 60 * 60
-        )
-        |> json(200, %{ok: true, next: next})
+  get "/auth/callback" do
+    params = conn.query_params
+    code = params["code"]
+    state = params["state"]
 
-      :pending ->
-        json(conn, 200, %{ok: false, pending: true})
+    cond do
+      not is_binary(code) or not is_binary(state) ->
+        json(conn, 400, %{error: "invalid_callback"})
 
-      {:error, reason} ->
-        json(conn, 200, %{ok: false, error: to_string(reason)})
+      true ->
+        case Mjolnir.Auth.Login.complete(code, state) do
+          {:ok, token, next} ->
+            conn
+            |> put_resp_cookie(Mjolnir.API.Auth.term_cookie(), token,
+              http_only: true,
+              secure: true,
+              same_site: "Lax",
+              path: "/",
+              max_age: 12 * 60 * 60
+            )
+            |> put_resp_header("location", next)
+            |> send_resp(302, "")
+
+          {:error, reason} ->
+            Logger.error("IdentiKey callback failed: #{inspect(reason)}")
+            json(conn, 401, %{error: "login_failed"})
+        end
     end
   end
 
@@ -250,6 +279,14 @@ defmodule Mjolnir.API.Router do
         if conn.body_params["preserve_iroh_key"],
           do: Map.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
           else: opts
+
+      opts =
+        case conn.body_params["git_signing"] do
+          true -> Map.put(opts, :git_signing, true)
+          false -> Map.put(opts, :git_signing, false)
+          nil -> opts
+          _ -> Map.put(opts, :_validation_error, "git_signing must be a boolean")
+        end
 
       opts =
         if Map.has_key?(conn.body_params, "enable_iroh"),
@@ -422,6 +459,14 @@ defmodule Mjolnir.API.Router do
             {:ok, vm} ->
               json(conn, 201, Views.render_vm(vm))
 
+            {:error, {:iroh_identity_in_use, id, ticket}} ->
+              json(conn, 409, %{
+                error: "iroh_identity_in_use",
+                vm_id: id,
+                ticket: ticket,
+                hint: "that snapshot's Iroh key is already live; reuse this VM"
+              })
+
             {:error, reason} ->
               Logger.error("VM spawn failed: #{inspect(reason)}")
               json(conn, 500, %{error: "spawn_failed"})
@@ -452,7 +497,7 @@ defmodule Mjolnir.API.Router do
       vms =
         Mjolnir.VM.list()
         |> Enum.filter(fn vm ->
-          (user_id == "localhost" or vm.owner_id == user_id) and
+          (user_id == "localhost" or Mjolnir.Deploy.Owner.same?(vm.owner_id, user_id)) and
             metadata_matches?(vm.metadata, selector)
         end)
         |> Enum.map(&Views.render_vm_summary/1)
@@ -463,7 +508,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_stranded()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_stranded_summary/1)
@@ -474,7 +519,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_failed()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_failed_summary/1)
@@ -486,7 +531,7 @@ defmodule Mjolnir.API.Router do
         Mjolnir.VM.list_stopped()
         |> Enum.filter(fn record ->
           (user_id == "localhost" or
-             Map.get(record.spawn_config || %{}, "owner_id") == user_id) and
+             Mjolnir.Deploy.Owner.same?(Map.get(record.spawn_config || %{}, "owner_id"), user_id)) and
             metadata_matches?(record.metadata, selector)
         end)
         |> Enum.map(&Views.render_stopped_summary/1)
@@ -520,7 +565,9 @@ defmodule Mjolnir.API.Router do
           visible =
             Enum.filter(entries, fn e ->
               owner = get_in(e, [:metadata, "spawn_config", "owner_id"])
-              user_id == "localhost" or owner == user_id or is_nil(owner)
+
+              user_id == "localhost" or is_nil(owner) or
+                Mjolnir.Deploy.Owner.same?(owner, user_id)
             end)
 
           json(conn, 200, %{trash: Enum.map(visible, &Views.render_trash_entry/1)})
@@ -546,7 +593,8 @@ defmodule Mjolnir.API.Router do
 
           # Ownership: a user may only restore their own VM. Localhost (the
           # SSH-tunnel admin path) and ownerless legacy entries are allowed.
-          if user_id == "localhost" or owner == user_id or is_nil(owner) do
+          if user_id == "localhost" or is_nil(owner) or
+               Mjolnir.Deploy.Owner.same?(owner, user_id) do
             restore_from_trash(conn, id)
           else
             json(conn, 403, %{error: "forbidden"})
@@ -583,6 +631,48 @@ defmodule Mjolnir.API.Router do
         {:error, message} ->
           json(conn, 400, %{error: "invalid_session", message: message})
       end
+    else
+      conn
+    end
+  end
+
+  # Owner grants a terminal invite. The XID can open /term and nothing else.
+  post "/api/vms/:id/term-invites" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      xid = conn.body_params["xid"]
+
+      cond do
+        not (is_binary(xid) and Regex.match?(~r/^[0-9a-f]{64}$/, xid)) ->
+          json(conn, 400, %{error: "invalid_xid"})
+
+        true ->
+          authorize_vm(conn, id, :grant_pty, fn _vm ->
+            case Mjolnir.VM.grant_pty(id, xid) do
+              {:ok, invites} ->
+                json(conn, 200, %{pty_invites: invites})
+
+              {:error, reason} ->
+                json(conn, 500, %{error: "grant_failed", reason: inspect(reason)})
+            end
+          end)
+      end
+    else
+      conn
+    end
+  end
+
+  delete "/api/vms/:id/term-invites/:xid" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      authorize_vm(conn, id, :grant_pty, fn _vm ->
+        case Mjolnir.VM.revoke_pty(id, xid) do
+          {:ok, invites} -> json(conn, 200, %{pty_invites: invites})
+          {:error, reason} -> json(conn, 500, %{error: "revoke_failed", reason: inspect(reason)})
+        end
+      end)
     else
       conn
     end
@@ -1034,34 +1124,42 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Send message to a VM (inter-VM messaging / coroutine wake-up)
+  # Send message to a VM (inter-VM messaging / coroutine wake-up).
+  # The sender is the authenticated principal. A body field is not.
   post "/api/vms/:id/messages" do
-    conn = require_scope(conn, "vms:exec")
+    conn =
+      if Mjolnir.API.Auth.capability?(conn) do
+        conn
+      else
+        require_scope(conn, "vms:exec")
+      end
 
     unless conn.halted do
-      authorize_vm(conn, id, :message, fn _vm ->
-        from_vm_id = conn.body_params["from_vm_id"] || "external"
+      send = fn ->
         payload = conn.body_params["payload"] || %{}
-        # Plug stringifies atoms; missing id must stay nil so Mailbox generates one.
+        sender = message_sender(conn)
 
-        # Validate from_vm_id ownership when not "external"
         authorized =
-          if from_vm_id == "external" do
-            true
-          else
-            user = %{user_id: conn.assigns[:user_id]}
+          cond do
+            Mjolnir.API.Auth.capability?(conn) ->
+              biscuit_right(conn, id, "message") == :ok
 
-            case Mjolnir.VM.get(from_vm_id) do
-              {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
-              # Not found or unreachable (mjolnir-8ie): cannot authorize the sender.
-              {:error, _} -> false
-            end
+            sender == conn.assigns[:user_id] ->
+              true
+
+            true ->
+              user = %{user_id: conn.assigns[:user_id]}
+
+              case Mjolnir.VM.get(sender) do
+                {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
+                {:error, _} -> false
+              end
           end
 
         if authorized do
           message_id = conn.body_params["id"]
 
-          case Mjolnir.VM.deliver_message(id, from_vm_id, payload, id: message_id) do
+          case Mjolnir.VM.deliver_message(id, sender, payload, id: message_id) do
             {:ok, %{message_id: mid, status: status}} ->
               json(conn, 200, %{ok: true, message_id: mid, status: status})
 
@@ -1081,10 +1179,133 @@ defmodule Mjolnir.API.Router do
         else
           json(conn, 404, %{error: "not_found"})
         end
-      end)
+      end
+
+      if Mjolnir.API.Auth.capability?(conn) do
+        send.()
+      else
+        authorize_vm(conn, id, :message, fn _vm -> send.() end)
+      end
     else
       conn
     end
+  end
+
+  # Caller mailbox. The id is either the caller's own mailbox or a VM
+  # they may message. A client-supplied sender is not recorded.
+  get "/api/mail/:id/messages" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      conn = authorize_mailbox(conn, id)
+
+      if conn.halted do
+        conn
+      else
+        messages = Mjolnir.Mailbox.list_unacked(id)
+        json(conn, 200, %{ok: true, messages: messages})
+      end
+    else
+      conn
+    end
+  end
+
+  post "/api/mail/:id/messages" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      conn = authorize_mailbox(conn, id)
+
+      if conn.halted do
+        conn
+      else
+        payload = conn.body_params["payload"] || %{}
+        message_id = conn.body_params["id"]
+        sender = message_sender(conn)
+
+        case Mjolnir.Mailbox.accept(id, sender, payload, id: message_id) do
+          {:ok, %{message_id: mid, status: status}} ->
+            Mjolnir.Mailbox.kick(id)
+            json(conn, 200, %{ok: true, message_id: mid, status: status})
+
+          {:error, :invalid_message_id} ->
+            json(conn, 400, %{error: "invalid_message_id"})
+
+          {:error, reason} ->
+            Logger.error("Mailbox accept failed for #{id}: #{inspect(reason)}")
+            json(conn, 500, %{error: "message_delivery_failed"})
+        end
+      end
+    else
+      conn
+    end
+  end
+
+  post "/api/mail/:id/ack" do
+    conn = require_scope(conn, "vms:exec")
+
+    unless conn.halted do
+      conn = authorize_mailbox(conn, id)
+
+      if conn.halted do
+        conn
+      else
+        ack_mailbox(conn, id)
+      end
+    else
+      conn
+    end
+  end
+
+  post "/api/secrets/challenge" do
+    json(conn, 200, %{nonce: Mjolnir.Secrets.Redeem.challenge()})
+  end
+
+  post "/api/secrets/redeem" do
+    case Mjolnir.Secrets.Redeem.redeem(conn.body_params) do
+      {:ok, secret} ->
+        json(conn, 200, %{value_b64: Base.encode64(secret)})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_found"})
+
+      {:error, reason} ->
+        json(conn, 401, %{error: Atom.to_string(reason)})
+    end
+  end
+
+  post "/api/egress" do
+    case Mjolnir.Secrets.Redeem.egress(conn.body_params) do
+      {:ok, status, body} ->
+        json(conn, 200, %{upstream_status: status, body_b64: Base.encode64(body)})
+
+      {:error, :host_not_allowed} ->
+        json(conn, 403, %{error: "host_not_allowed"})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_found"})
+
+      {:error, reason} ->
+        json(conn, 401, %{error: Atom.to_string(reason)})
+    end
+  end
+
+  defp ack_mailbox(conn, id) do
+    ids =
+      case conn.body_params["ids"] do
+        list when is_list(list) -> Enum.filter(list, &is_binary/1)
+        _ -> []
+      end
+
+    results =
+      Enum.map(ids, fn mid ->
+        case Mjolnir.Mailbox.ack(id, mid) do
+          :ok -> %{id: mid, ok: true}
+          {:error, reason} -> %{id: mid, ok: false, error: inspect(reason)}
+        end
+      end)
+
+    json(conn, 200, %{ok: true, results: results})
   end
 
   # Stop VM
@@ -1305,7 +1526,7 @@ defmodule Mjolnir.API.Router do
           filtered =
             snapshots
             |> Enum.filter(fn meta ->
-              user_id == "localhost" or meta[:owner_id] == user_id
+              user_id == "localhost" or Mjolnir.Deploy.Owner.same?(meta[:owner_id], user_id)
             end)
             |> Enum.map(&Mjolnir.MemorySnapshot.annotate/1)
 
@@ -1417,7 +1638,7 @@ defmodule Mjolnir.API.Router do
       dormant =
         Mjolnir.DormantRegistry.list()
         |> Enum.filter(fn entry ->
-          user_id == "localhost" or entry.owner_id == user_id
+          user_id == "localhost" or Mjolnir.Deploy.Owner.same?(entry.owner_id, user_id)
         end)
         |> Enum.map(fn entry ->
           %{
@@ -1484,15 +1705,97 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  # Forgejo login → XID. Loopback only: a tenant token must not write the map.
+  get "/api/forgejo-owners/resolve" do
+    conn = conn |> require_scope("vms:read") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.resolve(conn.query_params["repo"]) do
+        {:ok, owner_id} -> json(conn, 200, %{owner_id: owner_id})
+        :error -> json(conn, 404, %{error: "owner_not_linked"})
+      end
+    end
+  end
+
+  put "/api/forgejo-owners/:login" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      forgejo_owner_put(conn, fn owner_id ->
+        Mjolnir.Deploy.ForgejoOwners.put_account(login, owner_id)
+      end)
+    end
+  end
+
+  delete "/api/forgejo-owners/:login" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.delete_account(login) do
+        :ok -> json(conn, 200, %{deleted: true})
+        {:error, reason} -> json(conn, 400, %{error: Atom.to_string(reason)})
+      end
+    end
+  end
+
+  put "/api/forgejo-owners/:login/:repo" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      forgejo_owner_put(conn, fn owner_id ->
+        Mjolnir.Deploy.ForgejoOwners.put_repo(login, repo, owner_id)
+      end)
+    end
+  end
+
+  delete "/api/forgejo-owners/:login/:repo" do
+    conn = conn |> require_scope("vms:spawn") |> require_localhost()
+
+    if conn.halted do
+      conn
+    else
+      case Mjolnir.Deploy.ForgejoOwners.delete_repo(login, repo) do
+        :ok -> json(conn, 200, %{deleted: true})
+        {:error, reason} -> json(conn, 400, %{error: Atom.to_string(reason)})
+      end
+    end
+  end
+
   # Deploy an app from a gzipped-tar source body; stream NDJSON progress.
   # See the module doc for the full request/response contract.
+  # A capability token is checked inside handle_deploy, against the app
+  # name, and does not receive vms:spawn.
   post "/api/deploy" do
-    conn = require_scope(conn, "vms:spawn")
+    conn =
+      if Mjolnir.API.Auth.capability?(conn) do
+        conn
+      else
+        require_scope(conn, "vms:spawn")
+      end
 
     # Ownership is checked inside handle_deploy: the app name is only known
     # after the uploaded source is extracted (resolve_app_name reads
     # package.json), so authorize_deploy runs there rather than here.
     if conn.halted, do: conn, else: handle_deploy(conn)
+  end
+
+  # Adopt an existing running VM as a named app without cutover.
+  put "/api/apps/:app" do
+    conn = require_scope(conn, "vms:spawn")
+
+    unless conn.halted do
+      handle_adopt(conn, app)
+    else
+      conn
+    end
   end
 
   # Set (or change) an app's custom domain.
@@ -1633,55 +1936,26 @@ defmodule Mjolnir.API.Router do
     end
   end
 
-  # Issue a public HTTP-01 cert for a CNAME'd custom domain (mjolnir-r7b3.3).
-  # Issuance runs on the host; the client never sees PEMs. Wildcard refuse
-  # happens before the app lookup so a `*.` name is never confused with
-  # app_not_found. Ownership is the same check as :set_domain.
+  # Issue a public HTTP-01 cert (mjolnir-r7b3.3, site aliases in ADR 0013).
+  # An app custom domain owns the host. Else a live site alias issues with
+  # domain insertion off. Else 404 name_not_found. PEMs never leave the host.
   post "/api/certs/issue" do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
       case conn.body_params["fqdn"] do
         fqdn when is_binary(fqdn) and fqdn != "" ->
-          if String.starts_with?(String.trim(fqdn), "*.") do
-            json(conn, 400, %{
-              error: "wildcard_not_supported",
-              detail: "HTTP-01 cannot issue wildcards (v1)"
-            })
-          else
-            case app_for_domain(fqdn) do
-              nil ->
-                json(conn, 404, %{error: "app_not_found", fqdn: fqdn})
+          case Mjolnir.API.Certs.resolve(fqdn) do
+            {:app, entry} ->
+              authorize_app(conn, entry.app_name, :issue_cert, fn _entry ->
+                issue_json(conn, fqdn, Mjolnir.API.Certs.issue(fqdn, domain: true))
+              end)
 
-              entry ->
-                authorize_app(conn, entry.app_name, :issue_cert, fn _entry ->
-                  case Mjolnir.API.Certs.issue(fqdn) do
-                    {:ok, result} ->
-                      json(conn, 200, result)
+            {:site, _name} ->
+              issue_json(conn, fqdn, Mjolnir.API.Certs.issue(fqdn, domain: false))
 
-                    {:error, :wildcard_not_supported} ->
-                      json(conn, 400, %{
-                        error: "wildcard_not_supported",
-                        detail: "HTTP-01 cannot issue wildcards (v1)"
-                      })
-
-                    {:error, :fqdn_required} ->
-                      json(conn, 400, %{error: "fqdn is required"})
-
-                    {:error, {:issue_failed, _code, output}} ->
-                      Logger.error("Cert issue failed for #{fqdn}: #{output}")
-                      json(conn, 500, %{error: "cert_issue_failed"})
-
-                    {:error, {:ensure_failed, reason}} ->
-                      Logger.error("Cert install failed for #{fqdn}: #{inspect(reason)}")
-                      json(conn, 500, %{error: "cert_install_failed"})
-
-                    {:error, reason} ->
-                      Logger.error("Cert issue failed for #{fqdn}: #{inspect(reason)}")
-                      json(conn, 500, %{error: "cert_issue_failed"})
-                  end
-                end)
-            end
+            {:error, reason} ->
+              resolve_error(conn, reason)
           end
 
         _ ->
@@ -1709,14 +1983,9 @@ defmodule Mjolnir.API.Router do
       case Mjolnir.API.Certs.list() do
         {:ok, certs} ->
           visible =
-            if user.user_id == "localhost" do
-              certs
-            else
-              Enum.filter(certs, fn c ->
-                host = c.host || ""
-                MapSet.member?(owned_hosts, String.downcase(host))
-              end)
-            end
+            Enum.filter(certs, fn cert ->
+              Mjolnir.API.Certs.include_cert?(cert, user, owned_hosts)
+            end)
 
           json(conn, 200, %{certs: visible})
 
@@ -1754,6 +2023,37 @@ defmodule Mjolnir.API.Router do
       {:error, {:memory_snapshot_requires_thaw, name}}
     else
       Mjolnir.VM.spawn(opts)
+    end
+  end
+
+  # Operator routes (Forgejo owner links). A JWT caller is not the host.
+  defp require_localhost(conn) do
+    cond do
+      conn.halted -> conn
+      conn.assigns[:user_id] == "localhost" -> conn
+      true -> json(conn, 403, %{error: "forbidden"})
+    end
+  end
+
+  defp forgejo_owner_put(conn, fun) do
+    owner_id = conn.body_params["owner_id"]
+
+    case fun.(owner_id) do
+      {:ok, id} ->
+        json(conn, 200, %{owner_id: id})
+
+      {:error, reason} when is_atom(reason) ->
+        json(conn, 400, %{error: Atom.to_string(reason)})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: "forgejo_owner_write_failed", reason: inspect(reason)})
+    end
+  end
+
+  defp stored_owner(app_name) do
+    case Mjolnir.Deploy.Registry.get(app_name) do
+      {:ok, entry} -> entry.owner_id
+      _ -> nil
     end
   end
 
@@ -1802,13 +2102,137 @@ defmodule Mjolnir.API.Router do
     json(conn, 500, %{error: "secrets_failed"})
   end
 
-  defp app_for_domain(fqdn) do
-    want = fqdn |> String.trim() |> String.trim_trailing(".") |> String.downcase()
+  defp issue_json(conn, fqdn, result) do
+    case result do
+      {:ok, body} ->
+        json(conn, 200, body)
 
-    Enum.find(Mjolnir.Deploy.Registry.list(), fn e ->
-      is_binary(e.custom_domain) and
-        String.downcase(String.trim_trailing(String.trim(e.custom_domain), ".")) == want
-    end)
+      {:error, :wildcard_not_supported} ->
+        json(conn, 400, %{
+          error: "wildcard_not_supported",
+          detail: "HTTP-01 cannot issue wildcards (v1)"
+        })
+
+      {:error, :fqdn_required} ->
+        json(conn, 400, %{error: "fqdn is required"})
+
+      {:error, {:issue_failed, _code, output}} ->
+        Logger.error("Cert issue failed for #{fqdn}: #{output}")
+        json(conn, 500, %{error: "cert_issue_failed"})
+
+      {:error, {:ensure_failed, reason}} ->
+        Logger.error("Cert install failed for #{fqdn}: #{inspect(reason)}")
+        json(conn, 500, %{error: "cert_install_failed"})
+
+      {:error, reason} ->
+        Logger.error("Cert issue failed for #{fqdn}: #{inspect(reason)}")
+        json(conn, 500, %{error: "cert_issue_failed"})
+    end
+  end
+
+  defp resolve_error(conn, :wildcard_not_supported) do
+    json(conn, 400, %{
+      error: "wildcard_not_supported",
+      detail: "HTTP-01 cannot issue wildcards (v1)"
+    })
+  end
+
+  defp resolve_error(conn, :fqdn_required), do: json(conn, 400, %{error: "fqdn is required"})
+
+  defp resolve_error(conn, :name_not_found), do: json(conn, 404, %{error: "name_not_found"})
+
+  defp resolve_error(conn, :host_routed_elsewhere) do
+    json(conn, 409, %{error: "host_routed_elsewhere"})
+  end
+
+  defp resolve_error(conn, :alias_index_unreadable) do
+    json(conn, 503, %{error: "alias_index_unreadable"})
+  end
+
+  defp resolve_error(conn, :gateway_config_unreadable) do
+    json(conn, 503, %{error: "gateway_config_unreadable"})
+  end
+
+  defp resolve_error(conn, reason) do
+    Logger.error("Cert resolve failed: #{inspect(reason)}")
+    json(conn, 500, %{error: "cert_issue_failed"})
+  end
+
+  defp handle_adopt(conn, app) do
+    user = %{user_id: conn.assigns[:user_id]}
+    vm_id = conn.body_params["service_vm_id"]
+    port = conn.body_params["port"]
+    snap = conn.body_params["release_snapshot"]
+    force? = conn.body_params["force"] in [true, "true"]
+
+    cond do
+      not is_binary(vm_id) or vm_id == "" ->
+        json(conn, 400, %{error: "service_vm_id is required"})
+
+      not is_integer(port) or port < 1 or port > 65_535 ->
+        json(conn, 400, %{error: "port must be an integer 1..65535"})
+
+      true ->
+        case Mjolnir.Deploy.Registry.get(app) do
+          {:ok, entry} ->
+            case Mjolnir.Policy.App.authorize(:adopt, user, entry) do
+              :ok ->
+                do_adopt(conn, app, vm_id, port, snap, force?)
+
+              :error ->
+                json(conn, 404, %{error: "app_not_found", app: app})
+            end
+
+          {:error, :not_found} ->
+            case Mjolnir.Policy.App.authorize(:deploy_new, user, nil) do
+              :ok ->
+                do_adopt(conn, app, vm_id, port, snap, force?)
+
+              :error ->
+                json(conn, 404, %{error: "app_not_found", app: app})
+            end
+        end
+    end
+  end
+
+  defp do_adopt(conn, app, vm_id, port, snap, force?) do
+    opts = [
+      owner_id: conn.assigns[:user_id],
+      force: force?
+    ]
+
+    opts =
+      if is_binary(snap) and snap != "",
+        do: Keyword.put(opts, :release_snapshot, snap),
+        else: opts
+
+    case Mjolnir.API.Adopt.adopt(app, vm_id, port, opts) do
+      {:ok, entry} ->
+        json(conn, 200, %{
+          app: entry.app_name,
+          service_vm_id: entry.service_vm_id,
+          port: entry.port,
+          release_snapshot: entry.release_snapshot,
+          stateful: entry.stateful
+        })
+
+      {:error, :vm_not_found} ->
+        json(conn, 404, %{error: "vm_not_found"})
+
+      {:error, :app_exists} ->
+        json(conn, 409, %{error: "app_exists"})
+
+      {:error, :stateful_vm_mismatch} ->
+        json(conn, 409, %{error: "stateful_vm_mismatch"})
+
+      {:error, {:snapshot_failed, reason}} ->
+        Logger.error("Adopt snapshot failed for #{app}: #{inspect(reason)}")
+        json(conn, 500, %{error: "snapshot_failed"})
+
+      {:error, {:registry_failed, reason}} ->
+        Logger.error("Adopt registry failed for #{app}: #{inspect(reason)}")
+        json(conn, 500, %{error: "adopt_failed"})
+    end
   end
 
   # --- POST /api/deploy ------------------------------------------------------
@@ -1817,12 +2241,106 @@ defmodule Mjolnir.API.Router do
   @deploy_max_body 256 * 1024 * 1024
 
   defp handle_deploy(conn) do
+    case resolve_deployer(conn) do
+      {:error, reason} ->
+        json(conn, 400, %{error: Atom.to_string(reason)})
+
+      {:ok, deployer} ->
+        handle_deploy_body(conn, deployer)
+    end
+  end
+
+  # Operator or a deploy capability names a Forgejo repo and the API
+  # resolves the XID. The caller does not send `X-Owner-Id` for that
+  # path. A capability token must also carry `right(<app>, "deploy")`,
+  # checked once the app name is known.
+  defp resolve_deployer(conn) do
+    repo = conn |> get_req_header("x-forgejo-repo") |> List.first()
+
+    cond do
+      Mjolnir.API.Auth.capability?(conn) ->
+        with {:ok, owner} <- forgejo_owner(repo) do
+          {:ok, owner}
+        end
+
+      Mjolnir.API.Auth.operator?(conn) and is_binary(repo) and repo != "" ->
+        forgejo_owner(repo)
+
+      true ->
+        Mjolnir.Deploy.Owner.resolve(
+          conn.assigns[:user_id],
+          conn |> get_req_header("x-owner-id") |> List.first()
+        )
+    end
+  end
+
+  defp forgejo_owner(repo) when is_binary(repo) and repo != "" do
+    case Mjolnir.Deploy.ForgejoOwners.resolve(repo) do
+      {:ok, owner} -> {:ok, owner}
+      :error -> {:error, :owner_not_linked}
+    end
+  end
+
+  defp forgejo_owner(_), do: {:error, :owner_not_linked}
+
+  defp message_sender(conn) do
+    claimed = conn.body_params["from_vm_id"]
+    user_id = conn.assigns[:user_id]
+
+    cond do
+      Mjolnir.API.Auth.capability?(conn) -> "capability"
+      is_binary(claimed) and claimed != "" and claimed != "external" -> claimed
+      true -> user_id || "operator"
+    end
+  end
+
+  defp authorize_mailbox(conn, id) do
+    user = %{user_id: conn.assigns[:user_id]}
+
+    cond do
+      Mjolnir.API.Auth.operator?(conn) ->
+        conn
+
+      conn.assigns[:user_id] == id ->
+        conn
+
+      true ->
+        case Mjolnir.VM.get(id) do
+          {:ok, vm} ->
+            if Mjolnir.Policy.VM.authorize(:message, user, vm) == :ok do
+              conn
+            else
+              json(conn, 404, %{error: "not_found"})
+            end
+
+          _ ->
+            json(conn, 404, %{error: "not_found"})
+        end
+    end
+  end
+
+  defp biscuit_right(conn, resource, operation) do
+    biscuit = conn.assigns[:biscuit]
+    fp = ""
+
+    case Application.get_env(:mjolnir, :biscuit_public_hex) do
+      hex when is_binary(hex) and is_binary(biscuit) ->
+        Mjolnir.Biscuit.authorize(biscuit, hex, fp, resource, operation, false)
+
+      _ ->
+        {:error, :biscuit_unconfigured}
+    end
+  rescue
+    _ -> {:error, :biscuit_unavailable}
+  end
+
+  defp handle_deploy_body(conn, deployer) do
     with {:ok, body, conn} <- read_full_body(conn),
          {:ok, requested_name} <- deploy_app_name(conn),
+         {:ok, base_image} <- deploy_base_image(conn),
          dest = deploy_src_dest(requested_name),
          {:ok, app_dir} <- extract_source(body, dest) do
       app_name = resolve_app_name(requested_name, app_dir)
-      deployer = conn.assigns[:user_id]
       memory_mb = deploy_memory_mb(conn)
       custom_domain = deploy_domain(conn)
 
@@ -1830,15 +2348,32 @@ defmodule Mjolnir.API.Router do
       # here, not at the route, because the app name comes from the uploaded
       # source. Must run before send_chunked/2 — once the response is chunked
       # we can no longer send a 403/404 status.
-      authorize_deploy(conn, app_name, fn _entry ->
-        do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain)
-      end)
+      #
+      # Localhost's policy bypass would otherwise let a loopback deploy stamp
+      # a different XID over an app someone already owns. `claim/2` is that
+      # check. Same 32 bytes stored as hex is a rewrite, not a transfer.
+      case Mjolnir.Deploy.Owner.claim(stored_owner(app_name), deployer) do
+        {:error, :owner_mismatch} ->
+          json(conn, 409, %{error: "owner_mismatch"})
+
+        _ ->
+          if Mjolnir.API.Auth.capability?(conn) and biscuit_right(conn, app_name, "deploy") != :ok do
+            json(conn, 403, %{error: "capability_denied"})
+          else
+            authorize_deploy(conn, app_name, fn _entry ->
+              do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image)
+            end)
+          end
+      end
     else
       {:error, :too_large} ->
         json(conn, 413, %{error: "source_too_large", limit_bytes: @deploy_max_body})
 
       {:error, :bad_app_name} ->
         json(conn, 400, %{error: "invalid X-App-Name"})
+
+      {:error, :bad_base_image} ->
+        json(conn, 400, %{error: "invalid X-Base-Image"})
 
       {:error, {:extract_failed, reason}} ->
         json(conn, 400, %{error: "invalid_source_archive", reason: inspect(reason)})
@@ -1852,7 +2387,7 @@ defmodule Mjolnir.API.Router do
   # Streams build progress as chunked JSON. Split out of handle_deploy/1 so the
   # ownership check (mjolnir-xuv) can still return a 403/404 status — once
   # send_chunked/2 runs, the status is committed and cannot be changed.
-  defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain) do
+  defp do_deploy(conn, app_name, app_dir, deployer, memory_mb, custom_domain, base_image) do
     conn = send_chunked(conn, 200)
 
     # The evolving conn is held in the process dictionary rather than an Agent.
@@ -1884,6 +2419,7 @@ defmodule Mjolnir.API.Router do
         deployer: deployer,
         memory_mb: memory_mb,
         custom_domain: custom_domain,
+        base_image: base_image,
         on_progress: on_progress
       )
 
@@ -1948,6 +2484,19 @@ defmodule Mjolnir.API.Router do
     case get_req_header(conn, "x-domain") do
       [d | _] when is_binary(d) and d != "" -> d
       _ -> nil
+    end
+  end
+
+  defp deploy_base_image(conn) do
+    case get_req_header(conn, "x-base-image") do
+      [name | _] when is_binary(name) and name != "" ->
+        case Validation.validate_safe_name(name, "X-Base-Image") do
+          {:ok, safe} -> {:ok, safe}
+          {:error, _} -> {:error, :bad_base_image}
+        end
+
+      _ ->
+        {:ok, nil}
     end
   end
 

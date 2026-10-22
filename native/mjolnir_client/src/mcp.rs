@@ -82,6 +82,10 @@ pub struct DeliverMessageParams {
     pub from_vm_id: Option<String>,
     #[schemars(description = "Arbitrary JSON payload.")]
     pub payload: Option<serde_json::Value>,
+    #[schemars(
+        description = "Producer message id. Same id retried is a host duplicate, not a second turn. Omit only when retry safety is not needed."
+    )]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -408,16 +412,19 @@ impl MjolnirMcpService {
 
     #[tool(
         name = "deliver_message",
-        description = "Send a message to a VM for inter-VM communication or coroutine wake-up."
+        description = "Send a message to a VM for inter-VM communication or coroutine wake-up. Pass `id` for retry-safe producer identity."
     )]
     async fn deliver_message(
         &self,
         Parameters(p): Parameters<DeliverMessageParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "from_vm_id": p.from_vm_id.unwrap_or_else(|| "external".into()),
             "payload": p.payload.unwrap_or(serde_json::Value::Object(Default::default())),
         });
+        if let Some(id) = p.id {
+            body["id"] = serde_json::Value::String(id);
+        }
         self.api_post(&format!("/api/vms/{}/messages", p.vm_id), &body)
             .await
     }

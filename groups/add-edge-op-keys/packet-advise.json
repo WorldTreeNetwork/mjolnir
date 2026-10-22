@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-edge-op-keys",
+  "node_id": "add-edge-op-keys",
+  "capability": "edge-auth",
+  "change_id": "add-edge-op-keys",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-edge-op-keys. Architecture. Author family is Grok. You are Astra (gpt-6-astra), other-family reader. Fable 5.1 infra-red on Claude credits.\n\nWHY: Direct authentication trusts a selected Mjolnir edge by cryptographic identity, not DNS. The edge needs a stable IdentiKey that can stay offline and rotating operational keys that prove the edge and mint capabilities. Those keys must not live on the BTRFS data volume (snapshots would capture them).\n\nWHAT (from proposal, not design): Store stable edge identity and operational keys under /var/lib/mjolnir/auth, 0600, outside btrfs_root. Stable key is the offline trust anchor; ordinary sessions do not require it online. Operational keys generate on start if missing, sign edge proof and capabilities, rotate with published overlap. Clients pin the stable edge XID. Discovery fills address only. This change writes ADR 0012-direct-edge-auth.\n\nNo living edge-auth spec yet (this change ADDs it). Related living: openspec/specs/web-pty-edge/spec.md (hosted /term stays at auth.identikey.me). Related: lib/mjolnir/secret_escrow.ex (escrow outside btrfs_root).\n\nLEARNINGS: docs/LEARNINGS.md 2026-09-20 add-identikey-being-client (pairwise sub vs public XID; identikey-core has no device_code).\n\nCited code (blind take):\n- lib/mjolnir/secret_escrow.ex:16-28 — escrow lives outside btrfs_root, mode 0600, never in snapshots\n- lib/mjolnir/application.ex:130-137 — JWKS child with first_fetch_sync true; no edge key child\n- lib/mjolnir/api/auth.ex:5-24 — sites token, localhost bypass, JWT; no Biscuit, no edge identity\n- openspec/specs/web-pty-edge/spec.md:113-124 — /term authenticates at auth.identikey.me\n\nRE-ADVISE after advise-4 send-back. Residuals patched: fresh restore ceremony attests reconciled output (auth-restore + restore_id + observed_revocations_hash); old A1+B1 cannot revive a retired kid; missing current evidence fail-closed; sole supersession encoding is op-supersede with exp_now as effective revocation time (late receipt still honors); next_kid names a separately delegated successor; permission-at-open fail-closed. Review the current proposal Why plus living/cited code first, then compare to the revised design Decision 9 and specs/edge-auth/spec.md.\nACTIVE BUILD. Write openspec/changes/add-edge-op-keys/reviews/2026-09-24-advise-5.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.\nFable 5.1 infra-red (Claude usage credits). You are the next other-family reader.\nREADER line: astra-arch-review. SPAWN line: parent dir of SPAWN_PROMPT_FILE.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/secret_escrow.ex",
+      "invariant": "Host secrets stay off the BTRFS data volume"
+    },
+    {
+      "symbol": "lib/mjolnir/api/auth.ex",
+      "invariant": "API auth today is sites token, localhost, or JWT"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-edge-op-keys/reviews/2026-09-24-advise-5.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-edge-op-keys/reviews/2026-09-24-advise-5.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-edge-op-keys/reviews/2026-09-24-advise-5.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement key files", "tracked_as": "act" },
+    { "item": "HTTP direct-auth endpoints", "tracked_as": "add-direct-auth-endpoints" },
+    { "item": "Hardware/enclave wrap", "tracked_as": "later" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-edge-op-keys/reviews",
+      "openspec/changes/add-edge-op-keys/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Steer 2026-09-24: host files /var/lib/mjolnir/auth 0600 not btrfs; client pins stable XID; discovery is address-only; no TOFU.",
+    "Banner is ACTIVE BUILD. Accept unblocks act for this node.",
+    "Sibling changes add-direct-challenge, add-biscuit-profiles, add-offline-jwks, add-managed-challenge-responder are separate reviews."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "reader"
+}

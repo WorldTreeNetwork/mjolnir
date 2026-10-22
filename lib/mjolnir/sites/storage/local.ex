@@ -61,6 +61,14 @@ defmodule Mjolnir.Sites.Storage.Local do
     File.regular?(Store.chunk_path(bao_hash58))
   end
 
+  @impl true
+  def chunk_present?(bao_hash58) do
+    case File.stat(Store.chunk_path(bao_hash58)) do
+      {:ok, %File.Stat{type: :regular, size: size}} when size > 0 -> true
+      _ -> false
+    end
+  end
+
   ## Internals
 
   # Whole-content Blake3 verification. Phase 1 does not stream-verify with the

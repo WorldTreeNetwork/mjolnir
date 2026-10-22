@@ -1,0 +1,18 @@
+[Unit]
+Description=Mjolnir guest scope witness (never restarts guests)
+After=dbus.service local-fs.target
+Requires=dbus.service
+Before=mjolnir.service
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/mjolnir
+EnvironmentFile=-/etc/mjolnir/env
+ExecStart=/usr/bin/python3 -u /opt/mjolnir/priv/vmm_watch.py mjolnir-vms.slice /var/lib/mjolnir/vmm-watch-mjolnir-vms.slice.json
+StateDirectory=mjolnir
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -198,7 +198,9 @@ defmodule Mjolnir.API.Domains do
       service_vm_id: e.service_vm_id,
       url: e.url,
       port: e.port,
-      custom_domain: e.custom_domain
+      custom_domain: e.custom_domain,
+      owner_id: e.owner_id,
+      stateful: e.stateful
     }
     |> Map.merge(override)
   end

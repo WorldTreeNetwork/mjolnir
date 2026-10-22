@@ -30,6 +30,9 @@ defmodule Mjolnir.API.TermPageTest do
       assert html =~ "main"
       assert html =~ "/api/vms/"
       assert html =~ "xterm"
+      assert html =~ "attachCustomKeyEventHandler"
+      assert html =~ "getSelection"
+      assert html =~ "Ctrl+C copies"
     end
 
     test "defaults a nil session to main" do
@@ -43,7 +46,7 @@ defmodule Mjolnir.API.TermPageTest do
       conn = request("/term/#{@vm_id}")
       assert conn.status == 200
       assert conn.resp_body =~ "MJOLNIR"
-      assert conn.resp_body =~ @vm_id
+      assert conn.resp_body =~ Mjolnir.VmId.storage_id(@vm_id)
       assert get_resp_header(conn, "content-type") |> hd() =~ "text/html"
     end
 

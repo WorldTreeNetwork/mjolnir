@@ -1,0 +1,13 @@
+[Unit]
+Description=Mjolnir guest NAT masquerade
+After=network-pre.target
+Before=mjolnir.service
+Documentation=docs/guide/host-sidecars.md
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/mjolnir-ensure-host-nat
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-biscuit-profiles",
+  "node_id": "add-biscuit-profiles",
+  "capability": "edge-auth",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "medium",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "sol-implement" }
+  },
+  "goal": "Implement add-biscuit-profiles login profiles on the existing runtime. Do not add a second Biscuit library.\n\nRuntime (usable, e5a6045): Mjolnir.Biscuit in lib/mjolnir/biscuit.ex and native/mjolnir_biscuit. Call it. Do not edit that crate.\n\nContract: openspec/changes/add-biscuit-profiles/design.md Decisions 1-8 and specs/edge-auth/spec.md. Advise accept is reviews/2026-09-24-advise-3.md.\n\nLand a module lib/mjolnir/auth/login_profile.ex that:\n- Mints holder-bound by default: authority fact login_mode(\"holder\") plus check if holder($fp). Session public is authorized at mint; verifier injects holder only after a valid login-proof. Stolen token (no proof / wrong key) fails.\n- Mints explicit bearer: login_mode(\"bearer\"), shorter exp and a strictly smaller right-set than the holder issuance for the same subject. Mode is authority-block only.\n- Rejects absent/unknown/conflicting modes, token-supplied holder facts, and attenuation that drops the holder check or overrides mode.\n- Login-proof is canonical dCBOR of the Decision 7 8-tuple, signed by the session key. Nonce store is injected (a test double is fine). Unknown/expired/replayed nonce fails closed. Do not build HTTP endpoints (add-direct-auth-endpoints).\n- One-shot authorize/4 result: allow or deny for this request. Deny does not fall back to JWT. Foreign root and expiry deny.\n- Tests in test/mjolnir/auth/login_profile_test.exs cover signature requirement, stolen token, attenuation, edge/audience binding, explicit bearer, expiry, downgrade.\n\nCheck the five open implement boxes in openspec/changes/add-biscuit-profiles/tasks.md when the tests pass. Edit and stop. Conductor persists. Do not fold. Do not git push.",
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Biscuit",
+      "invariant": "Only mint/verify runtime. No second biscuit-auth stack."
+    },
+    {
+      "symbol": "login_mode",
+      "invariant": "Authority-block fact holder or bearer. Verifier cannot downgrade holder to bearer."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/auth/login_profile_test.exs"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/auth/login_profile.ex",
+      "test/mjolnir/auth/login_profile_test.exs",
+      "openspec/changes/add-biscuit-profiles/tasks.md"
+    ],
+    "do_not": ["fold", "push", "second biscuit runtime", "HTTP endpoints", "edit native/mjolnir_biscuit"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "worker"
+}

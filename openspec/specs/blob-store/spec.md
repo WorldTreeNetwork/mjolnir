@@ -7,8 +7,12 @@ and
 [`add-blob-client`](../../changes/archive/2026-08-17-add-blob-client/proposal.md)
 on 2026-08-17, and
 [`add-blob-door-overlay`](../../changes/archive/2026-08-19-add-blob-door-overlay/proposal.md)
-on 2026-08-19. Decisions that are not yet code (iroh-blobs working
-set, encryption, Sites Recrypt cutover until real Blake3) live in
+on 2026-08-19, and
+[`add-blob-door-byte-pump`](../../changes/archive/2026-09-20-add-blob-door-byte-pump/proposal.md)
+on 2026-09-20, and
+[`add-recording-blob`](../../changes/archive/2026-10-21-add-recording-blob/proposal.md)
+on 2026-10-21. Decisions that are not yet code (iroh-blobs working
+set, encryption) live in
 [`docs/decisions/0003-blob-store-mesh.md`](../../../docs/decisions/0003-blob-store-mesh.md).
 
 ## Purpose
@@ -328,3 +332,234 @@ on the Sites blob routes. Large objects SHALL NOT use
 - GIVEN a guest PUT the door reported accepted
 - WHEN the door process is stopped
 - THEN HeadObject or GET of `blob/b3/{h}` on B2 returns the same bytes
+
+### Requirement: The door pumps bytes through host disk
+
+The door SHALL stream PUT bodies to a host-disk incoming file and
+SHALL hash Blake3 incrementally. It SHALL NOT buffer a whole object
+in RAM as the put path. GET SHALL stream a cache file or the
+canonical store. A configurable per-object ceiling
+(`BLOB_DOOR_MAX_BYTES`, default 1 TiB) MAY refuse a PUT with 413.
+Disk exhaustion SHALL be 507, not a silent truncate.
+
+#### Scenario: PUT larger than the old RAM cap
+
+- GIVEN a client PUTs 128 MiB whose Blake3 is `{h}`
+- WHEN the door accepts
+- THEN the process did not hold the 128 MiB as a single request
+  `Bytes` extract
+- AND GET `{h}` returns those bytes
+
+#### Scenario: Disk is full
+
+- GIVEN the cache filesystem cannot take the next write
+- WHEN a PUT is in flight
+- THEN the door returns 507
+- AND `{h}` is not accepted
+
+### Requirement: Local disk is a cache, not the accept proof
+
+The door MAY retain accepted objects on host SSD as a working-set
+cache and MAY serve GET/HEAD from that cache. The cache SHALL NOT
+satisfy accept-time durability. A PUT SHALL NOT return 2xx accepted
+until B2 HeadObject or GET confirms the key. GET SHALL NOT serve an
+incoming (unaccepted) file. A GET fill SHALL NOT be published into
+`objects/` if local flush or sync fails; a later GET SHALL fall
+back to B2 rather than serve the partial file. Wiping the cache
+directory SHALL NOT lose an object the door already reported
+accepted (B2 still has it). Concurrent promotions and evictions
+SHALL keep actual retained bytes at or under the configured budget
+and SHALL fall back to B2 when a cache open races with eviction.
+
+#### Scenario: Cache hit after accept
+
+- GIVEN the door accepted `{h}` and the object is in the cache
+- WHEN a client GETs `{h}`
+- THEN the bytes are those accepted bytes
+- AND the door does not need a B2 GET to answer
+
+#### Scenario: Cache is wiped
+
+- GIVEN `{h}` was accepted
+- AND the cache directory is empty
+- WHEN a client GETs `{h}`
+- THEN the door fetches from B2
+- AND returns the same bytes
+- AND MAY refill the cache
+
+#### Scenario: Ack from local file only is proposed
+
+- GIVEN a change that returns 2xx accepted after the incoming file
+  is renamed, before B2 HeadObject
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
+
+#### Scenario: Cache under btrfs_root is proposed
+
+- GIVEN a change that places the door cache under `btrfs_root`
+  (including `@blobs` or any nested subvolume on the data volume)
+- WHEN it is reviewed
+- THEN it is rejected against this requirement
+  because VM and named snapshots would CoW-pin cache extents and
+  the disk would fill monotonically
+
+#### Scenario: Encoded traversal of the cache root
+
+- GIVEN a GET or HEAD whose path is an absolute path or contains
+  `..` after URL decoding
+- WHEN the door handles the request
+- THEN it returns 4xx
+- AND it does not read a file outside `objects/`
+- AND it does not serve an `incoming/` file
+
+#### Scenario: Failed GET fill is not published
+
+- GIVEN a GET miss that streams from B2
+- AND the local fill flush or sync fails
+- WHEN the request completes
+- THEN `objects/` does not contain that hash
+- AND a later GET of the same hash is served from B2
+
+#### Scenario: Concurrent promotions stay under budget
+
+- GIVEN an empty cache whose budget is 100 bytes
+- WHEN two distinct 80-byte objects are promoted at once
+- THEN at most one is retained
+- AND the sum of sizes of files under `objects/` is ≤ 100
+
+#### Scenario: Cache open races with eviction
+
+- GIVEN `{h}` is accepted on B2
+- AND a cache hit path is unlinked before open
+- WHEN a client GETs `{h}`
+- THEN the door returns the B2 bytes
+- AND it does not return 404
+
+### Requirement: Object identifiers are hashes before any filesystem access
+
+GET, HEAD, and PUT SHALL treat the `{hash}` path parameter as a
+Blake3 digest in base58 (optional `.obao` suffix) and SHALL reject
+anything else with 4xx **before** joining it onto the cache or
+store path. `DiskCache::object_path` SHALL NOT be reachable with a
+string that is an absolute path or that contains a path separator
+or `..`.
+
+#### Scenario: Absolute path in GET
+
+- GIVEN a GET whose `{hash}` decodes to an absolute filesystem path
+- WHEN the door handles it
+- THEN the response is 4xx
+- AND the named file is not read
+
+#### Scenario: Parent traversal in GET
+
+- GIVEN a GET whose `{hash}` is `..%2Fincoming%2F<name>`
+- WHEN the door handles it
+- THEN the response is 4xx
+- AND no `incoming/` file is served
+
+### Requirement: Cache root is enforced on the resolved path
+
+Production start and the install script SHALL resolve
+`BLOB_DOOR_CACHE_DIR` (and any fallback) and SHALL refuse a
+location whose resolved path is under `btrfs_root`. A textual
+prefix check alone SHALL NOT satisfy this requirement. Custom
+accepted paths SHALL stay inside the unit's `ReadWritePaths`.
+
+#### Scenario: Symlink into the data volume
+
+- GIVEN `BLOB_DOOR_CACHE_DIR` is a symlink whose target is under
+  `btrfs_root`
+- WHEN the door starts or the installer runs
+- THEN it refuses that directory
+- AND it does not write cache files on the data volume
+
+#### Scenario: Fallback still under btrfs_root
+
+- GIVEN a configured cache dir that fails the check
+- AND the fallback would also resolve under `btrfs_root`
+- WHEN install or start runs
+- THEN it still refuses
+- AND it does not silently accept the unsafe fallback
+
+### Requirement: A recording index stores wraps beside a blob
+
+The system SHALL record a recording as the Blake3 hash of ciphertext already stored by the blob backend, the owner's base58btc XID, and the owner wrap bytes. It SHALL record a friend wrap as that same hash, the friend's base58btc XID, and the wrap bytes the caller supplies. It SHALL NOT generate a data key, unwrap a data key, store plaintext, store a private scalar, or call IdentiKey.
+
+The system SHALL refuse a registration whose hash is not already in the blob backend, and SHALL insert no row in that case. The presence check SHALL be `HEAD /storage/blob/b3/{hash}` for the door backend, or a file stat for the local backend. It SHALL NOT GET the ciphertext. An empty wrap, a wrap larger than 4096 bytes, or a wrap that is not a CBOR map with `alg` `x25519-xchacha20poly1305` and a 48-byte `ciphertext` SHALL be refused, and the wrap SHALL NOT be decrypted. Register, friend add, and GET SHALL require principal kind `:user` and SHALL bind the row to that JWT `sub`. A `:capability`, `:operator`, `:sites`, `:ceremony`, or `:public` caller SHALL be refused before any probe or write, and no row SHALL be written. The same owner wrap from that same `sub` SHALL succeed. The same owner wrap from a different `sub` SHALL be refused. A different owner wrap for that hash SHALL be refused. The check-and-write SHALL be serialized in the `Store` GenServer so two different wraps cannot both succeed. The file SHALL be `<sites_root>/recordings/<hash58>.json`, outside `blob/b3/`. The first `:user` to register a hash owns that row. That race is not the chunk route: a chunk hash has only one byte string, and this row does not. The stored owner XID is the registrant's claim, not a proof. One friend XID SHALL have one wrap. The same friend wrap from the registering `sub` SHALL succeed. A different friend wrap SHALL be refused. A friend add from any other `sub` SHALL be refused. A friend XID equal to the owner XID SHALL be refused. This index SHALL NOT be the path that delivers a wrap to a friend. The friend receives their wrap from the owner. The client keeps the owner wrap. The sites backup copies the row on its next daily run, not at ack.
+
+A v1 recording SHALL be one ciphertext object within the existing 64 MiB blob-route body. A chunked recording is out of this requirement. Replacing the owner wrap after the owner's X25519 changes is out of this requirement. Recovery is a new ciphertext and a new hash.
+
+The index row SHALL be an atomic fsync-and-rename file under the sites root, so the sites backup copies it. A restart SHALL read that file. Postgres SHALL NOT be required to serve the row.
+
+`GET` of the index SHALL return the hash, the owner XID, the owner wrap, and the friend wraps only to the registering principal. Any other principal SHALL be refused. The body SHALL NOT return the ciphertext, the data key, or a private scalar. The friend list is social-graph metadata and is not given the same unscoped read as the ciphertext.
+
+#### Scenario: An owner wrap is stored for an accepted blob
+
+- GIVEN ciphertext whose Blake3 is `{h}` is already in the blob backend
+- WHEN the owner registers `{h}` with their XID and a wrap
+- THEN the index row stores that hash, that XID, and that wrap
+- AND the blob bytes are unchanged
+
+#### Scenario: A missing blob inserts nothing
+
+- GIVEN `{h}` is not in the blob backend
+- WHEN a caller registers an owner wrap for `{h}`
+- THEN the call fails
+- AND no index row exists
+
+#### Scenario: A second owner wrap is refused
+
+- GIVEN `{h}` is registered with owner wrap W
+- WHEN a caller registers `{h}` with a different wrap W′
+- THEN the call fails
+- AND the stored wrap is still W
+
+#### Scenario: A friend wrap is stored without calling IdentiKey
+
+- GIVEN `{h}` is registered to an owner
+- WHEN the caller adds a friend XID distinct from the owner and a wrap
+- THEN the index stores that friend wrap
+- AND no request is sent to an IdentiKey origin
+
+#### Scenario: The owner is not a friend of their own blob
+
+- GIVEN `{h}` is registered to owner XID `A`
+- WHEN a caller adds friend XID `A`
+- THEN the call fails
+- AND no friend row is stored
+
+#### Scenario: The index is not the data key
+
+- GIVEN a registered recording
+- WHEN the registering principal reads the index
+- THEN the body contains the hash and the wrap bytes
+- AND the body does not contain the ciphertext or a 32-byte data key field
+
+#### Scenario: A different principal cannot add a friend
+
+- GIVEN JWT subject P registered `{h}`
+- WHEN JWT subject Q adds a friend wrap for `{h}`
+- THEN the call fails
+- AND no friend row is stored
+
+#### Scenario: A biscuit and a Sites token cannot register
+
+- GIVEN a `:capability` biscuit whose `user_id` is `"capability"`, and a `:sites` token
+- WHEN either caller registers, adds a friend, or reads the index
+- THEN each call is refused before a probe or a write
+- AND no row is written
+
+#### Scenario: Register does not download the ciphertext
+
+- GIVEN ciphertext whose Blake3 is `{h}` is already in the blob backend
+- WHEN a principal registers `{h}`
+- THEN the presence check is a HEAD or a file stat
+- AND the ciphertext bytes are not read
+
+#### Scenario: The wrap file survives a restart
+
+- GIVEN a registered owner wrap
+- WHEN the process restarts
+- THEN a read by the same principal returns that wrap
+- AND the file is under the sites root

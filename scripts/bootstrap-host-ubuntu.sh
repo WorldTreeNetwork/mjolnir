@@ -964,14 +964,16 @@ setup_networking() {
     fi
     log_info "External interface: $ext_iface"
 
-    # Reserved host-from-guest address (same as :host_api_ip). Tenant Postgres
-    # binds here. Dummy, not lo, so TAP guests can ARP it. Must exist before
-    # the sidecar starts; allocate_ip refuses this address.
-    local host_api_ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
-    log_info "Assigning reserved host-from-guest address ${host_api_ip}/32 on dummy-mjolnir"
-    ip link add dummy-mjolnir type dummy 2>/dev/null || true
-    ip link set dummy-mjolnir up
-    ip addr replace "${host_api_ip}/32" dev dummy-mjolnir
+    local modules
+    modules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-modules.sh"
+    if [[ ! -f "$modules" ]]; then
+        modules="$MJOLNIR_CODE/scripts/ensure-host-modules.sh"
+    fi
+    bash "$modules"
+
+    # Reserved host-from-guest address (same as :host_api_ip). Assigned by
+    # ensure_host_api_addr on dummy-mjolnir and persisted across reboot.
+    # allocate_ip refuses this address.
 
     # Enable IP forwarding, persist via /etc/sysctl.d (preferred over /etc/sysctl.conf on modern Ubuntu).
     log_info "Enabling IP forwarding..."
@@ -996,19 +998,18 @@ setup_networking() {
     log_success "VM networking configured (subnet: $vm_subnet, egress: $ext_iface)"
 }
 
-# Reserved host-from-guest address for tenant Postgres and the in-guest API.
-# Dummy (not lo): TAP /32 guests ARP this via proxy-ARP; lo + rp_filter drops it.
+# Reserved host-from-guest address for tenant Postgres, Redis, the blob
+# door, and the in-guest API. Dummy, never lo: TAP /32 guests ARP this
+# address, and rp_filter drops a reply that comes from loopback.
 ensure_host_api_addr() {
-    local ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
-    if ip addr show dummy-mjolnir >/dev/null 2>&1; then
-        :
-    else
-        ip link add dummy-mjolnir type dummy || true
+    local script ip
+    ip="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
+    script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-api-addr.sh"
+    # curl | bash has no sibling file. Code is already in MJOLNIR_CODE.
+    if [[ ! -f "$script" ]]; then
+        script="$MJOLNIR_CODE/scripts/ensure-host-api-addr.sh"
     fi
-    ip link set dummy-mjolnir up
-    if ! ip addr show dummy-mjolnir | grep -q "inet ${ip}/32"; then
-        ip addr add "${ip}/32" dev dummy-mjolnir || true
-    fi
+    bash "$script" --install-unit
     log_info "Host API / tenant Postgres bind: ${ip}/32 on dummy-mjolnir"
 }
 
@@ -1106,12 +1107,25 @@ import pathlib, sys
 path, subnet = pathlib.Path(sys.argv[1]), sys.argv[2]
 anchor = '-A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
 inject = (
-    '\n# MJOLNIR VM FORWARD — accept traffic to/from VM subnet\n'
+    '\n# MJOLNIR VM FORWARD — guests reach the internet, not each other\n'
+    f'-A ufw-before-forward -s {subnet} -d {subnet} -j DROP\n'
     f'-A ufw-before-forward -s {subnet} -j ACCEPT\n'
     f'-A ufw-before-forward -d {subnet} -j ACCEPT\n'
 )
 txt = path.read_text()
 path.write_text(txt.replace(anchor, anchor + inject, 1))
+PY
+    fi
+
+    # Hosts that already had the broad ACCEPT get the DROP in front of it.
+    local drop_rule="-A ufw-before-forward -s ${vm_subnet} -d ${vm_subnet} -j DROP"
+    local accept_rule="-A ufw-before-forward -s ${vm_subnet} -j ACCEPT"
+    if grep -qF "$accept_rule" "$before" && ! grep -qF "$drop_rule" "$before"; then
+        python3 - "$before" "$drop_rule" "$accept_rule" <<'PY'
+import pathlib, sys
+path, drop, accept = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+txt = path.read_text()
+path.write_text(txt.replace(accept, drop + "\n" + accept, 1))
 PY
     fi
 
@@ -1128,6 +1142,11 @@ setup_networking_iptables() {
     if ! iptables -t nat -C POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE 2>/dev/null; then
         log_info "Adding NAT masquerade rule for $vm_subnet out $ext_iface..."
         iptables -t nat -A POSTROUTING -s "$vm_subnet" -o "$ext_iface" -j MASQUERADE
+    fi
+
+    if ! iptables -C FORWARD -s "$vm_subnet" -d "$vm_subnet" -j DROP 2>/dev/null; then
+        log_info "Dropping guest-to-guest FORWARD for $vm_subnet..."
+        iptables -I FORWARD 1 -s "$vm_subnet" -d "$vm_subnet" -j DROP
     fi
 
     if ! iptables -C FORWARD -s "$vm_subnet" -j ACCEPT 2>/dev/null; then

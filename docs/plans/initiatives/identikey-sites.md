@@ -513,13 +513,14 @@ Host header to `(identikey_fp, site_name)` and serves via the same
       signature: <ed25519 over canonical_signing_bytes>
     }
 
-**TLS for vanity domains** is out of scope for this phase. Two practical
-options for users today:
-- Front the Mjolnir host with Cloudflare (or any reverse proxy) that
-  terminates TLS and forwards plain HTTP.
-- Wait for the planned HTTP-01 ACME pass that will extend the existing
-  `acme.rs` in `mjolnir-gateway` (DNS-01 today via Cloudflare for the
-  `*.vm.worldtree.network` wildcard).
+**TLS for vanity domains** uses the same `mj cert issue <fqdn>` path as an
+app, over HTTP-01. A site-only install writes `[[cert]]` and does not add
+a `[[domain]]` apex, because a new apex with no fallthrough is Iroh and
+would stop the sites resolver from serving the snapshot. If the name is
+already a local route or an Iroh dial, issuance returns
+`409 host_routed_elsewhere`. Rules: ADR 0013
+(`docs/decisions/0013-site-alias-certs.md`). DNS-01 stays out: that would
+mean holding the owner's DNS credentials.
 
 **Why not auto-DNS-01 for vanity domains?** Because we'd need the user's
 DNS API credentials. HTTP-01 needs nothing but the CNAME and port 80 —
@@ -723,8 +724,8 @@ Deliverables:
    Site owners add aliases by signing `(identikey_fp, "sites/<name>/aliases/<fqdn>")`
    records. Gateway pulls from Mjolnir's `/api/sites/aliases/lookup` endpoint
    on unmatched Host headers. Cache+invalidate is an optional separate caching
-   reverse proxy, not in the critical path. TLS for vanity domains is deferred
-   to a later pass (HTTP-01 via gateway port 80 is the natural future path).
+   reverse proxy, not in the critical path. TLS for vanity domains is
+   `mj cert issue` (ADR 0013). A site certificate does not declare an apex.
 
 ### Remaining open items
 

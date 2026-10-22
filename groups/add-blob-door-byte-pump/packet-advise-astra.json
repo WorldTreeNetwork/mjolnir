@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-blob-door-byte-pump-astra",
+  "node_id": "add-blob-door-byte-pump",
+  "capability": "blob-store",
+  "change_id": "add-blob-door-byte-pump",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-blob-door-byte-pump. Architecture. Author family is Grok. You are Astra (gpt-6-astra), other-family reader after Fable 5.1 infra-red (Claude usage credits exhausted).\n\nWHY: the door extracted whole PUT/GET as Bytes in RAM; DEFAULT_MAX_BYTES was 64 MiB so the host would not OOM. Replace that with a disk-backed byte pump: stream onto host SSD, hash Blake3 incrementally, write-through to B2, keep the file as a working-set cache. Accept is still HeadObject on B2. Cache is not the archive. Overlay bind, keys, and ADR 0003 accept proof do not change.\n\nLiving spec: openspec/specs/blob-store/spec.md (B2 is the canonical copy; working-set guests are not the archive).\nDelta (read after the blind take): openspec/changes/add-blob-door-byte-pump/specs/blob-store/spec.md — ADDED: The door pumps bytes through host disk; Local disk is a cache, not the accept proof (rejects cache-under-btrfs_root).\n\nCited code (read for the blind take):\n- native/mjolnir_blob_door/src/lib.rs:3-5, 24-33 — accepted = HeadObject/GET, not PutObject 200; DEFAULT_MAX_BYTES 1 TiB; DEFAULT_CACHE_BYTES 64 GiB; DEFAULT_CACHE_DIR /var/lib/mjolnir/blobs outside btrfs_root\n- native/mjolnir_blob_door/src/http.rs:29 — DefaultBodyLimit::disable()\n- native/mjolnir_blob_door/src/pump.rs:19-42 — stream body to file, incremental blake3, TooLarge, StorageFull\n- native/mjolnir_blob_door/src/put.rs:29-60 — exists-then-skip, put_path, confirm via store.head; Never ack on write alone\n- native/mjolnir_blob_door/src/s3.rs:77, 213, 236-245 — multipart above threshold; head_object; put_path from file\n- native/mjolnir_blob_door/src/cache.rs:10-15 — objects/incoming, budget\n- systemd/mjolnir-blob-door.service:14-20 — ProtectSystem=strict + ReadWritePaths=/var/lib/mjolnir/blobs\n- scripts/install-blob-door.sh:21-25, 50-60 — refuse cache under btrfs_root, migrate legacy @blobs\n- docs/decisions/0003-blob-store-mesh.md — door is not the archive\n\nWrite openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.",
+  "anchors": [
+    {
+      "symbol": "openspec/specs/blob-store/spec.md",
+      "invariant": "B2 HeadObject/GET is accept; working set is not the archive"
+    },
+    {
+      "symbol": "native/mjolnir_blob_door/src/put.rs",
+      "invariant": "confirm() after put_path; never ack on local write alone"
+    },
+    {
+      "symbol": "native/mjolnir_blob_door/src/lib.rs",
+      "invariant": "cache dir outside btrfs_root; 1 TiB rail; 64 GiB budget"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md"
+  },
+  "out_of_scope": [
+    { "item": "Sites Elixir Plug.Conn.read_body 64 MiB", "tracked_as": "sites" },
+    { "item": "mj client MAX_BODY", "tracked_as": "mj-client" },
+    { "item": "MinIO / iroh-blobs / encryption", "tracked_as": "adr-0003" },
+    { "item": "Write-back / ack-before-B2", "tracked_as": "adr-0003" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-blob-door-byte-pump/reviews",
+      "openspec/changes/add-blob-door-byte-pump/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Code landed 0553ef0 (stream+cache), 18f4437 (cache off btrfs_root), 70600cb (crate + live B2 e2e).",
+    "First landing put the cache at /var/lib/mjolnir/btrfs/@blobs; follow-up moved it because snapshots CoW-pin extents. Delta scenario Cache under btrfs_root is proposed exists for that.",
+    "Fable 5.1 spawn infra-red twice: Claude usage credits exhausted for claude-fable-5-1. This is the --after route.",
+    "No prior advise file. This is the gating architecture read.",
+    "LEARNINGS has no line naming this id."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader"
+}

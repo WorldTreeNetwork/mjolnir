@@ -2,7 +2,7 @@ defmodule Mjolnir.Sites.IdentiKeyTest do
   use ExUnit.Case, async: true
 
   import Bitwise
-  alias Mjolnir.Sites.IdentiKey
+  alias Mjolnir.Sites.{Crypto, IdentiKey}
 
   describe "gen_keypair/0" do
     test "returns a map with 32-byte public and secret keys" do
@@ -91,6 +91,18 @@ defmodule Mjolnir.Sites.IdentiKeyTest do
       kp1 = IdentiKey.gen_keypair()
       kp2 = IdentiKey.gen_keypair()
       refute IdentiKey.fingerprint(kp1) == IdentiKey.fingerprint(kp2)
+    end
+
+    test "is Blake3 of the raw public key, not SHA-256" do
+      kp = IdentiKey.gen_keypair()
+      assert IdentiKey.fingerprint(kp) == Crypto.blake3_hash_base58(kp.ed25519_public)
+
+      sha =
+        kp.ed25519_public
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Crypto.base58_encode()
+
+      refute IdentiKey.fingerprint(kp) == sha
     end
   end
 

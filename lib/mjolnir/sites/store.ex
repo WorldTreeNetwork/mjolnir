@@ -7,6 +7,7 @@ defmodule Mjolnir.Sites.Store do
       <sites_root>/blob/b3/<bao_hash58>.obao     Bao outboard sibling
       <sites_root>/manifests/<snapshot_hash58>    Gordian envelope
       <sites_root>/manifests/<snapshot_hash58>.ots  OpenTimestamps proof
+      <sites_root>/recordings/<hash58>.json       recording wrap index
 
   See `docs/plans/initiatives/identikey-sites.md` §4 and §6.1.
 
@@ -129,6 +130,82 @@ defmodule Mjolnir.Sites.Store do
     end
   end
 
+  @doc """
+  True when `hash` is base58btc of a 32-byte Blake3, or the shorter Sites
+  form that drops leading zero bytes. Rejects traversal and short garbage.
+  """
+  @spec valid_blob_hash?(term()) :: boolean()
+  def valid_blob_hash?(hash) when is_binary(hash) and byte_size(hash) in 40..90 do
+    case Mjolnir.Base58.decode(hash) do
+      {:ok, bytes} when byte_size(bytes) in 28..32 ->
+        hash == Mjolnir.Base58.encode(bytes)
+
+      _ ->
+        false
+    end
+  end
+
+  def valid_blob_hash?(_), do: false
+
+  @doc "True when `text` is the canonical base58btc of 32 bytes."
+  @spec valid_xid?(term()) :: boolean()
+  def valid_xid?(text) when is_binary(text) do
+    case Mjolnir.Base58.decode(text, 32) do
+      {:ok, bytes} -> Mjolnir.Base58.encode(bytes) == text
+      :error -> false
+    end
+  end
+
+  def valid_xid?(_), do: false
+
+  @doc """
+  True when the configured backend can see this ciphertext object.
+
+  Local stats the file. Recrypt sends HEAD. Neither path calls `has_chunk?/1`
+  or `get_chunk/1`. Call this before `GenServer.call/3`, not inside it.
+  """
+  @spec chunk_present?(String.t()) :: boolean()
+  def chunk_present?(hash) do
+    if valid_blob_hash?(hash) do
+      Storage.backend().chunk_present?(hash)
+    else
+      false
+    end
+  end
+
+  @doc """
+  Compare-and-set the owner wrap for `hash`. Serialized in this process.
+  Does not look at the blob bytes. The caller already probed presence.
+  """
+  @spec register_recording(String.t(), String.t(), String.t(), binary()) ::
+          {:ok, :created | :exists} | {:error, term()}
+  def register_recording(sub, hash, owner_xid, wrap)
+      when is_binary(sub) and sub != "" and is_binary(hash) and is_binary(owner_xid) and
+             is_binary(wrap) do
+    GenServer.call(__MODULE__, {:register_recording, sub, hash, owner_xid, wrap})
+  end
+
+  @doc """
+  Compare-and-set one friend wrap. Only the registering `sub` succeeds.
+  Does not call IdentiKey and does not probe the blob.
+  """
+  @spec add_recording_friend(String.t(), String.t(), String.t(), binary()) ::
+          {:ok, :created | :exists} | {:error, term()}
+  def add_recording_friend(sub, hash, friend_xid, wrap)
+      when is_binary(sub) and sub != "" and is_binary(hash) and is_binary(friend_xid) and
+             is_binary(wrap) do
+    GenServer.call(__MODULE__, {:add_recording_friend, sub, hash, friend_xid, wrap})
+  end
+
+  @doc "Read a recording index from disk. Does not consult process state."
+  @spec fetch_recording(String.t()) :: {:ok, map()} | :not_found | {:error, term()}
+  def fetch_recording(hash) when is_binary(hash) do
+    case recording_path(hash) do
+      {:ok, path} -> read_recording_file(path)
+      :error -> {:error, :bad_hash}
+    end
+  end
+
   ## GenServer
 
   @impl true
@@ -159,6 +236,14 @@ defmodule Mjolnir.Sites.Store do
     {:reply, write_atomic(ots_path(snapshot_hash58), bytes), state}
   end
 
+  def handle_call({:register_recording, sub, hash, owner_xid, wrap}, _from, state) do
+    {:reply, write_register(sub, hash, owner_xid, wrap), state}
+  end
+
+  def handle_call({:add_recording_friend, sub, hash, friend_xid, wrap}, _from, state) do
+    {:reply, write_friend(sub, hash, friend_xid, wrap), state}
+  end
+
   ## Internals
 
   defp validate_hash!(hash58) when is_binary(hash58) do
@@ -166,6 +251,154 @@ defmodule Mjolnir.Sites.Store do
       hash58
     else
       raise ArgumentError, "invalid bao hash: #{inspect(hash58)}"
+    end
+  end
+
+  defp recording_path(hash) do
+    if valid_blob_hash?(hash) do
+      {:ok, Path.join([root(), "recordings", hash <> ".json"])}
+    else
+      :error
+    end
+  end
+
+  defp recording_path_ok(hash) do
+    case recording_path(hash) do
+      {:ok, path} -> {:ok, path}
+      :error -> {:error, :bad_hash}
+    end
+  end
+
+  defp write_register(sub, hash, owner_xid, wrap) do
+    with {:ok, path} <- recording_path_ok(hash),
+         :ok <- reject_bad_wrap(wrap) do
+      case read_recording_file(path) do
+        :not_found ->
+          row = %{
+            "v" => 1,
+            "hash" => hash,
+            "owner_sub" => sub,
+            "owner_xid" => owner_xid,
+            "owner_wrap" => Base.url_encode64(wrap, padding: false),
+            "friends" => []
+          }
+
+          with :ok <- write_atomic(path, Jason.encode!(row)), do: {:ok, :created}
+
+        {:ok, row} ->
+          cond do
+            row["owner_sub"] == sub and row["owner_xid"] == owner_xid and
+                same_wrap?(row["owner_wrap"], wrap) ->
+              {:ok, :exists}
+
+            row["owner_sub"] == sub ->
+              {:error, :conflict}
+
+            true ->
+              {:error, :not_owner}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp write_friend(sub, hash, friend_xid, wrap) do
+    with {:ok, path} <- recording_path_ok(hash),
+         :ok <- reject_bad_wrap(wrap) do
+      case read_recording_file(path) do
+        :not_found ->
+          {:error, :not_found}
+
+        {:error, _} = err ->
+          err
+
+        {:ok, row} ->
+          cond do
+            row["owner_sub"] != sub ->
+              {:error, :not_owner}
+
+            row["owner_xid"] == friend_xid ->
+              {:error, :self}
+
+            true ->
+              case insert_friend(row["friends"], friend_xid, wrap) do
+                :same ->
+                  {:ok, :exists}
+
+                :conflict ->
+                  {:error, :conflict}
+
+                {:new, friends} ->
+                  with :ok <- write_atomic(path, Jason.encode!(%{row | "friends" => friends})),
+                       do: {:ok, :created}
+
+                :corrupt ->
+                  {:error, :corrupt}
+              end
+          end
+      end
+    end
+  end
+
+  defp reject_bad_wrap(wrap) do
+    if Mjolnir.Sites.WrapShape.valid?(wrap), do: :ok, else: {:error, :bad_wrap}
+  end
+
+  defp same_wrap?(stored, wrap) when is_binary(stored) and is_binary(wrap) do
+    case Base.url_decode64(stored, padding: false) do
+      {:ok, ^wrap} -> true
+      _ -> false
+    end
+  end
+
+  defp same_wrap?(_, _), do: false
+
+  defp insert_friend(friends, xid, wrap) when is_list(friends) do
+    encoded = Base.url_encode64(wrap, padding: false)
+
+    case Enum.find(friends, &(is_map(&1) and &1["friend_xid"] == xid)) do
+      nil ->
+        {:new, friends ++ [%{"friend_xid" => xid, "wrap" => encoded}]}
+
+      %{"wrap" => ^encoded} ->
+        :same
+
+      _ ->
+        :conflict
+    end
+  end
+
+  defp insert_friend(_, _, _), do: :corrupt
+
+  defp read_recording_file(path) do
+    case File.read(path) do
+      {:ok, bytes} ->
+        case Jason.decode(bytes) do
+          {:ok,
+           %{
+             "hash" => _,
+             "owner_sub" => _,
+             "owner_xid" => _,
+             "owner_wrap" => _,
+             "friends" => friends
+           } = row}
+          when is_list(friends) ->
+            {:ok, row}
+
+          {:ok, _} ->
+            {:error, :corrupt}
+
+          {:error, _} ->
+            {:error, :corrupt}
+        end
+
+      {:error, :enoent} ->
+        :not_found
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

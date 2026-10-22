@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-buzz-local-runtime-2026-09-10",
+  "node_id": "add-buzz-local-runtime",
+  "capability": "buzz-local-client",
+  "change_id": "add-buzz-local-runtime",
+  "role": "worker",
+  "surface": "packet-only",
+  "density": "lean",
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-duke" }
+  },
+  "assignee": {
+    "id": "grok-4.6",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "grok-4.6" }
+  },
+  "goal": "Implement add-buzz-local-runtime leftover SHALLs. Hive is already live (wss://buzz.identikey.me, add-buzz-relay); do not touch relay restore. Stay on HEAD. Do not fold.\n\nThree landings:\n1. Protocol facade in Mjolnir (OTP): Nostr events in → internal mailbox message → last hop is a conformant Nostr event for buzz-acp. Host MUST NOT persist Buzz event kinds as a second log. Running-body mentions stay on the relay; host mailbox is not required for those bytes.\n2. Wake producer IS that ingress. Dormant body + mention at host ingress → facade translates → Admit (existing Mjolnir.Admit.thaw_allowed?/2) → VM.deliver_message / DormantRegistry.queue_message. Producer is not the guest, Reconcile, or a desktop-only side channel.\n3. identikey-protocol crate `identikey-admit` (Apache-2.0 OR BSD-2-Clause-Patent, workspace license already). Envelope format, attestation shape (vm_id + non-negative epoch), verdict vocabulary deny/drop/reply-here/deliver, pure validators. MUST NOT depend on identikey-core. Mjolnir.Admit stays the v1 Elixir evaluator this slice; do not add a Rustler NIF. Crate path: /Users/dukejones/work/IdentiKey/identikey-protocol (sibling repo). Add workspace member + tests.\n\nRead: openspec/changes/add-buzz-local-runtime/, openspec/specs/buzz-local-client/spec.md, docs/decisions/0002-buzz-local-client-fabric.md, lib/mjolnir/admit.ex, lib/mjolnir/dormant_registry.ex, VM.deliver_message. Catalog: do not add @base/dev.\n\nCheck tasks.md boxes that this act closes.",
+  "non_goals": [
+    "Do not restore or redeploy the B0 hive.",
+    "Do not add @base/dev.",
+    "Do not fold living specs.",
+    "Do not pull identikey-core into the admit crate.",
+    "Do not replace Mjolnir.Admit with a NIF this slice."
+  ],
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Admit.thaw_allowed?",
+      "invariant": "v1 Elixir shape-check remains the evaluator; missing/mismatched attestation is deny; epoch is not StateStore persist generation"
+    },
+    {
+      "symbol": "VM.deliver_message",
+      "invariant": "trusted hop; refuses :admission_denied and does not write pending_messages or start restore when Admit fails"
+    },
+    {
+      "symbol": "identikey-admit",
+      "invariant": "portable protocol crate in identikey-protocol; Apache-2.0 OR BSD-2-Clause-Patent; no identikey-core"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/admit_test.exs"
+  },
+  "out_of_scope": [
+    { "item": "B0 hive / NIP-OA", "tracked_as": "add-buzz-relay" },
+    { "item": "@base/dev", "tracked_as": "ADR 0009 catalog" },
+    { "item": "Rustler NIF linking Admit to the crate", "tracked_as": "later" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/admit.ex",
+      "lib/mjolnir/buzz/",
+      "lib/mjolnir/application.ex",
+      "test/mjolnir/admit_test.exs",
+      "test/mjolnir/buzz/",
+      "openspec/changes/add-buzz-local-runtime/tasks.md"
+    ],
+    "do_not": ["fold", "deploy", "push"]
+  }
+}

@@ -51,6 +51,15 @@ defmodule Mjolnir.Sites.Storage do
   @callback has_chunk?(bao_hash58) :: boolean()
 
   @doc """
+  True if the ciphertext object is present, without reading it.
+
+  Local implementations stat the file. The door implementation sends
+  `HEAD /storage/blob/b3/{hash}`. This is not `has_chunk?/1`: the Recrypt
+  `has_chunk?/1` downloads the ciphertext.
+  """
+  @callback chunk_present?(bao_hash58) :: boolean()
+
+  @doc """
   Resolve the configured backend module. Defaults to
   `Mjolnir.Sites.Storage.Local` so unit tests and recrypt-less hosts stay green.
   """

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-blob-door-byte-pump-re",
+  "node_id": "add-blob-door-byte-pump",
+  "capability": "blob-store",
+  "change_id": "add-blob-door-byte-pump",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "Re-advise add-blob-door-byte-pump after send-back amend. Prior review: openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md (send-back, astra-arch-review). Author is still Grok. Fable 5.1 is credit-exhausted this session; you are the --after route again.\n\nWHY unchanged: RAM Bytes extract was a weak blob store; disk pump + write-through; B2 HeadObject is accept; cache is not the archive.\n\nAmend answers R1–R4 in the delta and design, not in product code:\n- R1: new requirement Object identifiers are hashes before any filesystem access; GET/HEAD/PUT validate base58 32-byte Blake3 before objects.join. Scenarios: absolute path GET, parent traversal GET. Also Encoded traversal under the cache requirement.\n- R2: concurrent promotions SHALL keep actual retained bytes ≤ budget; scenario two 80-byte objects into a 100-byte cache; cache-open-vs-eviction falls back to B2 not 404.\n- R3: GET fill SHALL NOT be published on flush/sync failure; Failed GET fill is not published.\n- R4: new requirement Cache root is enforced on the resolved path (install AND process start; symlink/.. /unsafe fallback). Textual prefix alone does not satisfy.\n\nCode repairs R1–R4 remain unchecked on tasks.md for act after accept. This read is of the reconciled CONTRACT. Accept if the amend answers the send-back; do not require the Rust fixes to already exist. Check Fresh advise after preparation only on accept, citing this contract.\n\nWrite openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-re-advise.md.\nBLIND PASS: Why + living spec + cited code first, then compare to the amend. Do not implement. Do not fold. Do not flip the banner.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-advise.md",
+      "invariant": "Send-back R1–R4; architecture of write-through held"
+    },
+    {
+      "symbol": "openspec/changes/add-blob-door-byte-pump/specs/blob-store/spec.md",
+      "invariant": "Amended SHALLs for hash-before-join, budget, failed fill, resolved cache root"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-re-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-re-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-blob-door-byte-pump/reviews/2026-09-20-re-advise.md"
+  },
+  "out_of_scope": [
+    { "item": "Implement R1–R4 in native/mjolnir_blob_door", "tracked_as": "act" },
+    { "item": "Sites Plug 64 MiB / mj MAX_BODY", "tracked_as": "sites" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-blob-door-byte-pump/reviews",
+      "openspec/changes/add-blob-door-byte-pump/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "First advise send-back 5a1101e. Contract amend is the follow-up commit on this branch.",
+    "R1–R4 stay [ ] until act. Fresh advise after preparation is for the accepting reader to check."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "lean",
+  "surface": "packet-only",
+  "role": "reader"
+}

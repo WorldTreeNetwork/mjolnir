@@ -35,6 +35,34 @@ ExUnit.configure(
 # assertions happened to look at the store. Isolating per run removes the
 # cross-run channel entirely; a leak within one run is a separate concern and
 # the assertions in router_test/mcp server_test no longer depend on it.
+b3 = Application.get_env(:mjolnir, :blake3_bin)
+
+unless is_binary(b3) and File.regular?(b3) do
+  {out, status} =
+    System.cmd("cargo", ["build", "-p", "mjolnir-blob-door", "--bin", "mjolnir-b3"],
+      cd: Path.expand("native"),
+      stderr_to_stdout: true
+    )
+
+  if status != 0 do
+    raise "mjolnir-b3 build failed:\n#{out}"
+  end
+end
+
+biscuit = Application.get_env(:mjolnir, :biscuit_bin)
+
+unless is_binary(biscuit) and File.regular?(biscuit) do
+  {out, status} =
+    System.cmd("cargo", ["build", "-p", "mjolnir-biscuit", "--bin", "mjolnir-biscuit"],
+      cd: Path.expand("native"),
+      stderr_to_stdout: true
+    )
+
+  if status != 0 do
+    raise "mjolnir-biscuit build failed:\n#{out}"
+  end
+end
+
 state_dir =
   Path.join([
     System.tmp_dir!(),

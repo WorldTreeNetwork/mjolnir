@@ -60,6 +60,7 @@ defmodule Mjolnir.Deploy.Builder do
           spawn: (map() -> {:ok, map()} | {:error, term()}),
           exec: (String.t(), String.t(), keyword() -> {:ok, String.t()} | {:error, term()}),
           snapshot: (String.t(), String.t(), keyword() -> {:ok, map()} | {:error, term()}),
+          update_snapshot_metadata: (String.t(), map() -> {:ok, map()} | {:error, term()}),
           stop: (String.t() -> :ok | {:error, term()})
         }
 
@@ -106,12 +107,11 @@ defmodule Mjolnir.Deploy.Builder do
     with {:ok, existing} <- existing_layer_ids(ops, prefix) do
       plan = Plan.compute(base_layer_id, steps, existing)
       release_snapshot = release_snapshot_name(plan, base_layer_id, base_image, prefix)
+      log_cache_plan(plan)
 
       if plan.steps_to_run == [] do
         # Full cache hit: the release snapshot already exists. No VM is booted.
-        Logger.info(
-          "Deploy.Builder: full cache hit (#{plan.cache_hits} layers), release=#{release_snapshot}"
-        )
+        Logger.info("Deploy.Builder: full cache hit, release=#{release_snapshot}")
 
         {:ok, finalize(plan, release_snapshot, [])}
       else
@@ -129,8 +129,7 @@ defmodule Mjolnir.Deploy.Builder do
     boot = boot_opts(plan, base_layer_id, base_image, prefix, spawn_opts)
 
     Logger.info(
-      "Deploy.Builder: #{plan.cache_hits} hit / #{plan.cache_misses} miss; " <>
-        "resume from #{inspect(boot)}, #{length(plan.steps_to_run)} step(s) to run"
+      "Deploy.Builder: resume from #{inspect(boot)}, #{length(plan.steps_to_run)} step(s) to run"
     )
 
     case ops.spawn.(boot) do
@@ -173,7 +172,13 @@ defmodule Mjolnir.Deploy.Builder do
       snapshot_opts = if index == last_index, do: [skip_verify: true], else: []
 
       with {:ok, _out} <- ops.exec.(vm_id, step.command, timeout: exec_timeout),
-           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, snapshot_opts) do
+           {:ok, _meta} <- ops.snapshot.(vm_id, snapshot_name, snapshot_opts),
+           {:ok, _meta} <-
+             ops.update_snapshot_metadata.(snapshot_name, %{
+               "deploy_parent_id" => step.parent_id,
+               "deploy_command_digest" => step.command_digest,
+               "deploy_input_digest" => step.input_digest
+             }) do
         {:cont, {:ok, [step.cache_key | built]}}
       else
         {:error, reason} ->
@@ -227,6 +232,20 @@ defmodule Mjolnir.Deploy.Builder do
 
   # --- planning helpers ------------------------------------------------------
 
+  defp log_cache_plan(plan) do
+    Logger.info("Deploy.Builder: #{plan.cache_hits} hit / #{plan.cache_misses} miss")
+
+    plan.layers
+    |> Enum.with_index(1)
+    |> Enum.each(fn
+      {%{status: :hit}, index} ->
+        Logger.info("Deploy.Builder: layer #{index}: hit")
+
+      {%{status: :miss, miss_reason: reason}, index} ->
+        Logger.info("Deploy.Builder: layer #{index}: miss (#{reason})")
+    end)
+  end
+
   # The boot map for the ephemeral build VM: spawn from the base image when the
   # plan resumes at the base, otherwise reflink-clone the deepest cached layer.
   defp boot_opts(plan, base_layer_id, base_image, prefix, spawn_opts) do
@@ -255,9 +274,10 @@ defmodule Mjolnir.Deploy.Builder do
       {:ok, snapshots} ->
         ids =
           snapshots
-          |> Enum.map(&snapshot_name/1)
-          |> Enum.filter(&String.starts_with?(&1, prefix))
-          |> Enum.map(&String.replace_prefix(&1, prefix, ""))
+          |> Enum.filter(&String.starts_with?(snapshot_name(&1), prefix))
+          |> Map.new(fn metadata ->
+            {String.replace_prefix(snapshot_name(metadata), prefix, ""), metadata}
+          end)
 
         {:ok, ids}
 
@@ -290,6 +310,7 @@ defmodule Mjolnir.Deploy.Builder do
       spawn: &Mjolnir.VM.spawn/1,
       exec: &Mjolnir.VM.exec/3,
       snapshot: &Mjolnir.VM.snapshot/3,
+      update_snapshot_metadata: &Mjolnir.BTRFS.update_snapshot_metadata/2,
       stop: &Mjolnir.VM.stop/1,
       diagnostics: &Mjolnir.Deploy.Diagnostics.capture/2
     }

@@ -3,8 +3,10 @@ defmodule Mjolnir.Admit do
   Host-side admission evaluator for request-path VM thaws (add-buzz-local-client).
 
   v1 is a **shape check**, fail-closed: a thaw requires an attestation map
-  with matching `vm_id` and a non-negative integer `epoch`. Cryptographic
-  verification belongs in `identikey-protocol` (`nod-identikey-admit`).
+  with matching `vm_id` and a non-negative integer `epoch`. The portable
+  protocol (envelope, attestation shape, verdict vocabulary, pure validators)
+  lives in `identikey-protocol` crate `identikey-admit`. This module remains
+  the v1 Elixir evaluator — no Rustler NIF this slice.
 
   Lifecycle epoch is **not** `StateStore`'s persist generation.
   """
@@ -35,6 +37,17 @@ defmodule Mjolnir.Admit do
   end
 
   def thaw_allowed?(_, _), do: false
+
+  @doc """
+  Portable verdict vocabulary (`identikey-admit`): `:deny` | `:deliver`.
+
+  `:drop` and `:reply_here` are facade policy (running-body relay, cache),
+  not this evaluator.
+  """
+  @spec verdict(String.t(), payload()) :: :deny | :deliver
+  def verdict(vm_id, payload) do
+    if thaw_allowed?(vm_id, payload), do: :deliver, else: :deny
+  end
 
   @spec attestation(payload()) :: {:ok, map()} | :error
   def attestation(payload) when is_map(payload) do

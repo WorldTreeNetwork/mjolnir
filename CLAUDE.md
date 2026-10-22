@@ -21,6 +21,7 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 - Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
 - `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
+- Client API: `https://api.vm.worldtree.network` (`mj doctor` / `mj secrets ls <app>`). Deploy secrets live at `/var/lib/mjolnir/deploy/secrets/<slug>.json`, `0600 root:root`. Managed LUKS passphrases at `/var/lib/mjolnir/escrow/<vm_id>`, same mode. Elixir is root; gateway is `User=mjolnir` and cannot read those files.
 
 ## Local Control Plane (Justfile)
 
@@ -78,7 +79,9 @@ just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 
 Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still builds and restarts Elixir exactly as before.
 
-**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface:
+**VM Operations** — use the **`mj` binary** (`native/mjolnir_client/`). It talks to the public API with token auth (`mj login` / `mj status`), so it works from anywhere — no SSH tunnel. There are no `just vm-*` recipes; `mj` is the whole VM/snapshot surface.
+
+`mj login` on a Mac (and on Linux with `DISPLAY` or `WAYLAND_DISPLAY`, and not over SSH) is loopback authorization code + PKCE. `mj login --device`, SSH (`SSH_CONNECTION` or `SSH_TTY`), and a non-macOS session with no display print a device code and do not open a browser. The device request is `client_id` and `scope=openid` only. The OP registration for `mjolnir-cli` has to allow the device grant or that path returns `unauthorized_client`. Offline checks stay the last-known JWKS. A configured `:audience` requires `aud`. `mjolnir-term` stays the browser code flow. Two `mj` processes share the lock beside `token.json` when they refresh.
 
 ```bash
 mj spawn                               # Spawn a VM (--snapshot <name>, --memory <mb>, --connect)
@@ -90,6 +93,7 @@ mj reboot <id> | mj restart <id>       # Restart a wedged VM (kill hypervisor �
 mj url <id>                            # Web gateway URL
 mj connect <id>                        # Interactive PTY (WebSocket); retries on drop (backoff + jitter). --session NAME reattaches tmux. --no-reconnect for one-shot.
 mj message <id> '{"k":"v"}'            # Send a payload in; wakes a dormant VM
+mj message --id turn-1 <id> '{"k":"v"}'  # Retry-safe producer id (second POST is 200 duplicate)
 mj doctor [<id>] [--fix]               # Health probe (no id = API + host); --fix heals
 mj ticket get <id> [--wait]            # Connection ticket (--wait blocks for PTY readiness)
 mj snapshot create <id> <name>         # Checkpoint a VM
@@ -117,7 +121,7 @@ just bootstrap        # Bootstrap a fresh server
 
 ### How It Works
 
-The Justfile is for **server operations** — deploy, build, host management — plus the **IdentiKey Sites** recipes. Those Sites recipes still use **SSH-wrapped curl** (`ssh host "curl localhost:4000/..."`) because the API auth bypass only trusts `127.0.0.1`; the SSH tunnel makes curl appear as localhost on the server. VM and snapshot operations are **not** in the Justfile — they live in the `mj` binary, which authenticates to the public API with a bearer token and needs no SSH tunnel.
+The Justfile is for **server operations** — deploy, build, host management — plus the **IdentiKey Sites** recipes. Sites and Forge recipes SSH to the host and call `scripts/operator-curl.sh`. That uses `/run/mjolnir/operator.sock` when the release has created it, and plain `curl` to `127.0.0.1:4000` until then. TCP loopback is not a principal in the release that ignores `MJOLNIR_AUTH_BYPASS_LOCALHOST`. VM and snapshot operations are **not** in the Justfile — they live in the `mj` binary, which authenticates to the public API with a bearer token and needs no SSH tunnel.
 
 ## Build & Development Commands
 
@@ -157,7 +161,7 @@ The full guest agent is built as part of `just deploy-full` (which runs `cargo b
 
 Universal host services on `:host_api_ip` (`10.200.0.1`, `dummy-mjolnir` — not loopback). Guests find locators in `/etc/mjolnir/vm.json`. Catalog: [`docs/guide/host-sidecars.md`](docs/guide/host-sidecars.md).
 
-- **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt cutover is `mjolnir-u8v7.4` (Blake3 stub).
+- **Blob door** `:7222` — content-addressed blobs (ADR 0003, spec `blob-store`). `blob_door_url` → `PUT/GET /storage/blob/b3/{hash}`. Operator: `docs/runbooks/blob-door.md`. Rides `just deploy`. Sites Recrypt: `MJOLNIR_RECRYPT_STORAGE_URL=http://10.200.0.1:7222` (`mjolnir-u8v7.4`). Content hashes and IdentiKey fingerprints are real Blake3 (`mjolnir-b3`). Live sites inventory: `docs/guide/live-sites.md`.
 - **Postgres** `:5432` — declared tenant DBs only (`DATABASE_URL` in deploy secrets). Runbook: `docs/runbooks/host-postgres-tenants.md`. Extra app keys: `mj secrets set <app> KEY` then redeploy. Guide: `docs/guide/deploying-an-app.md`.
 - **Redis** `:6379` — AUTH, AOF everysec, systemd not OTP (`REDIS_URL` in deploy secrets). Runbook: `docs/runbooks/host-redis.md`. ADR 0007.
 - **API** `:4000` — `api_url`. Guests do not get the localhost auth bypass.
@@ -238,7 +242,7 @@ Sandbox mode: when `:forge_systemd_units_dir` is set to anything other than `/et
 
 ### Guest Agent (Rust, `native/mjolnir_guest_agent/`)
 
-Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC.
+Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC. Agent SDK on `127.0.0.1:5001` (`GET /messages`, `GET /recv`, `POST /ack`, `POST /done`). Default consume loop peeks the inbox, fsyncs the producer id to `/var/lib/mjolnir/mail-seen`, writes `/var/lib/mjolnir/mail/<id>.json`, optional `/var/lib/agent/on-mail`, then application-ACKs. Disable with `MJOLNIR_MAIL_CONSUME=0`. Needs `just deploy --agent`.
 
 ### Configuration
 

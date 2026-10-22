@@ -4,7 +4,7 @@ defmodule Mjolnir.Syslog.Supervisor do
 
       Mjolnir.Syslog.Supervisor (one_for_one)
       ├── Mjolnir.Syslog.Router    — routes messages to configured sinks
-      └── Mjolnir.Syslog.Listener  — receives vsock channel 2 data from VMs
+      └── Mjolnir.Syslog.Listener  — vsock ch2 + optional host UDP ingest
 
   Mounted under `Mjolnir.Application` when `:syslog_enabled` is `true`
   (the default). Disable via:

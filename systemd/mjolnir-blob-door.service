@@ -1,6 +1,7 @@
 [Unit]
 Description=Mjolnir blob door (recrypt layout on B2)
-After=network.target
+After=network.target mjolnir-hotel-ip.service
+Requires=mjolnir-hotel-ip.service
 Documentation=docs/runbooks/blob-door.md
 
 [Service]
@@ -14,6 +15,12 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=yes
+# Disk cache / incoming sink. Outside btrfs_root — a cache on the data
+# volume would be CoW-pinned by every snapshot and fill the disk.
+# ProtectSystem=strict makes /var read-only without this.
+# The installer writes a cache-path.conf override when a custom resolved
+# BLOB_DOOR_CACHE_DIR is selected.
+ReadWritePaths=/var/lib/mjolnir/blobs
 Restart=on-failure
 
 [Install]

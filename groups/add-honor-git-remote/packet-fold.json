@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-fold-add-honor-git-remote",
+  "node_id": "add-honor-git-remote",
+  "capability": "honor-being",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "opus-5-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "opus-5",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "opus-5-fold" }
+  },
+  "goal": "FOLD add-honor-git-remote. You are the designated FOLDER (Opus 5). This is FOLD, not advise, not act.\n\nDo NOT write reviews/*-advise.md. Do NOT send-back. Do NOT implement leftover product work.\n\nBanner is ACTIVE BUILD. All tasks.md boxes are [x], including R1–R3 and fresh advise (astra-arch-review accept in reviews/2026-09-24-advise-2.md). A prior failed fold left notes/2026-09-24-fold-advise.md; ignore it.\n\nFollow fold-steps.md:\n1. Admit ACTIVE BUILD.\n2. Confirm checkboxes.\n3. Apply openspec/changes/add-honor-git-remote/specs/honor-being/spec.md onto openspec/specs/honor-being/spec.md (ADDED Forgejo write remote; MODIFIED respawn revoke order).\n4. Confirm every SHALL is living in openspec/specs/.\n5. mkdir -p openspec/changes/archive && git mv openspec/changes/add-honor-git-remote openspec/changes/archive/2026-09-24-add-honor-git-remote\n6. Amend docs/architecture.md / docs/decisions/0011-honor-being.md only if shape needs it.\n7. One LEARNINGS line only if a surprise.\n8. Report living spec paths + archive path.\n\nDo not start the next change.",
+  "acceptance": {
+    "kind": "command",
+    "command": "test ! -d openspec/changes/add-honor-git-remote && test -d openspec/changes/archive/2026-09-24-add-honor-git-remote && rg -q 'Forgejo write remote' openspec/specs/honor-being/spec.md"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/specs/honor-being/spec.md",
+      "openspec/changes/add-honor-git-remote",
+      "openspec/changes/archive",
+      "docs/LEARNINGS.md",
+      "docs/architecture.md",
+      "docs/decisions/0011-honor-being.md"
+    ],
+    "do_not": ["advise", "act", "implement leftover", "write reviews", "flip other banners", "deploy"]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "skill-host",
+  "role": "folder"
+}

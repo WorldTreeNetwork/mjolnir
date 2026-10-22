@@ -1,0 +1,8 @@
+{
+  "node_id": "mjolnir-uktt.2.1",
+  "change_id": "add-site-cert-subject",
+  "disposition": "pass",
+  "summary": "ADR 0013 records site-alias certificate subjects. The HTTP-01 plan and Sites initiative section 6.5 point at it. The issuer is unchanged.",
+  "verify_command": "test -f docs/decisions/0013-site-alias-certs.md && rg -q host_routed_elsewhere docs/decisions/0013-site-alias-certs.md && rg -q alias_index_unreadable docs/decisions/0013-site-alias-certs.md && rg -q 0013-site-alias-certs docs/plans/http01-custom-certs.md && rg -q 0013-site-alias-certs docs/plans/initiatives/identikey-sites.md",
+  "verify_exit": 0
+}

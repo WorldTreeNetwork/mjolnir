@@ -1,0 +1,94 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-honor-git-remote",
+  "node_id": "add-honor-git-remote",
+  "change_id": "add-honor-git-remote",
+  "capability": "honor-being",
+  "requester": {
+    "id": "agt-duke",
+    "kind": "human",
+    "harness": "human",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-duke"
+    }
+  },
+  "assignee": {
+    "id": "agt-grok",
+    "kind": "model",
+    "harness": "grok",
+    "interface": "grok-4.6",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok"
+    }
+  },
+  "goal": "Human activated add-honor-git-remote. Land the six tasks.md boxes. Register the ssh_git pubkey as a repo write deploy key on Forgejo VirtueInnova/hypersigil-store-frontend via host API (token from config/env, never the guest). Wire GitSigning.mint to register and :git_signing_forgejo_revoke to delete by key id/pubkey before revoke_device/opaque; failed delete is an error, not :ok. Unconfigured (no token) stays :not_wired reconcile find. Guest git uses /run/mjolnir/git_signing_key for mimir (known_hosts). Respawn: old Forgejo key gone, new pubkey registered. Tests against a fake Forgejo (no Bypass in mix.exs — Req + hook or Bypass-free fake). Live: clone/push if a host token exists; if not, leave the live box open. Edit declared paths and stop; the conductor persists. Do not fold. Do not put a Forgejo PAT in the guest or snapshot.",
+  "non_goals": [
+    "Fold",
+    "Machine user",
+    "Verified-commit badge",
+    "GitHub origin deploy",
+    "CORS",
+    "Tokenator",
+    "extra_mounts"
+  ],
+  "anchors": [
+    {
+      "symbol": "GitSigning.revoke/1",
+      "invariant": "Forgejo delete before revoke_device before opaque; failed Forgejo delete stops the chain"
+    },
+    {
+      "symbol": "deploy key",
+      "invariant": "write key on VirtueInnova/hypersigil-store-frontend; pubkey is ssh_git device_public_key; title includes vm_id"
+    },
+    {
+      "symbol": "guest",
+      "invariant": "no Forgejo token; git IdentityFile is /run/mjolnir/git_signing_key"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/git_signing_test.exs"
+  },
+  "out_of_scope": [
+    {
+      "item": "Prod Medusa CORS",
+      "tracked_as": "update-hypersigil-store-cors"
+    },
+    {
+      "item": "Snapshot XAI_API_KEY scrub",
+      "tracked_as": "add-honor-snapshot-key-scrub"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/git_signing.ex",
+      "lib/mjolnir/forgejo/",
+      "lib/mjolnir/vm.ex",
+      "config/config.exs",
+      "config/runtime.exs",
+      "test/mjolnir/git_signing_test.exs",
+      "scripts/hosted-being-bootstrap.sh",
+      "docs/runbooks/hosted-being.md",
+      "openspec/changes/add-honor-git-remote/"
+    ],
+    "do_not": [
+      "fold",
+      "kill --all",
+      "machine user",
+      "Forgejo PAT on guest"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "explicit",
+  "surface": "skill-host",
+  "inherited": [
+    "ACTIVE BUILD as of this act. Design: repo write deploy key, host API, one SSH key for signing and push.",
+    "GitSigning.revoke already calls :git_signing_forgejo_revoke; hook nil is :not_wired mapped to :ok. Prod hosted-being provision requires the token.",
+    "runner_forgejo_url is http://127.0.0.1:3000. Token from MJOLNIR_FORGEJO_TOKEN or deploy secrets — do not log it.",
+    "Bead mjolnir-x97p.4. Existing tests use Application.put_env hooks, not Bypass."
+  ]
+}

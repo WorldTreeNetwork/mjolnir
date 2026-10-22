@@ -1,5 +1,6 @@
+use std::path::Path;
+
 use crate::store::{object_key, outboard_key, CanonicalStore, StoreError};
-use crate::{blake3_bytes, hash_to_base58};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PutError {
@@ -25,40 +26,28 @@ pub enum PutOutcome {
     AlreadyPresent,
 }
 
-/// Hash-refuse, exists-then-skip, write, confirm. Never ack on write alone.
-pub async fn put_bytes<S: CanonicalStore>(
+/// Exists-then-skip, write from a file, confirm. Never ack on write alone.
+/// Caller already hashed the file (object PUT) or skipped hashing (.obao).
+pub async fn put_file<S: CanonicalStore>(
     store: &S,
-    claimed: &[u8; 32],
-    body: &[u8],
+    hash_b58: &str,
+    path: &Path,
+    len: u64,
+    obao: bool,
 ) -> Result<PutOutcome, PutError> {
-    let actual = blake3_bytes(body);
-    if &actual != claimed {
-        return Err(PutError::HashMismatch);
-    }
-    let key = object_key(&hash_to_base58(claimed));
-    if store.head(&key).await.is_ok() {
-        let existing = store.get(&key).await?;
-        if blake3_bytes(&existing) == *claimed {
+    let key = if obao {
+        outboard_key(hash_b58)
+    } else {
+        object_key(hash_b58)
+    };
+    if let Ok(existing) = store.head(&key).await {
+        if existing == len {
             return Ok(PutOutcome::AlreadyPresent);
         }
         return Err(PutError::HashMismatch);
     }
-    store.put(&key, body.to_vec()).await?;
-    confirm(store, &key, body.len() as u64).await?;
-    Ok(PutOutcome::Created)
-}
-
-pub async fn put_outboard<S: CanonicalStore>(
-    store: &S,
-    claimed: &[u8; 32],
-    body: &[u8],
-) -> Result<PutOutcome, PutError> {
-    let key = outboard_key(&hash_to_base58(claimed));
-    if store.head(&key).await.is_ok() {
-        return Ok(PutOutcome::AlreadyPresent);
-    }
-    store.put(&key, body.to_vec()).await?;
-    confirm(store, &key, body.len() as u64).await?;
+    store.put_path(&key, path).await?;
+    confirm(store, &key, len).await?;
     Ok(PutOutcome::Created)
 }
 

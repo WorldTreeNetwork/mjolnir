@@ -1,7 +1,8 @@
 defmodule Mjolnir.Deploy.OrchestratorTest do
   use ExUnit.Case, async: true
 
-  alias Mjolnir.Deploy.Orchestrator
+  alias Mjolnir.Deploy.Builder.Plan
+  alias Mjolnir.Deploy.{CacheKey, Orchestrator}
 
   @plan %{
     runtime: "node@20",
@@ -132,6 +133,244 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       # No secrets file → plain boot.
       refute Map.has_key?(o[:spawn_opts], :secrets_mode)
     end
+
+    test "uses the plan's base_image when set (mjolnir.toml pin)", %{agent: agent, dir: dir} do
+      plan = Map.put(@plan, :base_image, "ubuntu-24.04")
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      assert {:ok, _} = Orchestrator.deploy("identikey", dir, ops: ops)
+
+      {:build, base, _steps, o} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "ubuntu-24.04"
+      assert o[:base_image] == "ubuntu-24.04"
+    end
+
+    test "opts :base_image overrides the plan pin", %{agent: agent, dir: dir} do
+      plan = Map.put(@plan, :base_image, "ubuntu-24.04")
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      assert {:ok, _} =
+               Orchestrator.deploy("identikey", dir, ops: ops, base_image: "arch")
+
+      {:build, base, _, o} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "arch"
+      assert o[:base_image] == "arch"
+    end
+
+    test "omitted key still uses deploy-node-bun", %{agent: agent, dir: dir} do
+      ops = recording_ops(agent, [])
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+      {:build, base, _, _} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert base == "deploy-node-bun"
+    end
+
+    test "manifest build sizing wins over host defaults and reaches the build spawn opts", %{
+      agent: agent,
+      dir: dir
+    } do
+      plan = Map.put(@plan, :build, %{vcpus: 5, memory_mb: 8192})
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+
+      {:build, _, _, opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      assert opts[:spawn_opts][:vcpus] == 5
+      assert opts[:spawn_opts][:memory_mb] == 8192
+    end
+
+    test "clamps build sizing, reports it, and leaves service memory alone", %{
+      agent: agent,
+      dir: dir
+    } do
+      {:ok, progress} = start_supervised({Agent, fn -> [] end}, id: :progress)
+      plan = Map.put(@plan, :build, %{vcpus: 99, memory_mb: 99_999})
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      on_progress = fn stage, line -> Agent.update(progress, &[{stage, line} | &1]) end
+
+      assert {:ok, _} =
+               Orchestrator.deploy("app", dir,
+                 ops: ops,
+                 memory_mb: 1024,
+                 on_progress: on_progress
+               )
+
+      {:build, _, _, build_opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      {:run, _, _, _, run_opts} = Enum.find(events(agent), &match?({:run, _, _, _, _}, &1))
+      assert build_opts[:spawn_opts][:vcpus] == 6
+      assert build_opts[:spawn_opts][:memory_mb] == 16_384
+      assert run_opts[:spawn_opts][:memory_mb] == 1024
+
+      lines = progress |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "build VM: 6 vCPU, 16384 MB" in lines
+      assert "vcpus 99 -> 6 (host max)" in lines
+      assert "memory_mb 99999 -> 16384 (host max)" in lines
+    end
+  end
+
+  describe "plan_to_steps/3 — manifest table inputs" do
+    defp filesystem_ops do
+      %{
+        hash_file: &CacheKey.hash_file/1,
+        hash_tree: &CacheKey.hash_tree/2,
+        hash_globs: &CacheKey.hash_globs/2
+      }
+    end
+
+    test "command-only step ignores source edits and mounts no source", %{dir: dir} do
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "apt-get update", inputs: []}]
+      }
+
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      File.write!(Path.join(dir, "unrelated.txt"), "changed")
+      assert {:ok, [after_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      assert before == after_edit
+      refute before.command =~ "mount"
+      refute before.command =~ "cp "
+      assert before.command =~ "cd /app && apt-get update"
+      assert before.input_hash == CacheKey.no_inputs_hash()
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+      assert [%{status: :hit}] = Plan.compute("base", [after_edit], [cached]).layers
+    end
+
+    test "glob step changes only for matched files and copies only matches", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "web/nested"))
+      File.write!(Path.join(dir, "web/index.js"), "one")
+      File.write!(Path.join(dir, "web/nested/view.js"), "two")
+      File.write!(Path.join(dir, "server.ex"), "outside")
+
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "build-web", inputs: ["web/**"]}]
+      }
+
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert before.command =~ "--null -T /mnt/deploy-inputs/0.files"
+      assert before.input_files == ["web/index.js", "web/nested/view.js"]
+      refute before.command =~ "server.ex"
+
+      File.write!(Path.join(dir, "server.ex"), "outside changed")
+      assert {:ok, [outside_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert outside_edit == before
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+      assert [%{status: :hit}] = Plan.compute("base", [outside_edit], [cached]).layers
+
+      File.write!(Path.join(dir, "web/index.js"), "matched changed")
+      assert {:ok, [matched_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert matched_edit.command == before.command
+      assert matched_edit.input_hash != before.input_hash
+
+      assert [%{status: :miss, miss_reason: :inputs}] =
+               Plan.compute("base", [matched_edit], [cached]).layers
+    end
+
+    test "5,000-file glob uses a bounded command and copies only matches", %{
+      agent: agent,
+      dir: dir
+    } do
+      File.mkdir_p!(Path.join(dir, "web"))
+      paths = for index <- 1..5000, do: "web/file-#{index}.txt"
+      paths = paths ++ ["web/with space\nand newline.txt"]
+      for path <- paths, do: File.write!(Path.join(dir, path), path)
+      File.write!(Path.join(dir, "excluded.txt"), "excluded")
+
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "true", inputs: ["web/**"]}]
+      }
+
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+      destination = Path.join(dir, "copied")
+      File.mkdir_p!(destination)
+
+      ops =
+        Map.put(ops, :build, fn _, [step], opts ->
+          assert byte_size(step.command) < 65_536
+          share = Enum.find(opts[:spawn_opts][:extra_mounts], &(&1.tag == "inputs"))
+          refute String.starts_with?(share.shared_dir, dir <> "/")
+          list = File.read!(Path.join(share.shared_dir, step.input_list))
+          assert String.split(list, <<0>>, trim: true) == Enum.sort(paths)
+          Agent.update(agent, &[{:input_share, share.shared_dir} | &1])
+          # Run the actual archive/copy part locally; mounting virtiofs is server-only.
+          [_, copy] = String.split(step.command, "; tar -C ", parts: 2)
+
+          command =
+            ("tar -C " <> copy)
+            |> String.replace("/mnt/deploy-src", "'#{dir}'")
+            |> String.replace("/mnt/deploy-inputs", "'#{share.shared_dir}'")
+            |> String.replace("/app", "'#{destination}'")
+            |> String.replace("/tmp/deploy-0.files.tar", "'#{destination}/copy.tar'")
+
+          assert {_, 0} = System.cmd("sh", ["-c", command], stderr_to_stdout: true)
+          assert {:ok, copied} = CacheKey.matching_files(destination, ["**"])
+          assert copied == Enum.sort(paths)
+          {:ok, build_ok()}
+        end)
+
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops)
+      {:input_share, share_dir} = Enum.find(events(agent), &match?({:input_share, _}, &1))
+      refute File.exists?(share_dir)
+    end
+
+    test "empty glob matches keep a stable command and clean up lists on build failure", %{
+      agent: agent,
+      dir: dir
+    } do
+      plan = %{
+        @plan
+        | runtime: "",
+          package_manager: nil,
+          steps: [%{run: "true", inputs: ["web/**"]}]
+      }
+
+      assert {:ok, [empty]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      ops = recording_ops(agent, detect_result: {:ok, plan})
+
+      ops =
+        Map.put(ops, :build, fn _, [step], opts ->
+          share = Enum.find(opts[:spawn_opts][:extra_mounts], &(&1.tag == "inputs"))
+          assert File.read!(Path.join(share.shared_dir, step.input_list)) == ""
+          Agent.update(agent, &[{:input_share, share.shared_dir} | &1])
+          {:error, :build_failed}
+        end)
+
+      assert {:error, %{stage: "build", reason: :build_failed}} =
+               Orchestrator.deploy("app", dir, ops: ops)
+
+      {:input_share, share_dir} = Enum.find(events(agent), &match?({:input_share, _}, &1))
+      refute File.exists?(share_dir)
+
+      File.mkdir_p!(Path.join(dir, "web"))
+      File.write!(Path.join(dir, "web/first.txt"), "first")
+      assert {:ok, [populated]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+      assert empty.command == populated.command
+      assert empty.input_hash != populated.input_hash
+    end
+
+    test "string step keeps full-tree hash and copy behavior", %{dir: dir} do
+      plan = %{@plan | runtime: "", package_manager: nil, steps: ["make"]}
+      assert {:ok, [before]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      File.write!(Path.join(dir, "any-file"), "changed")
+      assert {:ok, [after_edit]} = Orchestrator.plan_to_steps(plan, dir, filesystem_ops())
+
+      assert before.command =~ "cp -a /mnt/deploy-src/. /app/"
+      assert before.input_hash != after_edit.input_hash
+
+      cached = CacheKey.compute("base", before.command, before.input_hash)
+
+      assert [%{status: :miss, miss_reason: :inputs}] =
+               Plan.compute("base", [after_edit], [cached]).layers
+    end
   end
 
   describe "deploy/3 — managed secrets" do
@@ -163,6 +402,29 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       assert List.last(stages) == "done"
     end
 
+    test "reports every layer's hit or miss cause to the deploying client", %{
+      agent: agent,
+      dir: dir
+    } do
+      {:ok, prog} = start_supervised({Agent, fn -> [] end}, id: :layer_prog)
+
+      layers = [
+        %{status: :hit, miss_reason: nil},
+        %{status: :miss, miss_reason: :inputs},
+        %{status: :miss, miss_reason: :parent}
+      ]
+
+      build = Map.put(build_ok(), :plan, %{layers: layers})
+      ops = recording_ops(agent, build_result: {:ok, build})
+      on_progress = fn stage, line -> Agent.update(prog, &[{stage, line} | &1]) end
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops, on_progress: on_progress)
+
+      lines = prog |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "layer 1: hit" in lines
+      assert "layer 2: miss (inputs)" in lines
+      assert "layer 3: miss (parent)" in lines
+    end
+
     test "surfaces a detect failure with its stage, never building", %{agent: agent, dir: dir} do
       ops = recording_ops(agent, detect_result: {:error, :unsupported_app})
 
@@ -177,6 +439,26 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
 
       assert {:error, %{stage: "build"}} = Orchestrator.deploy("app", dir, ops: ops)
       refute Enum.any?(events(agent), &match?({:run, _, _, _, _}, &1))
+    end
+
+    test "names build memory when its agent disappears", %{agent: agent, dir: dir} do
+      {:ok, progress} = start_supervised({Agent, fn -> [] end}, id: :progress)
+      plan = Map.put(@plan, :build, %{memory_mb: 8192, vcpus: 4})
+
+      ops =
+        recording_ops(agent,
+          detect_result: {:ok, plan},
+          build_result:
+            {:error, {:step_failed, "cargo build", {:vsock_unavailable, :closed}, [], %{}}}
+        )
+
+      on_progress = fn stage, line -> Agent.update(progress, &[{stage, line} | &1]) end
+
+      assert {:error, %{stage: "build"}} =
+               Orchestrator.deploy("app", dir, ops: ops, on_progress: on_progress)
+
+      lines = progress |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "cause: build VM stopped responding; it had 8192 MB. Raise build.memory_mb." in lines
     end
   end
 end

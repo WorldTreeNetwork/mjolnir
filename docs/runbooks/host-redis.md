@@ -8,6 +8,9 @@ Guest catalog: [`guide/host-sidecars.md`](../guide/host-sidecars.md).
 
 Rides `just deploy` / `scripts/deploy.sh` (`scripts/install-redis.sh`).
 No `just deploy-redis`. The install step does not restart Elixir.
+It assigns `10.200.0.1/32` on `dummy-mjolnir` through
+`mjolnir-hotel-ip.service` before Redis starts. If `dummy` cannot be
+created, install stops. The address is not placed on `lo`.
 Restart Redis only when unit/conf/binary/password changed.
 
 ```bash

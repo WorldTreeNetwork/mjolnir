@@ -1,6 +1,8 @@
 import Config
 
 config :mjolnir,
+  vmm_slice: "mjolnir-vms.slice",
+  vmm_scope_prefix: "mjolnir-",
   # Hypervisor
   hypervisor: Mjolnir.Hypervisor.CloudHypervisor,
 
@@ -18,6 +20,12 @@ config :mjolnir,
   # Defaults
   default_vcpus: 2,
   default_memory_mb: 512,
+  # Build VMs compile full dependency graphs and are sized independently from
+  # service VMs. Keep :default_vcpus for service VMs unchanged.
+  deploy_build_vcpus: 4,
+  deploy_build_memory_mb: 4096,
+  deploy_build_max_vcpus: 6,
+  deploy_build_max_memory_mb: 16_384,
   default_base_image: "ubuntu-24.04",
 
   # Sockets
@@ -146,6 +154,12 @@ config :mjolnir,
   # Origin of mjolnir-blob-door (only read by the Recrypt backend).
   # Overridable via MJOLNIR_RECRYPT_STORAGE_URL (e.g. http://10.200.0.1:7222).
   recrypt_storage_url: nil,
+  # Real Blake3 (`mjolnir-b3`). Content hashes and IdentiKey fingerprints.
+  blake3_bin: "/opt/mjolnir/bin/mjolnir-b3",
+  biscuit_bin: "/opt/mjolnir/bin/mjolnir-biscuit",
+  # Stable edge identity and delegated operational signing keys. This host
+  # path must remain outside btrfs_root so VM/named snapshots never capture it.
+  auth_dir: "/var/lib/mjolnir/auth",
 
   # Forgejo runner — managed as an Erlang Port. Disabled by default so unit
   # tests and dev machines without the binary stay green. Operator enables in
@@ -155,6 +169,13 @@ config :mjolnir,
   runner_config_path: "/etc/mjolnir/runner.yml",
   runner_state_dir: "/var/lib/mjolnir/runner",
   runner_forgejo_url: "http://127.0.0.1:3000",
+  # Host Forgejo API for hosted-being write deploy keys. URL falls back to
+  # runner_forgejo_url when nil. Token from MJOLNIR_FORGEJO_TOKEN at runtime —
+  # never log it, never inject into the guest.
+  forgejo_url: nil,
+  forgejo_token: nil,
+  forgejo_deploy_owner: "VirtueInnova",
+  forgejo_deploy_repo: "hypersigil-store-frontend",
   runner_labels: ["ubuntu-24.04:host"],
   runner_max_concurrent_jobs: 1,
   runner_log_level: "info",
@@ -183,20 +204,29 @@ config :mjolnir,
 config :mjolnir,
   allowed_mount_prefixes: []
 
-# Syslog-over-vsock transport. VMs stream syslog via vsock channel 2.
+# Syslog ingest. Guests stream RFC 3164 on vsock channel 2. Host apps
+# (mjolnir-log) send UDP when udp_port is set; unset = no bind.
+# Loopback for host processes; bind 10.200.0.1 so guests can send to
+# the hotel IP. :app_log sinks are EventBus-only (no journald double).
 # See lib/mjolnir/syslog/.
 config :mjolnir, :syslog,
   enabled: true,
   vsock_channel: 2,
-  sinks: [:eventbus, :logger]
+  sinks: [:eventbus, :logger],
+  app_log_sinks: [:eventbus]
 
-# Auth defaults
+# udp_host: {127, 0, 0, 1},
+# udp_port: 3164
+
+# Auth defaults. Issuer is the hosted IdentiKey OP. Keycloak
+# (connect.identikey.io) is deprecated; set MJOLNIR_AUTH_ISSUER only to
+# point somewhere else. That old host still uses the realm certs URL.
+# A set audience requires `aud`. A token that omits it fails at the API.
 config :mjolnir, :auth,
   bypass_localhost: false,
-  issuer: "https://connect.identikey.io/realms/identikey",
-  audience: "mjolnir",
-  # Public client `mj login` already uses. No new Keycloak client required;
-  # device-code + PKCE is registered, authorization-code redirect_uris are not.
-  client_id: "mjolnir-cli"
+  issuer: "https://auth.identikey.me",
+  audience: ["mjolnir-cli", "mjolnir-term", "mjolnir"],
+  client_id: "mjolnir-term",
+  redirect_uri: "https://api.vm.worldtree.network/auth/callback"
 
 import_config "#{config_env()}.exs"

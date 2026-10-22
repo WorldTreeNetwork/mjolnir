@@ -118,12 +118,12 @@ check_system_suitability() {
         fi
     fi
 
-    # BTRFS host filesystem check
-    if ! btrfs filesystem show / &>/dev/null && ! findmnt -t btrfs &>/dev/null; then
+    # BTRFS host filesystem check (`btrfs filesystem show PATH` is not reliable)
+    if findmnt -n -o FSTYPE / | grep -qx btrfs || findmnt -t btrfs &>/dev/null; then
+        log_success "BTRFS filesystem present"
+    else
         log_warn "No BTRFS filesystem detected. This script assumes the host is on BTRFS."
         log_warn "If /var/lib/mjolnir is not on BTRFS, subvolume operations will fail."
-    else
-        log_success "BTRFS filesystem present"
     fi
 
     local mem_gb
@@ -177,12 +177,14 @@ install_base_packages() {
         log_warn "virtiofsd not found in repos — check AUR or install manually"
     fi
 
-    # virtiofsd ships at /usr/lib/virtiofsd on Arch; the mjolnir code expects
-    # /usr/libexec/virtiofsd (FHS-compliant location). Symlink bridges that.
-    if [[ -f /usr/lib/virtiofsd && ! -e /usr/libexec/virtiofsd ]]; then
-        mkdir -p /usr/libexec
-        ln -s /usr/lib/virtiofsd /usr/libexec/virtiofsd
-        log_info "Linked /usr/lib/virtiofsd → /usr/libexec/virtiofsd"
+    # virtiofsd ships at /usr/lib/virtiofsd on Arch. Mjolnir's compiled default
+    # is /usr/local/bin/virtiofsd (config.exs); bootstrap also used to only
+    # link /usr/libexec, which left spawn failing with :enoent.
+    if [[ -f /usr/lib/virtiofsd ]]; then
+        mkdir -p /usr/libexec /usr/local/bin
+        ln -sfn /usr/lib/virtiofsd /usr/libexec/virtiofsd
+        ln -sfn /usr/lib/virtiofsd /usr/local/bin/virtiofsd
+        log_info "Linked /usr/lib/virtiofsd → /usr/libexec/virtiofsd and /usr/local/bin/virtiofsd"
     fi
 
     # File capabilities let virtiofsd override DAC checks, chown, etc. without
@@ -386,6 +388,11 @@ deploy_mjolnir_code() {
 
     cd "$MJOLNIR_CODE"
 
+    if command -v mise &>/dev/null; then
+        mise trust "$MJOLNIR_CODE/.mise.toml" >/dev/null 2>&1 || true
+        mise trust "$MJOLNIR_CODE" >/dev/null 2>&1 || true
+    fi
+
     log_info "Fetching dependencies..."
     MIX_ENV=prod mix deps.get
 
@@ -465,8 +472,10 @@ setup_btrfs() {
     mkdir -p "$MJOLNIR_ROOT/btrfs"
 
     # Confirm we're actually on BTRFS (creates subvolumes, not just directories)
-    if ! btrfs filesystem show "$MJOLNIR_ROOT/btrfs" &>/dev/null; then
-        log_warn "$MJOLNIR_ROOT/btrfs is not on a BTRFS filesystem"
+    local btrfs_fstype
+    btrfs_fstype=$(findmnt -n -o FSTYPE "$MJOLNIR_ROOT/btrfs" 2>/dev/null || findmnt -n -o FSTYPE / | head -1)
+    if [[ "$btrfs_fstype" != "btrfs" ]]; then
+        log_warn "$MJOLNIR_ROOT/btrfs fstype=${btrfs_fstype:-unknown} (want btrfs)"
         log_warn "Subvolume operations will use regular directories (CoW cloning won't work)"
     else
         log_success "Confirmed BTRFS at $MJOLNIR_ROOT/btrfs"
@@ -569,6 +578,13 @@ install_host_ghostty_terminfo() {
 setup_networking() {
     log_section "Setting Up VM Networking (nftables)"
 
+    local modules nat
+    modules="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-modules.sh"
+    if [[ ! -f "$modules" ]]; then
+        modules="$MJOLNIR_CODE/scripts/ensure-host-modules.sh"
+    fi
+    bash "$modules"
+
     local vm_subnet="10.200.0.0/10"
 
     # Enable IP forwarding
@@ -619,17 +635,34 @@ $include_line
 NFTEOF
     fi
 
-    # Load the rules now
+    # Load the mjolnir table only. Do not restart nftables.service — that
+    # flushes Tailscale's xtables/nft hybrid rules on Arch.
     if nft -f "$nft_file" 2>/dev/null; then
         log_success "nftables rules loaded"
     else
-        log_warn "Failed to load nftables rules immediately — will take effect after nftables.service restart"
+        log_warn "Failed to load nftables NAT immediately (missing nf_nat/dummy.ko is common if the running kernel != /lib/modules)."
     fi
 
-    # Enable nftables to persist across reboots
-    systemctl enable nftables.service 2>/dev/null || true
-    systemctl restart nftables.service 2>/dev/null || \
-        log_warn "nftables.service restart failed — rules may not persist on next boot"
+    local ensure
+    ensure="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-api-addr.sh"
+    if [[ ! -f "$ensure" ]]; then
+        ensure="$MJOLNIR_CODE/scripts/ensure-host-api-addr.sh"
+    fi
+    if bash "$ensure" --install-unit; then
+        log_success "Host API address on dummy-mjolnir (mjolnir-hotel-ip.service)"
+    else
+        log_warn "Hotel address was not assigned. Sidecars fail closed until dummy.ko loads for the running kernel."
+    fi
+
+    nat="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-host-nat.sh"
+    if [[ ! -f "$nat" ]]; then
+        nat="$MJOLNIR_CODE/scripts/ensure-host-nat.sh"
+    fi
+    if bash "$nat" --install-unit; then
+        log_success "Guest masquerade persisted (mjolnir-nat.service)"
+    else
+        log_warn "Guest masquerade was not installed. VM egress waits until iptables can load."
+    fi
 
     log_success "VM networking configured (subnet: $vm_subnet, nftables)"
 }

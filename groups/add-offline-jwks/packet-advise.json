@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-offline-jwks",
+  "node_id": "add-offline-jwks",
+  "capability": "edge-auth",
+  "change_id": "add-offline-jwks",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "fast": false,
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-offline-jwks. Change rigor, sensitive auth. Author family is Grok. You are Astra (gpt-6-astra), other-family reader. Fable 5.1 infra-red on Claude credits.\n\nWHY: Elixir starts Mjolnir.Auth.KeycloakStrategy with first_fetch_sync true. A reboot while auth.identikey.me is unreachable fails boot, so hosted JWTs cannot be checked even when they are unexpired and the keys were already known.\n\nWHAT (from proposal, not design): Persist last-known-valid JWKS under /var/lib/mjolnir/auth, mode 0600, outside btrfs_root. Boot from that cache; live fetch is opportunistic, not a start dependency. Unknown kid fails closed. Rotation overlap is the issuer publishing both keys in one JWKS; a later validated document that omits a kid retires it. Provision at bootstrap when the issuer is reachable.\n\nNo living edge-auth spec yet. Related: openspec/specs/web-pty-edge/spec.md (hosted ID token verify for /term).\n\nCited code (blind take):\n- lib/mjolnir/application.ex:130-137 — JWKS strategy started with first_fetch_sync true\n- lib/mjolnir/auth/keycloak_strategy.ex:25-38 — jwks_url from issuer, Tesla Mint adapter, no disk cache\n- lib/mjolnir/auth/token.ex:29-37 — verify_and_validate via JokenJwks hook; no issuer means error\n- lib/mjolnir/secret_escrow.ex:16-28 — precedent for 0600 files outside btrfs_root\n\nRE-ADVISE after advise-3 send-back. Residual patched: unknown-kid scenario GIVEN is absence from the active set; retirement-across-restart requires successful persist of {B} before offline restart. Failed-persist scenarios remain complementary. Review the current proposal Why plus living/cited code first, then compare to the revised design Decision 7 and specs/edge-auth/spec.md.\nACTIVE BUILD. Write openspec/changes/add-offline-jwks/reviews/2026-09-24-advise-4.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md / the delta. Steelman against the take. Do not implement. Do not fold. Do not flip the banner.\nREADER line: astra-arch-review. SPAWN line: parent dir of SPAWN_PROMPT_FILE.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/application.ex",
+      "invariant": "JWKS fetch is a sync start dependency today"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-offline-jwks/reviews/2026-09-24-advise-4.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-offline-jwks/reviews/2026-09-24-advise-4.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-offline-jwks/reviews/2026-09-24-advise-4.md"
+  },
+  "out_of_scope": [
+    { "item": "Direct challenge protocol", "tracked_as": "add-direct-challenge" },
+    { "item": "mj login flags", "tracked_as": "add-mj-login-modes" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-offline-jwks/reviews",
+      "openspec/changes/add-offline-jwks/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Steer 2026-09-24: JWKS last-known-good on disk under /var/lib/mjolnir/auth; unknown kid fail closed.",
+    "Banner is ACTIVE BUILD. Accept unblocks act for this node."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "reader"
+}

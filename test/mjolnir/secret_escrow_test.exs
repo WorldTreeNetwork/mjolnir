@@ -41,7 +41,7 @@ defmodule Mjolnir.SecretEscrowTest do
 
   test "the escrow file is mode 0600", %{dir: dir, vm_id: vm_id} do
     :ok = SecretEscrow.put(vm_id, "s3cret")
-    %File.Stat{mode: mode} = File.stat!(Path.join(dir, vm_id))
+    %File.Stat{mode: mode} = File.stat!(Path.join(dir, Mjolnir.VmId.storage_id(vm_id)))
     assert (mode &&& 0o777) == 0o600
   end
 

@@ -31,7 +31,27 @@ pub async fn cmd_spawn(
     memory_mb: &Option<u32>,
     snapshot: &Option<String>,
     base_image: &Option<String>,
+    target: Option<&str>,
+    manifest_path: &str,
+    dry_run: bool,
 ) -> Result<()> {
+    if let Some(name) = target {
+        return cmd_spawn_target(
+            profile,
+            api_flag,
+            token,
+            name,
+            manifest_path,
+            dry_run,
+            memory_mb,
+            snapshot,
+            base_image,
+        )
+        .await;
+    }
+    if dry_run {
+        anyhow::bail!("--dry-run is only valid with --target");
+    }
     if snapshot.is_some() && base_image.is_some() {
         anyhow::bail!("--snapshot and --base are mutually exclusive; pass at most one");
     }
@@ -60,6 +80,7 @@ pub async fn cmd_spawn(
         snapshot: snapshot.clone(),
         base_image: base_image.clone(),
         ssh_public_key,
+        ..SpawnOptions::default()
     };
 
     eprintln!("Spawning VM...");
@@ -749,7 +770,10 @@ pub async fn cmd_snapshot_show(
     println!("Snapshot");
     println!("═══════════════════════════════════════════════════════");
     println!("Name:         {}", m.name);
-    println!("Kind:         {}", m.kind.as_deref().unwrap_or("filesystem"));
+    println!(
+        "Kind:         {}",
+        m.kind.as_deref().unwrap_or("filesystem")
+    );
     println!("Source VM:    {}", m.source_vm_id);
     println!("Created At:    {}", m.created_at);
     println!("Size:         {} MB", size_mb);
@@ -897,6 +921,193 @@ pub async fn cmd_url(
         }
     }
 
+    Ok(())
+}
+
+async fn cmd_spawn_target(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    name: &str,
+    path: &str,
+    dry_run: bool,
+    memory_override: &Option<u32>,
+    snapshot_override: &Option<String>,
+    base_override: &Option<String>,
+) -> Result<()> {
+    let dev = crate::dev_manifest::load(std::path::Path::new(path), name)?;
+    eprintln!(
+        "target {name}: {} memory={} port={} sign={}",
+        dev.snapshot
+            .as_deref()
+            .or(dev.base.as_deref())
+            .unwrap_or("?"),
+        dev.memory_mb,
+        dev.port,
+        dev.git_sign
+    );
+    if dry_run {
+        println!("{}", crate::dev_manifest::start_script(name, &dev));
+        return Ok(());
+    }
+
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+    if let Some(existing) = find_target_vm(&client, base, name).await? {
+        eprintln!(
+            "reusing {name} VM {} (already running)",
+            existing.id
+        );
+        return finish_target(&client, base, &existing.id, existing.web_url, existing.ticket, name, &dev).await;
+    }
+
+    let ssh_public_key = crate::config::resolve_ssh_key_path().and_then(|key_path| {
+        crate::config::read_ssh_public_key(profile).map(|ssh_key| {
+            eprintln!("Using SSH key: {}", key_path);
+            ssh_key
+        })
+    });
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("role".into(), serde_json::json!(name));
+    if let Some(remote) = &dev.git_remote {
+        metadata.insert("git_remote".into(), serde_json::json!(remote));
+    }
+
+    let snapshot = snapshot_override.clone().or(dev.snapshot.clone());
+    let base_image = if snapshot.is_some() {
+        None
+    } else {
+        base_override.clone().or(dev.base.clone())
+    };
+    let opts = SpawnOptions {
+        memory_mb: Some(memory_override.unwrap_or(dev.memory_mb)),
+        snapshot,
+        base_image,
+        ssh_public_key,
+        preserve_iroh_key: Some(dev.preserve_iroh_key),
+        git_signing: Some(dev.git_sign),
+        metadata: Some(metadata),
+    };
+
+    eprintln!("Spawning target {name}...");
+    let spawned = client
+        .post(format!("{}/api/vms", base))
+        .json(&spawn_body(&opts))
+        .send()
+        .await
+        .context("failed to send spawn request")?;
+    if spawned.status() == reqwest::StatusCode::CONFLICT {
+        let body: serde_json::Value = spawned.json().await.context("409 body")?;
+        let id = body["vm_id"]
+            .as_str()
+            .context("iroh_identity_in_use missing vm_id")?
+            .to_string();
+        eprintln!("reusing {name} VM {id} (Iroh identity already live)");
+        let url = body.get("web_url").and_then(|v| v.as_str()).map(str::to_string);
+        let ticket = body.get("ticket").and_then(|v| v.as_str()).map(str::to_string);
+        return finish_target(&client, base, &id, url, ticket, name, &dev).await;
+    }
+    let spawned = spawned
+        .error_for_status()
+        .context("spawn request failed")?;
+    let resp: SpawnResponse = spawned.json().await.context("failed to parse spawn response")?;
+    eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+    if resp.shell_ready != Some(true) {
+        eprintln!("Waiting for shell...");
+        let _ = await_pty(&client, base, &resp.id, 120_000).await?;
+    }
+    finish_target(&client, base, &resp.id, resp.web_url, resp.ticket, name, &dev).await
+}
+
+fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
+    let mut body = serde_json::json!({});
+    if let Some(key) = &opts.ssh_public_key {
+        body["ssh_public_key"] = serde_json::json!(key);
+    }
+    if let Some(memory) = opts.memory_mb {
+        body["memory_mb"] = serde_json::json!(memory);
+    }
+    if let Some(snap) = &opts.snapshot {
+        body["snapshot"] = serde_json::json!(snap);
+    }
+    if let Some(base_image) = &opts.base_image {
+        body["base_image"] = serde_json::json!(base_image);
+    }
+    if let Some(preserve) = opts.preserve_iroh_key {
+        body["preserve_iroh_key"] = serde_json::json!(preserve);
+    }
+    if let Some(sign) = opts.git_signing {
+        body["git_signing"] = serde_json::json!(sign);
+    }
+    if let Some(metadata) = &opts.metadata {
+        body["metadata"] = serde_json::Value::Object(metadata.clone());
+    }
+    body
+}
+
+struct ListedVm {
+    id: String,
+    web_url: Option<String>,
+    ticket: Option<String>,
+}
+
+async fn find_target_vm(
+    client: &reqwest::Client,
+    base: &str,
+    name: &str,
+) -> Result<Option<ListedVm>> {
+    let resp = client
+        .get(format!("{}/api/vms", base))
+        .query(&[("metadata.role", name)])
+        .send()
+        .await
+        .context("list VMs")?
+        .error_for_status()
+        .context("list VMs failed")?;
+    let body: serde_json::Value = resp.json().await.context("list VMs body")?;
+    let Some(vms) = body["vms"].as_array() else {
+        return Ok(None);
+    };
+    let Some(vm) = vms.iter().find(|vm| vm["state"] == "running") else {
+        return Ok(None);
+    };
+    Ok(Some(ListedVm {
+        id: vm["id"].as_str().unwrap_or_default().to_string(),
+        web_url: vm["web_url"].as_str().map(str::to_string),
+        ticket: vm["ticket"].as_str().map(str::to_string),
+    }))
+}
+
+async fn finish_target(
+    client: &reqwest::Client,
+    base: &str,
+    id: &str,
+    web_url: Option<String>,
+    ticket: Option<String>,
+    name: &str,
+    dev: &crate::dev_manifest::DevTarget,
+) -> Result<()> {
+    let script = crate::dev_manifest::start_script(name, dev);
+    let exec_resp: ExecResponse = client
+        .post(format!("{}/api/vms/{}/exec", base, id))
+        .json(&serde_json::json!({ "command": script }))
+        .send()
+        .await
+        .context("failed to start target command")?
+        .error_for_status()
+        .context("target start exec failed")?
+        .json()
+        .await
+        .context("failed to parse target start response")?;
+    if let Some(output) = &exec_resp.output {
+        eprint!("{output}");
+    }
+    if let Some(url) = web_url {
+        println!("{url}");
+    } else if let Some(ticket) = ticket.as_deref() {
+        println!("https://{ticket}.vm.worldtree.network");
+    }
     Ok(())
 }
 
@@ -1104,14 +1315,16 @@ pub async fn cmd_doctor_host(
     Ok(())
 }
 
-/// `mj message <id> <json>` — deliver a JSON payload into a VM; wakes a
-/// dormant VM if it is parked.
+/// `mj message [--id <producer-id>] <id> <json>` — deliver a JSON payload
+/// into a VM; wakes a dormant VM if it is parked. A producer `--id` makes
+/// retries duplicate-safe (host 200 `duplicate`).
 pub async fn cmd_message(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     id_or_ticket: &str,
     payload: &str,
+    producer_id: Option<&str>,
     json: bool,
 ) -> Result<()> {
     let payload_value: serde_json::Value =
@@ -1123,10 +1336,15 @@ pub async fn cmd_message(
 
     let id = resolve_vm_id(&client, base, id_or_ticket).await?;
 
+    let mut req_body = serde_json::json!({ "payload": payload_value });
+    if let Some(pid) = producer_id {
+        req_body["id"] = serde_json::Value::String(pid.to_string());
+    }
+
     let body = send_text(
         client
             .post(format!("{}/api/vms/{}/messages", base, &id))
-            .json(&serde_json::json!({ "payload": payload_value })),
+            .json(&req_body),
         "message",
     )
     .await?;
@@ -1134,7 +1352,17 @@ pub async fn cmd_message(
     if json {
         println!("{}", body);
     } else {
-        eprintln!("Accepted message for {}", id);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        let mid = parsed
+            .get("message_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let status = parsed
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("queued");
+        eprintln!("Accepted message {} for {} ({})", mid, id, status);
     }
     Ok(())
 }
@@ -1243,6 +1471,9 @@ mod tests {
             &None,
             &Some("my-snapshot".to_string()),
             &Some("my-base-image".to_string()),
+            None,
+            ".",
+            false,
         )
         .await;
         assert!(result.is_err());

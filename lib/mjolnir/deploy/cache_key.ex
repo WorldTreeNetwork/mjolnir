@@ -39,9 +39,16 @@ defmodule Mjolnir.Deploy.CacheKey do
   "build", ".svelte-kit"]` — these are build outputs and dependency caches that
   should not participate in the source-tree hash (changing them must not
   invalidate the layer key for the build step itself).
+
+  `hash_globs/2` is the explicit-input counterpart used by manifest table
+  steps. It hashes only regular files matched by the supplied source-relative
+  globs. An empty glob list uses a namespaced, fixed no-inputs hash so a
+  command-only step is distinct from every tree or matched-file hash.
   """
 
   @default_tree_excludes ["node_modules", ".git", "build", ".svelte-kit"]
+  @no_inputs_hash :crypto.hash(:sha256, "mjolnir:no-inputs:v1")
+                  |> Base.encode16(case: :lower)
 
   @doc """
   Computes a stable, lowercase hex SHA-256 cache key for a build layer.
@@ -99,6 +106,83 @@ defmodule Mjolnir.Deploy.CacheKey do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc "The fixed input hash used by command-only (`inputs = []`) steps."
+  @spec no_inputs_hash() :: String.t()
+  def no_inputs_hash, do: @no_inputs_hash
+
+  @doc """
+  Hashes the sorted relative paths and contents of regular files matched by
+  source-relative `globs`.
+
+  Overlapping globs are de-duplicated. Paths and contents are each reduced to a
+  fixed-width SHA-256 digest before combination, matching `compute/3`'s
+  boundary-safe style. `[]` returns `no_inputs_hash/0` without reading `root`.
+  """
+  @spec hash_globs(String.t(), [String.t()]) :: {:ok, String.t()} | {:error, term()}
+  def hash_globs(_root, []), do: {:ok, @no_inputs_hash}
+
+  def hash_globs(root, globs) when is_list(globs) do
+    with {:ok, rel_paths} <- matching_files(root, globs) do
+      state = :crypto.hash_init(:sha256)
+      state = :crypto.hash_update(state, hash_component("mjolnir:glob-inputs:v1"))
+
+      result =
+        Enum.reduce_while(rel_paths, {:ok, state}, fn rel_path, {:ok, acc_state} ->
+          case File.read(Path.join(root, rel_path)) do
+            {:ok, contents} ->
+              next_state =
+                acc_state
+                |> :crypto.hash_update(hash_component(rel_path))
+                |> :crypto.hash_update(hash_component(contents))
+
+              {:cont, {:ok, next_state}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        end)
+
+      case result do
+        {:ok, final_state} ->
+          {:ok, :crypto.hash_final(final_state) |> Base.encode16(case: :lower)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc false
+  @spec matching_files(String.t(), [String.t()]) :: {:ok, [String.t()]} | {:error, term()}
+  def matching_files(_root, []), do: {:ok, []}
+
+  def matching_files(root, globs) when is_list(globs) do
+    expanded_root = Path.expand(root)
+
+    if Enum.all?(globs, &relative_glob?/1) do
+      paths =
+        globs
+        |> Enum.flat_map(fn glob ->
+          Path.wildcard(Path.join(expanded_root, glob), match_dot: true)
+        end)
+        |> Enum.uniq()
+        |> Enum.filter(fn path ->
+          case File.lstat(path) do
+            {:ok, %File.Stat{type: :regular}} -> true
+            _ -> false
+          end
+        end)
+        |> Enum.map(&Path.relative_to(&1, expanded_root))
+        |> Enum.sort()
+
+      {:ok, paths}
+    else
+      {:error, :glob_must_be_relative}
+    end
+  rescue
+    error in [ArgumentError] -> {:error, error}
   end
 
   @doc """
@@ -160,6 +244,12 @@ defmodule Mjolnir.Deploy.CacheKey do
   # nil is encoded as the literal string "nil", distinct from "".
   defp hash_component(nil), do: :crypto.hash(:sha256, "nil")
   defp hash_component(value), do: :crypto.hash(:sha256, value)
+
+  defp relative_glob?(glob) when is_binary(glob) do
+    glob != "" and Path.type(glob) == :relative and ".." not in Path.split(glob)
+  end
+
+  defp relative_glob?(_), do: false
 
   # Recursively collect all regular-file paths relative to root, skipping
   # top-level entries whose basename is in excludes.

@@ -17,18 +17,71 @@ if escrow_dir = System.get_env("MJOLNIR_SECRET_ESCROW_DIR") do
   config :mjolnir, secret_escrow_dir: escrow_dir
 end
 
-if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST", "false") == "true" do
-  config :mjolnir, :auth, bypass_localhost: true
+# MJOLNIR_AUTH_BYPASS_LOCALHOST is ignored. A TCP peer on 127.0.0.1 is
+# not the operator: the public gateway dials loopback for site fallback,
+# and that splice used to inherit full control-plane scope. Break-glass
+# is the Unix socket below. Dev and test opt in separately.
+if System.get_env("MJOLNIR_AUTH_BYPASS_LOCALHOST") == "true" do
+  IO.warn("MJOLNIR_AUTH_BYPASS_LOCALHOST is set and has no effect")
+end
+
+if config_env() == :prod do
+  config :mjolnir,
+    operator_socket: System.get_env("MJOLNIR_OPERATOR_SOCKET", "/run/mjolnir/operator.sock")
+
+  config :mjolnir, isolate_guests: true
+end
+
+if pub = System.get_env("MJOLNIR_BISCUIT_PUBLIC_HEX") do
+  config :mjolnir, biscuit_public_hex: pub
+end
+
+if hosts = System.get_env("MJOLNIR_EGRESS_ALLOW_HOSTS") do
+  config :mjolnir,
+    egress_allow_hosts:
+      hosts
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
 end
 
 if issuer = System.get_env("MJOLNIR_AUTH_ISSUER") do
+  # IdentiKey sets `aud` to the OAuth client id. `mj` is mjolnir-cli and
+  # the browser login is mjolnir-term. A comma-separated
+  # MJOLNIR_AUTH_AUDIENCE replaces this list.
+  audience =
+    case System.get_env("MJOLNIR_AUTH_AUDIENCE") do
+      value when is_binary(value) and value != "" ->
+        value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+      _ ->
+        ["mjolnir-cli", "mjolnir-term", "mjolnir"]
+    end
+
   config :mjolnir, :auth,
     issuer: issuer,
-    audience: System.get_env("MJOLNIR_AUTH_AUDIENCE", "mjolnir")
+    audience: audience
 end
+
+if client_id = System.get_env("MJOLNIR_AUTH_CLIENT_ID") do
+  config :mjolnir, :auth, client_id: client_id
+end
+
+if redirect_uri = System.get_env("MJOLNIR_AUTH_REDIRECT_URI") do
+  config :mjolnir, :auth, redirect_uri: redirect_uri
+end
+
+# Compiled default is already https://auth.identikey.me, client mjolnir-term,
+# redirect https://api.vm.worldtree.network/auth/callback. These env vars
+# override that. Do not point MJOLNIR_AUTH_ISSUER back at Keycloak.
 
 if api_port = System.get_env("MJOLNIR_API_PORT") do
   config :mjolnir, api_port: String.to_integer(api_port)
+end
+
+# Default 4. Raise only after a single reconcile pass stays inside the
+# agent budget. Two overlapping passes are what overloaded the host.
+if conc = System.get_env("MJOLNIR_RECONCILE_MAX_CONCURRENCY") do
+  config :mjolnir, reconcile_max_concurrency: String.to_integer(conc)
 end
 
 case System.get_env("MJOLNIR_GATEWAY_ROUTES_ENABLED") do
@@ -96,6 +149,14 @@ if recrypt_storage_url = System.get_env("MJOLNIR_RECRYPT_STORAGE_URL") do
     recrypt_storage_url: recrypt_storage_url
 end
 
+if blake3_bin = System.get_env("MJOLNIR_BLAKE3_BIN") do
+  config :mjolnir, blake3_bin: blake3_bin
+end
+
+if biscuit_bin = System.get_env("MJOLNIR_BISCUIT_BIN") do
+  config :mjolnir, biscuit_bin: biscuit_bin
+end
+
 case System.get_env("MJOLNIR_PG_ENABLED") do
   "true" -> config :mjolnir, pg_enabled: true
   "false" -> config :mjolnir, pg_enabled: false
@@ -132,4 +193,31 @@ end
 
 if pg_tenant_listen = System.get_env("MJOLNIR_PG_TENANT_LISTEN_IP") do
   config :mjolnir, pg_tenant_listen_ip: pg_tenant_listen
+end
+
+if syslog_udp_port = System.get_env("MJOLNIR_SYSLOG_UDP_PORT") do
+  config :mjolnir, :syslog,
+    udp_host: System.get_env("MJOLNIR_SYSLOG_UDP_HOST", "127.0.0.1"),
+    udp_port: String.to_integer(syslog_udp_port)
+end
+
+# Host Forgejo token for repo deploy keys (add-honor-git-remote). Never log it.
+# Skip in test so a developer shell token cannot hit live Forgejo from mix test.
+if config_env() != :test do
+  if token = System.get_env("MJOLNIR_FORGEJO_TOKEN") do
+    config :mjolnir, forgejo_token: token
+  end
+end
+
+if url = System.get_env("MJOLNIR_FORGEJO_URL") do
+  config :mjolnir, forgejo_url: url
+end
+
+# Each instance must use a sibling slice and a disjoint scope prefix.
+if slice = System.get_env("MJOLNIR_VMM_SLICE") do
+  config :mjolnir, vmm_slice: slice
+end
+
+if prefix = System.get_env("MJOLNIR_VMM_SCOPE_PREFIX") do
+  config :mjolnir, vmm_scope_prefix: prefix
 end

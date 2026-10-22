@@ -39,7 +39,15 @@ defmodule Mjolnir.Health.Monitor do
       # Catch L4/L5 failures: any VM whose GenServer died (e.g. hypervisor
       # crashed, was SIGKILLed) has a StateStore record but no registry
       # entry. Reconcile.run is idempotent — skips healthy VMs silently.
-      Mjolnir.Reconcile.run()
+      # Skip, don't block. A pass already covers the stranded set, and waiting
+      # here would hold probes and the CI lease sweep behind it.
+      case Mjolnir.Reconcile.run() do
+        :skipped ->
+          Logger.debug("Health.Monitor: reconcile pass already running, skipping")
+
+        :ok ->
+          :ok
+      end
 
       # Reclaim CI VMs whose server-side lease expired (mjolnir-urp).
       #
@@ -78,6 +86,7 @@ defmodule Mjolnir.Health.Monitor do
     vm_ids =
       Registry.select(Mjolnir.VMRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1"}}]}])
       |> Enum.map(fn {id} -> id end)
+      |> Enum.filter(&is_binary/1)
 
     # Isolate per-VM failures: the tick-level rescue is too coarse — one VM
     # raising there skips every *later* VM plus the trash reap. Contain it here
@@ -86,7 +95,7 @@ defmodule Mjolnir.Health.Monitor do
       try do
         probe_one(vm_id)
       rescue
-        e -> Logger.error("Health.Monitor: probe of #{vm_id} raised: #{inspect(e)}")
+        e -> Logger.error("Health.Monitor: probe of #{inspect(vm_id)} raised: #{inspect(e)}")
       end
     end)
   end

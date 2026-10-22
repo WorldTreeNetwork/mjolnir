@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-mjolnir-pjjz",
+  "node_id": "mjolnir-pjjz",
+  "change_id": "add-deploy-build-sizing",
+  "capability": "deploy-build",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "model",
+    "harness": "claude",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-conductor"
+    }
+  },
+  "assignee": {
+    "id": "terra-known",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-terra",
+    "effort": "medium",
+    "fast": false,
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "terra-known"
+    }
+  },
+  "goal": "Implement openspec/changes/add-deploy-build-sizing (ACTIVE BUILD). Contract: its proposal.md, tasks.md, steer.md and specs/deploy-build/spec.md. Read those first. add-deploy-step-inputs already landed (119c798) in the same modules; build on it, do not rework it.\n\nToday the build VM gets :deploy_build_memory_mb (lib/mjolnir/deploy/orchestrator.ex:403 build_memory_mb, default 2048 at :56) and the host :default_vcpus (config/config.exs:19, consumed at lib/mjolnir/vm.ex:2022), the same for every app. build_opts (orchestrator.ex, the spawn_opts map with extra_mounts) never passes vcpus.\n\nLand:\n- lib/mjolnir/deploy/manifest.ex: optional `build = { vcpus, memory_mb }` table (positive integers; any other key refused before boot, naming it). Expose it on the parsed plan. Document it in the module doc's Fields table.\n- config/config.exs: host defaults deploy_build_vcpus: 4, deploy_build_memory_mb: 4096, deploy_build_max_vcpus and deploy_build_max_memory_mb (pick ceilings that fit an 8-core / 31 GB host, e.g. 6 and 16384). Do not change :default_vcpus (service VMs).\n- lib/mjolnir/deploy/orchestrator.ex: build VM size = manifest build.* else host default, clamped to the max; pass both vcpus and memory_mb in build spawn_opts. Service VM sizing (run_opts / :memory_mb) untouched. Emit a progress line before building: `build VM: <v> vCPU, <m> MB`, plus `<key> <requested> -> <clamped> (host max)` when clamped.\n- lib/mjolnir/deploy/diagnostics.ex: when a build step fails with {:vsock_unavailable, ...}, the message states the build VM's memory and names build.memory_mb to raise. Keep the existing diagnostics behavior otherwise.\n- Tests in the listed files: manifest value wins over host default; ceiling clamps and is reported; service VM memory unaffected; vcpus reaches spawn_opts; malformed build table refused; diagnostic text on agent loss.\n\nMix may fail in your sandbox (TCP filesystem lock :eperm, seen on the previous node); if so, report it as a blocker and stop rather than working around the lock. The conductor runs `mix test test/mjolnir/deploy`. Check matching boxes in openspec/changes/add-deploy-build-sizing/tasks.md only for tests you actually ran green. Edit and stop. Do not fold. Do not push.",
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Deploy.Orchestrator.build_opts",
+      "invariant": "Build VM sizing only; service VM sizing (run_opts) unchanged."
+    },
+    {
+      "symbol": ":default_vcpus",
+      "invariant": "Host default for service VMs. Not changed by this node."
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/deploy"
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/deploy/manifest.ex",
+      "lib/mjolnir/deploy/orchestrator.ex",
+      "lib/mjolnir/deploy/diagnostics.ex",
+      "config/config.exs",
+      "test/mjolnir/deploy/manifest_test.exs",
+      "test/mjolnir/deploy/orchestrator_test.exs",
+      "test/mjolnir/deploy/diagnostics_test.exs",
+      "openspec/changes/add-deploy-build-sizing/tasks.md"
+    ],
+    "do_not": [
+      "fold",
+      "push",
+      "change :default_vcpus",
+      "service VM sizing",
+      "caches"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "change",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "worker"
+}

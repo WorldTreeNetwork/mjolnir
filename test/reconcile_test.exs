@@ -126,6 +126,35 @@ defmodule Mjolnir.ReconcileTest do
       end
     end
 
+    test "an active scope is attached, including restart_policy never" do
+      uuid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+      record = Record.new(uuid, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:attach, ^record, _}] = Reconcile.build_plan([record], %{uuid => :active})
+    end
+
+    test "a failed scope is a death: always resumes, never finalizes", ctx do
+      always_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+      never_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", always_id]))
+
+      always = Record.new(always_id, :running, spawn_config: %{"restart_policy" => "always"})
+      never = Record.new(never_id, :running, spawn_config: %{"restart_policy" => "never"})
+
+      assert [{:resume, ^always, _}] =
+               Reconcile.build_plan([always], %{always_id => :failed})
+
+      assert [{:finalize, ^never, _}] =
+               Reconcile.build_plan([never], %{never_id => :failed})
+    end
+
+    test "an unclassifiable scope is not resumed and not finalized" do
+      uuid = "12121212-1212-1212-1212-121212121212"
+      record = Record.new(uuid, :running)
+
+      assert [{:backoff, ^record, _}] = Reconcile.build_plan([record], %{uuid => :unknown})
+    end
+
     test "restart_policy=always resumes, as before", ctx do
       uuid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
       File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
@@ -232,6 +261,43 @@ defmodule Mjolnir.ReconcileTest do
       end)
 
       :ok
+    end
+
+    test "a second caller skips while a pass is held" do
+      parent = self()
+
+      holder =
+        spawn(fn ->
+          true = Reconcile.acquire_pass()
+          send(parent, :held)
+
+          receive do
+            :release -> Reconcile.release_pass()
+          end
+        end)
+
+      assert_receive :held, 1_000
+      assert Reconcile.run() == :skipped
+      send(holder, :release)
+      ref = Process.monitor(holder)
+      assert_receive {:DOWN, ^ref, :process, ^holder, _}, 1_000
+      assert Reconcile.run() == :ok
+    end
+
+    test "an in-flight resume claim is not started again", ctx do
+      uuid = "12121212-3434-5656-7878-909090909090"
+      File.mkdir_p!(Path.join([ctx.btrfs_root, "@vms", uuid]))
+
+      :ok = Mjolnir.StateStore.put(Record.new(uuid, :running))
+      {:ok, _} = Registry.register(Mjolnir.VMRegistry, {:resume, uuid}, nil)
+
+      assert :ok = Reconcile.run()
+
+      assert {:ok, record} = Mjolnir.StateStore.get(uuid)
+      assert record.intent == :running
+      refute record.runtime["resume_failures"]
+
+      Registry.unregister(Mjolnir.VMRegistry, {:resume, uuid})
     end
 
     test "finalizes to :stopped instead of resuming, and preserves the rootfs", ctx do

@@ -39,20 +39,26 @@ defmodule Mjolnir.Deploy.Builder.Plan do
   @type step_input :: %{required(:command) => String.t(), required(:input_hash) => String.t()}
 
   @type status :: :hit | :miss
+  @type miss_reason :: :command | :inputs | :parent
 
   @typedoc "A planned layer: its id, the parent it was keyed against, and cache status."
   @type layer :: %{
           command: String.t(),
           cache_key: String.t(),
           parent_id: String.t(),
-          status: status()
+          command_digest: String.t(),
+          input_digest: String.t(),
+          status: status(),
+          miss_reason: miss_reason() | nil
         }
 
   @typedoc "A layer that must actually be built (a cache miss), in run order."
   @type run_step :: %{
           command: String.t(),
           cache_key: String.t(),
-          parent_id: String.t()
+          parent_id: String.t(),
+          command_digest: String.t(),
+          input_digest: String.t()
         }
 
   use TypedStruct
@@ -83,26 +89,49 @@ defmodule Mjolnir.Deploy.Builder.Plan do
   Resolves the layer chain and cache decisions for a build.
 
   `existing_layer_ids` is any enumerable of layer ids known to exist in the
-  cache (a list or `MapSet`). Returns a `%Plan{}`; never raises for an empty
-  step list (degenerates to "nothing to build, release == base").
+  cache (a list or `MapSet`), or a map from ids to snapshot metadata.
+  Returns a `%Plan{}`; never raises for an empty step list (degenerates to "nothing to build, release == base").
   """
   @spec compute(String.t(), [step_input()], Enumerable.t()) :: t()
   def compute(base_layer_id, steps, existing_layer_ids)
       when is_binary(base_layer_id) and is_list(steps) do
-    existing = MapSet.new(existing_layer_ids)
+    metadata =
+      Map.new(existing_layer_ids, fn
+        {id, meta} -> {id, meta}
+        id -> {id, %{}}
+      end)
+
+    existing = MapSet.new(Map.keys(metadata))
 
     {layers_rev, _parent, _still_hitting} =
       Enum.reduce(steps, {[], base_layer_id, true}, fn step, {acc, parent_id, still_hitting} ->
         command = Map.fetch!(step, :command)
         input_hash = Map.fetch!(step, :input_hash)
         cache_key = CacheKey.compute(parent_id, command, input_hash)
+        command_digest = :crypto.hash(:sha256, command) |> Base.encode16(case: :lower)
 
         # A layer is a hit only if every layer before it hit AND its key exists.
         # The `still_hitting` guard makes the hit set a structural prefix.
         hit? = still_hitting and MapSet.member?(existing, cache_key)
         status = if hit?, do: :hit, else: :miss
 
-        layer = %{command: command, cache_key: cache_key, parent_id: parent_id, status: status}
+        miss_reason =
+          cond do
+            hit? -> nil
+            not still_hitting -> :parent
+            true -> miss_cause(metadata, parent_id, command_digest, input_hash)
+          end
+
+        layer = %{
+          command: command,
+          cache_key: cache_key,
+          parent_id: parent_id,
+          command_digest: command_digest,
+          input_digest: input_hash,
+          status: status,
+          miss_reason: miss_reason
+        }
+
         {[layer | acc], cache_key, hit?}
       end)
 
@@ -117,7 +146,7 @@ defmodule Mjolnir.Deploy.Builder.Plan do
 
     steps_to_run =
       Enum.map(misses, fn l ->
-        %{command: l.command, cache_key: l.cache_key, parent_id: l.parent_id}
+        Map.take(l, [:command, :cache_key, :parent_id, :command_digest, :input_digest])
       end)
 
     release_layer_id =
@@ -135,5 +164,37 @@ defmodule Mjolnir.Deploy.Builder.Plan do
       cache_hits: length(hits),
       cache_misses: length(misses)
     }
+  end
+
+  defp miss_cause(metadata, parent_id, command_digest, input_digest) do
+    siblings =
+      metadata
+      |> Map.values()
+      |> Enum.filter(&(&1["deploy_parent_id"] == parent_id))
+
+    cond do
+      Enum.any?(
+        siblings,
+        &(&1["deploy_command_digest"] == command_digest and
+            is_binary(&1["deploy_input_digest"]) and
+              &1["deploy_input_digest"] != input_digest)
+      ) ->
+        :inputs
+
+      # If both differ, command wins only when no stored sibling has this command.
+      siblings != [] and
+          Enum.all?(
+            siblings,
+            &(is_binary(&1["deploy_command_digest"]) and
+                  &1["deploy_command_digest"] != command_digest)
+          ) ->
+        :command
+
+      input_digest == CacheKey.no_inputs_hash() ->
+        :command
+
+      true ->
+        :inputs
+    end
   end
 end

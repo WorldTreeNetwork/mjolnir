@@ -125,10 +125,9 @@ defmodule Mjolnir.API.Validation do
   Returns `{:ok, id}` or `{:error, message}`.
   """
   def validate_vm_id(id) when is_binary(id) do
-    if Regex.match?(~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/, id) do
-      {:ok, id}
-    else
-      {:error, "invalid VM ID format"}
+    case Mjolnir.VmId.canonicalize(id) do
+      {:ok, canonical} -> {:ok, canonical}
+      :error -> {:error, "invalid VM ID format"}
     end
   end
 

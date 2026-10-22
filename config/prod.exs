@@ -14,7 +14,7 @@ config :mjolnir,
   # only emitted while the VM is running+local, so a stale id self-heals to "no
   # route" rather than a bad backend.
   gateway_extra_domains: [
-    %{fqdn: "zine.identikey.io", vm_id: "076adf62-b3e1-4696-8427-1b20faf3fd9c", port: 3000}
+    %{fqdn: "zine.identikey.io", vm_id: "v8E58ZQRFsA5XGe9rCzPM", port: 3000}
   ],
 
   # OTP-managed Postgres sidecar. The mjolnir service runs as root for VM /

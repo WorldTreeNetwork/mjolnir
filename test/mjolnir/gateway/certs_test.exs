@@ -233,6 +233,30 @@ defmodule Mjolnir.Gateway.CertsTest do
       # no second write/reload
       assert Fake.reloads(pid) == 1
     end
+
+    test "retargets an existing [[cert]] that still points at an older directory" do
+      pid = Fake.start()
+
+      toml = """
+      [[cert]]
+      host = "zine.identikey.io"
+      cert = "/etc/mjolnir/certs/zine/fullchain.pem"
+      key = "/etc/mjolnir/certs/zine/privkey.pem"
+      """
+
+      with_toml(pid, toml)
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "zine.identikey.io",
+                 [mode: :origin_ca, cert: @cert_pem, key: @key_pem] ++ Fake.opts(pid)
+               )
+
+      updated = Fake.toml(pid)
+      assert updated =~ ~s(cert = "/etc/mjolnir/certs/zine.identikey.io/fullchain.pem")
+      assert updated =~ ~s(key = "/etc/mjolnir/certs/zine.identikey.io/privkey.pem")
+      refute updated =~ ~s(/etc/mjolnir/certs/zine/fullchain.pem)
+    end
   end
 
   describe "ensure/2 :origin_ca — validation" do
@@ -425,6 +449,170 @@ defmodule Mjolnir.Gateway.CertsTest do
     test "returns {:ok, :absent} when no cert entry exists", %{pid: pid} do
       assert {:ok, :absent} = Certs.remove("nonexistent.example.com", Fake.opts(pid))
       assert Fake.reloads(pid) == 0
+    end
+  end
+
+  describe "app first-issue apex" do
+    test "does not append a shorter parent over a longer configured apex" do
+      pid =
+        Fake.start(%{
+          "/etc/mjolnir/gateway.toml" => """
+          [[domain]]
+          suffix = "apps.example.com"
+          fallthrough = "none"
+          """
+        })
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com", "apps.example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "shop.apps.example.com")
+      assert toml =~ ~s(suffix = "apps.example.com")
+      refute toml =~ ~s(suffix = "example.com")
+    end
+
+    test "appends the long configured apex when the file does not have it yet" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["apps.example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(suffix = "apps.example.com")
+      refute toml =~ ~s(suffix = "example.com")
+    end
+
+    test "does not invent a short apex that would cover another site alias" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com"],
+                   alias_hosts: ["blog.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "shop.example.com")
+      refute toml =~ "[[domain]]"
+    end
+
+    test "does not invent the last two labels when no configured apex covers the host" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.co.uk",
+                 [cert: @cert_pem, key: @key_pem, apexes: [], alias_hosts: []] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "blog.example.co.uk")
+      refute toml =~ "[[domain]]"
+    end
+
+    test "an unreadable alias index blocks a new apex" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.apps.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["apps.example.com"],
+                   alias_hosts: :unreadable
+                 ] ++ Fake.opts(pid)
+               )
+
+      refute Fake.toml(pid) =~ "[[domain]]"
+    end
+
+    test "the host's own alias does not block its configured apex" do
+      pid = Fake.start(%{"/etc/mjolnir/gateway.toml" => ""})
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "shop.example.com",
+                 [
+                   cert: @cert_pem,
+                   key: @key_pem,
+                   apexes: ["example.com"],
+                   alias_hosts: ["shop.example.com"]
+                 ] ++ Fake.opts(pid)
+               )
+
+      assert Fake.toml(pid) =~ ~s(suffix = "example.com")
+    end
+  end
+
+  describe "domain: false" do
+    test "a site-only install does not add an apex, before or after renewal" do
+      pid =
+        Fake.start(%{
+          "/etc/mjolnir/gateway.toml" => """
+          [[cert]]
+          host = "other.example"
+          cert = "/etc/mjolnir/certs/other.example/fullchain.pem"
+          key = "/etc/mjolnir/certs/other.example/privkey.pem"
+          """
+        })
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify(
+                 "blog.example.com",
+                 Fake.toml(pid),
+                 []
+               )
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.com",
+                 [cert: @cert_pem, key: @key_pem, domain: false] ++ Fake.opts(pid)
+               )
+
+      toml = Fake.toml(pid)
+      assert toml =~ ~s(host = "blog.example.com")
+      refute toml =~ "[[domain]]"
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify("blog.example.com", toml, [])
+
+      renewed = @cert_pem <> "RENEWED\n"
+
+      assert {:ok, :installed} =
+               Certs.ensure(
+                 "blog.example.com",
+                 [cert: renewed, key: @key_pem, domain: false] ++ Fake.opts(pid)
+               )
+
+      after_renew = Fake.toml(pid)
+      refute after_renew =~ "[[domain]]"
+      assert after_renew =~ ~s(host = "blog.example.com")
+
+      assert {:ok, :reject} =
+               Mjolnir.Gateway.Classify.classify("blog.example.com", after_renew, [])
     end
   end
 end

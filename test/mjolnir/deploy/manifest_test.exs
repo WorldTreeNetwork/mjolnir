@@ -64,6 +64,10 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert {:ok, %BuildPlan{package_manager: nil}} = Manifest.load(dir)
     end
 
+    test "omitted base_image is nil so Orchestrator keeps deploy-node-bun", %{dir: dir} do
+      assert {:ok, %BuildPlan{base_image: nil}} = Manifest.load(dir)
+    end
+
     test "the declared runtime gets a mise install prepended", %{dir: dir} do
       # Without this the toolchain is declared but never installed, and the
       # build silently runs against whatever the base image ships.
@@ -159,20 +163,79 @@ defmodule Mjolnir.Deploy.ManifestTest do
       assert msg =~ "must not be blank"
     end
 
-    test "steps must be a list of strings", %{dir: dir} do
+    test "steps must contain strings or step tables", %{dir: dir} do
       write_manifest(dir, ~s(start_command = "./run"\nport = 8080\nsteps = [1, 2]))
       assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
-      assert msg =~ "steps must be a list of strings"
+      assert msg =~ "step 1"
+      assert msg =~ "string or a {run, inputs} table"
     end
 
-    test "a typo'd key is an error, not silently ignored", %{dir: dir} do
-      # `start-command` with a hyphen would otherwise be accepted and dropped,
-      # and the real failure would surface much later as a missing field.
-      write_manifest(dir, ~s(start_command = "./run"\nport = 8080\nstart-command = "./other"))
+    test "accepts and normalizes a {run, inputs} step", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = [
+        { run = "apt-get install -y git", inputs = [] },
+        { run = "cd web && npm run build", inputs = ["web/**"] }
+      ]
+      """)
+
+      assert {:ok, %BuildPlan{steps: steps}} = Manifest.load(dir)
+
+      assert steps == [
+               %{run: "apt-get install -y git", inputs: []},
+               %{run: "cd web && npm run build", inputs: ["web/**"]}
+             ]
+    end
+
+    test "rejects an unknown table key with the step index and bad key", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = ["echo ok", { run = "make", input = ["x"] }]
+      """)
 
       assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "step 2"
       assert msg =~ "unknown key"
-      assert msg =~ "start-command"
+      assert msg =~ "input"
+    end
+
+    test "rejects missing or malformed table fields with the step index", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      steps = [{ run = "make", inputs = "src/**" }]
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "step 1"
+      assert msg =~ "inputs"
+      assert msg =~ "list of strings"
+    end
+
+    test "unknown keys and tables are ignored so a newer mjolnir.toml loads", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      start-command = "./other"
+      future_flag = true
+
+      [site]
+      name = "blog"
+      dir = "dist"
+      """)
+
+      assert {:ok, %BuildPlan{start_command: "./run", port: 8080}} = Manifest.load(dir)
+    end
+
+    test "a hyphenated typo of a required key still fails as missing, not as unknown", %{
+      dir: dir
+    } do
+      write_manifest(dir, ~s(start-command = "./run"\nport = 8080))
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "start_command is required"
+      refute msg =~ "unknown key"
     end
   end
 
@@ -180,11 +243,120 @@ defmodule Mjolnir.Deploy.ManifestTest do
   # Optional fields
   # ---------------------------------------------------------------------------
 
+  describe "base_image (mjolnir-6ee1)" do
+    test "round-trips ubuntu-24.04", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./target/release/identikey-server"
+      port = 8080
+      base_image = "ubuntu-24.04"
+      """)
+
+      assert {:ok, %BuildPlan{base_image: "ubuntu-24.04"}} = Manifest.load(dir)
+    end
+
+    test "rejects a path-shaped value", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      base_image = "../escape"
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load(dir)
+      assert msg =~ "base_image"
+    end
+  end
+
+  describe "[targets] spawn targets" do
+    test "prod plan ignores targets", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "node build"
+      port = 3000
+
+      [targets.dev]
+      snapshot = "hosted-devpreview-test"
+      base = "ubuntu-24.04"
+      command = "bun run dev --host 0.0.0.0 --port 80"
+
+      [targets.dev.env]
+      VITE_MEDUSA_BACKEND_URL = "https://api.hypersigil.world"
+
+      [targets.dev.git]
+      remote = "forgejo"
+      sign = true
+      """)
+
+      assert {:ok, %BuildPlan{start_command: "node build", port: 3000}} = Manifest.load(dir)
+
+      assert {:ok, dev} = Manifest.load_target(dir, "dev")
+      assert dev.snapshot == "hosted-devpreview-test"
+      assert dev.base == "ubuntu-24.04"
+      assert dev.port == 80
+      assert dev.memory_mb == 2048
+      assert dev.preserve_iroh_key == true
+      assert dev.git_sign == true
+      assert dev.git_remote == "forgejo"
+      assert dev.env["VITE_MEDUSA_BACKEND_URL"] == "https://api.hypersigil.world"
+      assert Manifest.load_target(dir, "staging") == :none
+    end
+
+    test "a missing target is :none, not an error", %{dir: dir} do
+      write_manifest(dir, ~s(start_command = "./run"\nport = 8080))
+      assert Manifest.load_target(dir, "dev") == :none
+    end
+
+    test "a target without a root is an error", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+
+      [targets.dev]
+      command = "bun run dev"
+      """)
+
+      assert {:error, {:invalid_manifest, msg}} = Manifest.load_target(dir, "dev")
+      assert msg =~ "base or snapshot"
+      assert {:ok, %BuildPlan{}} = Manifest.load(dir)
+    end
+  end
+
   describe "minimal manifest" do
     test "steps and runtime are optional", %{dir: dir} do
       write_manifest(dir, ~s(start_command = "./prebuilt-binary"\nport = 8080))
 
       assert {:ok, %BuildPlan{steps: [], runtime: ""}} = Manifest.load(dir)
+    end
+  end
+
+  describe "build VM sizing" do
+    test "parses optional positive build sizing fields onto the plan", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { vcpus = 6, memory_mb = 8192 }
+      """)
+
+      assert {:ok, plan} = Manifest.load(dir)
+      assert plan.build == %{vcpus: 6, memory_mb: 8192}
+    end
+
+    test "rejects malformed build tables and names an unknown key", %{dir: dir} do
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { memory_mb = 0, cpu_count = 4 }
+      """)
+
+      assert {:error, {:invalid_manifest, message}} = Manifest.load(dir)
+      assert message =~ "build has unknown key"
+
+      write_manifest(dir, """
+      start_command = "./run"
+      port = 8080
+      build = { memory_mb = 0 }
+      """)
+
+      assert {:error, {:invalid_manifest, message}} = Manifest.load(dir)
+      assert message =~ "build.memory_mb must be a positive integer"
     end
   end
 

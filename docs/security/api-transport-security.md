@@ -27,7 +27,12 @@ This guide covers Mjolnir's HTTP API authentication, authorization, and secure t
    └────────────────────────────────────┘
 ```
 
-The API is **HTTP-only, localhost-bound**. All remote access must use SSH tunneling. This design ensures the API cannot be accidentally exposed to the internet, but introduces security trade-offs (see "Security Limitations" below).
+The API listens on the host (Bandit, port 4000) and is reached two ways:
+
+- **Humans and `mj`.** `https://api.vm.worldtree.network` terminates on the gateway, which dials `10.255.255.1:4000` and forwards the caller's bearer token. That peer is not loopback, and loopback would not be the operator anyway.
+- **Break-glass.** `curl --unix-socket /run/mjolnir/operator.sock`. The socket is mode `0600`. `MJOLNIR_AUTH_BYPASS_LOCALHOST` has no effect.
+
+The site fallback used to splice a visitor's TCP connection onto `127.0.0.1:4000`. The gateway now refuses that splice when the path is `/api` or `/auth`. Site HTML is served from the materialized snapshot, or, for `GET` of a page, by `VanityHostPlug` before Auth.
 
 ## Authentication Methods
 
@@ -47,21 +52,41 @@ ssh root@server "curl -H 'Authorization: Bearer $TOKEN' \
 ```
 
 **Token format**: JWT (JSON Web Token)
-- **Issuer**: Configurable via `MJOLNIR_AUTH_ISSUER` environment variable
-- **Verification**: `lib/mjolnir/auth/token.ex` validates signature and `sub` (subject/user ID)
-- **Scopes**: Token claims include `scope` field (currently unused; all authenticated users get full access)
-- **Expiry**: Currently NOT enforced (⚠️ TODO: add `exp` claim validation)
+- **Issuer**: `MJOLNIR_AUTH_ISSUER`. `lib/mjolnir/auth/token.ex` checks the signature, `iss`, and `exp`.
+- **Audience**: a token that carries `aud` must match the configured audience. Tokens that omit `aud` still pass until `:require_audience` is turned on.
+- **Subject**: `sub` is the owner. `localhost`, `operator`, `capability`, and `sites_token:…` are rejected so a token cannot become the operator principal.
+- **Scopes**: a valid JWT is still rewritten to the full scope set. Ownership, not scope, is what stops one tenant touching another's VM. A sites token is the exception: it keeps only the publish scope.
+- **Capability**: `Authorization: Bearer biscuit:<base64>` confers no scopes. Deploy checks `right(<app>, "deploy")`. Message checks `right(<vm>, "message")`. Redeem checks `right(<secret>, "redeem")` plus a holder signature over a single-use nonce.
 
 **`mj` integration**:
 ```bash
 # Automatic JWT injection (if $MJOLNIR_TOKEN env var set)
 mj spawn
-# Internally: ssh user@server "curl -H 'Authorization: Bearer $MJOLNIR_TOKEN' ..."
+# Talks to https://api.vm.worldtree.network with the saved bearer token.
 ```
 
-### 2. Localhost Bypass
+### 2. Operator socket
 
-If `auth.bypass_localhost: true` is configured, any request from 127.0.0.1 or ::1 is auto-authenticated as `user_id="localhost"` with full scopes:
+TCP source address is not a login. The operator pipeline
+(`Mjolnir.API.OperatorPipeline`) sets the principal only for
+connections accepted on the Unix socket. Dev and the test suite opt
+in with `:dev_operator` and `:test_operator`. A production release
+sets neither.
+
+```bash
+curl --unix-socket /run/mjolnir/operator.sock http://localhost/api/vms
+```
+
+`MJOLNIR_OPERATOR_SOCKET` makes `mj deploy` use that socket and send
+`X-Forgejo-Repo`. The API resolves the IdentiKey from
+`forgejo-owners.json`. The client does not pass `--owner`.
+
+### 2b. What loopback bypass used to be
+
+If `auth.bypass_localhost: true` is configured, requests from
+127.0.0.1 used to be `user_id="localhost"` with full scopes. That is
+no longer true. The paragraph below is the old shape, kept so a
+reader can see what changed:
 
 ```bash
 # No token needed — curl directly on server

@@ -422,6 +422,18 @@ defmodule Mjolnir.BTRFS do
   defp stringify_metadata_value(v), do: v
 
   @doc """
+  The first directory in `dirs` whose `etc/mjolnir/iroh.key` bytes equal
+  `key_bytes`. Used to refuse a second guest with the same Iroh identity.
+  """
+  @spec find_rootfs_with_iroh_key(binary(), [String.t()]) :: String.t() | nil
+  def find_rootfs_with_iroh_key(key_bytes, dirs)
+      when is_binary(key_bytes) and is_list(dirs) do
+    Enum.find(dirs, fn dir ->
+      File.read(Path.join(dir, "etc/mjolnir/iroh.key")) == {:ok, key_bytes}
+    end)
+  end
+
+  @doc """
   Delete the iroh key from a rootfs directory to force new key generation.
 
   This is needed when spawning a VM from a snapshot to ensure each VM gets

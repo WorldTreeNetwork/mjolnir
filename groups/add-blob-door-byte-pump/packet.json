@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-blob-door-byte-pump-r1-r4",
+  "node_id": "add-blob-door-byte-pump",
+  "capability": "blob-store",
+  "change_id": "add-blob-door-byte-pump",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-5.6-sol",
+    "effort": "medium",
+    "signing": { "mode": "stand-in", "stand_in_id": "sol-implement" }
+  },
+  "goal": "ACT add-blob-door-byte-pump R1–R4. Architecture accept is 799988a (reviews/2026-09-20-re-advise.md). Implement the four owed boxes. Do not fold. Do not change overlay bind or B2 accept proof.\n\nR1: Validate GET/HEAD `{hash}` as 32-byte Blake3 base58 (optional .obao) BEFORE any cache/store access. Absolute paths, `..`, path separators → 4xx. DiskCache::object_path must not be reachable with those strings. Tests: encoded absolute path, parent traversal into incoming/, invalid hash, .obao variants. Astra probe: encoded absolute path returned 200 + marker bytes; `..%2Fincoming%2F` served unaccepted bytes.\n\nR2: Coordinate concurrent promote/commit_fill/evict so actual files under objects/ stay ≤ budget. Two 80-byte promotions into a 100-byte cache must not both land. Same-key promotions must not double-count. GET that loses the cache-open race (eviction unlinks) falls back to B2, not 404. Test real disk usage, not only the AtomicU64.\n\nR3: GET-miss fill: if flush() or sync_all() fails, discard the fill; do not promote. Next GET uses B2. Do not ignore those errors (http.rs currently does). Fault-inject late local completion failure.\n\nR4: Resolve BLOB_DOOR_CACHE_DIR (and fallback) at process start AND in install-blob-door.sh. Refuse if the resolved path is under btrfs_root. Textual prefix is not enough (symlink, `..`). Unsafe fallback must also refuse. Align custom paths with systemd ReadWritePaths.\n\nCheck the four R boxes on tasks.md when the tests prove them. Leave Fresh advise checked.",
+  "anchors": [
+    {
+      "symbol": "native/mjolnir_blob_door/src/http.rs",
+      "invariant": "PUT already hash_from_base58; GET/HEAD must too before cache.get"
+    },
+    {
+      "symbol": "native/mjolnir_blob_door/src/cache.rs",
+      "invariant": "object_path join; promote/commit_fill/evict_to_fit races; used counter"
+    },
+    {
+      "symbol": "native/mjolnir_blob_door/src/main.rs",
+      "invariant": "BLOB_DOOR_CACHE_DIR accepted without resolved-path check"
+    },
+    {
+      "symbol": "scripts/install-blob-door.sh",
+      "invariant": "refuse_btrfs_cache is textual prefix only"
+    },
+    {
+      "symbol": "openspec/changes/add-blob-door-byte-pump/specs/blob-store/spec.md",
+      "invariant": "ADDED SHALLs for hash-before-join, budget, failed fill, resolved root"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "cd native && cargo test -p mjolnir-blob-door --offline -- --test-threads=1"
+  },
+  "out_of_scope": [
+    { "item": "Sites Plug 64 MiB / mj MAX_BODY", "tracked_as": "sites" },
+    { "item": "Live B2 e2e (BLOB_DOOR_B2_TEST)", "tracked_as": "demo" },
+    { "item": "Fold / archive the change", "tracked_as": "fold" },
+    { "item": "Deploy the door unit", "tracked_as": "deploy" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "native/mjolnir_blob_door/src/http.rs",
+      "native/mjolnir_blob_door/src/cache.rs",
+      "native/mjolnir_blob_door/src/main.rs",
+      "native/mjolnir_blob_door/src/lib.rs",
+      "native/mjolnir_blob_door/tests/door.rs",
+      "native/mjolnir_blob_door/tests/cache.rs",
+      "scripts/install-blob-door.sh",
+      "systemd/mjolnir-blob-door.service",
+      "openspec/changes/add-blob-door-byte-pump/tasks.md"
+    ],
+    "do_not": ["fold", "deploy", "push", "flip banner"]
+  },
+  "inherited": [
+    "Write-through: 2xx still means B2 HeadObject. Incoming never served. Cache outside btrfs_root.",
+    "First cache landing was @blobs on the data volume; 18f4437 moved it. Do not put it back.",
+    "Prior Sol act spawns wrote ADVISE instead of implementing. This job is product code plus tests."
+  ],
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only",
+  "role": "worker"
+}

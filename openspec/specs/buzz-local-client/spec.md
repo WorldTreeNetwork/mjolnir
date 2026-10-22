@@ -2,10 +2,13 @@
 
 What is built. Folded from
 [`add-buzz-local-client`](../../changes/archive/2026-08-16-add-buzz-local-client/proposal.md)
-on 2026-08-16, and from `mjolnir-1pe` on 2026-08-17. Decisions that
-are not yet code live in
-[`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md)
-and `openspec/changes/add-buzz-local-runtime/`.
+on 2026-08-16, from `mjolnir-1pe` on 2026-08-17, from
+[`add-buzz-local-runtime`](../../changes/archive/2026-09-10-add-buzz-local-runtime/proposal.md)
+on 2026-09-10, and from
+[`add-buzz-relay`](../../changes/archive/2026-09-20-add-buzz-relay/proposal.md)
+on 2026-09-20. Decisions live in
+[`docs/decisions/0002-buzz-local-client-fabric.md`](../../../docs/decisions/0002-buzz-local-client-fabric.md).
+Catalog names are ADR 0009.
 
 ## Purpose
 
@@ -13,7 +16,12 @@ Request-path thaws are fail-closed. Buzz bodies with `restart_policy:
 never` cannot enter `DormantRegistry`. Guests stay off the Erlang
 cluster. The host Postgres sidecar is a catalog, not a tenant hotel.
 The agent nsec is an opaque SecretStore blob, not a field on the VM
-record.
+record. Nostr enters through `Mjolnir.Buzz.Facade`; that ingress is
+the named wake producer; last hop is a conformant Nostr event.
+`identikey-admit` is the portable protocol crate; `Mjolnir.Admit`
+remains the v1 Elixir evaluator. The B0 target relay is one stateful
+guest we run at `wss://buzz.identikey.me`, backed up by snapshot, not
+redeployed.
 
 ## Requirements
 
@@ -116,3 +124,123 @@ the `inject_identity` guest agent to be deployed.
 - WHEN the StateStore running record, list/info API bodies, `Inspect`
   of the VM, and logs from `Identity.put/2` are searched for the nsec
 - THEN there are no matches
+
+### Requirement: Protocol facade (Nostr)
+
+External Nostr traffic SHALL enter the host through
+`Mjolnir.Buzz.Facade` / `Mjolnir.Buzz.Nostr`, which translates it into
+the internal OTP message-passing architecture (mailboxes). When an
+internal message is delivered into a Buzz body, the last hop SHALL
+translate it back into a conformant Nostr event for `buzz-acp`. The
+host SHALL NOT persist Buzz event kinds as a substitute event log;
+the relay remains the log. Further protocol adapters SHALL share
+`Facade.ingest_internal/2`, not a second thaw path.
+
+#### Scenario: Running body, mention stays on Nostr
+
+- GIVEN a running Buzz-managed agent VM whose harness is connected to
+  the relay
+- WHEN a human posts a channel mention in the Buzz desktop
+- THEN the desktop and `buzz-acp` exchange that event with the relay
+  over Nostr
+- AND the host mailbox is not required for those bytes to land
+
+#### Scenario: Dormant body, Nostr becomes an internal wake
+
+- GIVEN a dormant Buzz-managed VM
+- WHEN a mention (or emulated Nostr event) arrives at the host ingress
+- THEN the facade translates it to an internal message
+- AND a proxy decides whether that message is an admitted wake
+- AND if delivered, the last hop presents a conformant Nostr event to
+  the guest harness
+
+### Requirement: Wake producer is the protocol ingress
+
+For Buzz, the producer of a wake SHALL be incoming traffic on the
+Nostr ingress after translation by the protocol facade
+(`Mjolnir.Buzz.Nostr.producer/0` is `"nostr"`). The producer SHALL NOT
+be the guest, Reconcile, or an implicit desktop-only side channel.
+
+#### Scenario: Named producer
+
+- GIVEN a dormant Buzz body and a mention on the relay
+- WHEN a wake occurs
+- THEN the host Nostr ingress produced the internal message that
+  admission considered
+- AND no other unnamed component is required for that production
+
+### Requirement: Protocol versus host policy
+
+`identikey-protocol` crate `identikey-admit` SHALL own the portable
+admission protocol: envelope format, attestation shape (`vm_id` plus
+non-negative integer `epoch`), verdict vocabulary (deny / drop /
+reply-here / deliver), and pure validators. That crate SHALL be
+Apache-2.0 OR BSD-2-Clause-Patent and SHALL NOT depend on
+`identikey-core`. Mjolnir SHALL own lifecycle policy.
+`Mjolnir.Admit` SHALL remain the v1 Elixir evaluator (shape-check;
+`verdict/2` is `:deny` | `:deliver`). This slice SHALL NOT link a
+Rustler NIF.
+
+#### Scenario: A second embedder can link the protocol
+
+- GIVEN the admit protocol published from `identikey-protocol`
+- WHEN a gateway plugin or CDN origin adapter depends on it
+- THEN it does not pull `identikey-core` or an AGPL obligation
+
+### Requirement: B0 self-hosted relay VM
+
+A named Mjolnir app `buzz-relay` SHALL run the Buzz relay, Postgres,
+Redis, and MinIO as systemd units inside **one** guest (Block
+`deploy/compose/.env` is the env contract, not the runtime). That
+guest's filesystem SHALL hold the community event log, object store,
+and git volume. The advertised `RELAY_URL` SHALL be
+`wss://buzz.identikey.me` from first boot (scheme, host, and empty
+port, byte for byte). TLS SHALL terminate at the Mjolnir gateway;
+the guest SHALL NOT run the Caddy overlay. The hive SHALL be treated
+as stateful: a deploy cutover that boots a fresh rootfs SHALL NOT be
+the upgrade path. `mj snapshot create` SHALL be the backup verb.
+
+Restoring that backup is not self-contained: escrow is keyed by
+`vm_id` and a `--snapshot` spawn mints a new one, so the managed
+secrets must be carried across by hand
+([`docs/runbooks/buzz-relay-restore.md`](../../../docs/runbooks/buzz-relay-restore.md)).
+
+#### Scenario: Liveness on the vanity name
+
+- GIVEN `buzz-relay` is running and `mj domain set buzz-relay buzz.identikey.me` has been applied
+- WHEN a client requests `https://buzz.identikey.me/_liveness`
+- THEN the response is HTTP 200
+
+#### Scenario: Snapshot includes the hive
+
+- GIVEN a self-hosted Buzz relay running as that VM
+- WHEN the VM is snapshotted
+- THEN the snapshot includes the event log (Postgres data directory)
+- AND community events are not stored on the host Postgres sidecar
+
+#### Scenario: RELAY_URL matches Join
+
+- GIVEN the relay process
+- WHEN Buzz Desktop joins with `wss://buzz.identikey.me`
+- THEN NIP-11 / NIP-42 challenges advertise that exact URL
+- AND NIP-98 does not 401 solely because of a host/port/scheme mismatch
+
+### Requirement: Provider-deployed identity on our relay
+
+A self-hosted Buzz relay used as the local-client target SHALL accept
+the provider-deployed identity class (desktop-minted key plus NIP-OA
+`auth_tag`). Closed membership SHALL stay on. The "plain member, no
+auth_tag" workaround SHALL NOT be the default join path.
+
+Built here is the relay-side half only: `BUZZ_ALLOW_NIP_OA_AUTH=true`
+with closed membership, owner bootstrapped as a member row. The
+scenario below has not been observed end to end, because the provider
+`deploy` op that mints the `auth_tag` is still a stub in
+`buzz-backend-mjolnir`.
+
+#### Scenario: Deployed agent is a relay member
+
+- GIVEN our relay and a `deploy` that presents `private_key_nsec` and
+  `auth_tag`
+- WHEN the harness authenticates
+- THEN the relay does not refuse with `restricted: not a relay member`

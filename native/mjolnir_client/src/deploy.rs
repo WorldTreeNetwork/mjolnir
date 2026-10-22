@@ -48,6 +48,9 @@ pub async fn cmd_deploy(
     name: Option<String>,
     memory: u32,
     domain: Option<String>,
+    base_image: Option<String>,
+    owner: Option<String>,
+    forgejo_repo: Option<String>,
 ) -> Result<()> {
     // Resolve + validate the source directory.
     let dir = match path {
@@ -80,6 +83,22 @@ pub async fn cmd_deploy(
         memory
     );
 
+    if let Ok(sock) = std::env::var("MJOLNIR_OPERATOR_SOCKET") {
+        if !sock.is_empty() {
+            return deploy_operator_socket(
+                &sock,
+                &tarball,
+                &app_name,
+                memory,
+                domain.as_deref(),
+                base_image.as_deref(),
+                owner.as_deref(),
+                forgejo_repo.as_deref(),
+            )
+            .await;
+        }
+    }
+
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -92,6 +111,15 @@ pub async fn cmd_deploy(
         .body(tarball);
     if let Some(ref d) = domain {
         req = req.header("X-Domain", d);
+    }
+    if let Some(ref img) = base_image {
+        req = req.header("X-Base-Image", img);
+    }
+    if let Some(ref owner_id) = owner {
+        req = req.header("X-Owner-Id", owner_id);
+    }
+    if let Some(ref repo) = forgejo_repo {
+        req = req.header("X-Forgejo-Repo", repo);
     }
 
     let resp = req.send().await.context("deploy: failed to send request")?;
@@ -150,6 +178,83 @@ pub async fn cmd_deploy(
             bail!("deploy failed at stage '{}': {}", stage, error);
         }
         None => bail!("deploy: stream ended without a final result"),
+    }
+}
+
+/// `MJOLNIR_OPERATOR_SOCKET` is the break-glass listener. curl speaks Unix
+/// sockets; reqwest does not. The socket mode is the credential, so this
+/// path sends no bearer token.
+async fn deploy_operator_socket(
+    sock: &str,
+    tarball: &[u8],
+    app_name: &str,
+    memory: u32,
+    domain: Option<&str>,
+    base_image: Option<&str>,
+    owner: Option<&str>,
+    forgejo_repo: Option<&str>,
+) -> Result<()> {
+    let file = std::env::temp_dir().join(format!("mj-deploy-{}.tgz", std::process::id()));
+    std::fs::write(&file, tarball).context("deploy: failed to spool tarball")?;
+    let mut cmd = tokio::process::Command::new("curl");
+    cmd.arg("-sS")
+        .arg("-N")
+        .arg("--unix-socket")
+        .arg(sock)
+        .arg("-H")
+        .arg(format!("X-App-Name: {app_name}"))
+        .arg("-H")
+        .arg(format!("X-Memory-MB: {memory}"))
+        .arg("-H")
+        .arg("Content-Type: application/gzip")
+        .arg("--data-binary")
+        .arg(format!("@{}", file.display()))
+        .arg("http://localhost/api/deploy")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(d) = domain {
+        cmd.arg("-H").arg(format!("X-Domain: {d}"));
+    }
+    if let Some(img) = base_image {
+        cmd.arg("-H").arg(format!("X-Base-Image: {img}"));
+    }
+    if let Some(owner_id) = owner {
+        cmd.arg("-H").arg(format!("X-Owner-Id: {owner_id}"));
+    }
+    if let Some(repo) = forgejo_repo {
+        cmd.arg("-H").arg(format!("X-Forgejo-Repo: {repo}"));
+    }
+    let out = cmd.output().await.context("deploy: curl --unix-socket failed")?;
+    let _ = std::fs::remove_file(&file);
+    if !out.status.success() {
+        bail!(
+            "deploy: operator socket curl failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut final_result: Option<DeployFinal> = None;
+    for line in text.lines() {
+        handle_line(line.trim(), &mut final_result);
+    }
+    match final_result {
+        Some(f) if f.ok => {
+            let url = f.url.unwrap_or_default();
+            eprintln!("\n\x1b[32m✔ Deployed {}\x1b[0m", f.app_name.unwrap_or_else(|| app_name.to_string()));
+            if !url.is_empty() {
+                println!("{url}");
+            }
+            Ok(())
+        }
+        Some(f) => bail!(
+            "deploy failed at stage '{}': {}",
+            f.stage.as_deref().unwrap_or("?"),
+            f.error.as_deref().unwrap_or("unknown error")
+        ),
+        None => bail!(
+            "deploy: operator socket returned no result: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ),
     }
 }
 

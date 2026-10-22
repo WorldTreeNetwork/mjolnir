@@ -269,6 +269,20 @@ defmodule Mjolnir.Vsock.Protocol do
   end
 
   @doc """
+  Write a named tmpfs file in `/run/mjolnir/`. `name` is a basename
+  the guest allowlists (`git_signing_key`). Do not log `contents`.
+  """
+  def inject_file_request(name, contents, opts \\ [])
+      when is_binary(name) and is_binary(contents) do
+    %{
+      "type" => "inject_file",
+      "id" => opts[:request_id] || UUID.uuid4(),
+      "name" => name,
+      "contents" => contents
+    }
+  end
+
+  @doc """
   Wipe the guest's LUKS volume key from kernel RAM before a memory snapshot.
 
   The guest no-ops (`ok: true, suspended: false`) when no mapper is open, so

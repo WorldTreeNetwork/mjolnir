@@ -80,6 +80,42 @@ defmodule Mjolnir.API.AuthTest do
       assert conn.status == 401
     end
 
+    test "loopback is not the operator when the test opt-in is off" do
+      previous = Application.get_env(:mjolnir, :test_operator)
+      Application.put_env(:mjolnir, :test_operator, false)
+      put_auth(bypass_localhost: true)
+
+      on_exit(fn ->
+        if previous == nil do
+          Application.delete_env(:mjolnir, :test_operator)
+        else
+          Application.put_env(:mjolnir, :test_operator, previous)
+        end
+      end)
+
+      conn =
+        conn(:get, "/api/vms")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> call_auth()
+
+      assert conn.halted
+      assert conn.status == 401
+    end
+
+    test "the operator socket flag grants the principal from any peer" do
+      put_auth(bypass_localhost: false)
+
+      conn =
+        conn(:get, "/api/vms")
+        |> Map.put(:remote_ip, {10, 1, 2, 3})
+        |> put_private(:mjolnir_operator, true)
+        |> call_auth()
+
+      refute conn.halted
+      assert conn.assigns[:principal_kind] == :operator
+      assert conn.assigns[:user_id] == "localhost"
+    end
+
     test "returns 401 when bypass_localhost is true but request is not from localhost" do
       put_auth(bypass_localhost: true)
 

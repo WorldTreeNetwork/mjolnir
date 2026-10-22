@@ -54,6 +54,11 @@ defmodule Mjolnir.Application do
 
           # Per-actor durable message spool (ADR 0006)
           Mjolnir.Mailbox,
+
+          # Buzz protocol facade: Nostr (later Matrix) → OTP mailbox → last hop
+          # is a conformant Nostr event for buzz-acp. Named wake producer. The
+          # host is not a second event log.
+          Mjolnir.Buzz.Facade,
           %{
             id: Mjolnir.StartupMailboxSweep,
             start: {Task, :start_link, [&Mjolnir.Mailbox.sweep/0]},
@@ -74,8 +79,8 @@ defmodule Mjolnir.Application do
           # with Bandit — and that is the goal. Stranded :running records surface
           # in /api/vms as state=recovering until each VM re-registers, so the
           # API stays honest while rehydration proceeds. Reconcile.run/0 resumes
-          # with bounded concurrency, and Health.Monitor re-runs it every 30s as
-          # a safety net if this initial pass misses any.
+          # with bounded concurrency. Health.Monitor re-runs it every 30s as a
+          # safety net, and skips when a pass is already in flight.
           %{
             id: Mjolnir.StartupReconcile,
             start: {Task, :start_link, [&Mjolnir.Reconcile.run/0]},
@@ -108,25 +113,75 @@ defmodule Mjolnir.Application do
           # In-flight browser logins against IdentiKey Connect (mjolnir-wrug.3)
           Mjolnir.Auth.Login,
 
-          # HTTP API
+          # Single-use nonces for holder-bound secret redeem.
+          Mjolnir.Secrets.Nonces,
+
+          # HTTP API. TCP. A loopback peer is not the operator.
           {Bandit,
            plug: Mjolnir.API.Router,
            port: api_port,
            thousand_island_options: [read_timeout: :infinity]}
-        ]
+        ] ++
+        operator_listener()
 
     opts = [strategy: :one_for_one, name: Mjolnir.Supervisor]
 
     Logger.info("Starting Mjolnir MicroVM Fabric")
     Logger.info("Starting Mjolnir Orchestrator (HTTP API on port #{api_port})")
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      chmod_operator_socket()
+      maybe_isolate_guests()
+      {:ok, pid}
+    end
+  end
+
+  defp operator_listener do
+    case Application.get_env(:mjolnir, :operator_socket) do
+      path when is_binary(path) and path != "" ->
+        File.rm(path)
+        File.mkdir_p!(Path.dirname(path))
+
+        [
+          {Bandit,
+           plug: Mjolnir.API.OperatorPipeline,
+           scheme: :http,
+           port: 0,
+           ip: {:local, path},
+           thousand_island_options: [read_timeout: :infinity]}
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp chmod_operator_socket do
+    case Application.get_env(:mjolnir, :operator_socket) do
+      path when is_binary(path) -> File.chmod(path, 0o600)
+      _ -> :ok
+    end
+  end
+
+  defp maybe_isolate_guests do
+    if Application.get_env(:mjolnir, :isolate_guests, false) do
+      case Mjolnir.Network.ensure_guest_isolation() do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("guest isolation: #{inspect(reason)}")
+      end
+    end
   end
 
   defp maybe_jwks_strategy do
     auth_config = Application.get_env(:mjolnir, :auth, [])
 
+    # The issuer (auth.identikey.me) is served by a VM on this host. A
+    # synchronous fetch during boot waits on a guest that this same boot is
+    # supposed to resume, times out, and used to take the whole release down
+    # before Bandit listened. Fetch in the background; verification fails
+    # closed until the first successful refresh.
     if Keyword.get(auth_config, :issuer) do
-      [{Mjolnir.Auth.KeycloakStrategy, issuer: auth_config[:issuer], first_fetch_sync: true}]
+      [{Mjolnir.Auth.JwksStrategy, issuer: auth_config[:issuer], first_fetch_sync: false}]
     else
       []
     end

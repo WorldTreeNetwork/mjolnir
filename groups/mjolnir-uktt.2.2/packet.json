@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-sites-alias-certs",
+  "node_id": "mjolnir-uktt.2.2",
+  "change_id": "add-sites-alias-certs",
+  "capability": "site-certs",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "grok",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "grok" }
+  },
+  "goal": "Make mj cert issue work for a live site alias. Follow openspec/specs/site-certs/spec.md, ADR 0013, and openspec/changes/add-sites-alias-certs/design.md. Site-only install writes [[cert]] and does not add [[domain]]. Renewal reinstalls and never appends a missing [[domain]], on every branch.",
+  "anchors": [
+    { "symbol": "Mjolnir.API.Router POST /api/certs/issue", "invariant": "App custom domain owns the host. Else a live alias issues with domain insertion off. Else 404 name_not_found." },
+    { "symbol": "Mjolnir.Gateway.Certs.ensure/2", "invariant": "domain: false skips ensure_domain_block. Default remains append." },
+    { "symbol": "Mjolnir.SecretStore.read_alias/1", "invariant": "Missing file and ArgumentError are :not_found. Parse failure and other read errors are {:error, reason}. lookup_alias stays miss-on-error." },
+    { "symbol": "Mjolnir.Gateway.Classify", "invariant": "Mirror gateway classify. Local or Iroh is 409 before HTTP-01. Missing base file is :reject. Other base read failures are 503 gateway_config_unreadable." }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "mix test test/mjolnir/api/certs_test.exs test/mjolnir/api/router_test.exs test/mjolnir/gateway/certs_test.exs test/mjolnir/gateway/classify_test.exs test/mjolnir/api/sites_token_auth_test.exs test/mjolnir/sites/alias_secret_store_test.exs && cargo test -p mjolnir-gateway --bin mjolnir-gateway site_only_cert_does_not_change_classification --manifest-path native/Cargo.toml"
+  },
+  "out_of_scope": [
+    { "item": "App first-issue short apex", "tracked_as": "mjolnir-5ckn" },
+    { "item": "Default sites hostname", "tracked_as": "mjolnir-9bq.10" },
+    { "item": "Cert list temp dir 500", "tracked_as": "mjolnir-kzrt" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/api/router.ex",
+      "lib/mjolnir/api/certs.ex",
+      "lib/mjolnir/gateway/certs.ex",
+      "lib/mjolnir/gateway/classify.ex",
+      "lib/mjolnir/secret_store.ex",
+      "test/mjolnir/api/router_test.exs",
+      "test/mjolnir/api/certs_test.exs",
+      "test/mjolnir/gateway/certs_test.exs",
+      "test/mjolnir/gateway/classify_test.exs",
+      "test/mjolnir/api/sites_token_auth_test.exs",
+      "test/mjolnir/sites/alias_secret_store_test.exs",
+      "docs/guide/deploying-a-static-site.md",
+      "native/mjolnir_gateway/src/main.rs",
+      "openspec/changes/add-sites-alias-certs/",
+      "groups/mjolnir-uktt.2.2/packet.json"
+    ],
+    "do_not": ["deploy", "restart mjolnir.service", "edit config/config.exs", "edit config/test.exs", "edit config/runtime.exs", "fix mjolnir-5ckn"]
+  },
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "explicit",
+  "role": "worker",
+  "inherited": [
+    "ADR 0013 at c93cda3 is accepted. Living spec folded at 8c8390d.",
+    "Renewal never appends a [[domain]] that is not already present, including strangers such as zine.identikey.io.",
+    "Renewal does not re-apply 409. An unreadable alias index fails the pass before Let's Encrypt.",
+    "ops.ensure is 4-arity so fakes see domain: true or false."
+  ]
+}

@@ -107,6 +107,23 @@ defmodule Mjolnir.VMSecretsUnlockTest do
     end
   end
 
+  describe "gateway routes" do
+    test "reaching :running publishes :vm_started so custom-domain routes re-render" do
+      # Gateway.RouteReconciler only re-renders on lifecycle events. Nothing
+      # published :vm_started, so a VM revived or resumed after the post-boot
+      # settle sweeps came back :running with its domain still parked
+      # (2026-10-14: banana, buzz, hypersigil.world, taskmaster.dev).
+      state = booting_state()
+      Mjolnir.EventBus.subscribe(state.id)
+
+      assert {:noreply, %{state: :running}} =
+               VM.handle_info({:secrets_unlock_result, state.secrets_unlock_pid, :ok}, state)
+
+      vm_id = state.id
+      assert_receive {:mjolnir_event, ^vm_id, :vm_started, _}
+    end
+  end
+
   describe "the worker dies" do
     test "a crash still completes the boot, recording the death" do
       # The worker's own try/catch converts ordinary failures into {:error, _},
