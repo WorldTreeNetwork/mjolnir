@@ -802,7 +802,11 @@ identikey-protocol
 Living spec [`blob-store`](../openspec/specs/blob-store/spec.md), ADR
 [`0003`](decisions/0003-blob-store-mesh.md). Operator runbook
 [`runbooks/blob-door.md`](runbooks/blob-door.md). We are not doing
-MinIO. iroh-blobs as working-set/transmit is later.
+MinIO. iroh-blobs as working-set/transmit is later. A recording
+index (`add-recording-blob`, folded 2026-10-21) is one JSON row at
+`<sites_root>/recordings/<hash58>.json` beside ciphertext the door
+already holds. It is not a second byte store, not a VM, and not an
+unwrap.
 
 ### Channel System (Future)
 
