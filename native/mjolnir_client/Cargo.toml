@@ -2,6 +2,10 @@
 name = "mjolnir-client"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["World Tree Network Foundation"]
+description = "mj / mjolnir CLI — consumer client for a Mjolnir host"
+repository = "https://github.com/Identikey/mjolnir"
 
 [dependencies]
 mjolnir-protocol = { path = "../mjolnir_protocol" }

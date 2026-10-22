@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
 //! JSON-in / JSON-out BEAM face for `mjolnir-axsb.1.3`. No HTTP.
 
 use mjolnir_biscuit::{

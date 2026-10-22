@@ -6,6 +6,9 @@ defmodule Mjolnir.MixProject do
       app: :mjolnir,
       version: "0.1.0",
       elixir: "~> 1.15",
+      description:
+        "Distributed computational fabric for checkpointable Linux microVMs (AGPL-3.0-or-later; the mj CLI is MIT)",
+      licenses: ["AGPL-3.0-or-later"],
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       elixirc_paths: elixirc_paths(Mix.env()),

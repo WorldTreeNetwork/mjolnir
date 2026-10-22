@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
 //! Mjolnir CLI — VM control plane.
 //!
 //! Usage:

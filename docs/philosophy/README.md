@@ -15,6 +15,9 @@ In this folder:
   agent's agency (body, snapshot, mailbox, capability)
 - [`mailbox-as-spool.md`](mailbox-as-spool.md) — per-actor filesystem
   spool; 0MQ / π-calculus compose above it
+- [`licensing-and-components.md`](licensing-and-components.md) — AGPL
+  host / MIT CLI; consumer vs mini-hoster; Foundation vs LLC; sister
+  repos. The SHALL is LICENSE + NOTICE, not this file.
 
 Related notes that predate this folder and still live at `docs/` root:
 

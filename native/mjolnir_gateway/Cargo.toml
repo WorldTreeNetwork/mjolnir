@@ -2,6 +2,10 @@
 name = "mjolnir-gateway"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["World Tree Network Foundation"]
+description = "Mjolnir host HTTP / Iroh edge gateway"
+repository = "https://github.com/Identikey/mjolnir"
 
 [dependencies]
 mjolnir-protocol = { path = "../mjolnir_protocol" }

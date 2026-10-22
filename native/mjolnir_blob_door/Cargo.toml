@@ -2,6 +2,10 @@
 name = "mjolnir-blob-door"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["World Tree Network Foundation"]
+description = "Mjolnir host blob-door sidecar"
+repository = "https://github.com/Identikey/mjolnir"
 publish = false
 
 [dependencies]

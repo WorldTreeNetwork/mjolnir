@@ -5,6 +5,14 @@ unmaintained = "warn"
 [licenses]
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-DFS-2016", "CC0-1.0", "Zlib", "MPL-2.0"]
 confidence-threshold = 0.9
+# First-party host crates are AGPL. Do not add AGPL to `allow` — that would
+# also bless AGPL third-party deps into the MIT CLI graph.
+exceptions = [
+    { crate = "mjolnir-guest-agent", allow = ["AGPL-3.0-or-later"] },
+    { crate = "mjolnir-gateway", allow = ["AGPL-3.0-or-later"] },
+    { crate = "mjolnir-blob-door", allow = ["AGPL-3.0-or-later"] },
+    { crate = "mjolnir-biscuit", allow = ["AGPL-3.0-or-later"] },
+]
 
 [bans]
 multiple-versions = "warn"

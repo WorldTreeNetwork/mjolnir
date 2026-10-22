@@ -1,0 +1,43 @@
+{
+  "id": "pkt-advise-add-lan-file-server-reread2",
+  "node_id": "advise-add-lan-file-server-reread2",
+  "change_id": "add-lan-file-server",
+  "capability": "lan-files",
+  "role": "reader",
+  "goal": "Re-advise add-lan-file-server after ownership-root amend (ACTIVE BUILD). Author Grok. You are fable-5.1-arch-review. Prior reread said closing the owner-root box is enough to accept without another blind pass — still write a file. Do not overwrite prior reviews. Persist openspec/changes/add-lan-file-server/reviews/2026-09-04-reread2-advise.md. Verdict accept or send-back. Banner ADVISE, READER: fable-5.1-arch-review, SPAWN: this dir. If send-back, add owed boxes. Do not implement.",
+  "surface": "skill-host",
+  "assignee": {
+    "id": "fable-5.1-arch-review",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "fable-5.1",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-fable-5-1-arch-review" }
+  },
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-lan-file-server/reviews/",
+      "openspec/changes/add-lan-file-server/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement product code", "flip banner"]
+  },
+  "acceptance": { "kind": "review-file" },
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "lean",
+  "why": "GET requires Capability root issuer equal to ownership(h) recorded at first identikey-auth-gated put. Self-issued caps do not read.",
+  "living_specs": [
+    "openspec/changes/add-lan-file-server/specs/lan-files/spec.md"
+  ],
+  "cited": [
+    "openspec/changes/add-lan-file-server/specs/lan-files/spec.md Cap issued by non-owner"
+  ],
+  "learnings": []
+}

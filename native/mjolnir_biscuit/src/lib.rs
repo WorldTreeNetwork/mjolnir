@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
 //! Host Biscuit face (`mjolnir-axsb.1.7`).
 //!
 //! Mint/verify and §5 fingerprints come from `identikey-capability`.

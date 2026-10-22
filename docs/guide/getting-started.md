@@ -34,9 +34,13 @@ mj status
 # Shows your current API endpoint and that you're authenticated.
 ```
 
-> Don't have a server? See the README's [Run your own server](../../README.md#run-your-own-server)
-> section. The VMs need Linux + KVM, so the *server* must be a Linux host — but the `mj` CLI
-> itself runs fine from a Mac.
+> Don't have a server? [Run a node](run-a-node.md) (mini-PC, AGPL host) or the README's
+> [Run your own server](../../README.md#run-your-own-server) section. The VMs need Linux + KVM,
+> so the *server* must be a Linux host — but the `mj` CLI itself is MIT and runs fine from a Mac.
+>
+> `mj connect` is a real PTY into the guest. `mj connect --session NAME` attaches tmux so
+> reconnects (and extra humans) share one terminal. Secrets you set with `mj secrets` land
+> as env vars inside the VM and never enter a snapshot.
 
 ---
 

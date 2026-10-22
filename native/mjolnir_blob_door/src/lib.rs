@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
 //! Blob door: HTTP put/get over recrypt `blob/b3/{base58}` keys.
 //!
 //! Callers never hold B2 credentials. Accepted means the canonical

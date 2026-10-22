@@ -1,0 +1,76 @@
+Mjolnir
+Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+for more details.
+
+The copyright holder is **World Tree Network Foundation**. World Tree LLC
+sells mesh hardware; it is not the software licensor. Contact:
+duke@worldtree.io.
+
+------------------------------------------------------------------------------
+Exception: MIT-licensed client crates
+------------------------------------------------------------------------------
+
+The following crates are licensed under the MIT License (see each crate's
+LICENSE file), not the AGPL:
+
+  - native/mjolnir_client     — the `mj` / `mjolnir` CLI
+  - native/mjolnir_api        — HTTP client + OIDC token store (also used by
+                                external apps such as Papyrus)
+  - native/mjolnir_protocol   — vsock / PTY wire protocol
+
+These exist so consumers, other apps, and package managers can ship a
+Mjolnir client without AGPL obligations. They do not include the
+orchestrator, guest agent, gateway, or blob door.
+
+The MIT crates do not depend on AGPL crates. AGPL crates may depend on the
+MIT crates (the usual direction). That cut is load-bearing: if protocol or
+api were AGPL, the CLI could not be MIT.
+
+The rest of this repository — Elixir orchestrator (`lib/`), guest agent,
+gateway, blob door, bootstrap/install scripts, systemd units, Forge — is
+AGPL-3.0-or-later.
+
+------------------------------------------------------------------------------
+Hardware, mini-hosters, and World Tree LLC
+------------------------------------------------------------------------------
+
+AGPL covers the software. It does not restrict selling hardware. World Tree
+LLC sells mesh nodes that provide an Iroh-addressed base layer. Anyone may
+run this software on a mini-PC they own (and, when ARM lands, a Raspberry
+Pi). Running unmodified AGPL software as a mini-hoster does not create extra
+source-sharing duties beyond pointing users at this repository. Modified
+network services must comply with AGPL section 13.
+
+A separate commercial license for the **host** is available from the
+Foundation — see COMMERCIAL-LICENSE.md. It is not required to sell
+boxes that run unmodified Mjolnir, with this repository as the source
+offer. The MIT CLI never needs it.
+
+Contributions are accepted under the Contributor License Agreement in
+CLA.md, which is what makes the split- and dual-license model possible.
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+Mjolnir builds on other open-source software distributed under its own
+license. Notably:
+
+  - iroh and related crates (n0-computer) — MIT OR Apache-2.0
+  - Cloud Hypervisor — Apache-2.0 OR BSD-3-Clause
+  - Elixir / OTP — Apache-2.0
+
+The AGPL terms above apply to the Mjolnir source in this repository, not
+to these independently-licensed components.
+
+The component map (consumer vs server) lives in
+docs/philosophy/licensing-and-components.md.

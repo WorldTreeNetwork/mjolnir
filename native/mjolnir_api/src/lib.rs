@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2026 World Tree Network Foundation and the Mjolnir contributors
+
 //! Shared Mjolnir client core: the host-API **data layer** (typed response
 //! structs + authenticated HTTP helpers) and the **OIDC token store** (device
 //! flow + `~/.config/mjolnir/token.json`).

@@ -2,6 +2,10 @@
 name = "mjolnir-guest-agent"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["World Tree Network Foundation"]
+description = "In-guest agent: exec, PTY, tmux, secrets, Iroh — part of the Mjolnir host product"
+repository = "https://github.com/Identikey/mjolnir"
 
 # Feature flags:
 # - `full` (default): enables the full guest agent with tmux, secrets, agent SDK, and Iroh.

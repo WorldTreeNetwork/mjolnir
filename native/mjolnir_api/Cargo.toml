@@ -2,7 +2,10 @@
 name = "mjolnir-api"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["World Tree Network Foundation"]
 description = "Shared Mjolnir host-API data layer + OIDC token store, consumed by the mjolnir CLI and external apps (Papyrus)."
+repository = "https://github.com/Identikey/mjolnir"
 
 [dependencies]
 anyhow = "1"

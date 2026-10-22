@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
 
+Copyright: World Tree Network Foundation. Host (Elixir, guest agent, gateway) is AGPL-3.0-or-later; `native/mjolnir_client` + `mjolnir_api` + `mjolnir_protocol` are MIT. See NOTICE and `docs/philosophy/licensing-and-components.md`. GitHub transfer to WorldTreeNetwork is pending (`Identikey/mjolnir` still resolves).
+
 **Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. Firecracker was removed — it lacked virtio-fs support, which is required for the current storage architecture.
 
 ## Current Status

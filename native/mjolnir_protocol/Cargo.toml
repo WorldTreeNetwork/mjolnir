@@ -2,6 +2,10 @@
 name = "mjolnir-protocol"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["World Tree Network Foundation"]
+description = "Vsock / PTY wire protocol spoken by the Mjolnir CLI and guest agent"
+repository = "https://github.com/Identikey/mjolnir"
 
 [dependencies]
 tokio = { version = "1", features = ["io-util"] }

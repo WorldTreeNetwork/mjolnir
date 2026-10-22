@@ -2,6 +2,8 @@
 
 Mjolnir is a distributed computational fabric for spawning **checkpointable Linux microVMs** in milliseconds, with NAT-traversing P2P access via [Iroh](https://iroh.computer). Think "instant, snapshottable sandboxes" — clone a filesystem with a BTRFS reflink, boot a [Cloud Hypervisor](https://www.cloudhypervisor.org) microVM, run code, snapshot, restore.
 
+Stewarded by the **World Tree Network Foundation**. The host (orchestrator, guest agent, gateway) is **AGPL-3.0-or-later**; the `mj` CLI is **MIT**. Mini-hosters run the host on a box they own — [run a node](docs/guide/run-a-node.md). World Tree LLC sells mesh *hardware* (Iroh-addressed radios); it is not the software licensor. [Licensing](docs/philosophy/licensing-and-components.md).
+
 **Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. (Firecracker was removed — it lacks virtio-fs, which the storage architecture requires.)
 
 ---
@@ -13,7 +15,7 @@ Mjolnir is a distributed computational fabric for spawning **checkpointable Linu
 | **Use a Mjolnir server** (spawn/exec/connect to VMs) | [Use it](#use-it) — the `mj` CLI |
 | **Call host services from a VM** (blob store, Postgres, API) | [Host sidecars](docs/guide/host-sidecars.md) |
 | **Operate a server you can SSH into** | [Operate it](#operate-it) — the `just` control plane |
-| **Stand up your own server** from scratch | [Run your own server](#run-your-own-server) |
+| **Stand up your own server** from scratch | [Run your own server](#run-your-own-server) — [mini-hoster node](docs/guide/run-a-node.md) |
 | **Understand the internals** | [Architecture](#architecture) |
 
 > VMs require Linux + KVM, so the **server** must be a Linux host. The `mj` CLI and the `just` control plane both run fine from a Mac.
@@ -54,8 +56,9 @@ service outage keeps your credentials for a retry; a revoked session requires
 mj list                          # list your VMs
 mj info <vm_id>                  # detailed status
 mj exec <vm_id> "uname -a"       # run a one-shot command
-mj connect <vm_id>               # interactive shell (gateway WebSocket)
-mj connect <ticket>              # interactive shell (P2P over Iroh QUIC, NAT-traversing)
+mj connect <vm_id>               # interactive PTY (gateway WebSocket)
+mj connect <ticket>              # interactive PTY (P2P over Iroh QUIC, NAT-traversing)
+mj connect --session NAME <id>   # attach tmux inside the guest (reconnect / extra humans)
 mj snapshot create <vm_id> my-snap  # checkpoint a running VM
 mj snapshot list                 # list snapshots
 mj spawn --snapshot my-snap      # restore from a snapshot
@@ -126,7 +129,9 @@ Run `just --list` for everything — deploys, host management, IdentiKey Sites, 
 
 ## Run your own server
 
-The server is a Linux host with KVM. The bootstrap script installs every dependency (Cloud Hypervisor, Erlang/Elixir via mise, Rust), provisions BTRFS storage, builds the rootfs + guest agent, and starts the orchestrator.
+This is the mini-hoster path: plug in a mini-PC, bootstrap, and the box becomes an Iroh-addressed compute node. Walkthrough: **[Run a node](docs/guide/run-a-node.md)**. Raspberry Pi is a **goal** (ARM guest agent is not shipped); the ship-today SKU is an x86_64 mini-PC with KVM + BTRFS.
+
+The server is a Linux host with KVM. The bootstrap script installs every dependency (Cloud Hypervisor, Erlang/Elixir via mise, Rust), provisions BTRFS storage, builds the rootfs + guest agent, and starts the orchestrator. Secrets you `mj secrets set` are injected at VM spawn and mapped to env vars inside the guest — they never enter a snapshot.
 
 ### Requirements
 
@@ -142,7 +147,7 @@ Cloud Hypervisor 50+, Erlang 26+, Elixir 1.15+, and Rust are installed by the bo
 ### Bootstrap
 
 ```bash
-git clone https://github.com/IdentiKey/mjolnir.git
+git clone https://github.com/Identikey/mjolnir.git   # → WorldTreeNetwork/mjolnir after org transfer
 cd mjolnir
 
 # Dev: keeps code in your workspace for live editing, loopback storage
@@ -241,7 +246,7 @@ with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
 [Deploying a Web App](docs/guide/deploying-an-app.md) (`mj deploy`, `mj secrets`,
 `mj domain`). Host services every VM can call: [Host sidecars](docs/guide/host-sidecars.md).
 
-- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md) · [Host sidecars](docs/guide/host-sidecars.md)
+- [Guide (user-facing)](docs/guide/) · [Getting Started](docs/guide/getting-started.md) · [Run a node](docs/guide/run-a-node.md) · [Snapshots](docs/guide/snapshots.md) · [Coming from Docker](docs/guide/coming-from-docker.md) · [Deploying a Web App](docs/guide/deploying-an-app.md) · [Host sidecars](docs/guide/host-sidecars.md)
 - [Current status / handoff notes](docs/plans/current-status.md)
 - [Roadmap](docs/roadmap.md)
 - [MicroVM Fabric Spec](docs/microvm-fabric.md)
@@ -249,4 +254,9 @@ with VMs. Type-along [Getting Started](docs/guide/getting-started.md), then
 
 ## License
 
-MIT
+Copyright (C) 2026 World Tree Network Foundation.
+
+- **Host** (Elixir orchestrator, guest agent, gateway, blob door, bootstrap): [AGPL-3.0-or-later](LICENSE)
+- **Consumer client** (`native/mjolnir_client`, `mjolnir_api`, `mjolnir_protocol`): [MIT](native/mjolnir_client/LICENSE)
+
+See [NOTICE](NOTICE) and [licensing and components](docs/philosophy/licensing-and-components.md). Contributions require the [CLA](CLA.md) — [CONTRIBUTING.md](CONTRIBUTING.md). Host commercial terms: [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).

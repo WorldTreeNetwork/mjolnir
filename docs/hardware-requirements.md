@@ -4,13 +4,17 @@ This document defines the hardware and host-OS requirements for running Mjolnir,
 
 Mjolnir has two viable deployment profiles. Most of this document covers the **full profile** (the default — microVMs spawned by Cloud Hypervisor with BTRFS storage and TAP networking). A second **OTP-only profile** is described in §7; it relaxes the hardware requirements significantly in exchange for giving up microVM isolation, and is intended for environments where the full profile is impossible (e.g. containerized GPU rentals).
 
+Mini-hosters (plug in a box, become an Iroh-addressed compute node) use the **full profile**. The ship-today SKU is an x86_64 mini-PC; Raspberry Pi is a goal, not a current capability — see [Run a node](guide/run-a-node.md). Any host that satisfies §1–§4 can offer VMs; GPU passthrough (§5) is optional and is how a machine with a GPU shares it across the mesh.
+
+Copyright: World Tree Network Foundation. The host software is AGPL-3.0-or-later; running unmodified on hardware you own does not require a license from World Tree LLC.
+
 ---
 
 ## 1. CPU and Virtualization
 
 ### Hard requirements (full profile)
 
-- **x86_64** (Intel or AMD). ARM64 is supported by Cloud Hypervisor upstream, but Mjolnir's guest agent and rootfs build pipeline target `x86_64-unknown-linux-musl` exclusively. ARM is not currently tested.
+- **x86_64** (Intel or AMD). ARM64 is supported by Cloud Hypervisor upstream, but Mjolnir's guest agent and rootfs build pipeline target `x86_64-unknown-linux-musl` exclusively. ARM is not currently tested. That includes Raspberry Pi 4/5: Pi 5 has KVM, but we do not ship an aarch64 guest agent or rootfs yet. Do not buy a Pi *as a Mjolnir hypervisor* until that port lands; a Lightning Mesh radio (OpenWrt) is the $50–$80 node that exists today.
 - **Hardware virtualization extensions**, exposed to the host kernel:
   - Intel: VT-x with EPT (Extended Page Tables)
   - AMD: AMD-V with NPT (Nested Page Tables)

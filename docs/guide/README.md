@@ -26,6 +26,8 @@ Read in order if you're new:
 6. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
    (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres. How guests find
    locators in `/etc/mjolnir/vm.json`.
+7. **[Run a node](run-a-node.md)** — mini-hoster path: plug in a mini-PC, bootstrap,
+   become an Iroh-addressed compute node. Raspberry Pi is a goal, not today.
 
 ## Related (deeper) docs
 
