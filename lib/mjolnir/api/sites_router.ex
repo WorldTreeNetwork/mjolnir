@@ -17,6 +17,9 @@ defmodule Mjolnir.API.SitesRouter do
       PUT    /blob/:hash                   — upload chunk (framed: len|ct|len|ob)
       GET    /blob/:hash                   — fetch ciphertext
       GET    /blob/:hash/outboard          — fetch Bao outboard
+      POST   /recordings                   — owner wrap for a stored ciphertext hash
+      POST   /recordings/:hash/friends     — one friend wrap for that hash
+      GET    /recordings/:hash             — owner index (registering JWT sub only)
       GET    /manifests/:hash              — fetch a manifest envelope
       GET    /manifests/:hash/ots          — fetch the OpenTimestamps receipt
       PUT    /manifests/:hash/ots          — upload an OpenTimestamps receipt
@@ -61,7 +64,8 @@ defmodule Mjolnir.API.SitesRouter do
     Materializer,
     OpenTimestamps,
     Server,
-    Store
+    Store,
+    WrapShape
   }
 
   plug(:match)
@@ -397,6 +401,32 @@ defmodule Mjolnir.API.SitesRouter do
     end
   end
 
+  ## Recording index
+
+  # JWT `:user` only. Checked before the body is read and before any blob probe,
+  # so a biscuit, a Sites token, the operator, a ceremony, or a public caller
+  # never reaches the door or the recordings directory.
+  post "/recordings" do
+    case recording_user(conn) do
+      :no -> json(conn, 403, %{error: "forbidden"})
+      {:ok, sub} -> register_recording(conn, sub)
+    end
+  end
+
+  post "/recordings/:hash/friends" do
+    case recording_user(conn) do
+      :no -> json(conn, 403, %{error: "forbidden"})
+      {:ok, sub} -> add_recording_friend(conn, sub, hash)
+    end
+  end
+
+  get "/recordings/:hash" do
+    case recording_user(conn) do
+      :no -> json(conn, 403, %{error: "forbidden"})
+      {:ok, sub} -> show_recording(conn, sub, hash)
+    end
+  end
+
   match _ do
     json(conn, 404, %{error: "not_found"})
   end
@@ -598,6 +628,185 @@ defmodule Mjolnir.API.SitesRouter do
   end
 
   defp unframe_chunk(_), do: {:error, :bad_framing}
+
+  # 16 KiB covers a 4096-byte wrap in unpadded base64url plus the JSON envelope.
+  # The ciphertext itself stays on `PUT /blob/:hash` (64 MiB).
+  @recording_body_max 16_384
+
+  defp recording_user(conn) do
+    case conn.assigns do
+      %{principal_kind: :user, user_id: sub} when is_binary(sub) and sub != "" -> {:ok, sub}
+      _ -> :no
+    end
+  end
+
+  defp register_recording(conn, sub) do
+    case read_json_body(conn) do
+      {:error, _, conn} ->
+        json(conn, 400, %{error: "bad_body"})
+
+      {:ok, bytes, conn} ->
+        with {:ok, hash, owner_xid, wrap_b64} <- decode_register_body(bytes),
+             :ok <- check_hash(hash),
+             :ok <- check_xid(owner_xid),
+             {:ok, wrap} <- decode_wrap_body(wrap_b64) do
+          if Store.chunk_present?(hash) do
+            finish_register(conn, sub, hash, owner_xid, wrap)
+          else
+            json(conn, 404, %{error: "blob_missing"})
+          end
+        else
+          :bad_body -> json(conn, 400, %{error: "bad_body"})
+          :bad_hash -> json(conn, 400, %{error: "bad_hash"})
+          :bad_xid -> json(conn, 400, %{error: "bad_xid"})
+          :bad_wrap -> json(conn, 400, %{error: "bad_wrap"})
+        end
+    end
+  end
+
+  defp finish_register(conn, sub, hash, owner_xid, wrap) do
+    case Store.register_recording(sub, hash, owner_xid, wrap) do
+      {:ok, which} when which in [:created, :exists] ->
+        status = if which == :created, do: 201, else: 200
+
+        case Store.fetch_recording(hash) do
+          {:ok, row} -> json(conn, status, public_recording(row))
+          other -> json(conn, 500, %{error: inspect(other)})
+        end
+
+      {:error, :conflict} ->
+        json(conn, 409, %{error: "wrap_conflict"})
+
+      {:error, :not_owner} ->
+        json(conn, 403, %{error: "not_owner"})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  defp add_recording_friend(conn, sub, hash) do
+    case read_json_body(conn) do
+      {:error, _, conn} ->
+        json(conn, 400, %{error: "bad_body"})
+
+      {:ok, bytes, conn} ->
+        with :ok <- check_hash(hash),
+             {:ok, friend_xid, wrap_b64} <- decode_friend_body(bytes),
+             :ok <- check_xid(friend_xid),
+             {:ok, wrap} <- decode_wrap_body(wrap_b64) do
+          finish_friend(conn, sub, hash, friend_xid, wrap)
+        else
+          :bad_body -> json(conn, 400, %{error: "bad_body"})
+          :bad_hash -> json(conn, 400, %{error: "bad_hash"})
+          :bad_xid -> json(conn, 400, %{error: "bad_xid"})
+          :bad_wrap -> json(conn, 400, %{error: "bad_wrap"})
+        end
+    end
+  end
+
+  defp finish_friend(conn, sub, hash, friend_xid, wrap) do
+    case Store.add_recording_friend(sub, hash, friend_xid, wrap) do
+      {:ok, which} when which in [:created, :exists] ->
+        status = if which == :created, do: 201, else: 200
+
+        case Store.fetch_recording(hash) do
+          {:ok, row} -> json(conn, status, public_recording(row))
+          other -> json(conn, 500, %{error: inspect(other)})
+        end
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "recording_missing"})
+
+      {:error, :not_owner} ->
+        json(conn, 403, %{error: "not_owner"})
+
+      {:error, :self} ->
+        json(conn, 400, %{error: "owner_is_not_friend"})
+
+      {:error, :conflict} ->
+        json(conn, 409, %{error: "wrap_conflict"})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  defp show_recording(conn, sub, hash) do
+    case Store.fetch_recording(hash) do
+      {:error, :bad_hash} ->
+        json(conn, 400, %{error: "bad_hash"})
+
+      :not_found ->
+        json(conn, 404, %{error: "recording_missing"})
+
+      {:ok, %{"owner_sub" => ^sub} = row} ->
+        json(conn, 200, public_recording(row))
+
+      {:ok, _} ->
+        json(conn, 403, %{error: "not_owner"})
+
+      {:error, reason} ->
+        json(conn, 500, %{error: inspect(reason)})
+    end
+  end
+
+  defp public_recording(row) do
+    %{
+      hash: row["hash"],
+      owner_xid: row["owner_xid"],
+      wrap: row["owner_wrap"],
+      friends:
+        Enum.map(row["friends"], fn friend ->
+          %{"friend_xid" => friend["friend_xid"], "wrap" => friend["wrap"]}
+        end)
+    }
+  end
+
+  defp decode_register_body(bytes) do
+    case Jason.decode(bytes) do
+      {:ok, %{"hash" => hash, "owner_xid" => owner_xid, "wrap" => wrap}}
+      when is_binary(hash) and is_binary(owner_xid) and is_binary(wrap) ->
+        {:ok, hash, owner_xid, wrap}
+
+      _ ->
+        :bad_body
+    end
+  end
+
+  defp decode_friend_body(bytes) do
+    case Jason.decode(bytes) do
+      {:ok, %{"friend_xid" => friend_xid, "wrap" => wrap}}
+      when is_binary(friend_xid) and is_binary(wrap) ->
+        {:ok, friend_xid, wrap}
+
+      _ ->
+        :bad_body
+    end
+  end
+
+  defp decode_wrap_body(text) do
+    case Base.url_decode64(text, padding: false) do
+      {:ok, bytes} -> if WrapShape.valid?(bytes), do: {:ok, bytes}, else: :bad_wrap
+      :error -> :bad_wrap
+    end
+  end
+
+  defp check_hash(hash) do
+    if Store.valid_blob_hash?(hash), do: :ok, else: :bad_hash
+  end
+
+  defp check_xid(xid) do
+    if Store.valid_xid?(xid), do: :ok, else: :bad_xid
+  end
+
+  defp read_json_body(conn) do
+    case Plug.Conn.read_body(conn, length: @recording_body_max) do
+      {:ok, bytes, conn} -> {:ok, bytes, conn}
+      {:more, _partial, conn} -> {:error, :body_too_large, conn}
+      {:error, reason} -> {:error, reason, conn}
+    end
+  end
 
   defp read_full_body(conn) do
     case Plug.Conn.read_body(conn, length: 64 * 1024 * 1024) do
