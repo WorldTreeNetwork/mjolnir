@@ -36,6 +36,23 @@ defmodule Mjolnir.Deploy.DetectorTest do
       # No svelte.config.js
       assert Detector.detect(dir) == {:error, :unsupported_app}
     end
+
+    test "accepts adapter-node declared only in vite.config.ts", %{dir: dir} do
+      File.write!(Path.join(dir, "package.json"), "{}")
+
+      File.write!(
+        Path.join(dir, "vite.config.ts"),
+        "import adapter from \"@sveltejs/adapter-node\";\n"
+      )
+
+      assert {:ok, %BuildPlan{package_manager: :npm}} = Detector.detect(dir)
+    end
+
+    test "does not treat a plain vite.config.ts as SvelteKit", %{dir: dir} do
+      File.write!(Path.join(dir, "package.json"), "{}")
+      File.write!(Path.join(dir, "vite.config.ts"), "export default {};")
+      assert Detector.detect(dir) == {:error, :unsupported_app}
+    end
   end
 
   describe "missing package.json" do
@@ -222,7 +239,7 @@ defmodule Mjolnir.Deploy.DetectorTest do
       assert {:ok, %BuildPlan{package_manager: :yarn}} = Detector.detect(dir)
     end
 
-    test "all four lockfiles present → bun wins", %{dir: dir} do
+    test "all four lockfiles present, bun wins", %{dir: dir} do
       scaffold_sveltekit(dir)
       write_lockfile(dir, "bun.lock")
       write_lockfile(dir, "pnpm-lock.yaml")

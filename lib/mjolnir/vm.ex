@@ -1440,9 +1440,15 @@ defmodule Mjolnir.VM do
 
       {:error, reason} ->
         Logger.error("VM #{state.id} failed to boot: #{inspect(reason)}")
+        # Reply before stop. Otherwise await_boot sits until its call
+        # timeout and the API only sees an EXIT (mjolnir-igi9).
+        if state.boot_waiter do
+          GenServer.reply(state.boot_waiter, {:error, reason})
+        end
+
         # Return :normal so the :transient DynamicSupervisor does NOT restart
         # (transient processes only restart on abnormal termination)
-        {:stop, :normal, %{state | state: :failed}}
+        {:stop, :normal, %{state | state: :failed, boot_waiter: nil}}
     end
   end
 

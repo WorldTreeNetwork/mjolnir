@@ -469,12 +469,12 @@ defmodule Mjolnir.API.Router do
 
             {:error, reason} ->
               Logger.error("VM spawn failed: #{inspect(reason)}")
-              json(conn, 500, %{error: "spawn_failed"})
+              spawn_failure(conn, reason)
           end
         catch
           :exit, reason ->
             Logger.error("VM spawn crashed: #{inspect(reason)}")
-            json(conn, 500, %{error: "spawn_failed"})
+            spawn_failure(conn, reason)
         end
       end
     else
@@ -2015,6 +2015,24 @@ defmodule Mjolnir.API.Router do
   # bytes arrive intact for erl_tar to decompress+extract.
   defp maybe_parse_body(%{path_info: ["api", "deploy"]} = conn, _opts), do: conn
   defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
+
+  # A vsock ping miss used to collapse into a bare spawn_failed, which
+  # looks like a host crash. Name the agent (mjolnir-igi9).
+  defp spawn_failure(conn, :boot_timeout) do
+    json(conn, 500, %{
+      error: "spawn_failed",
+      reason: "guest_agent_timeout",
+      message: "guest agent never pinged on vsock"
+    })
+  end
+
+  defp spawn_failure(conn, {:timeout, {GenServer, :call, [_, :await_boot | _]}}) do
+    spawn_failure(conn, :boot_timeout)
+  end
+
+  defp spawn_failure(conn, _reason) do
+    json(conn, 500, %{error: "spawn_failed"})
+  end
 
   defp spawn_rejecting_memory_snapshot(opts) do
     name = opts[:snapshot]

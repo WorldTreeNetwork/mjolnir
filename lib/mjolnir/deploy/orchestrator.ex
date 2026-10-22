@@ -118,6 +118,7 @@ defmodule Mjolnir.Deploy.Orchestrator do
          :ok <- emit_build_size(progress, build_size),
          :ok <- emit(progress, "build", "#{length(steps)} layer(s); building"),
          base_image = resolve_base_image(opts, plan),
+         :ok <- emit(progress, "build", "base image #{base_image}"),
          {:build, {:ok, build}} <-
            {:build,
             tag_build_result(
@@ -199,6 +200,13 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # Worth naming rather than inspecting: this one is a deliberate refusal, and
   # the operator needs to know it was a refusal and not a crash.
+  defp failure_lines({:spawn_failed, :boot_timeout}, _build_size) do
+    [
+      "error: guest agent never pinged on vsock (boot_timeout)",
+      "note: the build VM image booted without an agent answer; check that base image, not the host build"
+    ]
+  end
+
   defp failure_lines({:secrets_unlock_failed, reason}, _build_size) do
     [
       "error: managed secrets never mounted (#{reason})",

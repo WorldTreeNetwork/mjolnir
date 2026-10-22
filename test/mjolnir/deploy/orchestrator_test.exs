@@ -434,6 +434,19 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       refute Enum.any?(events(agent), &match?({:build, _, _, _}, &1))
     end
 
+    test "names a vsock miss and the base image", %{agent: agent, dir: dir} do
+      {:ok, progress} = start_supervised({Agent, fn -> [] end}, id: :agent_miss)
+      ops = recording_ops(agent, build_result: {:error, {:spawn_failed, :boot_timeout}})
+      on_progress = fn stage, line -> Agent.update(progress, &[{stage, line} | &1]) end
+
+      assert {:error, %{stage: "build", reason: {:spawn_failed, :boot_timeout}}} =
+               Orchestrator.deploy("app", dir, ops: ops, on_progress: on_progress)
+
+      lines = progress |> Agent.get(& &1) |> Enum.reverse() |> Enum.map(&elem(&1, 1))
+      assert "base image deploy-node-bun" in lines
+      assert "error: guest agent never pinged on vsock (boot_timeout)" in lines
+    end
+
     test "surfaces a build failure with its stage, never running", %{agent: agent, dir: dir} do
       ops = recording_ops(agent, build_result: {:error, {:step_failed, "bun install", :boom, []}})
 

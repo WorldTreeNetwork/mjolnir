@@ -10,8 +10,11 @@ defmodule Mjolnir.Deploy.Detector do
   have recognised.
 
   Only if there is no manifest does framework inference run, and it recognises
-  exactly one framework: SvelteKit/adapter-node, requiring both `package.json`
-  and `svelte.config.js`. Anything else returns `{:error, :unsupported_app}`,
+  exactly one framework: SvelteKit/adapter-node. That needs `package.json` and
+  either `svelte.config.js` or a `vite.config.ts` that imports
+  `@sveltejs/adapter-node` (Kit can put `adapter()` in the Vite config and
+  ship no `svelte.config.js`). Anything else returns
+  `{:error, :unsupported_app}`,
   whose remedy is a manifest rather than a new detector — we will never infer
   every stack, and an app that describes itself does not need us to.
 
@@ -49,7 +52,8 @@ defmodule Mjolnir.Deploy.Detector do
 
   A `mjolnir.toml` manifest is honoured first and wins outright. Failing that,
   returns `{:ok, %BuildPlan{}}` for a recognised SvelteKit/adapter-node app, or
-  `{:error, :unsupported_app}` if the required marker files are absent.
+  `{:error, :unsupported_app}` if neither `svelte.config.js` nor a Vite config
+  that imports `@sveltejs/adapter-node` is present.
 
   A malformed manifest returns `{:error, {:invalid_manifest, message}}` — it
   does not degrade to inference.
@@ -66,9 +70,27 @@ defmodule Mjolnir.Deploy.Detector do
   # Framework inference — reached only when the app did not declare itself.
   defp infer(app_dir) do
     with :ok <- require_file(app_dir, "package.json"),
-         :ok <- require_file(app_dir, "svelte.config.js") do
+         :ok <- sveltekit_marker(app_dir) do
       pm = detect_package_manager(app_dir)
       {:ok, build_plan(pm)}
+    end
+  end
+
+  # Kit next may declare adapter-node only in vite.config.ts.
+  defp sveltekit_marker(dir) do
+    cond do
+      File.exists?(Path.join(dir, "svelte.config.js")) -> :ok
+      vite_adapter_node?(dir) -> :ok
+      true -> {:error, :unsupported_app}
+    end
+  end
+
+  defp vite_adapter_node?(dir) do
+    path = Path.join(dir, "vite.config.ts")
+
+    case File.read(path) do
+      {:ok, source} -> String.contains?(source, "@sveltejs/adapter-node")
+      _ -> false
     end
   end
 
