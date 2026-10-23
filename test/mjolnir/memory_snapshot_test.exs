@@ -242,6 +242,96 @@ defmodule Mjolnir.MemorySnapshotTest do
       refute_receive :paused, 50
     end
 
+    test "refuses another VM's memory snapshot name without pausing", ctx do
+      plant_memory!(ctx.root, "taken", "vm-2", "theirs")
+      test_pid = self()
+
+      assert {:error, {:snapshot_exists, "taken"}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "taken",
+                 pause_fun: fn _ ->
+                   send(test_pid, :paused)
+                   :ok
+                 end
+               )
+
+      refute_receive :paused, 50
+      assert File.read!(mem_state(ctx.root, "taken")) == "theirs"
+    end
+
+    test "a failed freeze keeps the previous memory snapshot", ctx do
+      plant_memory!(ctx.root, "old", "vm-1", "previous")
+
+      assert {:error, {:pause_failed, :boom}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "new",
+                 pause_fun: fn _ -> {:error, :boom} end
+               )
+
+      assert File.read!(mem_state(ctx.root, "old")) == "previous"
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "new.mem"]))
+    end
+
+    test "re-freezing the same name does not destroy the current image before capture",
+         ctx do
+      plant_memory!(ctx.root, "park", "vm-1", "previous")
+
+      assert {:error, {:pause_failed, :boom}} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "park",
+                 pause_fun: fn _ -> {:error, :boom} end
+               )
+
+      assert File.read!(mem_state(ctx.root, "park")) == "previous"
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "park.next.mem"]))
+    end
+
+    test "a successful freeze keeps only this VM's new memory snapshot", ctx do
+      plant_memory!(ctx.root, "old", "vm-1", "previous")
+      plant_memory!(ctx.root, "older", "vm-1", "older")
+      plant_memory!(ctx.root, "other", "vm-2", "stay")
+      plant_filesystem!(ctx.root, "disk", "vm-1")
+
+      assert {:ok, meta} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "new",
+                 pause_fun: fn _ -> :ok end,
+                 capture_fun: capture_ok(ctx.root)
+               )
+
+      assert meta.name == "new"
+      assert meta.memory_dir == Path.join([ctx.root, "@snapshots", "new.mem"])
+      assert File.read!(mem_state(ctx.root, "new")) == "new-image"
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "old.mem"]))
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "old.json"]))
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "older.mem"]))
+      assert File.read!(mem_state(ctx.root, "other")) == "stay"
+      assert File.exists?(Path.join([ctx.root, "@snapshots", "disk.json"]))
+    end
+
+    test "a successful same-name freeze publishes the new image and drops the previous",
+         ctx do
+      plant_memory!(ctx.root, "park", "vm-1", "previous")
+
+      assert {:ok, meta} =
+               MemorySnapshot.freeze(
+                 %{id: "vm-1", socket_path: "/nope.sock"},
+                 "park",
+                 pause_fun: fn _ -> :ok end,
+                 capture_fun: capture_ok(ctx.root)
+               )
+
+      assert meta.name == "park"
+      assert File.read!(mem_state(ctx.root, "park")) == "new-image"
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "park.next"]))
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "park.next.mem"]))
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "park.next.json"]))
+    end
+
     test "a failed pause reports pause_failed and captures nothing", ctx do
       assert {:error, {:pause_failed, :boom}} =
                MemorySnapshot.freeze(
@@ -400,6 +490,48 @@ defmodule Mjolnir.MemorySnapshotTest do
 
       assert {:error, {:snapshot_pin_unknown, "legacy"}} =
                MemorySnapshot.prepare_thaw("legacy", "new-vm-id")
+    end
+
+    test "a crashed same-name replace is published under that name before the pin check",
+         ctx do
+      # Capture finished at park.next, then the process died before the rename.
+      plant_memory!(ctx.root, "park.next", "vm-1", "newer")
+
+      assert {:error, {:snapshot_pin_unknown, "park"}} =
+               MemorySnapshot.prepare_thaw("park", "vm-1")
+
+      assert File.read!(mem_state(ctx.root, "park")) == "newer"
+      refute File.exists?(Path.join([ctx.root, "@snapshots", "park.next.mem"]))
+    end
+  end
+
+  defp plant_memory!(root, name, vm_id, body) do
+    mem = Path.join([root, "@snapshots", "#{name}.mem"])
+    File.mkdir_p!(mem)
+    File.write!(Path.join(mem, "state.json"), body)
+    File.mkdir_p!(Path.join([root, "@snapshots", name]))
+
+    File.write!(
+      Path.join([root, "@snapshots", "#{name}.json"]),
+      Jason.encode!(%{name: name, source_vm_id: vm_id, kind: "memory"})
+    )
+  end
+
+  defp plant_filesystem!(root, name, vm_id) do
+    File.mkdir_p!(Path.join([root, "@snapshots", name]))
+
+    File.write!(
+      Path.join([root, "@snapshots", "#{name}.json"]),
+      Jason.encode!(%{name: name, source_vm_id: vm_id, kind: "filesystem"})
+    )
+  end
+
+  defp mem_state(root, name), do: Path.join([root, "@snapshots", "#{name}.mem", "state.json"])
+
+  defp capture_ok(root) do
+    fn vm, name, mem_dir, _opts ->
+      plant_memory!(root, name, vm.id, "new-image")
+      {:ok, %{name: name, memory_dir: mem_dir, memory_bytes: 10, generation: 1}}
     end
   end
 end

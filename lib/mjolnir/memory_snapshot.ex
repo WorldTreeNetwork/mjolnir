@@ -77,6 +77,11 @@ defmodule Mjolnir.MemorySnapshot do
   full RAM, uncompressed, every time — a 2 GiB VM writes 2 GiB. Memory and
   filesystem snapshots are complementary, not substitutes, and callers should
   choose deliberately.
+
+  A VM keeps **one** memory snapshot. The previous image stays until the next
+  freeze has captured a complete replacement, then it is deleted. A crash
+  during that capture leaves the previous image. Filesystem snapshots are
+  not part of this rotation.
   """
 
   require Logger
@@ -192,71 +197,116 @@ defmodule Mjolnir.MemorySnapshot do
   Returns `{:ok, metadata}` — the BTRFS sidecar plus `:memory_dir`,
   `:memory_bytes`, `:secrets_suspended`, and `:source_terminal` (always
   `true`, so a caller cannot read the result as "still running" by omission).
+
+  Re-freezing the same VM replaces its previous memory snapshot. The previous
+  image is removed only after the new capture has written `state.json`, so a
+  crash keeps the last good image. The same name is written via a sibling
+  (`<name>.next`) and renamed into place. A name held by another VM, or by a
+  filesystem snapshot, is still `{:error, {:snapshot_exists, name}}`.
   """
   @spec freeze(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def freeze(vm, name, opts \\ []) do
+    with :ok <- settle_staged(vm.id, name) do
+      cond do
+        owned_memory?(vm.id, name) ->
+          run_freeze(vm, name, staging_name(name), opts)
+
+        name_occupied?(name) ->
+          {:error, {:snapshot_exists, name}}
+
+        true ->
+          run_freeze(vm, name, name, opts)
+      end
+    end
+  end
+
+  defp run_freeze(vm, public_name, write_as, opts) do
     socket = vm.socket_path
     pause = Keyword.get(opts, :pause_fun, &Client.pause_vm/1)
     quiesce = Keyword.get(opts, :quiesce_fun, &default_quiesce/2)
-    mem_dir = memory_dir(name)
+    capture_fun = Keyword.get(opts, :capture_fun, &capture/4)
+    mem_dir = memory_dir(write_as)
     secrets_mode = secrets_mode(vm, opts)
 
-    if File.exists?(mem_dir) do
-      {:error, {:snapshot_exists, name}}
-    else
-      # Quiesce BEFORE pause. luksSuspend is a guest-userspace call; once
-      # vCPUs stop, the agent cannot wipe the key, and the snapshot would
-      # capture it. A failed wipe leaves the VM running.
-      case quiesce.(vm, secrets_mode) do
-        {:ok, quiesce_info} ->
-          case pause.(socket) do
-            :ok ->
-              # Everything from here runs with no vCPU scheduled. That is the
-              # whole correctness argument: the guest cannot write to the
-              # filesystem between the BTRFS snapshot and the RAM capture, so
-              # the two describe the same instant.
-              #
-              # There is no `after resume` because there is no resume — see
-              # the moduledoc above. The pause is not a window we exit; it
-              # is the end of this VM's life in this VMM.
-              case capture(vm, name, mem_dir, opts) do
-                {:ok, metadata} ->
-                  _ = write_secrets_sidecar(mem_dir, quiesce_info)
+    # Quiesce BEFORE pause. luksSuspend is a guest-userspace call; once
+    # vCPUs stop, the agent cannot wipe the key, and the snapshot would
+    # capture it. A failed wipe leaves the VM running.
+    case quiesce.(vm, secrets_mode) do
+      {:ok, quiesce_info} ->
+        case pause.(socket) do
+          :ok ->
+            # Everything from here runs with no vCPU scheduled. That is the
+            # whole correctness argument: the guest cannot write to the
+            # filesystem between the BTRFS snapshot and the RAM capture, so
+            # the two describe the same instant.
+            #
+            # There is no `after resume` because there is no resume — see
+            # the moduledoc above. The pause is not a window we exit; it
+            # is the end of this VM's life in this VMM.
+            #
+            # `write_as` may be a sibling of `public_name`. The previous
+            # image stays at `public_name` until capture returns, and is
+            # removed only after that.
+            case capture_fun.(vm, write_as, mem_dir, opts) do
+              {:ok, metadata} ->
+                case retain_latest(vm.id, write_as, public_name) do
+                  :ok ->
+                    mem_dir = memory_dir(public_name)
+                    _ = write_secrets_sidecar(mem_dir, quiesce_info)
 
-                  Logger.info(
-                    "VM #{vm.id} is now PARKED — vm.snapshot is terminal for a virtio-fs VM. " <>
-                      "Tear it down; thaw '#{name}' into a fresh VMM to get it back."
-                  )
+                    Logger.info(
+                      "VM #{vm.id} is now PARKED — vm.snapshot is terminal for a virtio-fs VM. " <>
+                        "Tear it down; thaw '#{public_name}' into a fresh VMM to get it back."
+                    )
 
-                  {:ok,
-                   metadata
-                   |> Map.put(:source_terminal, true)
-                   |> Map.put(:secrets_suspended, Map.get(quiesce_info, :suspended, false))}
+                    {:ok,
+                     metadata
+                     |> Map.put(:name, public_name)
+                     |> Map.put(:memory_dir, mem_dir)
+                     |> Map.put(:source_terminal, true)
+                     |> Map.put(:secrets_suspended, Map.get(quiesce_info, :suspended, false))}
 
-                {:error, reason} ->
-                  # The VM is left paused and, having been snapshotted or
-                  # partially snapshotted, may already be unable to continue.
-                  # Say so rather than implying a resume would fix it.
-                  Logger.error(
-                    "Freeze of VM #{vm.id} failed: #{inspect(reason)}. The VM is paused and may " <>
-                      "not be resumable; treat it as parked and tear it down."
-                  )
+                  {:error, reason} ->
+                    Logger.error(
+                      "Freeze of VM #{vm.id} captured '#{write_as}' but could not publish it as " <>
+                        "'#{public_name}': #{inspect(reason)}."
+                    )
 
-                  {:error, reason}
-              end
+                    {:error, reason}
+                end
 
-            {:error, reason} ->
-              # Nothing was captured and no snapshot was taken, so the VM is
-              # untouched apart from a failed pause attempt.
-              {:error, {:pause_failed, reason}}
-          end
+              {:error, {:snapshot_exists, _} = reason} ->
+                {:error, reason}
 
-        {:error, {:secrets_quiesce_required, _} = reason} ->
-          {:error, reason}
+              {:error, reason} ->
+                # The in-progress image is not restorable. Leave any previous
+                # complete image (a different name, or the public name we have
+                # not renamed over) where it is.
+                discard_incomplete(write_as)
+                # The VM is left paused and, having been snapshotted or
+                # partially snapshotted, may already be unable to continue.
+                # Say so rather than implying a resume would fix it.
+                # The previous memory snapshot, if any, is still on disk.
+                Logger.error(
+                  "Freeze of VM #{vm.id} failed: #{inspect(reason)}. The VM is paused and may " <>
+                    "not be resumable; treat it as parked and tear it down."
+                )
 
-        {:error, reason} ->
-          {:error, {:secrets_quiesce_failed, reason}}
-      end
+                {:error, reason}
+            end
+
+          {:error, reason} ->
+            # Nothing was captured and no snapshot was taken, so the VM is
+            # untouched apart from a failed pause attempt. A previous memory
+            # snapshot is still the crash copy.
+            {:error, {:pause_failed, reason}}
+        end
+
+      {:error, {:secrets_quiesce_required, _} = reason} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, {:secrets_quiesce_failed, reason}}
     end
   end
 
@@ -278,6 +328,198 @@ defmodule Mjolnir.MemorySnapshot do
 
   defp vsock_path(vm) when is_map(vm) do
     Map.get(vm, :vsock_path)
+  end
+
+  # Sibling used so a same-name re-freeze can write the new image without
+  # destroying the previous one first. Stable (not random) so a crash between
+  # "new image complete" and "renamed into place" can still be finished.
+  defp staging_name(name) do
+    suffix = ".next"
+    candidate = name <> suffix
+
+    if byte_size(candidate) <= 128 do
+      candidate
+    else
+      String.slice(name, 0, 128 - byte_size(suffix)) <> suffix
+    end
+  end
+
+  defp name_occupied?(name) do
+    root = Application.get_env(:mjolnir, :btrfs_root)
+    snap = Path.join(root, "@snapshots")
+
+    File.exists?(memory_dir(name)) or File.exists?(Path.join(snap, name)) or
+      File.exists?(Path.join(snap, "#{name}.json"))
+  end
+
+  defp owned_memory?(vm_id, name) do
+    memory_snapshot?(name) and snapshot_source(name) == vm_id
+  end
+
+  defp snapshot_source(name) do
+    case BTRFS.get_snapshot(name) do
+      {:ok, %{metadata: metadata}} -> metadata[:source_vm_id]
+      _ -> nil
+    end
+  end
+
+  defp memory_snapshot_names(vm_id) do
+    case BTRFS.list_snapshots() do
+      {:ok, snaps} ->
+        snaps
+        |> Enum.filter(fn meta ->
+          meta[:source_vm_id] == vm_id and is_binary(meta[:name]) and
+            memory_snapshot?(meta[:name])
+        end)
+        |> Enum.map(& &1.name)
+
+      _ ->
+        []
+    end
+  end
+
+  # Finish a same-name replace that crashed after the new image was written
+  # to `<name>.next`. The public name is what thaw looks up.
+  defp settle_staged(vm_id, public_name) do
+    staged = staging_name(public_name)
+
+    cond do
+      owned_memory?(vm_id, staged) ->
+        finish_swap(vm_id, staged, public_name)
+
+      our_partial?(vm_id, staged) ->
+        discard_incomplete(staged)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp finish_swap(vm_id, staged, public_name) do
+    cond do
+      owned_memory?(vm_id, public_name) ->
+        case BTRFS.delete_snapshot(public_name) do
+          :ok -> promote(staged, public_name)
+          {:error, reason} -> {:error, reason}
+        end
+
+      not name_occupied?(public_name) ->
+        promote(staged, public_name)
+
+      our_partial?(vm_id, public_name) ->
+        discard_incomplete(public_name)
+        promote(staged, public_name)
+
+      true ->
+        {:error, {:snapshot_exists, public_name}}
+    end
+  end
+
+  # A capture that died before `state.json` existed. A filesystem snapshot
+  # has no memory dir and is not kind "memory", so it is not swept up here.
+  defp our_partial?(vm_id, name) do
+    cond do
+      memory_snapshot?(name) ->
+        false
+
+      snapshot_source(name) not in [vm_id, nil] ->
+        false
+
+      File.exists?(memory_dir(name)) ->
+        snapshot_source(name) in [vm_id, nil]
+
+      snapshot_source(name) == vm_id and snapshot_kind(name) == "memory" ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp snapshot_kind(name) do
+    case BTRFS.get_snapshot(name) do
+      {:ok, %{metadata: metadata}} -> metadata[:kind]
+      _ -> nil
+    end
+  end
+
+  defp discard_incomplete(name) do
+    if memory_snapshot?(name) do
+      :ok
+    else
+      _ = File.rm_rf(memory_dir(name))
+
+      root = Application.get_env(:mjolnir, :btrfs_root)
+      snap = Path.join(root, "@snapshots")
+
+      if File.exists?(Path.join(snap, name)) or File.exists?(Path.join(snap, "#{name}.json")) do
+        _ = BTRFS.delete_snapshot(name)
+      end
+
+      :ok
+    end
+  end
+
+  # Drop every other memory snapshot of this VM once `written` is a complete
+  # image. Same-name replaces land in `<name>.next` and are renamed onto
+  # `public` only after that. A crash before this runs leaves the previous
+  # image. A crash after the new image is complete but before the rename
+  # leaves `<name>.next`, which the next freeze or thaw puts back.
+  defp retain_latest(vm_id, written, public_name) do
+    with :ok <- maybe_promote(vm_id, written, public_name) do
+      Enum.each(memory_snapshot_names(vm_id) -- [public_name], fn name ->
+        case BTRFS.delete_snapshot(name) do
+          :ok ->
+            :ok
+
+          other ->
+            Logger.error("VM #{vm_id} kept previous memory snapshot '#{name}': #{inspect(other)}")
+        end
+      end)
+
+      :ok
+    end
+  end
+
+  defp maybe_promote(_vm_id, name, name), do: :ok
+
+  defp maybe_promote(vm_id, written, public_name) do
+    finish_swap(vm_id, written, public_name)
+  end
+
+  defp promote(from, to) do
+    root = Application.get_env(:mjolnir, :btrfs_root)
+    snap = Path.join(root, "@snapshots")
+
+    with :ok <- rename_artifact(Path.join(snap, from), Path.join(snap, to)),
+         :ok <- rename_artifact(Path.join(snap, "#{from}.json"), Path.join(snap, "#{to}.json")),
+         :ok <- rename_artifact(memory_dir(from), memory_dir(to)),
+         :ok <-
+           rename_artifact(
+             Path.join(snap, "#{from}.mem.forks"),
+             Path.join(snap, "#{to}.mem.forks")
+           ) do
+      case BTRFS.update_snapshot_metadata(to, %{name: to, memory_dir: memory_dir(to)}) do
+        {:ok, _} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp rename_artifact(from, to) do
+    cond do
+      not File.exists?(from) ->
+        :ok
+
+      File.exists?(to) ->
+        {:error, {:rename_target_exists, to}}
+
+      true ->
+        case File.rename(from, to) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:rename_failed, from, reason}}
+        end
+    end
   end
 
   defp capture(vm, name, mem_dir, opts) do
@@ -306,9 +548,13 @@ defmodule Mjolnir.MemorySnapshot do
 
       {:ok, metadata}
     else
+      {:error, {:snapshot_exists, _} = reason} ->
+        {:error, reason}
+
       {:error, reason} ->
         # Leave nothing that could later be read as a usable memory snapshot.
-        _ = File.rm_rf(mem_dir)
+        # A previous image captured under another name is not this `name`.
+        discard_incomplete(name)
         Logger.error("Memory snapshot '#{name}' failed: #{inspect(reason)}")
         {:error, reason}
     end
@@ -333,6 +579,10 @@ defmodule Mjolnir.MemorySnapshot do
   """
   @spec prepare_thaw(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def prepare_thaw(name, new_vm_id) do
+    # A same-name replace that died after the new image was complete still
+    # has that image at `<name>.next`. Put it back under `name` before the
+    # pin check, so thaw of the name the operator used still works.
+    _ = recover_staged(name)
     mem_dir = memory_dir(name)
 
     with :ok <- ensure_memory_artifacts(name, mem_dir),
@@ -344,6 +594,13 @@ defmodule Mjolnir.MemorySnapshot do
       )
 
       {:ok, %{rootfs_path: rootfs_path, memory_dir: mem_dir, metadata: metadata}}
+    end
+  end
+
+  defp recover_staged(name) do
+    case snapshot_source(staging_name(name)) do
+      vm_id when is_binary(vm_id) -> settle_staged(vm_id, name)
+      _ -> :ok
     end
   end
 

@@ -370,7 +370,18 @@ defmodule Mjolnir.BTRFS do
     meta_path = Path.join(snapshot_dir, "#{name}.json")
 
     if File.dir?(subvol_path) or File.exists?(meta_path) do
-      _ = delete_subvolume(subvol_path)
+      # A real snapshot is a subvolume. A plain directory (a failed capture
+      # that never became one, or a unit-test stand-in) is not, and asking
+      # `btrfs subvolume delete` to remove it only logs an error while leaving
+      # the name taken.
+      if File.dir?(subvol_path) do
+        if subvolume?(subvol_path) do
+          _ = delete_subvolume(subvol_path)
+        else
+          File.rm_rf(subvol_path)
+        end
+      end
+
       _ = File.rm(meta_path)
       # Memory artifacts are a regular directory beside the subvolume, not a
       # subvolume themselves. Leaving them behind would keep `kind=memory`

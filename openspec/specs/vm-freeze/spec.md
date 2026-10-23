@@ -68,6 +68,34 @@ than clone the filesystem and cold-boot (which would drop guest RAM).
 - THEN the response is 400 `memory_snapshot_requires_thaw`
 - AND the body points at thaw
 
+### Requirement: A VM keeps one memory snapshot
+Each source VM SHALL have at most one retained memory snapshot after a
+successful freeze. The previous memory snapshot SHALL stay on disk until the
+replacement capture is complete, and SHALL be removed once that capture
+succeeds. A freeze that fails before a complete capture SHALL leave the
+previous memory snapshot in place. A same-name freeze SHALL write the new
+image beside the current one and publish it under that name only after the
+capture succeeds; a crash in that window SHALL still thaw under that name.
+Filesystem snapshots SHALL NOT be removed by this rotation.
+
+#### Scenario: The next freeze replaces the previous memory snapshot
+- GIVEN VM `v` has a memory snapshot `old`
+- WHEN freeze of `v` succeeds as `new`
+- THEN `new` is a memory snapshot
+- AND `old` is gone
+- AND a filesystem snapshot of `v` is still present
+
+#### Scenario: A failed freeze keeps the previous memory snapshot
+- GIVEN VM `v` has a memory snapshot `old`
+- WHEN freeze of `v` fails before a complete capture
+- THEN `old` is still a memory snapshot
+
+#### Scenario: Re-freeze of the same name replaces it
+- GIVEN VM `v` has memory snapshot `park`
+- WHEN freeze of `v` succeeds with name `park`
+- THEN `park` is the new image
+- AND the image captured before this freeze is gone
+
 ### Requirement: Snapshot catalog distinguishes kinds
 `GET /api/snapshots` and `GET /api/snapshots/:name` SHALL include `kind`
 of `filesystem` or `memory`. Kind is determined by whether memory artifacts
