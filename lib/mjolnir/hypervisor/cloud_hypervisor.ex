@@ -2,14 +2,14 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
   @moduledoc """
   Cloud Hypervisor backend implementation.
 
-  Implements the `Mjolnir.Hypervisor` behaviour for Cloud Hypervisor v50.0.
+  Implements the `Mjolnir.Hypervisor` behaviour for Cloud Hypervisor v54.0.
 
   Cloud Hypervisor is a modern, lightweight VMM built in Rust, focused on
   running cloud workloads with minimal overhead. It supports virtio-vsock
   for host-guest communication, virtio-fs for shared filesystem access,
   and provides a REST API over Unix sockets.
 
-  Pinned to Cloud Hypervisor v50.0.
+  Pinned to Cloud Hypervisor v54.0.
   """
 
   @behaviour Mjolnir.Hypervisor

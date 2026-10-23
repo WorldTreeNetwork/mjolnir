@@ -2,7 +2,7 @@ defmodule Mjolnir.CloudHypervisor.Client do
   @moduledoc """
   HTTP client for Cloud Hypervisor's Unix socket API.
 
-  Cloud Hypervisor (v50.0) exposes a REST API over a Unix domain socket.
+  Cloud Hypervisor (v54.0) exposes a REST API over a Unix domain socket.
   A single `vm.create` call sends the full VM configuration, then `vm.boot`
   starts the instance.
 
@@ -16,7 +16,7 @@ defmodule Mjolnir.CloudHypervisor.Client do
   - `PUT /api/v1/vm.delete` - Delete VM resources
   - `GET /api/v1/vm.info` - Get VM info
 
-  Pinned to Cloud Hypervisor v50.0.
+  Pinned to Cloud Hypervisor v54.0.
   """
 
   require Logger

@@ -8,13 +8,13 @@ Mjolnir is a distributed computational fabric for spawning checkpointable Linux 
 
 Copyright: World Tree Network Foundation. Host (Elixir, guest agent, gateway) is AGPL-3.0-or-later; `native/mjolnir_client` + `mjolnir_api` + `mjolnir_protocol` are MIT. See NOTICE and `docs/philosophy/licensing-and-components.md`. GitHub transfer to WorldTreeNetwork is pending (`Identikey/mjolnir` still resolves).
 
-**Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. Firecracker was removed — it lacked virtio-fs support, which is required for the current storage architecture.
+**Default hypervisor: Cloud Hypervisor v54.0** with virtio-fs + BTRFS subvolumes. Firecracker was removed — it lacked virtio-fs support, which is required for the current storage architecture.
 
 ## Current Status
 
 See `docs/plans/current-status.md` for detailed handoff notes.
 
-VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cloud Hypervisor v50 + virtio-fs.
+VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cloud Hypervisor v54 + virtio-fs.
 
 ### Deployment
 
@@ -175,7 +175,7 @@ sudo ./scripts/bootstrap-host-ubuntu.sh  # Ubuntu/Debian servers
 sudo ./scripts/bootstrap-host-arch.sh    # Arch Linux (local dev)
 ```
 
-Requires Linux with KVM (`/dev/kvm`), a BTRFS filesystem, Cloud Hypervisor v50+, Elixir 1.15+, and Erlang 26+.
+Requires Linux with KVM (`/dev/kvm`), a BTRFS filesystem, Cloud Hypervisor v54, Elixir 1.20+, and Erlang/OTP 27+.
 
 ## Architecture
 

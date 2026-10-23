@@ -167,8 +167,15 @@ defmodule Mjolnir.CloudHypervisor.ConfigTest do
         network_interface: %{tap_name: "mj-test", guest_mac: "02:FC:00:00:00:FF"}
       }
 
-      assert [%{"tap" => "mj-test", "mac" => "02:FC:00:00:00:FF"}] =
-               Config.network_config(config)
+      assert [
+               %{
+                 "tap" => "mj-test",
+                 "mac" => "02:FC:00:00:00:FF",
+                 "offload_csum" => true,
+                 "offload_tso" => true,
+                 "offload_ufo" => true
+               }
+             ] = Config.network_config(config)
     end
   end
 end

@@ -4,7 +4,7 @@ Mjolnir is a distributed computational fabric for spawning **checkpointable Linu
 
 Stewarded by the **World Tree Network Foundation**. The host (orchestrator, guest agent, gateway) is **AGPL-3.0-or-later**; the `mj` CLI is **MIT**. Mini-hosters run the host on a box they own — [run a node](docs/guide/run-a-node.md). World Tree LLC sells mesh *hardware* (Iroh-addressed radios); it is not the software licensor. [Licensing](docs/philosophy/licensing-and-components.md).
 
-**Default hypervisor: Cloud Hypervisor v50.0** with virtio-fs + BTRFS subvolumes. (Firecracker was removed — it lacks virtio-fs, which the storage architecture requires.)
+**Default hypervisor: Cloud Hypervisor v54.0** with virtio-fs + BTRFS subvolumes. (Firecracker was removed — it lacks virtio-fs, which the storage architecture requires.)
 
 ---
 

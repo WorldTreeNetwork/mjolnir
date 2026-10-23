@@ -2,8 +2,8 @@
 # Run `mise install` to install all tools
 
 [tools]
-erlang = "26.2.5"
-elixir = "1.16.2-otp-26"
+erlang = "27.3.4.19"
+elixir = "1.20.4-otp-27"
 rust = "stable"
 just = "latest"
 zig = "latest"

@@ -5,7 +5,7 @@ defmodule Mjolnir.MixProject do
     [
       app: :mjolnir,
       version: "0.1.0",
-      elixir: "~> 1.15",
+      elixir: "~> 1.20",
       description:
         "Distributed computational fabric for checkpointable Linux microVMs (AGPL-3.0-or-later; the mj CLI is MIT)",
       licenses: ["AGPL-3.0-or-later"],
@@ -75,8 +75,7 @@ defmodule Mjolnir.MixProject do
       # drag in 0.12.0 — five minor versions of a young library, none of it
       # required, since ex_mcp carries no advisories. Widen this as its own
       # change with the MCP tests actually exercised, not as a side effect of
-      # a security bump. (Note both 0.7.4 and 0.12.0 declare `elixir: "~> 1.17"`
-      # while we build on 1.16; that warning is pre-existing either way.)
+      # a security bump.
       {:ex_mcp, "~> 0.7.4"}
       # Blake3 is `mjolnir-b3` (native/mjolnir_blob_door), not the rustler
       # `:blake3` NIF. Fingerprints stay SHA-256 as minted.

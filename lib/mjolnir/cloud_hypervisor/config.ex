@@ -7,7 +7,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
   Uses virtio-fs for rootfs sharing (via virtiofsd) instead of virtio-blk disk images.
   The virtio-fs tag `myfs` is used consistently across CH config, boot_args, and guest fstab.
 
-  Pinned to Cloud Hypervisor v50.0 API specification.
+  Pinned to Cloud Hypervisor v54.0 API specification.
   """
 
   use TypedStruct
@@ -187,7 +187,11 @@ defmodule Mjolnir.CloudHypervisor.Config do
     [
       %{
         "tap" => net.tap_name,
-        "mac" => net.guest_mac
+        "mac" => net.guest_mac,
+        # v54 defaults these off. v53 defaulted them on. TSO and UFO require csum.
+        "offload_csum" => true,
+        "offload_tso" => true,
+        "offload_ufo" => true
       }
     ]
   end

@@ -36,9 +36,11 @@ set -euo pipefail
 
 MJOLNIR_ROOT="/var/lib/mjolnir"
 MJOLNIR_CODE="/opt/mjolnir"
-CH_VERSION="50.0"
+CH_VERSION="54.0"
+# v54.0 x86_64 static binary. The GitHub release publishes no .sha256 asset.
+CH_SHA256_X86_64="4f4f98a3d661a40f3e5272627cc895a1b2e525f2f6bedf5f895f9cd21ba5c65b"
 # Minimum versions (used for validation)
-MIN_ELIXIR_VERSION="1.15"
+MIN_ELIXIR_VERSION="1.20"
 # Populated by install_postgres() with the discovered server bin dir
 # (e.g. /usr/lib/postgresql/16/bin); written into /etc/mjolnir/env by
 # setup_systemd_service().
@@ -290,8 +292,8 @@ install_erlang_elixir() {
         echo "eval \"\$($HOME/.local/bin/mise activate bash)\"" >> "$HOME/.bashrc"
     fi
 
-    local erlang_version="26.2.5"
-    local elixir_version="1.16.2-otp-26"
+    local erlang_version="27.3.4.19"
+    local elixir_version="1.20.4-otp-27"
 
     log_info "Installing Erlang $erlang_version (this takes a while)..."
     mise use -g erlang@"$erlang_version"
@@ -370,18 +372,36 @@ install_cloud_hypervisor() {
     local url="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/${binary_suffix}"
 
     log_info "Downloading Cloud Hypervisor v${CH_VERSION}..."
-    curl -fsSL "$url" -o /usr/local/bin/cloud-hypervisor
-    chmod +x /usr/local/bin/cloud-hypervisor
+    local tmp_bin
+    tmp_bin=$(mktemp)
+    curl -fsSL "$url" -o "$tmp_bin"
 
-    # Verify download integrity (warn if checksum unavailable)
+    # Verify before replacing the installed binary. An in-place overwrite
+    # truncates the file running VMs still have mapped.
     log_info "Verifying checksum..."
+    local actual expected
+    actual=$(sha256sum "$tmp_bin" | awk '{print $1}')
+    expected=""
     if curl -fsSL "${url}.sha256" -o /tmp/ch-sha256 2>/dev/null; then
-        echo "$(cat /tmp/ch-sha256)  /usr/local/bin/cloud-hypervisor" | sha256sum -c - || \
-            log_error "Checksum verification FAILED for cloud-hypervisor binary"
+        expected=$(awk '{print $1}' /tmp/ch-sha256)
         rm -f /tmp/ch-sha256
-    else
-        log_warn "SHA256 checksum file not available — skipping verification"
+    elif [[ "$arch" == "x86_64" && -n "${CH_SHA256_X86_64:-}" ]]; then
+        expected="$CH_SHA256_X86_64"
     fi
+    if [[ -z "$expected" ]]; then
+        log_error "No SHA256 available for Cloud Hypervisor v${CH_VERSION} (${arch})"
+        rm -f "$tmp_bin"
+        exit 1
+    fi
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "Checksum verification FAILED for cloud-hypervisor binary"
+        log_error "expected $expected"
+        log_error "actual   $actual"
+        rm -f "$tmp_bin"
+        exit 1
+    fi
+    install -m755 "$tmp_bin" /usr/local/bin/cloud-hypervisor
+    rm -f "$tmp_bin"
 
     # Also install virtiofsd if available (needed for virtio-fs shared directories)
     if ! command -v virtiofsd &>/dev/null; then
