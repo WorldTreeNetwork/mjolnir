@@ -31,6 +31,18 @@ pub enum VsockRequest {
     /// an agent that cannot answer this leaves the host's gate to fail closed.
     #[serde(rename = "reseed_entropy")]
     ReseedEntropy { id: String, seed_hex: String },
+    /// Set `CLOCK_REALTIME` to the host's wall time after a restore.
+    ///
+    /// There is no monotonic field on purpose. The guest writes
+    /// `CLOCK_REALTIME` only and answers `monotonic_stepped: false`.
+    /// Same feature gate as `reseed_entropy`: a boot agent that rejected
+    /// this would leave a thawed VM permanently unpublished.
+    #[serde(rename = "set_wall_time")]
+    SetWallTime {
+        id: String,
+        realtime_secs: i64,
+        realtime_nsec: i64,
+    },
     #[serde(rename = "configure_network")]
     ConfigureNetwork { id: String, ip: String },
     #[cfg(feature = "iroh")]
@@ -229,6 +241,17 @@ pub enum VsockResponse {
         id: String,
         ok: bool,
         bytes: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Result of `set_wall_time`. `monotonic_stepped` is always false on this
+    /// agent; the host treats `true` as a failed thaw.
+    #[serde(rename = "set_wall_time_response")]
+    SetWallTimeResponse {
+        id: String,
+        ok: bool,
+        realtime_secs: i64,
+        monotonic_stepped: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },

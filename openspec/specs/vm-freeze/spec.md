@@ -106,3 +106,48 @@ claim.
 - GIVEN one filesystem snapshot and one memory snapshot
 - WHEN listing snapshots
 - THEN each entry has `kind` set accordingly
+
+### Requirement: Thaw steps wall time before reachability
+A thaw SHALL make the guest wall clock agree with host time before the VM is reachable (PTY, ticket, gateway). The system SHALL NOT add the freeze duration to `CLOCK_MONOTONIC`. A clock step that fails SHALL fail the thaw and SHALL NOT publish the VM.
+
+#### Scenario: Parked VM wakes on host time
+- GIVEN a memory snapshot whose guest clock is more than an hour behind the host
+- WHEN that snapshot is thawed
+- THEN the guest wall clock matches host time before PTY, ticket, or gateway publish
+- AND `CLOCK_MONOTONIC` has not jumped by the park duration
+
+#### Scenario: Clock step failure stays unpublished
+- GIVEN a thaw whose clock step fails
+- WHEN the caller asks for a connection ticket
+- THEN no ticket is issued
+- AND the VM is not published on the gateway
+
+### Requirement: Thaw health includes Iroh reachability
+A thawed VM SHALL NOT be reported healthy, and SHALL NOT be reachable (PTY, ticket, gateway), until an Iroh reachability probe succeeds. A successful guest-agent vsock ping SHALL NOT satisfy that probe. The probe SHALL run only after entropy reseed and the wall-clock step have succeeded.
+
+#### Scenario: Dead Iroh stays unhealthy
+- GIVEN a thawed VM whose guest agent answers vsock ping
+- AND whose Iroh node is not reachable
+- WHEN the operator reads health
+- THEN the VM is unhealthy
+- AND no connection ticket is issued
+
+#### Scenario: Probe success publishes
+- GIVEN a thawed VM whose Iroh reachability probe succeeds after reseed and clock step
+- WHEN the operator asks for a ticket
+- THEN a ticket is issued
+- AND health reports the VM healthy
+
+### Requirement: Storage reports memory snapshots apart from CoW snapshots
+`GET /api/storage` and `mj storage` SHALL report memory-snapshot usage as its own count, logical bytes, and exclusive bytes. That report SHALL NOT be only the `@snapshots` area total. A host with no memory snapshots SHALL report a count of zero. The system SHALL NOT add a second compression pass; on-disk size follows the btrfs mount compression.
+
+#### Scenario: Frozen RAM is visible beside the snapshot area
+- GIVEN one filesystem snapshot and one memory snapshot
+- WHEN the operator runs `mj storage`
+- THEN memory-snapshot count is 1
+- AND the memory-snapshot byte count is separate from the `@snapshots` area
+
+#### Scenario: No freezes
+- GIVEN no `@snapshots/*.mem` directory
+- WHEN `GET /api/storage` is called
+- THEN the memory-snapshot count is 0

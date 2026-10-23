@@ -380,9 +380,19 @@ pub async fn cmd_storage(
         let total = a.total_bytes.map(human_bytes).unwrap_or_else(|| "-".into());
         println!("{:<14} {:>7} {:>14} {:>14}", a.name, a.count, excl, total);
     }
+    if let Some(m) = &resp.memory_snapshots {
+        println!(
+            "{:<14} {:>7} {:>14} {:>14}",
+            "mem-snapshots",
+            m.count,
+            human_bytes(m.exclusive_bytes),
+            human_bytes(m.logical_bytes)
+        );
+    }
     println!();
     println!("EXCLUSIVE = data unique to that area; LOGICAL counts CoW-shared blocks");
     println!("(pre-compression — physical disk use is the 'Disk' line above).");
+    println!("mem-snapshots is @snapshots/*.mem (RAM images), not a second compressor.");
     Ok(())
 }
 

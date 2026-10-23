@@ -201,9 +201,21 @@ pub struct StorageArea {
 }
 
 #[derive(Deserialize)]
+pub struct MemorySnapshots {
+    pub count: u64,
+    pub logical_bytes: u64,
+    pub exclusive_bytes: u64,
+}
+
+#[derive(Deserialize)]
 pub struct StorageOverview {
     pub disk: Option<DiskUsage>,
     pub areas: Vec<StorageArea>,
+    /// Absent on a host that predates the split. Present, including count 0,
+    /// once `Mjolnir.Storage.overview/0` reports `@snapshots/*.mem` apart
+    /// from the CoW area.
+    #[serde(default)]
+    pub memory_snapshots: Option<MemorySnapshots>,
 }
 
 // --- Trash (GET /api/trash, POST /api/trash/:id/restore) ---

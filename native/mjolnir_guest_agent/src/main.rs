@@ -11,11 +11,12 @@
 
 #[cfg(feature = "full")]
 mod agent;
+mod clock;
 #[cfg(feature = "full")]
 mod consume;
+mod entropy;
 #[cfg(feature = "iroh")]
 mod iroh;
-mod entropy;
 mod protocol;
 mod pty;
 #[cfg(feature = "full")]

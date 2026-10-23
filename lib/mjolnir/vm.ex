@@ -2732,13 +2732,8 @@ defmodule Mjolnir.VM do
              vm_id: state.id,
              socket_path: guest_vsock
            }),
-         :ok <- Mjolnir.Entropy.reseed(vsock_conn) do
-      iroh_info =
-        if state.enable_iroh do
-          await_iroh_ready(guest_vsock, 5_000)
-        else
-          nil
-        end
+         {:ok, publish} <- publish_thawed(state, guest_vsock, vsock_conn) do
+      iroh_info = publish.iroh
 
       {:ok,
        %{
@@ -2761,6 +2756,39 @@ defmodule Mjolnir.VM do
       other -> {:error, other}
     end
   end
+
+  # `MemorySnapshot.thaw/3` has resumed the vCPUs. Nothing below
+  # `finish_boot/2` may run until this returns `:ok` — that is the PTY,
+  # ticket, and `:vm_started` gateway signal. `boot_ping: :ok` is the
+  # `wait_for_boot/2` that already succeeded; `Thaw.Publish` does not treat
+  # it as health.
+  defp publish_thawed(state, guest_vsock, vsock_conn) do
+    result =
+      Mjolnir.Thaw.Publish.run(%{
+        enable_iroh: state.enable_iroh,
+        boot_ping: :ok,
+        reseed: fn -> Mjolnir.Entropy.reseed(vsock_conn) end,
+        clock: fn -> Mjolnir.Clock.step(vsock_conn) end,
+        iroh: fn -> await_iroh_ready(guest_vsock, Mjolnir.Thaw.Publish.iroh_timeout_ms()) end
+      })
+
+    case result do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = err ->
+        _ = stop_vsock_conn(vsock_conn)
+        err
+    end
+  end
+
+  defp stop_vsock_conn(conn) when is_pid(conn) do
+    if Process.alive?(conn), do: GenServer.stop(conn, :normal, 1_000)
+  rescue
+    _ -> :ok
+  end
+
+  defp stop_vsock_conn(_conn), do: :ok
 
   defp abandon_thaw(state, thawed) do
     partial = %{

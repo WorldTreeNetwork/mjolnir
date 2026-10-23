@@ -15,6 +15,7 @@ compile_error!(
      cargo build --bin mjolnir-boot-agent --no-default-features --features boot"
 );
 
+mod clock;
 mod entropy;
 mod protocol;
 mod pty;

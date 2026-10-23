@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-10-23 / add-thaw-clock:** Cloud Hypervisor's REST API has no call that sets the guest clock while paused. Restore puts the snapshot KVM clock back (CH #7932). The wall step is guest `clock_settime(CLOCK_REALTIME)` after `vm.resume`. `CLOCK_MONOTONIC` is not written. Already-running guest processes can see snapshot time in that gap; publish stays closed until the agent confirms.
+- **2026-10-23 / add-memory-snapshot-usage:** Elixir 1.16 `File.Stat` has no block count. Memory-snapshot exclusive bytes are `btrfs filesystem du` when that works, else `stat -c %b`. A tmpfs that reports 0 blocks falls back to the logical size. Compression stays the zstd mount.
 - **2026-09-21 / add-guest-mail-consume:** Application ACK is the tombstone; vsock deliver_message_ack is not. The default consume loop must fsync the producer id *before* ACK so a crash between peek and ACK redelivers, and a recorded id is ACK-only on redelivery. Guest `/send` must pass that id as `Mailbox.accept` `id` or VM-to-VM is not retry-safe.
 
 - **2026-09-21 / add-agent-mail-backchannel:** A caller mailbox is the same `@mail/<id>/` spool with a non-VM id. REST peek/ack is not a second ledger. Guest send to a missing VM is accept-into-that-id, not 404.

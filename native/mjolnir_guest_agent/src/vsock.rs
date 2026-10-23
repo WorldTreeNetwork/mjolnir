@@ -278,6 +278,20 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                             },
                                         }
                                     }
+                                    Ok(VsockRequest::SetWallTime {
+                                        id,
+                                        realtime_secs,
+                                        realtime_nsec,
+                                    }) => {
+                                        let outcome = crate::clock::apply_wall(realtime_secs, realtime_nsec);
+                                        VsockResponse::SetWallTimeResponse {
+                                            id,
+                                            ok: outcome.ok,
+                                            realtime_secs: outcome.realtime_secs,
+                                            monotonic_stepped: outcome.monotonic_stepped,
+                                            error: outcome.error,
+                                        }
+                                    }
                                     // `session` is ignored here on purpose: the boot agent
                                     // runs in the initramfs, which has no tmux. A named
                                     // session only becomes meaningful after the pivot to
@@ -783,6 +797,26 @@ async fn handle_request(
                     bytes: 0,
                     error: Some(e),
                 },
+            }
+        }
+        VsockRequest::SetWallTime {
+            id,
+            realtime_secs,
+            realtime_nsec,
+        } => {
+            info!("Set wall time to {}.{}", realtime_secs, realtime_nsec);
+            let outcome = crate::clock::apply_wall(realtime_secs, realtime_nsec);
+            if outcome.ok {
+                info!("Wall clock set to {}", outcome.realtime_secs);
+            } else {
+                error!("Wall clock step failed: {:?}", outcome.error);
+            }
+            VsockResponse::SetWallTimeResponse {
+                id,
+                ok: outcome.ok,
+                realtime_secs: outcome.realtime_secs,
+                monotonic_stepped: outcome.monotonic_stepped,
+                error: outcome.error,
             }
         }
         VsockRequest::ConfigureNetwork { id, ip } => {

@@ -1051,11 +1051,13 @@ defmodule Mjolnir.MemorySnapshot do
   adopt the result as a live VM (register it, reseed it, publish it).
 
   **The VM is running but must not be considered reachable yet.** `vm.resume`
-  has happened, so userspace is executing, but its CRNG is still whatever the
-  snapshot froze — identical across every thaw of this image. The caller must
-  run `Mjolnir.Entropy.reseed/2` and only then publish a PTY, a ticket, or a
-  gateway route. See `Mjolnir.Entropy` for why the gate is on reachability and
-  not on execution.
+  has happened, so userspace is executing. Its CRNG is still whatever the
+  snapshot froze, and its wall clock is still snapshot time (CH restores the
+  KVM clock; it does not advance it by the park). The caller must run
+  `Mjolnir.Entropy.reseed/2` and `Mjolnir.Clock.step/1`, via
+  `Mjolnir.Thaw.Publish`, and only then publish a PTY, a ticket, or a gateway
+  route. See `Mjolnir.Entropy` for why the gate is on reachability and not
+  on execution.
 
   On failure, everything this function started is torn back down — a
   half-thawed VM holding a virtiofsd and a TAP is worse than a clean error,
