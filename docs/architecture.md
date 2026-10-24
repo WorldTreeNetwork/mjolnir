@@ -808,11 +808,14 @@ index (`add-recording-blob`, folded 2026-10-21) is one JSON row at
 already holds. It is not a second byte store, not a VM, and not an
 unwrap.
 
-A LAN-reachable Recrypt share (change `add-lan-file-server`,
-capability `lan-files`) is a guest HTTP surface, not a new sidecar
-and not a blob-door bind on the public NIC. Identity is
+A LAN-reachable Recrypt share is a guest HTTP surface, not a new
+sidecar and not a blob-door bind on the public NIC. Identity is
 `identikey-auth`; data caps are `recrypt-storage-auth` on Blake3
-File subjects; bytes stay on the door. In-flight until fold.
+File subjects; bytes stay on the door. Living spec
+[`lan-files`](../openspec/specs/lan-files/spec.md)
+(`add-lan-file-server` folded 2026-10-24). No Mjolnir ADR. Guest
+HTTP, LAN publish, and `meshd` are later beads
+(`mjolnir-h2fp.3`, `mjolnir-h2fp.4`).
 
 ### Channel System (Future)
 
