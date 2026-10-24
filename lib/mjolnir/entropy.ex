@@ -34,9 +34,11 @@ defmodule Mjolnir.Entropy do
   **inside the kernel, before userspace is scheduled**. Nothing in userspace
   can match that ordering guarantee.
 
-  Neither half exists on this stack yet: our PVH kernel is built without
-  `CONFIG_VMGENID`, and Cloud Hypervisor does not emit the device. That is
-  tracked as `mjolnir-3y6.13` and it is the real fix.
+  Cloud Hypervisor v54 exposes the device without a configuration knob.
+  Captures record the boot kernel capability; a CONFIG_VMGENID capture also
+  requires a genuine guest generation-id observation before publication.
+  This reseed is not that observation, and kernel reseeding does not reset
+  userspace PRNGs.
 
   ## What this module does instead, and its honest limit
 

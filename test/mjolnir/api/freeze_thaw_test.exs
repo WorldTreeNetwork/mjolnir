@@ -94,12 +94,29 @@ defmodule Mjolnir.API.FreezeThawTest do
       assert conn.status == 404
     end
 
+    test "a live source attempts a second guest instead of returning 409", %{root: root} do
+      write_snapshot(root, "live-source", %{"source_vm_id" => "live-api-source"})
+      mem = Path.join([root, "@snapshots", "live-source.mem"])
+      File.mkdir_p!(mem)
+      File.write!(Path.join(mem, "state.json"), "{}")
+      {:ok, _} = Registry.register(Mjolnir.VMRegistry, "live-api-source", :published)
+
+      # This fixture has no BTRFS pin or real RAM: the second restore must fail,
+      # while the registered source and its publication remain untouched.
+      conn = request(:post, "/api/snapshots/live-source/thaw")
+      assert conn.status == 500
+      assert Jason.decode!(conn.resp_body)["error"] == "thaw_failed"
+      assert [{pid, :published}] = Registry.lookup(Mjolnir.VMRegistry, "live-api-source")
+      assert pid == self()
+    end
+
     test "400 for a filesystem-only snapshot", %{root: root} do
       write_snapshot(root, "fs-only", %{})
       conn = request(:post, "/api/snapshots/fs-only/thaw")
       assert conn.status == 400
       body = Jason.decode!(conn.resp_body)
       assert body["error"] == "not_a_memory_snapshot"
+      assert body["hint"] =~ "spawn-from-snapshot"
     end
   end
 

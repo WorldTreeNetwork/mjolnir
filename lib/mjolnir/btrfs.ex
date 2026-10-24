@@ -891,7 +891,7 @@ defmodule Mjolnir.BTRFS do
   # `metadata[:gen_at_creation]` as nil on every snapshot loaded from disk and
   # degrades to "cannot prove it" — which for memory restore is a refusal, so
   # the failure would be loud but wrong.
-  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation gen_at_creation readonly kind source_terminal memory_bytes memory_dir restore_config)
+  @metadata_keys ~w(name source_vm_id owner_id created_at size_bytes generation gen_at_creation readonly kind source_terminal memory_bytes memory_dir restore_config vmgenid)
 
   defp atomize_metadata(metadata) when is_map(metadata) do
     Map.new(metadata, fn

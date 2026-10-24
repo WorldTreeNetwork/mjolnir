@@ -227,6 +227,14 @@ defmodule Mjolnir.MemorySnapshot do
     capture_fun = Keyword.get(opts, :capture_fun, &capture/4)
     mem_dir = memory_dir(write_as)
     secrets_mode = secrets_mode(vm, opts)
+    # Observe before pausing: the guest cannot answer once its vCPUs stop.
+    vmgenid =
+      Mjolnir.Thaw.Vmgenid.capture(
+        vm,
+        Keyword.get(opts, :vmgenid_observe, &Mjolnir.Thaw.Vmgenid.observe/1)
+      )
+
+    opts = Keyword.put(opts, :vmgenid_record, vmgenid)
 
     # Quiesce BEFORE pause. luksSuspend is a guest-userspace call; once
     # vCPUs stop, the agent cannot wipe the key, and the snapshot would
@@ -528,14 +536,16 @@ defmodule Mjolnir.MemorySnapshot do
     # expensive RAM write leaves no half-written memory dir next to a
     # perfectly good filesystem snapshot that something might later mistake
     # for a complete artifact.
-    with {:ok, metadata} <-
+    with {:ok, _metadata} <-
            BTRFS.create_snapshot(vm.id, name,
              source_vm_id: vm.id,
              owner_id: opts[:owner_id],
              readonly: true
            ),
          :ok <- File.mkdir_p(mem_dir),
-         :ok <- Client.snapshot_vm(vm.socket_path, mem_dir) do
+         :ok <- Client.snapshot_vm(vm.socket_path, mem_dir),
+         {:ok, metadata} <-
+           BTRFS.update_snapshot_metadata(name, %{vmgenid: opts[:vmgenid_record]}) do
       metadata =
         metadata
         |> Map.put(:memory_dir, mem_dir)

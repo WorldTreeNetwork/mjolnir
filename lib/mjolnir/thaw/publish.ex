@@ -29,27 +29,48 @@ defmodule Mjolnir.Thaw.Publish do
       classified by `classify_iroh/1` (the map `await_iroh_ready` returns,
       `nil`, or an error tuple).
     * `:enable_iroh` — boolean
+    * `:vmgenid_record` — immutable capture metadata
+    * `:vmgenid` — zero-arity guest device observation, `{:ok, id}` or `:missing`
+    * `:vsock_only` — suppress gateway and ticket publication for a second guest
     * `:boot_ping` — optional, ignored by the decision
   """
   @spec run(map()) :: {:ok, map()} | {:error, term()}
   def run(ctx) when is_map(ctx) do
     with :ok <- invoke(ctx.reseed),
-         :ok <- invoke(ctx.clock) do
+         :ok <- invoke(ctx.clock),
+         {:ok, generation} <-
+           Mjolnir.Thaw.Vmgenid.verify(
+             Map.get(ctx, :vmgenid_record),
+             invoke(Map.get(ctx, :vmgenid))
+           ) do
       iroh =
-        if Map.get(ctx, :enable_iroh, false) do
+        if Map.get(ctx, :enable_iroh, false) and not Map.get(ctx, :vsock_only, false) do
           classify_iroh(invoke(Map.get(ctx, :iroh)))
         else
           :disabled
         end
 
-      decide(%{
-        boot_ping: Map.get(ctx, :boot_ping, :unspecified),
-        reseed: :ok,
-        clock: :ok,
-        monotonic_stepped: false,
-        iroh: iroh,
-        enable_iroh: Map.get(ctx, :enable_iroh, false)
-      })
+      decision =
+        decide(%{
+          boot_ping: Map.get(ctx, :boot_ping, :unspecified),
+          reseed: :ok,
+          clock: :ok,
+          monotonic_stepped: false,
+          iroh: iroh,
+          enable_iroh: Map.get(ctx, :enable_iroh, false) and not Map.get(ctx, :vsock_only, false)
+        })
+
+      case decision do
+        {:ok, result} ->
+          {:ok,
+           Map.merge(result, %{
+             vmgenid: generation,
+             published: not Map.get(ctx, :vsock_only, false)
+           })}
+
+        error ->
+          error
+      end
     end
   end
 

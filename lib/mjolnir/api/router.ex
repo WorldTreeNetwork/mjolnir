@@ -1593,11 +1593,8 @@ defmodule Mjolnir.API.Router do
                     {:error, :not_a_memory_snapshot} ->
                       json(conn, 400, %{
                         error: "not_a_memory_snapshot",
-                        hint: "mj spawn --snapshot #{validated_name}"
+                        hint: "spawn-from-snapshot: mj spawn --snapshot #{validated_name}"
                       })
-
-                    {:error, {:vm_running, vm_id, _}} ->
-                      json(conn, 409, %{error: "vm_running", vm_id: vm_id})
 
                     {:error, {:snapshot_not_found, _}} ->
                       json(conn, 404, %{error: "not_found"})

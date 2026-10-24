@@ -127,6 +127,8 @@ defmodule Mjolnir.VM do
     # Named memory snapshot this GenServer is thawing from (`nil` on a
     # normal spawn). Set by `thaw/1` via spawn_with_id.
     thaw_name: nil,
+    thaw_vsock_only: false,
+    kernel_vmgenid: nil,
     # How long wait_for_boot polls the guest agent. Resume sets this to the
     # caller's budget (60s, 90s for managed secrets). Nil keeps the 30s
     # fresh-spawn default.
@@ -455,19 +457,28 @@ defmodule Mjolnir.VM do
   end
 
   @doc """
-  Restore a memory snapshot into the original VM id recorded at freeze.
+  Restore the source id, or remap a second guest when that id is live.
   """
   @spec thaw(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def thaw(name, opts \\ []) do
     with {:ok, %{metadata: meta}} <- BTRFS.get_snapshot(name),
          :ok <- ensure_memory_snapshot(name),
          vm_id when is_binary(vm_id) <-
-           meta[:source_vm_id] || {:error, :missing_source_vm_id},
-         :ok <- ensure_id_free(vm_id) do
-      spawn_opts = thaw_spawn_opts(meta, vm_id, name, opts)
+           meta[:source_vm_id] || {:error, :missing_source_vm_id} do
+      second? = ensure_id_free(vm_id) != :ok
+      target_id = if second?, do: Mjolnir.VmId.generate(), else: vm_id
+
+      spawn_opts =
+        thaw_spawn_opts(meta, target_id, name, opts)
+        |> Map.put(:thaw_vsock_only, second?)
+        |> then(fn spawn_opts ->
+          if second?, do: Map.put(spawn_opts, :restart_policy, :never), else: spawn_opts
+        end)
+        |> Map.put(:kernel_vmgenid, get_in(meta, [:vmgenid, "config_vmgenid"]))
 
       try do
-        spawn_with_id(spawn_opts)
+        spawn_fun = Keyword.get(opts, :spawn_fun, &spawn_with_id/1)
+        spawn_fun.(spawn_opts)
       catch
         :exit, reason -> {:error, {:thaw_failed, reason}}
       end
@@ -1371,6 +1382,13 @@ defmodule Mjolnir.VM do
       # silently downgraded to :always on the way back.
       restart_policy: normalize_restart_policy(opts[:restart_policy]),
       thaw_name: opts[:thaw],
+      thaw_vsock_only: opts[:thaw_vsock_only] || false,
+      kernel_vmgenid:
+        if(is_binary(opts[:thaw]),
+          do: opts[:kernel_vmgenid],
+          else:
+            Mjolnir.Thaw.Vmgenid.kernel_support(Application.get_env(:mjolnir, :ch_kernel_path))
+        ),
       boot_budget_ms: opts[:boot_budget_ms]
     }
 
@@ -1728,7 +1746,7 @@ defmodule Mjolnir.VM do
   # safe to move off-process the same way as the read-only round trips above.
   def handle_call(:reconfigure_iroh, from, state) do
     vsock_path = state.vsock_path
-    enable_iroh = state.enable_iroh
+    enable_iroh = state.enable_iroh and not state.thaw_vsock_only
 
     reply_off_process(from, fn ->
       if vsock_path,
@@ -1804,6 +1822,10 @@ defmodule Mjolnir.VM do
       end)
 
     {:noreply, %{state | vsock_rebuild_waiters: [from], vsock_rebuild_ref: ref}}
+  end
+
+  def handle_call({:await_pty, _timeout}, _from, %{thaw_vsock_only: true} = state) do
+    {:reply, {:error, :vsock_only}, state}
   end
 
   def handle_call({:await_pty, timeout}, _from, state) do
@@ -2529,7 +2551,7 @@ defmodule Mjolnir.VM do
   defp handle_boot_failure(state, error, socket_path, vsock_path, serial_path) do
     partial = Process.get(:boot_partial, %{})
 
-    if not state.resume_mode and partial[:rootfs_path] && transient_boot_error?(error) do
+    if (not state.resume_mode and partial[:rootfs_path]) && transient_boot_error?(error) do
       Logger.warning(
         "VM #{state.id}: transient boot failure (#{inspect(error)}); " <>
           "preserving rootfs and persisting :running record for Reconcile retry"
@@ -2707,7 +2729,7 @@ defmodule Mjolnir.VM do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
     vsock_path = state.hypervisor.vsock_path(socket_dir, state.id)
 
-    case Mjolnir.MemorySnapshot.thaw(name, state.id) do
+    case Mjolnir.MemorySnapshot.thaw(name, state.id, remap: state.thaw_vsock_only) do
       {:ok, thawed} ->
         case attach_thawed(state, thawed, vsock_path) do
           {:ok, _} = ok ->
@@ -2732,7 +2754,7 @@ defmodule Mjolnir.VM do
              vm_id: state.id,
              socket_path: guest_vsock
            }),
-         {:ok, publish} <- publish_thawed(state, guest_vsock, vsock_conn) do
+         {:ok, publish} <- publish_thawed(state, guest_vsock, vsock_conn, thawed.metadata) do
       iroh_info = publish.iroh
 
       {:ok,
@@ -2762,10 +2784,13 @@ defmodule Mjolnir.VM do
   # ticket, and `:vm_started` gateway signal. `boot_ping: :ok` is the
   # `wait_for_boot/2` that already succeeded; `Thaw.Publish` does not treat
   # it as health.
-  defp publish_thawed(state, guest_vsock, vsock_conn) do
+  defp publish_thawed(state, guest_vsock, vsock_conn, metadata) do
     result =
       Mjolnir.Thaw.Publish.run(%{
         enable_iroh: state.enable_iroh,
+        vsock_only: state.thaw_vsock_only,
+        vmgenid_record: metadata[:vmgenid],
+        vmgenid: fn -> Mjolnir.Thaw.Vmgenid.observe(vsock_conn) end,
         boot_ping: :ok,
         reseed: fn -> Mjolnir.Entropy.reseed(vsock_conn) end,
         clock: fn -> Mjolnir.Clock.step(vsock_conn) end,
@@ -2790,18 +2815,8 @@ defmodule Mjolnir.VM do
 
   defp stop_vsock_conn(_conn), do: :ok
 
-  defp abandon_thaw(state, thawed) do
-    partial = %{
-      state
-      | hypervisor_port: thawed.hypervisor_port,
-        virtiofsd_port: thawed.virtiofsd_port,
-        net_config: thawed.net,
-        rootfs_path: thawed.rootfs_path,
-        socket_path: thawed.api_socket,
-        vsock_path: thawed.vsock_socket
-    }
-
-    cleanup(partial, preserve_rootfs: false)
+  defp abandon_thaw(_state, thawed) do
+    Mjolnir.MemorySnapshot.teardown(thawed)
   end
 
   defp clone_rootfs(vm_id, base_image, config) do
@@ -3423,7 +3438,9 @@ defmodule Mjolnir.VM do
     # it a VM resumed by Reconcile or revived by an operator came back :running
     # while its domain stayed parked, because nothing else re-renders routes
     # after the post-boot settle sweeps.
-    Mjolnir.EventBus.publish(state.id, :vm_started, %{})
+    unless state.thaw_vsock_only do
+      Mjolnir.EventBus.publish(state.id, :vm_started, %{})
+    end
 
     Mjolnir.Mailbox.kick(state.id)
 

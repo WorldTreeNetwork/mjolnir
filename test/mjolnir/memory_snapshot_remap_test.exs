@@ -184,7 +184,9 @@ defmodule Mjolnir.MemorySnapshotRemapTest do
       test_pid = self()
       expected_tap = Mjolnir.Network.tap_name(@id_a)
 
-      virtiofs_start = fn _s, socket_path ->
+      virtiofs_start = fn shared_dir, socket_path ->
+        assert shared_dir == ctx.prep.rootfs_path
+        assert shared_dir != "vm-frozen"
         {:ok, l} = :gen_tcp.listen(0, [:binary, ifaddr: {:local, socket_path}])
         on_exit(fn -> :gen_tcp.close(l) end)
         {:ok, l}
