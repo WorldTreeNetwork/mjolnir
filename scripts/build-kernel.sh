@@ -63,8 +63,10 @@ echo "Enabling virtio-fs and related configs..."
 # GCC 15 defaults to C23, which makes bool/false/true keywords, breaking the compressed boot stub.
 # The arch/x86/boot/compressed/ subdir sets its own KBUILD_CFLAGS without -std=gnu11,
 # so it doesn't inherit the kernel's C standard. Patch it explicitly.
-echo "Patching compressed boot Makefile for GCC 15 C23 compatibility..."
-sed -i '/^KBUILD_CFLAGS := -m\$(BITS)/a KBUILD_CFLAGS += -std=gnu11' arch/x86/boot/compressed/Makefile
+if ! grep -q -- '-std=gnu11' arch/x86/boot/compressed/Makefile; then
+    echo "Patching compressed boot Makefile for GCC 15 C23 compatibility..."
+    sed -i '/^KBUILD_CFLAGS := -m\$(BITS)/a KBUILD_CFLAGS += -std=gnu11' arch/x86/boot/compressed/Makefile
+fi
 
 # dm-crypt for LUKS encrypted secrets volumes
 ./scripts/config --enable CONFIG_BLK_DEV_DM
@@ -72,10 +74,25 @@ sed -i '/^KBUILD_CFLAGS := -m\$(BITS)/a KBUILD_CFLAGS += -std=gnu11' arch/x86/bo
 ./scripts/config --enable CONFIG_CRYPTO_XTS
 ./scripts/config --enable CONFIG_CRYPTO_AES
 
+# VM Generation ID. The symbol lives under the VIRT_DRIVERS menu; enabling
+# only CONFIG_VMGENID leaves it unset once `make` syncs the config.
+# Built-in: PVH has no initramfs to load a module, and the driver has to be
+# in the image a snapshot captures.
+./scripts/config --enable CONFIG_VIRT_DRIVERS
+./scripts/config --enable CONFIG_VMGENID
+# So the host can read the captured kernel's capability back out of the
+# boot file (IKCFG_ST … IKCFG_ED) without a side record.
+./scripts/config --enable CONFIG_IKCONFIG
+./scripts/config --enable CONFIG_IKCONFIG_PROC
+
+# Resolve new symbols non-interactively. `make bzImage` otherwise runs
+# oldconfig, reads EOF, and can drop VMGENID when its menu was off.
+make olddefconfig
+
 # Verification: ensure critical configs are =y (built-in, not module)
 echo "Verifying kernel configuration..."
 VERIFY_FAILED=0
-for opt in CONFIG_VIRTIO_FS CONFIG_FUSE_FS CONFIG_PVH CONFIG_DM_CRYPT CONFIG_BLK_DEV_DM; do
+for opt in CONFIG_VIRTIO_FS CONFIG_FUSE_FS CONFIG_PVH CONFIG_DM_CRYPT CONFIG_BLK_DEV_DM CONFIG_VIRT_DRIVERS CONFIG_VMGENID CONFIG_IKCONFIG CONFIG_IKCONFIG_PROC; do
     val=$(grep "^${opt}=" .config | cut -d= -f2)
     if [ "$val" != "y" ]; then
         echo "FATAL: $opt is '$val', must be 'y' (built-in, not module)"
@@ -105,6 +122,10 @@ if [[ -f "$VMLINUX_BIN" ]]; then
     mkdir -p "$(dirname "$KERNEL_OUTPUT")"
     cp "$VMLINUX_BIN" "$KERNEL_OUTPUT"
     chmod 644 "$KERNEL_OUTPUT"
+    if ! scripts/extract-ikconfig "$KERNEL_OUTPUT" | grep -q '^CONFIG_VMGENID=y$'; then
+        echo "FATAL: $KERNEL_OUTPUT has no embedded CONFIG_VMGENID=y"
+        exit 1
+    fi
     echo ""
     echo "=== Kernel Built ==="
     echo "File: $KERNEL_OUTPUT"
