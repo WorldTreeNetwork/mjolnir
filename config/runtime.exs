@@ -221,3 +221,30 @@ end
 if prefix = System.get_env("MJOLNIR_VMM_SCOPE_PREFIX") do
   config :mjolnir, vmm_scope_prefix: prefix
 end
+
+# Share guest. runtime.exs cannot import_config, so the parser stays here.
+# Defaults stay nil unless both env vars are set. Neither port may be 7222.
+parse_lan_files_port = fn value ->
+  case Integer.parse(value) do
+    {port, ""} when port in 1..65535 and port != 7222 -> {:ok, port}
+    _ -> :error
+  end
+end
+
+lan_files =
+  case String.split(System.get_env("MJOLNIR_LAN_FILES") || "", ",") do
+    [vm_id, interface, publish, http] when vm_id != "" and interface != "" ->
+      with {:ok, publish_port} <- parse_lan_files_port.(publish),
+           {:ok, http_port} <- parse_lan_files_port.(http) do
+        %{vm_id: vm_id, interface: interface, publish_port: publish_port, http_port: http_port}
+      else
+        _ -> nil
+      end
+
+    _ ->
+      nil
+  end
+
+config :mjolnir,
+  lan_files: lan_files,
+  lan_files_bin: System.get_env("MJOLNIR_LAN_FILES_BIN")

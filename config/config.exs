@@ -83,6 +83,10 @@ config :mjolnir,
   # Guest agent binary to inject into rootfs on boot (nil = skip injection)
   guest_agent_bin: nil,
 
+  # Optional share guest installation and LAN publication (disabled by default).
+  lan_files: nil,
+  lan_files_bin: nil,
+
   # Initramfs image for two-phase boot (nil = legacy direct virtiofs boot)
   # Set to /var/lib/mjolnir/boot/initramfs.img to enable initramfs mode.
   # Override at runtime via MJOLNIR_INITRAMFS_PATH env var.

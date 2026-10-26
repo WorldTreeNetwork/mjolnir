@@ -2096,7 +2096,9 @@ defmodule Mjolnir.VM do
 
     rules =
       case Mjolnir.LanFiles.reconcile(owned, desired) do
-        {:ok, rules} -> rules
+        {:ok, rules} ->
+          rules
+
         {:error, reason, rules} ->
           Logger.warning("LAN files publish failed: #{inspect(reason)}")
           rules
@@ -2133,6 +2135,7 @@ defmodule Mjolnir.VM do
   @impl true
   def terminate(reason, state) do
     _ = Mjolnir.LanFiles.reconcile(state.lan_files_rules || [], [])
+
     if state.hypervisor == Mjolnir.Hypervisor.CloudHypervisor and
          Mjolnir.VmmScope.detach?(reason) do
       Mjolnir.VmmScope.detach(state.hypervisor_port)
@@ -2341,6 +2344,15 @@ defmodule Mjolnir.VM do
            _ = boot_partial_put(:extra_virtiofsd_ports, extra_virtiofsd_ports),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
+           # Both fresh boot and resume refresh the unit with this TAP's address.
+           :ok <-
+             Mjolnir.LanFiles.install(
+               rootfs_path,
+               state.id,
+               net_config.guest_ip,
+               Application.get_env(:mjolnir, :lan_files),
+               Application.get_env(:mjolnir, :lan_files_bin)
+             ),
            {:ok, hv_port} <-
              start_hypervisor(hypervisor, state.id, socket_path, serial_path, [
                virtiofsd_port | Enum.map(extra_virtiofsd_ports, &elem(&1, 1))

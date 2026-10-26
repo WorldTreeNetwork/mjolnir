@@ -24,7 +24,7 @@ Wire flow:
    recryption key. No signing or recryption private key is sent to the server.
    Classical signatures are accepted; a present PQ signature must verify.
 
-Host config (applied on guest boot/attach):
+Host config (publication reconciles on boot/attach):
 
 ```elixir
 config :mjolnir, :lan_files, %{
@@ -35,8 +35,22 @@ config :mjolnir, :lan_files, %{
 The VM host process polls the named interface once a second, reconciles scoped
 DNAT/FORWARD rules, and removes them on stop, target change, or address loss.
 There is no host listening socket and port 7222 is never published. No live
-rules or service changes are made by the unit tests. Guest installation and
-second-host LAN verification remain deployment work.
+rules or service changes are made by the unit tests. Second-host LAN verification
+remains deployment work.
+
+Set `MJOLNIR_LAN_FILES_BIN` to the host path of the compiled guest executable
+and `MJOLNIR_LAN_FILES` to `vm_id,interface,publish_port,http_port`. Exactly
+four fields are required; both ports must be in 1..65535 and neither may be
+7222. The boot config reads those variables. The defaults are nil, so an
+unconfigured host installs and publishes nothing.
+
+On fresh boot and resume, after the TAP address is known and before the guest
+starts, the host copies the binary to `/usr/local/bin/mjolnir-lan-files`, creates
+the metadata directory, and refreshes a service enabled through
+`basic.target.wants`. The unit binds the current guest IPv4 and HTTP port,
+retains `/var/lib/mjolnir/lan-files.sqlite`, and retries every two seconds
+without a start limit until the guest agent assigns the address. A missing
+binary or a different VM skips installation.
 
 ## Source provenance
 
