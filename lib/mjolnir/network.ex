@@ -477,6 +477,43 @@ defmodule Mjolnir.Network do
 
   defp hex(byte), do: String.downcase(Base.encode16(<<byte>>))
 
+  @doc "Pure, flow-scoped IPv4 rules for the LAN share (never the blob-door)."
+  def lan_files_rules(interface, address, publish_port, tap, guest, http_port) do
+    valid_ip = fn value ->
+      case :inet.parse_ipv4_address(String.to_charlist(value)) do
+        {:ok, {a, _, _, _}} when a != 0 and a != 127 -> true
+        _ -> false
+      end
+    end
+
+    unless valid_ip.(address) and valid_ip.(guest) and
+             is_integer(publish_port) and publish_port in 1..65535 and publish_port != 7222 and
+             is_integer(http_port) and http_port in 1..65535 and http_port != 7222 and
+             is_binary(interface) and interface != "" and is_binary(tap) and tap != "" do
+      raise ArgumentError, "LAN files requires explicit IPv4 addresses, interfaces and non-door ports"
+    end
+
+    port = Integer.to_string(publish_port)
+    target_port = Integer.to_string(http_port)
+    tag = ["-m", "comment", "--comment", "mjolnir-lan-files"]
+    original = ["--ctorigdst", address, "--ctorigdstport", port]
+
+    # Install permission before DNAT; remove DNAT first on teardown.
+    [
+      {"filter", "FORWARD",
+       ["-i", interface, "-o", tap, "-p", "tcp", "-d", guest, "--dport", target_port,
+        "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "--ctdir", "ORIGINAL"] ++
+         original ++ tag ++ ["-j", "ACCEPT"]},
+      {"filter", "FORWARD",
+       ["-i", tap, "-o", interface, "-p", "tcp", "-s", guest, "--sport", target_port,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY"] ++
+         original ++ tag ++ ["-j", "ACCEPT"]},
+      {"nat", "PREROUTING",
+       ["-i", interface, "-d", address <> "/32", "-p", "tcp", "--dport", port] ++
+         tag ++ ["-j", "DNAT", "--to-destination", guest <> ":" <> target_port]}
+    ]
+  end
+
   defp create_tap_device(tap_name) do
     run_cmd("ip", ["tuntap", "add", tap_name, "mode", "tap"])
   end

@@ -1,0 +1,26 @@
+[package]
+name = "mjolnir-lan-files"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+# Sibling checkouts; build.rs verifies and embeds these revisions. See README.md.
+identikey-auth = { path = "../../../../IdentiKey/identikey-protocol/crates/identikey-auth" }
+recrypt-storage-auth = { path = "../../../../IdentiKey/recrypt/crates/recrypt-storage-auth" }
+recrypt-core = { path = "../../../../IdentiKey/recrypt/crates/recrypt-core" }
+ed25519-dalek = "2"
+axum = "0.8"
+base64 = "0.22"
+bc-envelope = "=0.43.0"
+blake3 = "1"
+bs58 = "0.5"
+reqwest = { version = "0.12", default-features = false }
+rusqlite = { version = "0.37", features = ["bundled"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

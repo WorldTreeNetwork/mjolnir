@@ -7,5 +7,11 @@ members = [
     "mjolnir_gateway",
     "mjolnir_blob_door",
     "mjolnir_biscuit",
+    "mjolnir_lan_files",
 ]
 resolver = "2"
+
+# oqs-sys 0.11 requires bindgen 0.71. Backport its Clang 22+ type
+# completeness fix without changing the upstream crypto dependency graph.
+[patch.crates-io]
+bindgen = { path = "mjolnir_lan_files/vendor/bindgen" }

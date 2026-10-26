@@ -13,6 +13,7 @@ defmodule Mjolnir.VM do
 
   defstruct [
     :id,
+    :lan_files_rules,
     :config,
     :hypervisor,
     :hypervisor_pid,
@@ -1431,6 +1432,8 @@ defmodule Mjolnir.VM do
         vsock_path: vsock_path
     }
 
+    send(self(), :lan_files_publish)
+
     # The scope is already up. Polling it is the death signal. There is no
     # port, and LUKS is not unlocked again.
     Process.send_after(self(), :poll_scope, 5_000)
@@ -2086,6 +2089,23 @@ defmodule Mjolnir.VM do
     end
   end
 
+  def handle_info(:lan_files_publish, state) do
+    config = Application.get_env(:mjolnir, :lan_files)
+    desired = Mjolnir.LanFiles.desired(state, config)
+    owned = state.lan_files_rules || []
+
+    rules =
+      case Mjolnir.LanFiles.reconcile(owned, desired) do
+        {:ok, rules} -> rules
+        {:error, reason, rules} ->
+          Logger.warning("LAN files publish failed: #{inspect(reason)}")
+          rules
+      end
+
+    if config || rules != [], do: Process.send_after(self(), :lan_files_publish, 1_000)
+    {:noreply, %{state | lan_files_rules: rules}}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -2112,6 +2132,7 @@ defmodule Mjolnir.VM do
 
   @impl true
   def terminate(reason, state) do
+    _ = Mjolnir.LanFiles.reconcile(state.lan_files_rules || [], [])
     if state.hypervisor == Mjolnir.Hypervisor.CloudHypervisor and
          Mjolnir.VmmScope.detach?(reason) do
       Mjolnir.VmmScope.detach(state.hypervisor_port)
@@ -3426,6 +3447,7 @@ defmodule Mjolnir.VM do
         boot_waiter: nil
     }
 
+    send(self(), :lan_files_publish)
     persist_running_state(running_state)
 
     # spawn/1 blocks on await_boot. While the unlock ran, the mailbox was open,
