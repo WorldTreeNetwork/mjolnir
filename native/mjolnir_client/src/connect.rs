@@ -32,6 +32,40 @@ fn get_terminal_size() -> (u16, u16) {
     }
 }
 
+/// Write PTY output to the local terminal.
+///
+/// `set_raw_mode` tries to keep stdout blocking. This retry is the backstop
+/// for a tty that could not be reopened: a shared `O_NONBLOCK` makes a
+/// full-screen paint return EAGAIN (macOS errno 35, "Resource temporarily
+/// unavailable"), and `write_all` treats that as fatal.
+#[cfg(unix)]
+fn write_stdout(data: &[u8]) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    let mut stdout = std::io::stdout().lock();
+    let mut off = 0;
+    while off < data.len() {
+        match stdout.write(&data[off..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(ErrorKind::WriteZero, "stdout closed"));
+            }
+            Ok(n) => off += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    loop {
+        match stdout.flush() {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 #[cfg(windows)]
 fn get_terminal_size() -> (u16, u16) {
     crossterm::terminal::size()
@@ -54,8 +88,8 @@ struct TerminalState {
 }
 
 #[cfg(unix)]
-fn stdin_fcntl_flags() -> std::io::Result<i32> {
-    let flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+fn fd_flags(fd: i32) -> std::io::Result<i32> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
         Err(std::io::Error::last_os_error())
     } else {
@@ -64,12 +98,74 @@ fn stdin_fcntl_flags() -> std::io::Result<i32> {
 }
 
 #[cfg(unix)]
-fn stdin_set_fcntl_flags(flags: i32) -> std::io::Result<()> {
-    let rc = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, flags) };
+fn fd_set_flags(fd: i32, flags: i32) -> std::io::Result<()> {
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
     if rc < 0 {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn stdin_fcntl_flags() -> std::io::Result<i32> {
+    fd_flags(libc::STDIN_FILENO)
+}
+
+#[cfg(unix)]
+fn stdin_set_fcntl_flags(flags: i32) -> std::io::Result<()> {
+    fd_set_flags(libc::STDIN_FILENO, flags)
+}
+
+/// `O_NONBLOCK` lives on the open file description, not the descriptor.
+/// A login tty's stdin and stdout are usually two descriptors of one
+/// description, so the flag set for the stdin poll also makes stdout
+/// writes return EAGAIN. Restore both descriptors before returning.
+#[cfg(unix)]
+fn nonblock_is_shared(reader: i32, writer: i32) -> std::io::Result<bool> {
+    let reader_flags = fd_flags(reader)?;
+    let writer_before = fd_flags(writer)?;
+    fd_set_flags(reader, reader_flags | libc::O_NONBLOCK)?;
+    let writer_after = fd_flags(writer)?;
+    fd_set_flags(reader, reader_flags)?;
+    Ok(writer_before & libc::O_NONBLOCK == 0 && writer_after & libc::O_NONBLOCK != 0)
+}
+
+/// Make `reader` nonblocking. When `reader` and `writer` share a file
+/// description, `replacement` is installed over `reader` first so `writer`
+/// stays blocking. `replacement` is closed here either way.
+#[cfg(unix)]
+fn set_reader_nonblocking(
+    reader: i32,
+    writer: i32,
+    replacement: Option<i32>,
+) -> std::io::Result<()> {
+    let shared = nonblock_is_shared(reader, writer)?;
+    if let Some(repl) = replacement {
+        let installed = if shared {
+            let rc = unsafe { libc::dup2(repl, reader) };
+            if rc < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
+        unsafe { libc::close(repl) };
+        installed?;
+    }
+    let flags = fd_flags(reader)?;
+    fd_set_flags(reader, flags | libc::O_NONBLOCK)
+}
+
+#[cfg(unix)]
+fn open_controlling_tty() -> std::io::Result<i32> {
+    let fd = unsafe { libc::open(b"/dev/tty\0".as_ptr() as *const libc::c_char, libc::O_RDWR) };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(fd)
     }
 }
 
@@ -83,7 +179,15 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
     termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, &raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("tcsetattr: {}", e)))?;
     let fcntl_flags = stdin_fcntl_flags()?;
-    stdin_set_fcntl_flags(fcntl_flags | libc::O_NONBLOCK)?;
+    // A fresh open of the controlling tty has its own file description, so
+    // O_NONBLOCK stays off stdout. No tty (a pipe) leaves the shared flag
+    // in place and `write_stdout` absorbs EAGAIN.
+    let replacement = if nonblock_is_shared(libc::STDIN_FILENO, libc::STDOUT_FILENO)? {
+        open_controlling_tty().ok()
+    } else {
+        None
+    };
+    set_reader_nonblocking(libc::STDIN_FILENO, libc::STDOUT_FILENO, replacement)?;
     Ok(TerminalState {
         termios: original,
         fcntl_flags,
@@ -318,9 +422,7 @@ async fn run_shell_loop(
             result = read_frame(recv) => {
                 match result {
                     Ok(Some(Frame::Data(data))) => {
-                        let mut stdout = std::io::stdout().lock();
-                        stdout.write_all(&data)?;
-                        stdout.flush()?;
+                        write_stdout(&data)?;
                     }
                     Ok(Some(Frame::Exit { code })) => {
                         return Ok(code);
@@ -330,6 +432,12 @@ async fn run_shell_loop(
                     }
                     Ok(None) => {
                         return Ok(0);
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                     }
                     Err(e) => {
                         return Err(e.into());
@@ -745,9 +853,7 @@ where
             msg = ws_read.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        let mut stdout = std::io::stdout().lock();
-                        stdout.write_all(&data)?;
-                        stdout.flush()?;
+                        write_stdout(&data)?;
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         ws_write.send(Message::Pong(payload)).await?;
@@ -1111,6 +1217,40 @@ mod tests {
     #[test]
     fn percent_encode_query_escapes_non_ascii_bytewise() {
         assert_eq!(percent_encode_query("café"), "caf%C3%A9");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonblock_on_a_shared_tty_stays_off_the_writer() {
+        let path = std::env::temp_dir().join(format!("mj-nonblock-{}", std::process::id()));
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let reader = unsafe {
+            libc::open(
+                c_path.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            )
+        };
+        assert!(reader >= 0, "{}", std::io::Error::last_os_error());
+        let writer = unsafe { libc::dup(reader) };
+        let replacement = unsafe { libc::open(c_path.as_ptr(), libc::O_RDWR) };
+        assert!(writer >= 0 && replacement >= 0);
+
+        assert!(nonblock_is_shared(reader, writer).unwrap());
+        assert!(!nonblock_is_shared(reader, replacement).unwrap());
+
+        set_reader_nonblocking(reader, writer, Some(replacement)).unwrap();
+
+        let reader_flags = fd_flags(reader).unwrap();
+        let writer_flags = fd_flags(writer).unwrap();
+        assert_ne!(reader_flags & libc::O_NONBLOCK, 0);
+        assert_eq!(writer_flags & libc::O_NONBLOCK, 0);
+
+        unsafe {
+            libc::close(reader);
+            libc::close(writer);
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
