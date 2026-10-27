@@ -55,3 +55,5 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-10-15 / add-site-cert-subject:** App ensure appends [[domain]], and a missing fallthrough is Iroh, so that disposition never reaches the sites resolver. A site certificate is [[cert]] only. Renewal reinstalls and must not append a [[domain]] that was not already present, or a deleted alias can capture a sibling. lookup_alias maps every read error to :not_found; cert classification fails closed instead.
 
 - **2026-10-21 / add-recording-blob:** Recrypt `Store.has_chunk?/1` downloads the ciphertext, so a recording presence check is HEAD (door) or `File.stat` (local).
+
+- **2026-10-27 / add-recording-blob:** `conn.assigns.user_id` is not a holder. `:user` sets it to the JWT `sub` (`lib/mjolnir/api/auth.ex`). `:capability` is the constant `"capability"`, `:operator` is `"localhost"`, and `:sites` is `sites_token:<id>`, which changes when the token rotates. A row bound to `user_id` without `principal_kind == :user` is either shared by every biscuit or stranded on the next token.
