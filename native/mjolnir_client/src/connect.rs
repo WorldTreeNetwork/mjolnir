@@ -11,6 +11,7 @@ use mjolnir_protocol::{
 use nix::sys::termios;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
@@ -191,6 +192,7 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
         None
     };
     set_reader_nonblocking(libc::STDIN_FILENO, libc::STDOUT_FILENO, replacement)?;
+    arm_local_keyboard();
     Ok(TerminalState {
         termios: original,
         fcntl_flags,
@@ -199,6 +201,7 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
 
 #[cfg(unix)]
 fn restore_terminal(original: &TerminalState) {
+    disarm_local_keyboard();
     let stdin = std::io::stdin();
     let _ = stdin_set_fcntl_flags(original.fcntl_flags);
     let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSADRAIN, &original.termios);
@@ -238,12 +241,14 @@ async fn read_tty_stdin(
 fn set_raw_mode() -> std::io::Result<u32> {
     use crossterm::terminal;
     terminal::enable_raw_mode()?;
+    arm_local_keyboard();
     // Return 0 as a dummy "original mode" — crossterm tracks state internally
     Ok(0)
 }
 
 #[cfg(windows)]
 fn restore_terminal(_original: &u32) {
+    disarm_local_keyboard();
     let _ = crossterm::terminal::disable_raw_mode();
 }
 
@@ -397,6 +402,356 @@ async fn connect_shell(
     }
 }
 
+/// `CSI > 0 u` pushes a kitty keyboard frame with no enhancements, so a
+/// text key stays one byte. `CSI > 4 ; 0 m` leaves xterm modifyOtherKeys.
+/// The pop on the way out restores the outer shell's kitty flags.
+const KEYBOARD_PROTOCOL_ENTER: &[u8] = b"\x1b[>0u\x1b[>4;0m";
+const KEYBOARD_PROTOCOL_LEAVE: &[u8] = b"\x1b[<u";
+const KEY_HOLD_MS: u64 = 25;
+
+static KEYBOARD_STACK_PUSHED: AtomicBool = AtomicBool::new(false);
+
+fn write_local(data: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        write_stdout(data)
+    }
+    #[cfg(windows)]
+    {
+        let mut out = std::io::stdout().lock();
+        out.write_all(data)?;
+        out.flush()
+    }
+}
+
+fn arm_local_keyboard() {
+    if write_local(KEYBOARD_PROTOCOL_ENTER).is_ok() {
+        KEYBOARD_STACK_PUSHED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn disarm_local_keyboard() {
+    if KEYBOARD_STACK_PUSHED.swap(false, Ordering::SeqCst) {
+        let _ = write_local(KEYBOARD_PROTOCOL_LEAVE);
+    }
+}
+
+/// A shell that turned on kitty "report all keys", or a terminal left in
+/// modifyOtherKeys mode 2, sends Shift+2 as a CSI sequence. tmux 3.4 does
+/// not turn that back into `@`. Collapse the forms that are only a
+/// printable ASCII key with no Ctrl or Alt. Anything else is forwarded
+/// unchanged. An unfinished prefix is held briefly so a lone Escape is
+/// not delayed for long.
+struct KeyNormalizer {
+    pending: Vec<u8>,
+}
+
+impl KeyNormalizer {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    fn holding(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    fn push(&mut self, input: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(input);
+        self.drain(false)
+    }
+
+    fn flush(&mut self) -> Vec<u8> {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, force: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            if self.pending.is_empty() {
+                break;
+            }
+            match scan_legacy_key(&self.pending) {
+                KeyScan::Forward(n) => {
+                    let n = n.clamp(1, self.pending.len());
+                    out.extend(self.pending.drain(..n));
+                }
+                KeyScan::Ascii { consumed, byte } => {
+                    let n = consumed.min(self.pending.len());
+                    self.pending.drain(..n);
+                    out.push(byte);
+                }
+                KeyScan::NeedMore => {
+                    if force {
+                        out.extend(self.pending.drain(..));
+                    }
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+enum KeyScan {
+    Forward(usize),
+    Ascii { consumed: usize, byte: u8 },
+    NeedMore,
+}
+
+fn scan_legacy_key(buf: &[u8]) -> KeyScan {
+    if buf.first().copied() != Some(0x1b) {
+        let n = buf.iter().position(|b| *b == 0x1b).unwrap_or(buf.len());
+        return KeyScan::Forward(n.max(1));
+    }
+    if buf.len() == 1 || (buf.len() == 2 && buf[1] == b'[') {
+        return KeyScan::NeedMore;
+    }
+    if buf[1] != b'[' {
+        return KeyScan::Forward(1);
+    }
+    if buf.len() > 48 {
+        return KeyScan::Forward(1);
+    }
+    match csi_printable(&buf[2..]) {
+        Csi::NeedMore => KeyScan::NeedMore,
+        Csi::No => KeyScan::Forward(1),
+        Csi::Ascii { len, byte } => KeyScan::Ascii {
+            consumed: len + 2,
+            byte,
+        },
+    }
+}
+
+enum Csi {
+    NeedMore,
+    No,
+    Ascii { len: usize, byte: u8 },
+}
+
+enum Num {
+    NeedMore,
+    Bad,
+    Ok(u32, usize),
+}
+
+fn number(s: &[u8], i: usize) -> Num {
+    if i >= s.len() {
+        return Num::NeedMore;
+    }
+    if !s[i].is_ascii_digit() {
+        return Num::Bad;
+    }
+    let mut n: u32 = 0;
+    let mut j = i;
+    while j < s.len() && s[j].is_ascii_digit() {
+        n = n.saturating_mul(10).saturating_add((s[j] - b'0') as u32);
+        j += 1;
+        if j - i > 8 {
+            return Num::Bad;
+        }
+    }
+    if j == s.len() {
+        Num::NeedMore
+    } else {
+        Num::Ok(n, j)
+    }
+}
+
+fn plain_mod(mods: u32) -> bool {
+    mods == 1 || mods == 2
+}
+
+fn apply_shift(key: u8) -> u8 {
+    match key {
+        b'a'..=b'z' => key - b'a' + b'A',
+        b'1' => b'!',
+        b'2' => b'@',
+        b'3' => b'#',
+        b'4' => b'$',
+        b'5' => b'%',
+        b'6' => b'^',
+        b'7' => b'&',
+        b'8' => b'*',
+        b'9' => b'(',
+        b'0' => b')',
+        b'`' => b'~',
+        b'-' => b'_',
+        b'=' => b'+',
+        b'[' => b'{',
+        b']' => b'}',
+        b'\\' => b'|',
+        b';' => b':',
+        b'\'' => b'"',
+        b',' => b'<',
+        b'.' => b'>',
+        b'/' => b'?',
+        other => other,
+    }
+}
+
+fn csi_printable(s: &[u8]) -> Csi {
+    if s.starts_with(b"27;") || b"27;".starts_with(s) {
+        return modify_other_keys(s);
+    }
+    kitty_printable(s)
+}
+
+fn modify_other_keys(s: &[u8]) -> Csi {
+    const PREFIX: &[u8] = b"27;";
+    if s.len() < PREFIX.len() {
+        return if PREFIX.starts_with(s) {
+            Csi::NeedMore
+        } else {
+            Csi::No
+        };
+    }
+    if !s.starts_with(PREFIX) {
+        return Csi::No;
+    }
+    let mut i = PREFIX.len();
+    let mods = match number(s, i) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => {
+            i = j;
+            n
+        }
+    };
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b';' {
+        return Csi::No;
+    }
+    i += 1;
+    let code = match number(s, i) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => {
+            i = j;
+            n
+        }
+    };
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b'~' {
+        return Csi::No;
+    }
+    i += 1;
+    if plain_mod(mods) && (32..=126).contains(&code) {
+        Csi::Ascii {
+            len: i,
+            byte: code as u8,
+        }
+    } else {
+        Csi::No
+    }
+}
+
+fn kitty_printable(s: &[u8]) -> Csi {
+    let (key, mut i) = match number(s, 0) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => (n, j),
+    };
+    i = match skip_colons(s, i) {
+        Colon::NeedMore => return Csi::NeedMore,
+        Colon::Bad => return Csi::No,
+        Colon::At(j) => j,
+    };
+    let mut mods = 1u32;
+    let mut text: Option<u32> = None;
+    if i < s.len() && s[i] == b';' {
+        i += 1;
+        match number(s, i) {
+            Num::NeedMore => return Csi::NeedMore,
+            Num::Bad => return Csi::No,
+            Num::Ok(n, j) => {
+                mods = n;
+                i = j;
+            }
+        }
+        i = match skip_colons(s, i) {
+            Colon::NeedMore => return Csi::NeedMore,
+            Colon::Bad => return Csi::No,
+            Colon::At(j) => j,
+        };
+        if i < s.len() && s[i] == b';' {
+            i += 1;
+            match number(s, i) {
+                Num::NeedMore => return Csi::NeedMore,
+                Num::Bad => return Csi::No,
+                Num::Ok(n, j) => {
+                    text = Some(n);
+                    i = j;
+                }
+            }
+            i = match skip_colons(s, i) {
+                Colon::NeedMore => return Csi::NeedMore,
+                Colon::Bad => return Csi::No,
+                Colon::At(j) => j,
+            };
+        }
+    }
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b'u' {
+        return Csi::No;
+    }
+    i += 1;
+    let byte = if let Some(t) = text {
+        if (32..=126).contains(&t) {
+            Some(t as u8)
+        } else {
+            None
+        }
+    } else if (32..=126).contains(&key) {
+        Some(if mods == 2 {
+            apply_shift(key as u8)
+        } else {
+            key as u8
+        })
+    } else {
+        None
+    };
+    match byte {
+        Some(byte) if plain_mod(mods) => Csi::Ascii { len: i, byte },
+        _ => Csi::No,
+    }
+}
+
+enum Colon {
+    NeedMore,
+    Bad,
+    At(usize),
+}
+
+fn skip_colons(s: &[u8], mut i: usize) -> Colon {
+    if i < s.len() && s[i] == b':' {
+        while i < s.len() && s[i] == b':' {
+            i += 1;
+            match number(s, i) {
+                Num::NeedMore => return Colon::NeedMore,
+                Num::Bad => return Colon::Bad,
+                Num::Ok(_, j) => i = j,
+            }
+        }
+    }
+    Colon::At(i)
+}
+
+async fn hold_pending(holding: bool) {
+    if holding {
+        tokio::time::sleep(std::time::Duration::from_millis(KEY_HOLD_MS)).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
 pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
@@ -469,11 +824,13 @@ async fn run_shell_loop(
 ) -> Result<i32> {
     let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
     let mut sigwinch =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
             .context("Failed to register SIGWINCH handler")?;
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             result = read_frame(recv) => {
                 match result {
@@ -507,11 +864,20 @@ async fn run_shell_loop(
                         return Ok(0);
                     }
                     Ok(n) => {
-                        write_frame(send, &Frame::Data(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            write_frame(send, &Frame::Data(data)).await?;
+                        }
                     }
                     Err(e) => {
                         return Err(e.into());
                     }
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    write_frame(send, &Frame::Data(data)).await?;
                 }
             }
             _ = sigwinch.recv() => {
@@ -529,8 +895,10 @@ async fn run_shell_loop(
 ) -> Result<i32> {
     let mut stdin = tokio::io::stdin();
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             result = read_frame(recv) => {
                 match result {
@@ -560,11 +928,20 @@ async fn run_shell_loop(
                         return Ok(0);
                     }
                     Ok(n) => {
-                        write_frame(send, &Frame::Data(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            write_frame(send, &Frame::Data(data)).await?;
+                        }
                     }
                     Err(e) => {
                         return Err(e.into());
                     }
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    write_frame(send, &Frame::Data(data)).await?;
                 }
             }
         }
@@ -887,6 +1264,7 @@ where
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     // Send initial resize
     let (rows, cols) = get_terminal_size();
@@ -905,6 +1283,7 @@ where
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             msg = ws_read.next() => {
                 match msg {
@@ -925,9 +1304,18 @@ where
                 match result {
                     Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
-                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            ws_write.send(Message::Binary(data)).await?;
+                        }
                     }
                     Err(e) => return Err(e.into()),
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    ws_write.send(Message::Binary(data)).await?;
                 }
             }
             _ = sigwinch.recv() => {
@@ -953,6 +1341,7 @@ where
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let mut stdin = tokio::io::stdin();
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     // Send initial resize
     let (rows, cols) = get_terminal_size();
@@ -970,6 +1359,7 @@ where
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             // Data from server (PTY output)
             msg = ws_read.next() => {
@@ -994,9 +1384,18 @@ where
                 match result {
                     Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
-                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            ws_write.send(Message::Binary(data)).await?;
+                        }
                     }
                     Err(e) => return Err(e.into()),
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    ws_write.send(Message::Binary(data)).await?;
                 }
             }
             _ = ping.tick() => {
@@ -1283,6 +1682,33 @@ mod tests {
         assert!(!line.contains("does not support"));
         let line = session_fallback_line("ALPN protocol not supported");
         assert!(line.contains("does not support shared sessions"));
+    }
+
+    #[test]
+    fn shifted_symbols_survive_extended_key_encodings() {
+        let mut keys = KeyNormalizer::new();
+        assert_eq!(keys.push(b"hi"), b"hi");
+        assert_eq!(keys.push(b"\x1b[27;2;64~"), b"@");
+        assert_eq!(keys.push(b"\x1b[27;2;35~"), b"#");
+        assert_eq!(keys.push(b"\x1b[50;2u"), b"@");
+        assert_eq!(keys.push(b"\x1b[50;2;64u"), b"@");
+        assert_eq!(keys.push(b"\x1b[97;2u"), b"A");
+        assert_eq!(keys.push(b"a\x1b[27;2;64~b"), b"a@b");
+        assert_eq!(keys.push(b"\x1b[2~"), b"\x1b[2~");
+        assert_eq!(keys.push(b"\x1b[A"), b"\x1b[A");
+        assert_eq!(keys.push(b"\x1b[97;5u"), b"\x1b[97;5u");
+        assert_eq!(keys.push(b"\x1b[27;5;97~"), b"\x1b[27;5;97~");
+    }
+
+    #[test]
+    fn a_split_at_sign_is_held_until_the_sequence_finishes() {
+        let mut keys = KeyNormalizer::new();
+        assert!(keys.push(b"\x1b[27;2;").is_empty());
+        assert!(keys.holding());
+        assert_eq!(keys.push(b"64~"), b"@");
+        assert!(!keys.holding());
+        assert!(keys.push(b"\x1b").is_empty());
+        assert_eq!(keys.flush(), b"\x1b");
     }
 
     #[cfg(unix)]
