@@ -313,6 +313,87 @@ pub fn format_addr_info(addr: &EndpointAddr) -> String {
 
 // --- Iroh QUIC shell connection ---
 
+/// What to tell the user when the session-aware handshake will not be used.
+///
+/// A timeout is the path failing to finish, not the agent refusing the
+/// protocol. An ALPN refusal is the old agent.
+fn session_fallback_line(err: &str) -> String {
+    if err.to_ascii_lowercase().contains("timed out") {
+        format!("Session handshake timed out ({err}); attaching tmux in the shell.")
+    } else {
+        format!(
+            "Agent does not support shared sessions natively ({err}); attaching tmux in the shell."
+        )
+    }
+}
+
+/// Open the shell. A named session races the v2 handshake with the plain
+/// shell: v2 carries the tmux name in Hello, and the plain shell gets the
+/// attach command typed in. Waiting for v2 to time out before starting the
+/// plain shell made a slow path fail twice.
+async fn connect_shell(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+    session: Option<&str>,
+) -> Result<(iroh::endpoint::Connection, bool)> {
+    if session.is_none() {
+        let conn = endpoint
+            .connect(addr, SHELL_ALPN)
+            .await
+            .context("Failed to connect to VM")?;
+        return Ok((conn, false));
+    }
+
+    let mut v2 = std::pin::pin!(endpoint.connect(addr.clone(), SHELL_ALPN_V2));
+    let mut v1 = std::pin::pin!(endpoint.connect(addr, SHELL_ALPN));
+    let mut v1_conn: Option<iroh::endpoint::Connection> = None;
+    let mut v1_err: Option<String> = None;
+    let mut v2_err: Option<String> = None;
+
+    loop {
+        if let (Some(session_err), Some(shell_err)) = (&v2_err, &v1_err) {
+            anyhow::bail!(
+                "Failed to connect to VM: session handshake: {session_err}; shell: {shell_err}"
+            );
+        }
+        if v1_conn.is_some() && v2_err.is_some() {
+            eprintln!("{}", session_fallback_line(v2_err.as_deref().unwrap_or("")));
+            return Ok((v1_conn.take().expect("v1 conn"), false));
+        }
+        if v1_conn.is_some() && v2_err.is_none() {
+            // The plain shell is up. A session handshake that is merely a
+            // little slower still wins; one that is going to time out does not
+            // keep the terminal waiting.
+            match tokio::time::timeout(std::time::Duration::from_secs(2), &mut v2).await {
+                Ok(Ok(conn)) => return Ok((conn, true)),
+                Ok(Err(err)) => {
+                    eprintln!("{}", session_fallback_line(&err.to_string()));
+                    return Ok((v1_conn.take().expect("v1 conn"), false));
+                }
+                Err(_elapsed) => {
+                    eprintln!("Session handshake is still waiting; attaching tmux in the shell.");
+                    return Ok((v1_conn.take().expect("v1 conn"), false));
+                }
+            }
+        }
+
+        tokio::select! {
+            res = &mut v2, if v2_err.is_none() => {
+                match res {
+                    Ok(conn) => return Ok((conn, true)),
+                    Err(err) => v2_err = Some(err.to_string()),
+                }
+            }
+            res = &mut v1, if v1_conn.is_none() && v1_err.is_none() => {
+                match res {
+                    Ok(conn) => v1_conn = Some(conn),
+                    Err(err) => v1_err = Some(err.to_string()),
+                }
+            }
+        }
+    }
+}
+
 pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
@@ -322,35 +403,7 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
         .context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
-    // ALPN is the version handshake. A `--session` request needs an agent that can decode
-    // a Hello carrying a session name, so we ask for SHELL_ALPN_V2 and let QUIC tell us
-    // whether the far end speaks it — a v1 agent refuses the unknown ALPN during the TLS
-    // handshake, before we have written a byte. Falling back to v1 (and to typing the
-    // tmux command into the shell) degrades to the old behaviour instead of erroring.
-    // Without a session there is nothing to negotiate, so we keep the single-round-trip
-    // v1 path untouched.
-    let (conn, negotiated_v2) = if session.is_some() {
-        match endpoint.clone().connect(addr.clone(), SHELL_ALPN_V2).await {
-            Ok(conn) => (conn, true),
-            Err(e) => {
-                // Could be an old agent (ALPN refused) or a genuinely unreachable VM.
-                // Retrying on v1 distinguishes the two: if the VM is really unreachable
-                // the second attempt fails too, and that error is the one we surface.
-                eprintln!("Agent does not support shared sessions natively ({e}); falling back.");
-                let conn = endpoint
-                    .connect(addr, SHELL_ALPN)
-                    .await
-                    .context("Failed to connect to VM")?;
-                (conn, false)
-            }
-        }
-    } else {
-        let conn = endpoint
-            .connect(addr, SHELL_ALPN)
-            .await
-            .context("Failed to connect to VM")?;
-        (conn, false)
-    };
+    let (conn, negotiated_v2) = connect_shell(&endpoint, addr, session.as_deref()).await?;
     eprintln!("Connected. Opening shell...");
 
     let (mut send, mut recv) = conn.open_bi().await.context("Failed to open QUIC stream")?;
@@ -1217,6 +1270,16 @@ mod tests {
     #[test]
     fn percent_encode_query_escapes_non_ascii_bytewise() {
         assert_eq!(percent_encode_query("café"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn session_timeout_is_not_described_as_an_old_agent() {
+        let line = session_fallback_line("timed out");
+        assert!(line.contains("timed out"));
+        assert!(line.contains("attaching tmux"));
+        assert!(!line.contains("does not support"));
+        let line = session_fallback_line("ALPN protocol not supported");
+        assert!(line.contains("does not support shared sessions"));
     }
 
     #[cfg(unix)]
