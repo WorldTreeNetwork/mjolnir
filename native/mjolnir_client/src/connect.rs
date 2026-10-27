@@ -132,8 +132,10 @@ fn nonblock_is_shared(reader: i32, writer: i32) -> std::io::Result<bool> {
 }
 
 /// Make `reader` nonblocking. When `reader` and `writer` share a file
-/// description, `replacement` is installed over `reader` first so `writer`
-/// stays blocking. `replacement` is closed here either way.
+/// description, `replacement` is installed over `writer` so the flag stays
+/// off stdout. `reader` itself is left in place: the stdin poll watches
+/// that descriptor, and replacing it with `/dev/tty` makes the poll fail.
+/// `replacement` is closed here either way.
 #[cfg(unix)]
 fn set_reader_nonblocking(
     reader: i32,
@@ -143,7 +145,7 @@ fn set_reader_nonblocking(
     let shared = nonblock_is_shared(reader, writer)?;
     if let Some(repl) = replacement {
         let installed = if shared {
-            let rc = unsafe { libc::dup2(repl, reader) };
+            let rc = unsafe { libc::dup2(repl, writer) };
             if rc < 0 {
                 Err(std::io::Error::last_os_error())
             } else {
@@ -179,9 +181,10 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
     termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, &raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("tcsetattr: {}", e)))?;
     let fcntl_flags = stdin_fcntl_flags()?;
-    // A fresh open of the controlling tty has its own file description, so
-    // O_NONBLOCK stays off stdout. No tty (a pipe) leaves the shared flag
-    // in place and `write_stdout` absorbs EAGAIN.
+    // Install a second open of the controlling tty on stdout. O_NONBLOCK
+    // then applies only to the original stdin, which is what the poll
+    // watches. No tty (a pipe) leaves the shared flag in place and
+    // `write_stdout` absorbs EAGAIN.
     let replacement = if nonblock_is_shared(libc::STDIN_FILENO, libc::STDOUT_FILENO)? {
         open_controlling_tty().ok()
     } else {
@@ -453,7 +456,7 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
             std::process::exit(exit_code);
         }
         Err(e) => {
-            eprintln!("Connection error: {}", e);
+            eprintln!("Connection error: {e:#}");
             std::process::exit(1);
         }
     }
@@ -834,7 +837,7 @@ pub async fn cmd_connect(
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
-            eprintln!("Connection error: {}", e);
+            eprintln!("Connection error: {e:#}");
             std::process::exit(1);
         }
     }
