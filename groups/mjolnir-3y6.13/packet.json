@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-add-vmgenid-observe",
+  "node_id": "mjolnir-3y6.13",
+  "capability": "vm-freeze",
+  "change_id": "add-vmgenid",
+  "requester": {
+    "id": "agt-grok-conductor",
+    "kind": "model",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-grok-conductor" }
+  },
+  "assignee": {
+    "id": "agt-sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6.1-sol",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-sol-implement" }
+  },
+  "goal": "Make a thawed guest report a VM Generation ID change, and prove it with a disposable thaw on 45.76.77.97 before the fleet boot kernel is replaced. Mjolnir.Thaw.Vmgenid.observe/1 currently returns :missing. Add a guest-agent report of the generation id the VMGENID driver exposes, and thread that report through observe/1 so Mjolnir.Thaw.Vmgenid.verify/2 can see a real id. A /dev/urandom sample after Entropy.reseed is not that report. Entropy.reseed still finishes before the guest is reachable over vsock, and before PTY, ticket, and gateway publish. On root@45.76.77.97, record that the cloud-hypervisor binary is a v54+ build containing VmGenId. Build the x86_64 PVH kernel with scripts/build-kernel.sh (CONFIG_VMGENID=y is already in that script). Cold-boot one disposable VM on that kernel, freeze it, and thaw it. The guest must observe a generation id different from the id stored at capture. Do not copy the new kernel over /var/lib/mjolnir/vmlinux-ch until that observation exists. A second thaw of that same snapshot, while the first guest is still running, gets a new VM id, vsock CID, virtiofsd socket, and TAP, over a clone of the pinned rootfs, and no gateway ticket. The two guests must observe different generation ids. The first guest stays published if the second thaw fails. Check the open boxes in openspec/changes/add-vmgenid/tasks.md only for proofs you actually ran. Leave the change banner ACTIVE BUILD.",
+  "non_goals": [
+    "Replace Entropy.reseed",
+    "Patch Cloud Hypervisor",
+    "AArch64 acpi=on",
+    "A new guest IP, MAC, or Iroh key for the second thaw",
+    "Reopen add-thaw-clock, add-thaw-iroh-probe, or add-memory-snapshot-usage"
+  ],
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Thaw.Vmgenid.observe/1",
+      "invariant": "Returns a guest-visible generation id, never a urandom sample taken after Entropy.reseed. :missing means the guest did not report the device id."
+    },
+    {
+      "symbol": "Mjolnir.Thaw.Vmgenid.verify/2",
+      "invariant": "A CONFIG_VMGENID capture with a missing or unchanged id is not published. A legacy record does not claim a generation-id change."
+    },
+    {
+      "symbol": "Mjolnir.Entropy.reseed",
+      "invariant": "Still gates vsock reachability, PTY, ticket, and gateway. It is not evidence the VMGENID driver ran."
+    }
+  ],
+  "acceptance": {
+    "kind": "journey",
+    "journey": "On 45.76.77.97, a disposable VM cold-booted on a CONFIG_VMGENID=y kernel is frozen and thawed. The guest observes a generation id different from the id recorded at capture. That observation is not a /dev/urandom read after Entropy.reseed. The fleet file /var/lib/mjolnir/vmlinux-ch is unchanged until that observation exists. A second thaw of the same snapshot, while the first guest is running, is vsock-reachable after reseed, has no gateway ticket, and observes a different generation id. The first guest is still published if that second thaw fails. mix test test/mjolnir/vmgenid_thaw_test.exs passes."
+  },
+  "out_of_scope": [
+    {
+      "item": "Fold add-vmgenid into the living spec",
+      "tracked_as": "fold after this act"
+    },
+    {
+      "item": "Clock step, Iroh probe, and memory-snapshot retention",
+      "tracked_as": "openspec/specs/vm-freeze/spec.md"
+    },
+    {
+      "item": "Second public address for a forked guest",
+      "tracked_as": "mjolnir-8m3"
+    }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/thaw/vmgenid.ex",
+      "lib/mjolnir/thaw/publish.ex",
+      "lib/mjolnir/vsock/protocol.ex",
+      "lib/mjolnir/vm.ex",
+      "native/mjolnir_guest_agent",
+      "test/mjolnir/vmgenid_thaw_test.exs",
+      "scripts/build-kernel.sh",
+      "openspec/changes/add-vmgenid/tasks.md",
+      "openspec/changes/add-vmgenid/proposal.md"
+    ],
+    "do_not": [
+      "push",
+      "restart mjolnir.service",
+      "kill or reboot running production VMs",
+      "replace /var/lib/mjolnir/vmlinux-ch before a disposable thaw shows a new generation id",
+      "edit openspec/specs",
+      "edit openspec/changes/archive",
+      "patch Cloud Hypervisor",
+      "give the second guest a gateway ticket or a new IP, MAC, or Iroh key"
+    ]
+  },
+  "load_class": "structure-clear",
+  "rigor": "architecture",
+  "density": "standard",
+  "surface": "packet-only",
+  "inherited": [
+    "Preparation 2026-10-24: still valid. Delta SHA-256 349b1a0fda4f409f725af48d74f356c2f7c226a6938440ba23e17325d20c8429 matches openspec/changes/add-vmgenid/specs/vm-freeze/spec.md. Advise reviews/2026-10-23-advise-2.md accepted that text. Do not revise the delta.",
+    "HEAD at dispatch included ef6f310. scripts/build-kernel.sh already enables CONFIG_VMGENID and refuses an image without an embedded CONFIG_VMGENID=y.",
+    "Host is root@45.76.77.97. Production guest kernel path is /var/lib/mjolnir/vmlinux-ch. Cloud Hypervisor on that host was v54.0 with VmGenId strings on 2026-10-23. Re-read the binary before recording the proof. This laptop binary may still be v53.",
+    "Authority is the 2026-10-23 campaign grant on mjolnir-3y6 for this node only. Banner stays ACTIVE BUILD.",
+    "A fold of add-lan-file-server landed as commit 5311d40. Leave that commit and openspec/specs/lan-files alone."
+  ]
+}
