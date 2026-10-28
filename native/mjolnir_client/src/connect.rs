@@ -11,6 +11,7 @@ use mjolnir_protocol::{
 use nix::sys::termios;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
@@ -28,6 +29,40 @@ fn get_terminal_size() -> (u16, u16) {
             (ws.ws_row, ws.ws_col)
         } else {
             (24, 80)
+        }
+    }
+}
+
+/// Write PTY output to the local terminal.
+///
+/// `set_raw_mode` tries to keep stdout blocking. This retry is the backstop
+/// for a tty that could not be reopened: a shared `O_NONBLOCK` makes a
+/// full-screen paint return EAGAIN (macOS errno 35, "Resource temporarily
+/// unavailable"), and `write_all` treats that as fatal.
+#[cfg(unix)]
+fn write_stdout(data: &[u8]) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    let mut stdout = std::io::stdout().lock();
+    let mut off = 0;
+    while off < data.len() {
+        match stdout.write(&data[off..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(ErrorKind::WriteZero, "stdout closed"));
+            }
+            Ok(n) => off += n,
+            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    loop {
+        match stdout.flush() {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::Interrupted || e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err(e) => return Err(e),
         }
     }
 }
@@ -54,8 +89,8 @@ struct TerminalState {
 }
 
 #[cfg(unix)]
-fn stdin_fcntl_flags() -> std::io::Result<i32> {
-    let flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+fn fd_flags(fd: i32) -> std::io::Result<i32> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
         Err(std::io::Error::last_os_error())
     } else {
@@ -64,12 +99,76 @@ fn stdin_fcntl_flags() -> std::io::Result<i32> {
 }
 
 #[cfg(unix)]
-fn stdin_set_fcntl_flags(flags: i32) -> std::io::Result<()> {
-    let rc = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, flags) };
+fn fd_set_flags(fd: i32, flags: i32) -> std::io::Result<()> {
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
     if rc < 0 {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn stdin_fcntl_flags() -> std::io::Result<i32> {
+    fd_flags(libc::STDIN_FILENO)
+}
+
+#[cfg(unix)]
+fn stdin_set_fcntl_flags(flags: i32) -> std::io::Result<()> {
+    fd_set_flags(libc::STDIN_FILENO, flags)
+}
+
+/// `O_NONBLOCK` lives on the open file description, not the descriptor.
+/// A login tty's stdin and stdout are usually two descriptors of one
+/// description, so the flag set for the stdin poll also makes stdout
+/// writes return EAGAIN. Restore both descriptors before returning.
+#[cfg(unix)]
+fn nonblock_is_shared(reader: i32, writer: i32) -> std::io::Result<bool> {
+    let reader_flags = fd_flags(reader)?;
+    let writer_before = fd_flags(writer)?;
+    fd_set_flags(reader, reader_flags | libc::O_NONBLOCK)?;
+    let writer_after = fd_flags(writer)?;
+    fd_set_flags(reader, reader_flags)?;
+    Ok(writer_before & libc::O_NONBLOCK == 0 && writer_after & libc::O_NONBLOCK != 0)
+}
+
+/// Make `reader` nonblocking. When `reader` and `writer` share a file
+/// description, `replacement` is installed over `writer` so the flag stays
+/// off stdout. `reader` itself is left in place: the stdin poll watches
+/// that descriptor, and replacing it with `/dev/tty` makes the poll fail.
+/// `replacement` is closed here either way.
+#[cfg(unix)]
+fn set_reader_nonblocking(
+    reader: i32,
+    writer: i32,
+    replacement: Option<i32>,
+) -> std::io::Result<()> {
+    let shared = nonblock_is_shared(reader, writer)?;
+    if let Some(repl) = replacement {
+        let installed = if shared {
+            let rc = unsafe { libc::dup2(repl, writer) };
+            if rc < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        };
+        unsafe { libc::close(repl) };
+        installed?;
+    }
+    let flags = fd_flags(reader)?;
+    fd_set_flags(reader, flags | libc::O_NONBLOCK)
+}
+
+#[cfg(unix)]
+fn open_controlling_tty() -> std::io::Result<i32> {
+    let fd = unsafe { libc::open(b"/dev/tty\0".as_ptr() as *const libc::c_char, libc::O_RDWR) };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(fd)
     }
 }
 
@@ -83,7 +182,17 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
     termios::tcsetattr(&stdin, termios::SetArg::TCSANOW, &raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("tcsetattr: {}", e)))?;
     let fcntl_flags = stdin_fcntl_flags()?;
-    stdin_set_fcntl_flags(fcntl_flags | libc::O_NONBLOCK)?;
+    // Install a second open of the controlling tty on stdout. O_NONBLOCK
+    // then applies only to the original stdin, which is what the poll
+    // watches. No tty (a pipe) leaves the shared flag in place and
+    // `write_stdout` absorbs EAGAIN.
+    let replacement = if nonblock_is_shared(libc::STDIN_FILENO, libc::STDOUT_FILENO)? {
+        open_controlling_tty().ok()
+    } else {
+        None
+    };
+    set_reader_nonblocking(libc::STDIN_FILENO, libc::STDOUT_FILENO, replacement)?;
+    arm_local_keyboard();
     Ok(TerminalState {
         termios: original,
         fcntl_flags,
@@ -92,6 +201,7 @@ fn set_raw_mode() -> std::io::Result<TerminalState> {
 
 #[cfg(unix)]
 fn restore_terminal(original: &TerminalState) {
+    disarm_local_keyboard();
     let stdin = std::io::stdin();
     let _ = stdin_set_fcntl_flags(original.fcntl_flags);
     let _ = termios::tcsetattr(&stdin, termios::SetArg::TCSADRAIN, &original.termios);
@@ -131,12 +241,14 @@ async fn read_tty_stdin(
 fn set_raw_mode() -> std::io::Result<u32> {
     use crossterm::terminal;
     terminal::enable_raw_mode()?;
+    arm_local_keyboard();
     // Return 0 as a dummy "original mode" — crossterm tracks state internally
     Ok(0)
 }
 
 #[cfg(windows)]
 fn restore_terminal(_original: &u32) {
+    disarm_local_keyboard();
     let _ = crossterm::terminal::disable_raw_mode();
 }
 
@@ -209,6 +321,437 @@ pub fn format_addr_info(addr: &EndpointAddr) -> String {
 
 // --- Iroh QUIC shell connection ---
 
+/// What to tell the user when the session-aware handshake will not be used.
+///
+/// A timeout is the path failing to finish, not the agent refusing the
+/// protocol. An ALPN refusal is the old agent.
+fn session_fallback_line(err: &str) -> String {
+    if err.to_ascii_lowercase().contains("timed out") {
+        format!("Session handshake timed out ({err}); attaching tmux in the shell.")
+    } else {
+        format!(
+            "Agent does not support shared sessions natively ({err}); attaching tmux in the shell."
+        )
+    }
+}
+
+/// Open the shell. A named session races the v2 handshake with the plain
+/// shell: v2 carries the tmux name in Hello, and the plain shell gets the
+/// attach command typed in. Waiting for v2 to time out before starting the
+/// plain shell made a slow path fail twice.
+async fn connect_shell(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+    session: Option<&str>,
+) -> Result<(iroh::endpoint::Connection, bool)> {
+    if session.is_none() {
+        let conn = endpoint
+            .connect(addr, SHELL_ALPN)
+            .await
+            .context("Failed to connect to VM")?;
+        return Ok((conn, false));
+    }
+
+    let mut v2 = std::pin::pin!(endpoint.connect(addr.clone(), SHELL_ALPN_V2));
+    let mut v1 = std::pin::pin!(endpoint.connect(addr, SHELL_ALPN));
+    let mut v1_conn: Option<iroh::endpoint::Connection> = None;
+    let mut v1_err: Option<String> = None;
+    let mut v2_err: Option<String> = None;
+
+    loop {
+        if let (Some(session_err), Some(shell_err)) = (&v2_err, &v1_err) {
+            anyhow::bail!(
+                "Failed to connect to VM: session handshake: {session_err}; shell: {shell_err}"
+            );
+        }
+        if v1_conn.is_some() && v2_err.is_some() {
+            eprintln!("{}", session_fallback_line(v2_err.as_deref().unwrap_or("")));
+            return Ok((v1_conn.take().expect("v1 conn"), false));
+        }
+        if v1_conn.is_some() && v2_err.is_none() {
+            // The plain shell is up. A session handshake that is merely a
+            // little slower still wins; one that is going to time out does not
+            // keep the terminal waiting.
+            match tokio::time::timeout(std::time::Duration::from_secs(2), &mut v2).await {
+                Ok(Ok(conn)) => return Ok((conn, true)),
+                Ok(Err(err)) => {
+                    eprintln!("{}", session_fallback_line(&err.to_string()));
+                    return Ok((v1_conn.take().expect("v1 conn"), false));
+                }
+                Err(_elapsed) => {
+                    eprintln!("Session handshake is still waiting; attaching tmux in the shell.");
+                    return Ok((v1_conn.take().expect("v1 conn"), false));
+                }
+            }
+        }
+
+        tokio::select! {
+            res = &mut v2, if v2_err.is_none() => {
+                match res {
+                    Ok(conn) => return Ok((conn, true)),
+                    Err(err) => v2_err = Some(err.to_string()),
+                }
+            }
+            res = &mut v1, if v1_conn.is_none() && v1_err.is_none() => {
+                match res {
+                    Ok(conn) => v1_conn = Some(conn),
+                    Err(err) => v1_err = Some(err.to_string()),
+                }
+            }
+        }
+    }
+}
+
+/// `CSI > 0 u` pushes a kitty keyboard frame with no enhancements, so a
+/// text key stays one byte. `CSI > 4 ; 0 m` leaves xterm modifyOtherKeys.
+/// The pop on the way out restores the outer shell's kitty flags.
+const KEYBOARD_PROTOCOL_ENTER: &[u8] = b"\x1b[>0u\x1b[>4;0m";
+const KEYBOARD_PROTOCOL_LEAVE: &[u8] = b"\x1b[<u";
+const KEY_HOLD_MS: u64 = 25;
+
+static KEYBOARD_STACK_PUSHED: AtomicBool = AtomicBool::new(false);
+
+fn write_local(data: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        write_stdout(data)
+    }
+    #[cfg(windows)]
+    {
+        let mut out = std::io::stdout().lock();
+        out.write_all(data)?;
+        out.flush()
+    }
+}
+
+fn arm_local_keyboard() {
+    if write_local(KEYBOARD_PROTOCOL_ENTER).is_ok() {
+        KEYBOARD_STACK_PUSHED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn disarm_local_keyboard() {
+    if KEYBOARD_STACK_PUSHED.swap(false, Ordering::SeqCst) {
+        let _ = write_local(KEYBOARD_PROTOCOL_LEAVE);
+    }
+}
+
+/// A shell that turned on kitty "report all keys", or a terminal left in
+/// modifyOtherKeys mode 2, sends Shift+2 as a CSI sequence. tmux 3.4 does
+/// not turn that back into `@`. Collapse the forms that are only a
+/// printable ASCII key with no Ctrl or Alt. Anything else is forwarded
+/// unchanged. An unfinished prefix is held briefly so a lone Escape is
+/// not delayed for long.
+struct KeyNormalizer {
+    pending: Vec<u8>,
+}
+
+impl KeyNormalizer {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    fn holding(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    fn push(&mut self, input: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(input);
+        self.drain(false)
+    }
+
+    fn flush(&mut self) -> Vec<u8> {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, force: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            if self.pending.is_empty() {
+                break;
+            }
+            match scan_legacy_key(&self.pending) {
+                KeyScan::Forward(n) => {
+                    let n = n.clamp(1, self.pending.len());
+                    out.extend(self.pending.drain(..n));
+                }
+                KeyScan::Ascii { consumed, byte } => {
+                    let n = consumed.min(self.pending.len());
+                    self.pending.drain(..n);
+                    out.push(byte);
+                }
+                KeyScan::NeedMore => {
+                    if force {
+                        out.extend(self.pending.drain(..));
+                    }
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+enum KeyScan {
+    Forward(usize),
+    Ascii { consumed: usize, byte: u8 },
+    NeedMore,
+}
+
+fn scan_legacy_key(buf: &[u8]) -> KeyScan {
+    if buf.first().copied() != Some(0x1b) {
+        let n = buf.iter().position(|b| *b == 0x1b).unwrap_or(buf.len());
+        return KeyScan::Forward(n.max(1));
+    }
+    if buf.len() == 1 || (buf.len() == 2 && buf[1] == b'[') {
+        return KeyScan::NeedMore;
+    }
+    if buf[1] != b'[' {
+        return KeyScan::Forward(1);
+    }
+    if buf.len() > 48 {
+        return KeyScan::Forward(1);
+    }
+    match csi_printable(&buf[2..]) {
+        Csi::NeedMore => KeyScan::NeedMore,
+        Csi::No => KeyScan::Forward(1),
+        Csi::Ascii { len, byte } => KeyScan::Ascii {
+            consumed: len + 2,
+            byte,
+        },
+    }
+}
+
+enum Csi {
+    NeedMore,
+    No,
+    Ascii { len: usize, byte: u8 },
+}
+
+enum Num {
+    NeedMore,
+    Bad,
+    Ok(u32, usize),
+}
+
+fn number(s: &[u8], i: usize) -> Num {
+    if i >= s.len() {
+        return Num::NeedMore;
+    }
+    if !s[i].is_ascii_digit() {
+        return Num::Bad;
+    }
+    let mut n: u32 = 0;
+    let mut j = i;
+    while j < s.len() && s[j].is_ascii_digit() {
+        n = n.saturating_mul(10).saturating_add((s[j] - b'0') as u32);
+        j += 1;
+        if j - i > 8 {
+            return Num::Bad;
+        }
+    }
+    if j == s.len() {
+        Num::NeedMore
+    } else {
+        Num::Ok(n, j)
+    }
+}
+
+fn plain_mod(mods: u32) -> bool {
+    mods == 1 || mods == 2
+}
+
+fn apply_shift(key: u8) -> u8 {
+    match key {
+        b'a'..=b'z' => key - b'a' + b'A',
+        b'1' => b'!',
+        b'2' => b'@',
+        b'3' => b'#',
+        b'4' => b'$',
+        b'5' => b'%',
+        b'6' => b'^',
+        b'7' => b'&',
+        b'8' => b'*',
+        b'9' => b'(',
+        b'0' => b')',
+        b'`' => b'~',
+        b'-' => b'_',
+        b'=' => b'+',
+        b'[' => b'{',
+        b']' => b'}',
+        b'\\' => b'|',
+        b';' => b':',
+        b'\'' => b'"',
+        b',' => b'<',
+        b'.' => b'>',
+        b'/' => b'?',
+        other => other,
+    }
+}
+
+fn csi_printable(s: &[u8]) -> Csi {
+    if s.starts_with(b"27;") || b"27;".starts_with(s) {
+        return modify_other_keys(s);
+    }
+    kitty_printable(s)
+}
+
+fn modify_other_keys(s: &[u8]) -> Csi {
+    const PREFIX: &[u8] = b"27;";
+    if s.len() < PREFIX.len() {
+        return if PREFIX.starts_with(s) {
+            Csi::NeedMore
+        } else {
+            Csi::No
+        };
+    }
+    if !s.starts_with(PREFIX) {
+        return Csi::No;
+    }
+    let mut i = PREFIX.len();
+    let mods = match number(s, i) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => {
+            i = j;
+            n
+        }
+    };
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b';' {
+        return Csi::No;
+    }
+    i += 1;
+    let code = match number(s, i) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => {
+            i = j;
+            n
+        }
+    };
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b'~' {
+        return Csi::No;
+    }
+    i += 1;
+    if plain_mod(mods) && (32..=126).contains(&code) {
+        Csi::Ascii {
+            len: i,
+            byte: code as u8,
+        }
+    } else {
+        Csi::No
+    }
+}
+
+fn kitty_printable(s: &[u8]) -> Csi {
+    let (key, mut i) = match number(s, 0) {
+        Num::NeedMore => return Csi::NeedMore,
+        Num::Bad => return Csi::No,
+        Num::Ok(n, j) => (n, j),
+    };
+    i = match skip_colons(s, i) {
+        Colon::NeedMore => return Csi::NeedMore,
+        Colon::Bad => return Csi::No,
+        Colon::At(j) => j,
+    };
+    let mut mods = 1u32;
+    let mut text: Option<u32> = None;
+    if i < s.len() && s[i] == b';' {
+        i += 1;
+        match number(s, i) {
+            Num::NeedMore => return Csi::NeedMore,
+            Num::Bad => return Csi::No,
+            Num::Ok(n, j) => {
+                mods = n;
+                i = j;
+            }
+        }
+        i = match skip_colons(s, i) {
+            Colon::NeedMore => return Csi::NeedMore,
+            Colon::Bad => return Csi::No,
+            Colon::At(j) => j,
+        };
+        if i < s.len() && s[i] == b';' {
+            i += 1;
+            match number(s, i) {
+                Num::NeedMore => return Csi::NeedMore,
+                Num::Bad => return Csi::No,
+                Num::Ok(n, j) => {
+                    text = Some(n);
+                    i = j;
+                }
+            }
+            i = match skip_colons(s, i) {
+                Colon::NeedMore => return Csi::NeedMore,
+                Colon::Bad => return Csi::No,
+                Colon::At(j) => j,
+            };
+        }
+    }
+    if i >= s.len() {
+        return Csi::NeedMore;
+    }
+    if s[i] != b'u' {
+        return Csi::No;
+    }
+    i += 1;
+    let byte = if let Some(t) = text {
+        if (32..=126).contains(&t) {
+            Some(t as u8)
+        } else {
+            None
+        }
+    } else if (32..=126).contains(&key) {
+        Some(if mods == 2 {
+            apply_shift(key as u8)
+        } else {
+            key as u8
+        })
+    } else {
+        None
+    };
+    match byte {
+        Some(byte) if plain_mod(mods) => Csi::Ascii { len: i, byte },
+        _ => Csi::No,
+    }
+}
+
+enum Colon {
+    NeedMore,
+    Bad,
+    At(usize),
+}
+
+fn skip_colons(s: &[u8], mut i: usize) -> Colon {
+    if i < s.len() && s[i] == b':' {
+        while i < s.len() && s[i] == b':' {
+            i += 1;
+            match number(s, i) {
+                Num::NeedMore => return Colon::NeedMore,
+                Num::Bad => return Colon::Bad,
+                Num::Ok(_, j) => i = j,
+            }
+        }
+    }
+    Colon::At(i)
+}
+
+async fn hold_pending(holding: bool) {
+    if holding {
+        tokio::time::sleep(std::time::Duration::from_millis(KEY_HOLD_MS)).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
 pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Result<()> {
     eprintln!("Connecting to VM...");
 
@@ -218,35 +761,7 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
         .context("Failed to bind Iroh endpoint")?;
     endpoint.online().await;
 
-    // ALPN is the version handshake. A `--session` request needs an agent that can decode
-    // a Hello carrying a session name, so we ask for SHELL_ALPN_V2 and let QUIC tell us
-    // whether the far end speaks it — a v1 agent refuses the unknown ALPN during the TLS
-    // handshake, before we have written a byte. Falling back to v1 (and to typing the
-    // tmux command into the shell) degrades to the old behaviour instead of erroring.
-    // Without a session there is nothing to negotiate, so we keep the single-round-trip
-    // v1 path untouched.
-    let (conn, negotiated_v2) = if session.is_some() {
-        match endpoint.clone().connect(addr.clone(), SHELL_ALPN_V2).await {
-            Ok(conn) => (conn, true),
-            Err(e) => {
-                // Could be an old agent (ALPN refused) or a genuinely unreachable VM.
-                // Retrying on v1 distinguishes the two: if the VM is really unreachable
-                // the second attempt fails too, and that error is the one we surface.
-                eprintln!("Agent does not support shared sessions natively ({e}); falling back.");
-                let conn = endpoint
-                    .connect(addr, SHELL_ALPN)
-                    .await
-                    .context("Failed to connect to VM")?;
-                (conn, false)
-            }
-        }
-    } else {
-        let conn = endpoint
-            .connect(addr, SHELL_ALPN)
-            .await
-            .context("Failed to connect to VM")?;
-        (conn, false)
-    };
+    let (conn, negotiated_v2) = connect_shell(&endpoint, addr, session.as_deref()).await?;
     eprintln!("Connected. Opening shell...");
 
     let (mut send, mut recv) = conn.open_bi().await.context("Failed to open QUIC stream")?;
@@ -296,7 +811,7 @@ pub async fn connect_to_vm(addr: EndpointAddr, session: Option<String>) -> Resul
             std::process::exit(exit_code);
         }
         Err(e) => {
-            eprintln!("Connection error: {}", e);
+            eprintln!("Connection error: {e:#}");
             std::process::exit(1);
         }
     }
@@ -309,18 +824,18 @@ async fn run_shell_loop(
 ) -> Result<i32> {
     let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
     let mut sigwinch =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
             .context("Failed to register SIGWINCH handler")?;
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             result = read_frame(recv) => {
                 match result {
                     Ok(Some(Frame::Data(data))) => {
-                        let mut stdout = std::io::stdout().lock();
-                        stdout.write_all(&data)?;
-                        stdout.flush()?;
+                        write_stdout(&data)?;
                     }
                     Ok(Some(Frame::Exit { code })) => {
                         return Ok(code);
@@ -330,6 +845,12 @@ async fn run_shell_loop(
                     }
                     Ok(None) => {
                         return Ok(0);
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                     }
                     Err(e) => {
                         return Err(e.into());
@@ -343,11 +864,20 @@ async fn run_shell_loop(
                         return Ok(0);
                     }
                     Ok(n) => {
-                        write_frame(send, &Frame::Data(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            write_frame(send, &Frame::Data(data)).await?;
+                        }
                     }
                     Err(e) => {
                         return Err(e.into());
                     }
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    write_frame(send, &Frame::Data(data)).await?;
                 }
             }
             _ = sigwinch.recv() => {
@@ -365,8 +895,10 @@ async fn run_shell_loop(
 ) -> Result<i32> {
     let mut stdin = tokio::io::stdin();
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             result = read_frame(recv) => {
                 match result {
@@ -396,11 +928,20 @@ async fn run_shell_loop(
                         return Ok(0);
                     }
                     Ok(n) => {
-                        write_frame(send, &Frame::Data(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            write_frame(send, &Frame::Data(data)).await?;
+                        }
                     }
                     Err(e) => {
                         return Err(e.into());
                     }
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    write_frame(send, &Frame::Data(data)).await?;
                 }
             }
         }
@@ -673,7 +1214,7 @@ pub async fn cmd_connect(
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
-            eprintln!("Connection error: {}", e);
+            eprintln!("Connection error: {e:#}");
             std::process::exit(1);
         }
     }
@@ -723,6 +1264,7 @@ where
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let stdin = tokio::io::unix::AsyncFd::new(std::io::stdin()).context("Failed to watch stdin")?;
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     // Send initial resize
     let (rows, cols) = get_terminal_size();
@@ -741,13 +1283,12 @@ where
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             msg = ws_read.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        let mut stdout = std::io::stdout().lock();
-                        stdout.write_all(&data)?;
-                        stdout.flush()?;
+                        write_stdout(&data)?;
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         ws_write.send(Message::Pong(payload)).await?;
@@ -763,9 +1304,18 @@ where
                 match result {
                     Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
-                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            ws_write.send(Message::Binary(data)).await?;
+                        }
                     }
                     Err(e) => return Err(e.into()),
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    ws_write.send(Message::Binary(data)).await?;
                 }
             }
             _ = sigwinch.recv() => {
@@ -791,6 +1341,7 @@ where
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let mut stdin = tokio::io::stdin();
     let mut stdin_buf = vec![0u8; 4096];
+    let mut keys = KeyNormalizer::new();
 
     // Send initial resize
     let (rows, cols) = get_terminal_size();
@@ -808,6 +1359,7 @@ where
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
+        let holding = keys.holding();
         tokio::select! {
             // Data from server (PTY output)
             msg = ws_read.next() => {
@@ -832,9 +1384,18 @@ where
                 match result {
                     Ok(0) => return Ok(PtyEnd::LocalEof),
                     Ok(n) => {
-                        ws_write.send(Message::Binary(stdin_buf[..n].to_vec())).await?;
+                        let data = keys.push(&stdin_buf[..n]);
+                        if !data.is_empty() {
+                            ws_write.send(Message::Binary(data)).await?;
+                        }
                     }
                     Err(e) => return Err(e.into()),
+                }
+            }
+            _ = hold_pending(holding) => {
+                let data = keys.flush();
+                if !data.is_empty() {
+                    ws_write.send(Message::Binary(data)).await?;
                 }
             }
             _ = ping.tick() => {
@@ -1111,6 +1672,77 @@ mod tests {
     #[test]
     fn percent_encode_query_escapes_non_ascii_bytewise() {
         assert_eq!(percent_encode_query("café"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn session_timeout_is_not_described_as_an_old_agent() {
+        let line = session_fallback_line("timed out");
+        assert!(line.contains("timed out"));
+        assert!(line.contains("attaching tmux"));
+        assert!(!line.contains("does not support"));
+        let line = session_fallback_line("ALPN protocol not supported");
+        assert!(line.contains("does not support shared sessions"));
+    }
+
+    #[test]
+    fn shifted_symbols_survive_extended_key_encodings() {
+        let mut keys = KeyNormalizer::new();
+        assert_eq!(keys.push(b"hi"), b"hi");
+        assert_eq!(keys.push(b"\x1b[27;2;64~"), b"@");
+        assert_eq!(keys.push(b"\x1b[27;2;35~"), b"#");
+        assert_eq!(keys.push(b"\x1b[50;2u"), b"@");
+        assert_eq!(keys.push(b"\x1b[50;2;64u"), b"@");
+        assert_eq!(keys.push(b"\x1b[97;2u"), b"A");
+        assert_eq!(keys.push(b"a\x1b[27;2;64~b"), b"a@b");
+        assert_eq!(keys.push(b"\x1b[2~"), b"\x1b[2~");
+        assert_eq!(keys.push(b"\x1b[A"), b"\x1b[A");
+        assert_eq!(keys.push(b"\x1b[97;5u"), b"\x1b[97;5u");
+        assert_eq!(keys.push(b"\x1b[27;5;97~"), b"\x1b[27;5;97~");
+    }
+
+    #[test]
+    fn a_split_at_sign_is_held_until_the_sequence_finishes() {
+        let mut keys = KeyNormalizer::new();
+        assert!(keys.push(b"\x1b[27;2;").is_empty());
+        assert!(keys.holding());
+        assert_eq!(keys.push(b"64~"), b"@");
+        assert!(!keys.holding());
+        assert!(keys.push(b"\x1b").is_empty());
+        assert_eq!(keys.flush(), b"\x1b");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonblock_on_a_shared_tty_stays_off_the_writer() {
+        let path = std::env::temp_dir().join(format!("mj-nonblock-{}", std::process::id()));
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let reader = unsafe {
+            libc::open(
+                c_path.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            )
+        };
+        assert!(reader >= 0, "{}", std::io::Error::last_os_error());
+        let writer = unsafe { libc::dup(reader) };
+        let replacement = unsafe { libc::open(c_path.as_ptr(), libc::O_RDWR) };
+        assert!(writer >= 0 && replacement >= 0);
+
+        assert!(nonblock_is_shared(reader, writer).unwrap());
+        assert!(!nonblock_is_shared(reader, replacement).unwrap());
+
+        set_reader_nonblocking(reader, writer, Some(replacement)).unwrap();
+
+        let reader_flags = fd_flags(reader).unwrap();
+        let writer_flags = fd_flags(writer).unwrap();
+        assert_ne!(reader_flags & libc::O_NONBLOCK, 0);
+        assert_eq!(writer_flags & libc::O_NONBLOCK, 0);
+
+        unsafe {
+            libc::close(reader);
+            libc::close(writer);
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
