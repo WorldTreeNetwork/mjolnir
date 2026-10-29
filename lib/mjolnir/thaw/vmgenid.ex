@@ -7,8 +7,45 @@ defmodule Mjolnir.Thaw.Vmgenid do
   a urandom sample proves that the guest observed a generation-id change.
   """
 
-  @doc "The current guest agent cannot report the device's generation id."
-  def observe(_connection), do: :missing
+  @doc """
+  Ask the guest for the VM Generation ID sysfs value.
+
+  `nil` and a transport failure are `:missing`. A response is an id only when
+  `interpret/1` accepts it. A `/dev/urandom` sample is not a shape this
+  function returns.
+  """
+  def observe(nil), do: :missing
+
+  def observe(conn) when is_pid(conn) do
+    case Mjolnir.Vsock.Connection.send_request(conn, request(), 10_000) do
+      {:ok, response} -> interpret(response)
+      {:error, _reason} -> :missing
+    end
+  end
+
+  def observe(_conn), do: :missing
+
+  @doc "Build a `get_vmgenid` request. The boot agent answers this too."
+  def request(id \\ nil) do
+    %{"type" => "get_vmgenid", "id" => id || UUID.uuid4()}
+  end
+
+  @doc """
+  Classify a `vmgenid_response`.
+
+  Success is `ok: true` and a 32-digit hex id, the 16-byte counter. Every
+  other payload, including an old agent's error, is `:missing`.
+  """
+  def interpret(%{"type" => "vmgenid_response", "ok" => true, "generation_id" => id})
+      when is_binary(id) do
+    if generation_id?(id), do: {:ok, String.downcase(id)}, else: :missing
+  end
+
+  def interpret(_response), do: :missing
+
+  defp generation_id?(id) do
+    byte_size(id) == 32 and String.match?(id, ~r/^[0-9a-fA-F]+$/)
+  end
 
   @doc "Record the boot kernel capability and a genuine observation, if available."
   def capture(vm, observe \\ &observe/1) do

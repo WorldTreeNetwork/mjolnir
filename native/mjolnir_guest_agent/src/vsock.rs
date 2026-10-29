@@ -292,6 +292,7 @@ async fn handle_boot_connection(mut stream: VsockStream) {
                                             error: outcome.error,
                                         }
                                     }
+                                    Ok(VsockRequest::GetVmgenid { id }) => vmgenid_response(id),
                                     // `session` is ignored here on purpose: the boot agent
                                     // runs in the initramfs, which has no tmux. A named
                                     // session only becomes meaningful after the pivot to
@@ -819,6 +820,7 @@ async fn handle_request(
                 error: outcome.error,
             }
         }
+        VsockRequest::GetVmgenid { id } => vmgenid_response(id),
         VsockRequest::ConfigureNetwork { id, ip } => {
             info!("Configure network: {}", ip);
             let output = Command::new("/usr/local/bin/mjolnir-network-setup")
@@ -1425,6 +1427,16 @@ async fn handle_request(
 /// Hand-rolled rather than pulling in the `hex` crate: the guest agent is
 /// cross-compiled to a static musl binary that is injected into every rootfs,
 /// so a dependency here is paid for on every VM.
+fn vmgenid_response(id: String) -> VsockResponse {
+    let observed = crate::vmgenid::read_generation_id();
+    VsockResponse::VmgenidResponse {
+        id,
+        ok: observed.ok,
+        generation_id: observed.generation_id,
+        error: observed.error,
+    }
+}
+
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err(format!("hex string has odd length {}", s.len()));

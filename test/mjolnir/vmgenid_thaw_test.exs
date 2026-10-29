@@ -98,6 +98,22 @@ defmodule Mjolnir.VmgenidThawTest do
 
     assert :missing == Vmgenid.observe(nil)
 
+    assert {:ok, "00112233445566778899aabbccddeeff"} =
+             Vmgenid.interpret(%{
+               "type" => "vmgenid_response",
+               "ok" => true,
+               "generation_id" => "00112233445566778899AABBCCDDEEFF"
+             })
+
+    assert :missing ==
+             Vmgenid.interpret(%{
+               "type" => "vmgenid_response",
+               "ok" => true,
+               "generation_id" => "not-the-device"
+             })
+
+    assert :missing == Vmgenid.interpret(%{"type" => "error", "error" => "unknown"})
+
     assert {:error, :vmgenid_observation_missing} =
              Publish.run(
                gate(%{

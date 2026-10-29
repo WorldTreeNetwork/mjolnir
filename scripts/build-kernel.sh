@@ -41,6 +41,91 @@ fi
 
 cd "$CH_LINUX_DIR"
 
+# The ch-6.12.8 driver feeds the counter to random.c and stops. Userspace
+# has no /dev/vmgenid on this tree. Export the live 16 bytes as 32 hex
+# digits at /sys/firmware/vmgenid/generation_id. Idempotent.
+python3 - <<'PY'
+from pathlib import Path
+path = Path("drivers/virt/vmgenid.c")
+text = path.read_text()
+if "mjolnir_vmgenid_state" in text:
+    raise SystemExit(0)
+old = """#include <linux/random.h>
+"""
+new = """#include <linux/kobject.h>
+#include <linux/random.h>
+#include <linux/sysfs.h>
+"""
+if old not in text:
+    raise SystemExit("vmgenid.c includes changed; refusing to patch")
+text = text.replace(old, new, 1)
+old = """struct vmgenid_state {
+	u8 *next_id;
+	u8 this_id[VMGENID_SIZE];
+};
+"""
+new = """struct vmgenid_state {
+	u8 *next_id;
+	u8 this_id[VMGENID_SIZE];
+};
+
+static struct vmgenid_state *mjolnir_vmgenid_state;
+static struct kobject *mjolnir_vmgenid_kobj;
+
+static ssize_t generation_id_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct vmgenid_state *state = READ_ONCE(mjolnir_vmgenid_state);
+	(void)kobj;
+	(void)attr;
+	u8 id[VMGENID_SIZE];
+	int i;
+
+	if (!state || !state->next_id)
+		return -ENODEV;
+	memcpy(id, state->next_id, VMGENID_SIZE);
+	for (i = 0; i < VMGENID_SIZE; i++)
+		sprintf(buf + (i * 2), "%02x", id[i]);
+	buf[VMGENID_SIZE * 2] = '\\n';
+	return VMGENID_SIZE * 2 + 1;
+}
+static struct kobj_attribute mjolnir_generation_id_attr = __ATTR_RO(generation_id);
+"""
+if old not in text:
+    raise SystemExit("vmgenid_state struct changed; refusing to patch")
+text = text.replace(old, new, 1)
+old = """	memcpy(state->this_id, state->next_id, sizeof(state->this_id));
+	add_device_randomness(state->this_id, sizeof(state->this_id));
+"""
+new = """	memcpy(state->this_id, state->next_id, sizeof(state->this_id));
+	WRITE_ONCE(mjolnir_vmgenid_state, state);
+	add_device_randomness(state->this_id, sizeof(state->this_id));
+"""
+if old not in text:
+    raise SystemExit("setup_vmgenid_state changed; refusing to patch")
+text = text.replace(old, new, 1)
+old = """	if (ret < 0)
+		devm_kfree(dev, state);
+	return ret;
+}
+"""
+new = """	if (ret < 0) {
+		devm_kfree(dev, state);
+		return ret;
+	}
+	if (!mjolnir_vmgenid_kobj) {
+		mjolnir_vmgenid_kobj = kobject_create_and_add("vmgenid", firmware_kobj);
+		if (mjolnir_vmgenid_kobj)
+			sysfs_create_file(mjolnir_vmgenid_kobj, &mjolnir_generation_id_attr.attr);
+	}
+	return 0;
+}
+"""
+if old not in text:
+    raise SystemExit("vmgenid_add tail changed; refusing to patch")
+text = text.replace(old, new, 1)
+path.write_text(text)
+PY
+
 # Configure with CH defaults
 echo "Configuring with ch_defconfig..."
 make ch_defconfig

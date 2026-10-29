@@ -25,6 +25,7 @@ mod secrets;
 mod syslog;
 #[cfg(feature = "full")]
 mod tmux;
+mod vmgenid;
 mod vsock;
 
 use tracing::{error, info};

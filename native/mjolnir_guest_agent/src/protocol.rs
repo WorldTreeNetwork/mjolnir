@@ -43,6 +43,11 @@ pub enum VsockRequest {
         realtime_secs: i64,
         realtime_nsec: i64,
     },
+    /// Read the VM Generation ID sysfs file. Not a urandom sample. The boot
+    /// agent answers this too: a thawed VM stays on that binary until pivot,
+    /// and a missing answer is a missing observation.
+    #[serde(rename = "get_vmgenid")]
+    GetVmgenid { id: String },
     #[serde(rename = "configure_network")]
     ConfigureNetwork { id: String, ip: String },
     #[cfg(feature = "iroh")]
@@ -252,6 +257,16 @@ pub enum VsockResponse {
         ok: bool,
         realtime_secs: i64,
         monotonic_stepped: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// `generation_id` is 32 lowercase hex digits when `ok` is true.
+    #[serde(rename = "vmgenid_response")]
+    VmgenidResponse {
+        id: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        generation_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },

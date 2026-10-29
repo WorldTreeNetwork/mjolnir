@@ -20,15 +20,15 @@
 //!
 //! # What this is not
 //!
-//! The correct mechanism is VMGENID: an ACPI device holding a 128-bit
-//! generation ID the hypervisor changes on restore, which Linux's
-//! `drivers/virt/vmgenid.c` (5.18+) notices and acts on by reseeding the CRNG
-//! **in the kernel, before any userspace task is scheduled**. No userspace
-//! reseed can offer that ordering guarantee. Neither half exists on this stack
-//! yet — our PVH kernel is built without `CONFIG_VMGENID` and Cloud Hypervisor
-//! does not emit the device (mjolnir-3y6.13).
+//! The kernel mechanism is VMGENID: an ACPI device holding a 128-bit
+//! generation ID the hypervisor changes on restore. Linux's
+//! `drivers/virt/vmgenid.c` calls `add_vmfork_randomness` before userspace is
+//! scheduled. That reseed does not reset userspace generators, and the stock
+//! ch-6.12.8 driver does not show the counter to userspace. `vmgenid.rs`
+//! reads the sysfs file our kernel build adds. This ioctl stays the host
+//! gate for userspace PRNGs. It is not evidence the driver ran.
 //!
-//! So this is the honest interim: vCPUs resume all at once, so the agent
+//! vCPUs resume all at once, so the agent
 //! cannot beat every other userspace process to the first random byte. The
 //! residual race is real and unavoidable without VMGENID. What makes it
 //! tolerable is the *host-side gate* — Mjolnir keeps a thawed VM unreachable

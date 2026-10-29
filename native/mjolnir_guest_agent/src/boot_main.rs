@@ -17,6 +17,7 @@ compile_error!(
 
 mod clock;
 mod entropy;
+mod vmgenid;
 mod protocol;
 mod pty;
 mod vsock;
