@@ -194,6 +194,10 @@ defmodule Mjolnir.API.Router do
   # Hosted browser terminal (mjolnir-wrug). Same origin as the PTY socket
   # so the `mj_term` cookie can authenticate the WebSocket upgrade — a
   # browser cannot set Authorization on `new WebSocket(...)`.
+  #
+  # IdentiKey login is required (the Auth plug bounces a browser with no
+  # cookie through auth.identikey.me). Login is not enough: the caller must
+  # own the VM or hold a terminal invite, the same rule as the PTY socket.
   get "/term/:id" do
     conn = require_scope(conn, "pty:connect")
 
@@ -205,11 +209,7 @@ defmodule Mjolnir.API.Router do
           unless conn.halted do
             case pty_session_param(conn.query_params["session"]) do
               {:ok, session} ->
-                html = Mjolnir.API.TermPage.render(vm_id, session || "main")
-
-                conn
-                |> put_resp_content_type("text/html; charset=utf-8")
-                |> send_resp(200, html)
+                serve_term(conn, vm_id, session)
 
               {:error, message} ->
                 json(conn, 400, %{error: "invalid_session", message: message})
@@ -681,6 +681,40 @@ defmodule Mjolnir.API.Router do
   defp pty_session_param(nil), do: {:ok, nil}
   defp pty_session_param(""), do: {:ok, nil}
   defp pty_session_param(name), do: Validation.validate_session_name(name, "session")
+
+  # Owner or pty_invites. A stranger who finished IdentiKey login gets the
+  # locked page, not the terminal. Missing VMs stay 404.
+  @doc false
+  def serve_term(conn, vm_id, session) do
+    user = %{user_id: conn.assigns[:user_id]}
+
+    case Mjolnir.VM.get(vm_id) do
+      {:ok, vm} ->
+        case Mjolnir.Policy.VM.authorize(:pty, user, vm) do
+          :ok ->
+            html = Mjolnir.API.TermPage.render(vm_id, session || "main")
+
+            conn
+            |> put_resp_content_type("text/html; charset=utf-8")
+            |> send_resp(200, html)
+
+          :error ->
+            Logger.debug(
+              "Authz denied: user=#{inspect(user.user_id)} action=pty vm=#{vm_id} page=term"
+            )
+
+            conn
+            |> put_resp_content_type("text/html; charset=utf-8")
+            |> send_resp(403, Mjolnir.API.TermPage.denied())
+        end
+
+      {:error, :not_found} ->
+        json(conn, 404, %{error: "not_found"})
+
+      {:error, :unreachable} ->
+        json(conn, 503, %{error: "vm_unreachable"})
+    end
+  end
 
   # Get VM details
   get "/api/vms/:id" do

@@ -103,10 +103,21 @@
     .grip.se { bottom: -5px; right: -5px; cursor: nwse-resize; }
     .grip.ne { top: -5px; right: -5px; cursor: nesw-resize; }
     .grip.sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+    #identikey {
+      position: fixed;
+      top: 16px;
+      right: 18px;
+      z-index: 20;
+      width: 42px;
+      height: 37px;
+      pointer-events: none;
+    }
+    #identikey svg { width: 100%; height: 100%; display: block; }
   </style>
 </head>
 <body>
   <div id="desktop">
+    <div id="identikey" aria-label="IdentiKey">{{IDENTIKEY_MARK}}</div>
     <div id="win">
       <div id="title">
         <span class="mark">MJOLNIR</span>
