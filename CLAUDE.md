@@ -19,6 +19,7 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 ### Deployment
 
 - Server: `ssh root@45.76.77.97`
+- Dev laptop: `ssh dorje@10.43.1.243` (Framework5070, Arch). Mjolnir compiles and tests go here, including guest-agent and vsock builds. mise has Elixir 1.20.4 and OTP 27.3.4.19. Checkout `~/work/IdentiKey/mjolnir`. `/opt/mjolnir` is this machine's own install; its VMs are not mission critical and that install may be updated. Production deploys stay on the server above.
 - Deploy via Justfile (preferred): `just deploy`, `just deploy-full`, `just deploy-rootfs`
 - Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
@@ -149,7 +150,7 @@ cd native/mjolnir_guest_agent && cargo build --release    # Build guest agent
 
 The guest agent binary is `mjolnir-agent` and must be cross-compiled for the VM's target architecture (x86_64-unknown-linux-musl for static linking).
 
-**Important: All Rust builds must happen on the server**, not on macOS. The guest agent depends on `tokio-vsock` which is Linux-only — `cargo check` and `cargo build` both fail on macOS. Use the Mjolnir server (`ssh root@45.76.77.97`) as the build server:
+**Important: Rust builds do not happen on macOS.** The guest agent depends on `tokio-vsock`, which is Linux-only — `cargo check` and `cargo build` both fail on macOS. Compile and test on the Framework laptop (`ssh dorje@10.43.1.243`). Production deploys still go to the server (`ssh root@45.76.77.97`):
 
 ```bash
 just build-boot-agent           # Cross-compile boot agent on server via SSH
