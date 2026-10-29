@@ -38,24 +38,222 @@
       font-size: 11px;
       letter-spacing: 0;
     }
-    #term { height: calc(100% - 2rem); padding: 0.4rem 0.5rem 0.6rem; }
+    #desktop {
+      position: relative;
+      height: 100%;
+      background:
+        radial-gradient(circle, #1a1c19 1px, transparent 1px) 0 0 / 22px 22px,
+        var(--bg);
+      overflow: hidden;
+    }
+    #win {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      min-width: 360px;
+      min-height: 220px;
+      background: var(--bg);
+      border: 1px solid #3a3424;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+      box-sizing: border-box;
+    }
+    #title {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      flex: 0 0 auto;
+      padding: 0.4rem 0.7rem;
+      border-bottom: 1px solid var(--line);
+      background: #121411;
+      letter-spacing: 0.04em;
+      cursor: grab;
+      user-select: none;
+      touch-action: none;
+    }
+    #title.dragging { cursor: grabbing; }
+    #title .mark { color: var(--accent); font-weight: 600; }
+    #title .id { color: var(--dim); }
+    #title .sess { color: var(--fg); }
+    #title .size { color: var(--accent); font-variant-numeric: tabular-nums; }
+    #title .hint {
+      margin-left: auto;
+      color: var(--dim);
+      font-size: 11px;
+      letter-spacing: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #term { flex: 1 1 auto; min-height: 0; padding: 0.35rem 0.4rem 0.45rem; }
     .xterm { height: 100%; }
     .xterm-viewport { overflow-y: auto !important; }
+    .grip {
+      position: absolute;
+      z-index: 2;
+      touch-action: none;
+    }
+    .grip.n, .grip.s { left: 12px; right: 12px; height: 8px; cursor: ns-resize; }
+    .grip.e, .grip.w { top: 12px; bottom: 12px; width: 8px; cursor: ew-resize; }
+    .grip.n { top: -4px; }
+    .grip.s { bottom: -4px; }
+    .grip.e { right: -4px; }
+    .grip.w { left: -4px; }
+    .grip.nw, .grip.ne, .grip.sw, .grip.se { width: 14px; height: 14px; }
+    .grip.nw { top: -5px; left: -5px; cursor: nwse-resize; }
+    .grip.se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+    .grip.ne { top: -5px; right: -5px; cursor: nesw-resize; }
+    .grip.sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
   </style>
 </head>
 <body>
-  <div id="bar">
-    <span class="mark">MJOLNIR</span>
-    <span class="id">{{VM_SHORT}}</span>
-    <span class="sess">{{SESSION}}</span>
-    <span class="hint">Select text, then Ctrl+C copies. Ctrl+V pastes. Ctrl+C with nothing selected stops the program (OpenCode quits). It does not close this page.</span>
+  <div id="desktop">
+    <div id="win">
+      <div id="title">
+        <span class="mark">MJOLNIR</span>
+        <span class="id">{{VM_SHORT}}</span>
+        <span class="sess">{{SESSION}}</span>
+        <span class="size" id="size"></span>
+        <span class="hint" title="Select text, then Ctrl+C copies. Ctrl+V pastes. Ctrl+C with nothing selected stops the program (OpenCode quits). It does not close this page.">Select text, then Ctrl+C copies. Ctrl+V pastes. Drag the bar to move. Drag a corner to resize tmux.</span>
+      </div>
+      <div id="term"></div>
+      <div class="grip nw" data-edge="nw"></div>
+      <div class="grip n" data-edge="n"></div>
+      <div class="grip ne" data-edge="ne"></div>
+      <div class="grip e" data-edge="e"></div>
+      <div class="grip se" data-edge="se"></div>
+      <div class="grip s" data-edge="s"></div>
+      <div class="grip sw" data-edge="sw"></div>
+      <div class="grip w" data-edge="w"></div>
+    </div>
   </div>
-  <div id="term"></div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
     const VM_ID = {{VM_ID_JSON}};
     const SESSION = {{SESSION_JSON}};
+
+    const win = document.getElementById("win");
+    const title = document.getElementById("title");
+    const sizeLabel = document.getElementById("size");
+    const storeKey = "mjolnir-term-window:" + VM_ID + ":" + SESSION;
+    const minW = 360;
+    const minH = 220;
+
+    function defaultRect() {
+      const w = Math.round(window.innerWidth * 0.72);
+      const h = Math.round(window.innerHeight * 0.72);
+      return {
+        x: Math.round((window.innerWidth - w) / 2),
+        y: Math.round((window.innerHeight - h) / 2),
+        w: w,
+        h: h
+      };
+    }
+
+    function loadRect() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(storeKey));
+        if (saved && saved.w >= minW && saved.h >= minH) return saved;
+      } catch (e) {}
+      return defaultRect();
+    }
+
+    let rect = loadRect();
+    let beforeMax = null;
+
+    function place(next) {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      let w = Math.max(minW, Math.min(next.w, vw));
+      let h = Math.max(minH, Math.min(next.h, vh));
+      let x = Math.min(Math.max(0, next.x), Math.max(0, vw - Math.min(w, 120)));
+      let y = Math.min(Math.max(0, next.y), Math.max(0, vh - 36));
+      rect = { x: x, y: y, w: w, h: h };
+      win.style.left = x + "px";
+      win.style.top = y + "px";
+      win.style.width = w + "px";
+      win.style.height = h + "px";
+    }
+
+    function resizeFrom(start, edge, dx, dy) {
+      let x = start.x, y = start.y, w = start.w, h = start.h;
+      if (edge.indexOf("e") !== -1) w = start.w + dx;
+      if (edge.indexOf("s") !== -1) h = start.h + dy;
+      if (edge.indexOf("w") !== -1) { w = start.w - dx; x = start.x + dx; }
+      if (edge.indexOf("n") !== -1) { h = start.h - dy; y = start.y + dy; }
+      if (w < minW) {
+        if (edge.indexOf("w") !== -1) x -= minW - w;
+        w = minW;
+      }
+      if (h < minH) {
+        if (edge.indexOf("n") !== -1) y -= minH - h;
+        h = minH;
+      }
+      return { x: x, y: y, w: w, h: h };
+    }
+
+    place(rect);
+
+    let drag = null;
+    let resizeQueued = false;
+
+    function remember() {
+      try { localStorage.setItem(storeKey, JSON.stringify(rect)); } catch (e) {}
+    }
+
+    title.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      beforeMax = null;
+      drag = { edge: "move", px: ev.clientX, py: ev.clientY, start: Object.assign({}, rect) };
+      title.classList.add("dragging");
+      title.setPointerCapture(ev.pointerId);
+    });
+    title.addEventListener("dblclick", () => {
+      if (beforeMax) {
+        place(beforeMax);
+        beforeMax = null;
+      } else {
+        beforeMax = Object.assign({}, rect);
+        place({ x: 12, y: 12, w: window.innerWidth - 24, h: window.innerHeight - 24 });
+      }
+      remember();
+      sendResize();
+    });
+    document.querySelectorAll(".grip").forEach((grip) => {
+      grip.addEventListener("pointerdown", (ev) => {
+        if (ev.button !== 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        beforeMax = null;
+        drag = { edge: grip.dataset.edge, px: ev.clientX, py: ev.clientY, start: Object.assign({}, rect) };
+        grip.setPointerCapture(ev.pointerId);
+      });
+    });
+    window.addEventListener("pointermove", (ev) => {
+      if (!drag) return;
+      const dx = ev.clientX - drag.px;
+      const dy = ev.clientY - drag.py;
+      if (drag.edge === "move") {
+        place({ x: drag.start.x + dx, y: drag.start.y + dy, w: drag.start.w, h: drag.start.h });
+      } else {
+        place(resizeFrom(drag.start, drag.edge, dx, dy));
+        if (!resizeQueued) {
+          resizeQueued = true;
+          requestAnimationFrame(() => {
+            resizeQueued = false;
+            sendResize();
+          });
+        }
+      }
+    });
+    window.addEventListener("pointerup", () => {
+      if (!drag) return;
+      const sized = drag.edge !== "move";
+      drag = null;
+      title.classList.remove("dragging");
+      remember();
+      if (sized) sendResize();
+    });
 
     const term = new Terminal({
       cursorBlink: true,
@@ -98,6 +296,7 @@
 
     function sendResize() {
       fit.fit();
+      sizeLabel.textContent = term.cols + "×" + term.rows;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
       }
@@ -195,7 +394,10 @@
       else pasteClipboard();
     });
 
-    window.addEventListener("resize", sendResize);
+    window.addEventListener("resize", () => {
+      place(rect);
+      sendResize();
+    });
   </script>
 </body>
 </html>
