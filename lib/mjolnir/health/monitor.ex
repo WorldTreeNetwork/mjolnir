@@ -4,10 +4,11 @@ defmodule Mjolnir.Health.Monitor do
 
   Every `interval_ms` (default 30s), the monitor scans `Mjolnir.VMRegistry`
   and runs `Mjolnir.Health.check/1` on each VM. On `:degraded`, it attempts
-  an L1 auto-heal. On `:agent_unreachable` (guest agent silent on vsock but the
-  VM is provably TCP-live), it attempts an L1 vsock heal rather than declaring
-  death. On `:dead` (unreachable over *both* vsock and TCP), it emits an
-  `EventBus` event and stops escalating — a human decides the next step.
+  an L1 auto-heal. On `:agent_unreachable` (the guest is alive — a one-shot
+  agent ping answered, or TCP did — but the persistent vsock is down), it
+  attempts an L1 vsock heal rather than declaring death. On `:dead`
+  (unreachable over *both* vsock and TCP), it emits an `EventBus` event and
+  stops escalating — a human decides the next step.
 
   This is the "slow catch" layer for the connection-rot problem: even if
   nothing actively pokes a VM, the monitor notices a stale Iroh or vsock
@@ -141,12 +142,13 @@ defmodule Mjolnir.Health.Monitor do
         Logger.debug("Health.Monitor: VM #{vm_id} still booting; not healing")
 
       {:ok, %{overall: :agent_unreachable} = report} ->
-        # The guest agent is unreachable over vsock, but an independent TCP probe
-        # confirmed the VM is alive and serving. This is NOT death — it's a
-        # wedged vsock/agent channel (the mjolnir-8ie signature). Attempt the L1
-        # heal (rebuild the vsock connection) instead of crying DEAD.
+        # The persistent vsock is down, but the guest is alive: either a
+        # one-shot agent ping answered, or TCP did. This is NOT death — it's a
+        # dropped or wedged connection (the mjolnir-8ie signature, and a nil
+        # vsock_conn on a dev VM with no guest_ip). Attempt the L1 heal
+        # (rebuild the vsock connection) instead of crying DEAD.
         Logger.warning(
-          "Health.Monitor: VM #{vm_id} guest-agent unreachable over vsock but VM is TCP-live; " <>
+          "Health.Monitor: VM #{vm_id} persistent vsock is down but the guest is alive; " <>
             "attempting L1 vsock heal (not declaring DEAD)"
         )
 

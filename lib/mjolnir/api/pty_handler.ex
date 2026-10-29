@@ -55,31 +55,61 @@ defmodule Mjolnir.API.PtyHandler do
         "session=#{inspect(session)}"
     )
 
-    # Open PTY channel through the VM's vsock connection
-    case Mjolnir.Vsock.Connection.open_pty(vm.vsock_conn, 24, 80, 10_000, session) do
-      {:ok, channel_id} ->
-        # Register this process to receive data from the channel
-        :ok =
-          Mjolnir.Vsock.Connection.register_channel_handler(
-            vm.vsock_conn,
-            channel_id,
-            self()
-          )
-
-        state = %__MODULE__{
-          vm_id: vm_id,
-          channel: channel_id,
-          conn_pid: vm.vsock_conn
-        }
-
-        Logger.info("PTY WebSocket opened for VM #{vm_id}, channel #{channel_id}")
-        Process.send_after(self(), :ws_ping, @ping_ms)
-        {:ok, state}
-
+    with {:ok, conn} <- ensure_vsock_conn(vm),
+         {:ok, channel_id} <- open_pty(conn, session),
+         :ok <- Mjolnir.Vsock.Connection.register_channel_handler(conn, channel_id, self()) do
+      state = %__MODULE__{vm_id: vm_id, channel: channel_id, conn_pid: conn}
+      Logger.info("PTY WebSocket opened for VM #{vm_id}, channel #{channel_id}")
+      Process.send_after(self(), :ws_ping, @ping_ms)
+      {:ok, state}
+    else
       {:error, reason} ->
         Logger.error("Failed to open PTY for VM #{vm_id}: #{inspect(reason)}")
         {:stop, :normal, {1011, "Failed to open PTY: #{inspect(reason)}"}}
     end
+  end
+
+  # A missing or dead persistent connection used to reach
+  # `GenServer.call(nil, {:open_pty, ...})` and crash the websocket. Rebuild
+  # once, then open on the fresh pid. A busy or not-yet-running VM keeps its
+  # socket: stopping it under an in-flight exec is the mjolnir-1s9 failure.
+  defp ensure_vsock_conn(%Mjolnir.VM{vsock_conn: pid} = vm) when is_pid(pid) do
+    if Process.alive?(pid), do: {:ok, pid}, else: rebuild_vsock_conn(vm)
+  end
+
+  defp ensure_vsock_conn(%Mjolnir.VM{} = vm), do: rebuild_vsock_conn(vm)
+
+  defp rebuild_vsock_conn(%{state: :running, id: vm_id} = vm) do
+    if Mjolnir.Health.busy?(vm) do
+      {:error, :vm_busy}
+    else
+      case Mjolnir.VM.rebuild_vsock_connection(vm_id) do
+        :ok ->
+          case Mjolnir.VM.get(vm_id) do
+            {:ok, %{vsock_conn: pid}} when is_pid(pid) ->
+              if Process.alive?(pid), do: {:ok, pid}, else: {:error, :no_vsock_conn}
+
+            {:ok, _} ->
+              {:error, :no_vsock_conn}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp rebuild_vsock_conn(%{state: other}) do
+    {:error, {:vm_not_running, other}}
+  end
+
+  defp open_pty(conn, session) do
+    Mjolnir.Vsock.Connection.open_pty(conn, 24, 80, 10_000, session)
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   @impl WebSock

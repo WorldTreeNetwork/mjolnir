@@ -70,16 +70,19 @@ defmodule Mjolnir.Health.CorroborationTest do
       assert Health.corroborated_overall(:dead, checks, vm(), liveness(:unreachable)) == :dead
     end
 
-    test "a partially-healthy agent channel is not treated as reachable" do
-      # Ping answered but the persistent connection is wedged — that IS an
-      # agent-channel fault, so the liveness corroboration must still run.
+    test "ping ok but the persistent vsock is down is healable without a TCP proof" do
+      # The dev-VM failure: one-shot ping answers, vsock_conn is nil, and there
+      # is no guest_ip so TCP liveness is :unknown. Staying :dead made the
+      # monitor refuse the L1 rebuild on every tick.
       checks = [
         check("guest_agent_ping", :ok),
-        check("vsock_connection", {:dead, :closed})
+        check("vsock_connection", {:dead, :no_vsock_conn}),
+        check("guest_network", {:dead, :no_net_config})
       ]
 
-      assert Health.corroborated_overall(:dead, checks, vm(), liveness(:alive)) ==
-               :agent_unreachable
+      exploding = [liveness: fn _vm, _opts -> flunk("one-shot ping is the proof of life") end]
+
+      assert Health.corroborated_overall(:dead, checks, vm(), exploding) == :agent_unreachable
     end
 
     test "empty check list keeps the conservative 3-arity behavior" do

@@ -335,7 +335,13 @@ defmodule Mjolnir.Health do
   #    "guest-agent unreachable over vsock" warnings while exec worked fine.
   #    Such a VM is `:degraded` — the caller reads `checks` for the culprit.
   #
-  # 2. Only once the agent channel is genuinely unreachable does the vsock-free
+  # 2. A one-shot `guest_agent_ping` that answered, with the persistent
+  #    `vsock_connection` dead, is a dropped handle — not a dead guest. Dev VMs
+  #    often have no `guest_ip`, so the TCP probe returns `:unknown` and the old
+  #    rule stayed `:dead`, which made Health.Monitor refuse the L1 rebuild
+  #    forever. That case is `:agent_unreachable` and does not consult TCP.
+  #
+  # 3. Only once the agent channel is genuinely unreachable does the vsock-free
   #    TCP liveness probe decide between `:agent_unreachable` (guest answers on
   #    its app port, so it's wedged, not dead) and `:dead`. `:unknown` liveness
   #    (nothing to probe against) keeps the conservative `:dead`.
@@ -365,6 +371,12 @@ defmodule Mjolnir.Health do
 
       agent_channel_ok?(checks) ->
         :degraded
+
+      # Ping opened its own socket and the guest answered. The long-lived
+      # connection is the thing that's gone. Rebuild it. Do not wait for a
+      # TCP proof that this VM record may be unable to give.
+      one_shot_ping_ok?(checks) and persistent_vsock_down?(checks) ->
+        :agent_unreachable
 
       true ->
         liveness = Keyword.get(opts, :liveness, &Mjolnir.Health.TcpLiveness.probe/2)
@@ -423,6 +435,16 @@ defmodule Mjolnir.Health do
   defp agent_channel_ok?(checks) do
     Enum.all?(@agent_channel_checks, fn name ->
       Enum.any?(checks, fn c -> c.name == name and c.status == :ok end)
+    end)
+  end
+
+  defp one_shot_ping_ok?(checks) do
+    Enum.any?(checks, fn c -> c.name == "guest_agent_ping" and c.status == :ok end)
+  end
+
+  defp persistent_vsock_down?(checks) do
+    Enum.any?(checks, fn c ->
+      c.name == "vsock_connection" and match?({:dead, _}, c.status)
     end)
   end
 

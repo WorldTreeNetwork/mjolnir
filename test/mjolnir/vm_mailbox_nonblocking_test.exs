@@ -366,10 +366,130 @@ defmodule Mjolnir.VMMailboxNonBlockingTest do
         Mjolnir.VM.handle_info({:vsock_rebuild_result, {:ok, new_conn}}, state)
 
       assert new_state.vsock_conn == new_conn
+      assert is_reference(new_state.vsock_conn_ref)
       assert new_state.vsock_rebuild_waiters == []
 
       ref = elem(from, 1)
       assert_receive {^ref, :ok}, 1_000
+    end
+
+    test "a running VM rebuilds when its persistent vsock connection dies" do
+      {:ok, conn} = SilentConn.start_link()
+      mon = make_ref()
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "mjolnir-missing-vsock-#{System.unique_integer([:positive])}"
+        )
+
+      state = %Mjolnir.VM{
+        id: "test-vm",
+        state: :running,
+        vsock_conn: conn,
+        vsock_conn_ref: mon,
+        vsock_path: path
+      }
+
+      {:noreply, after_down} =
+        Mjolnir.VM.handle_info({:DOWN, mon, :process, conn, :normal}, state)
+
+      assert after_down.vsock_conn == nil
+      assert after_down.vsock_conn_ref == nil
+      assert is_reference(after_down.vsock_rebuild_ref)
+
+      assert_receive {:vsock_rebuild_result, {:error, _reason}}, 3_000
+    end
+
+    test "a VM that is not running does not rebuild a dropped vsock" do
+      mon = make_ref()
+
+      state = %Mjolnir.VM{
+        id: "test-vm",
+        state: :booting,
+        vsock_conn: self(),
+        vsock_conn_ref: mon,
+        vsock_path: "/tmp/does-not-matter"
+      }
+
+      {:noreply, after_down} =
+        Mjolnir.VM.handle_info({:DOWN, mon, :process, self(), :normal}, state)
+
+      assert after_down.vsock_conn == nil
+      assert after_down.vsock_rebuild_ref == nil
+      refute_receive {:vsock_rebuild_result, _}, 200
+    end
+
+    test "a connection death during an in-flight rebuild does not start a second one" do
+      mon = make_ref()
+      in_flight = make_ref()
+
+      state = %Mjolnir.VM{
+        id: "test-vm",
+        state: :running,
+        vsock_conn: self(),
+        vsock_conn_ref: mon,
+        vsock_path: "/tmp/does-not-matter",
+        vsock_rebuild_ref: in_flight
+      }
+
+      {:noreply, after_down} =
+        Mjolnir.VM.handle_info({:DOWN, mon, :process, self(), :killed}, state)
+
+      assert after_down.vsock_conn == nil
+      assert after_down.vsock_rebuild_ref == in_flight
+      refute_receive {:vsock_rebuild_result, _}, 200
+    end
+
+    test "a connection that just died is not rebuilt again inside the cooldown" do
+      mon = make_ref()
+
+      state = %Mjolnir.VM{
+        id: "test-vm",
+        state: :running,
+        vsock_conn: nil,
+        vsock_conn_ref: mon,
+        vsock_path: "/tmp/does-not-matter",
+        vsock_rebuild_mono: System.monotonic_time(:millisecond)
+      }
+
+      {:noreply, after_down} =
+        Mjolnir.VM.handle_info({:DOWN, mon, :process, self(), :normal}, state)
+
+      assert after_down.vsock_rebuild_ref == nil
+      refute_receive {:vsock_rebuild_result, _}, 200
+    end
+
+    test "a dropped vsock waits out an in-flight exec, then rebuilds" do
+      exec_ref = make_ref()
+      mon = make_ref()
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "mjolnir-missing-vsock-#{System.unique_integer([:positive])}"
+        )
+
+      state = %Mjolnir.VM{
+        id: "test-vm",
+        state: :running,
+        vsock_conn: nil,
+        vsock_conn_ref: mon,
+        vsock_path: path,
+        exec_inflight: %{exec_ref => true}
+      }
+
+      {:noreply, waiting} =
+        Mjolnir.VM.handle_info({:DOWN, mon, :process, self(), :normal}, state)
+
+      assert waiting.vsock_rebuild_ref == nil
+      refute_receive {:vsock_rebuild_result, _}, 200
+
+      {:noreply, rebuilding} =
+        Mjolnir.VM.handle_info({:DOWN, exec_ref, :process, self(), :normal}, waiting)
+
+      assert is_reference(rebuilding.vsock_rebuild_ref)
+      assert_receive {:vsock_rebuild_result, {:error, _reason}}, 3_000
     end
 
     test "end-to-end: rebuild against a wedged old connection still frees the mailbox and replies" do

@@ -84,6 +84,15 @@ defmodule Mjolnir.VM do
     # whole change exists to prevent. The DOWN clause uses this to fail the
     # waiters instead.
     vsock_rebuild_ref: nil,
+    # Monitor ref for the persistent Vsock.Connection. When that process dies
+    # the VM used to keep a nil or dead pid until a health tick, and the tick
+    # refused to rebuild when it could not prove the guest over TCP. The DOWN
+    # clause rebuilds the connection itself while the VM is running.
+    vsock_conn_ref: nil,
+    # Monotonic millisecond timestamp of the last rebuild attempt. A connection
+    # that dies as soon as it starts must not spin this process; the next
+    # attempt waits. Health.Monitor still retries on its own interval.
+    vsock_rebuild_mono: nil,
     # Lifetime policy (mjolnir-yhr). :always (default) lets Mjolnir.Reconcile
     # rehydrate this VM if it is found stranded — right when the HOST lost it.
     # :never means a stranded record is finalized to :stopped instead, rootfs
@@ -1807,24 +1816,7 @@ defmodule Mjolnir.VM do
   end
 
   def handle_call(:rebuild_vsock_connection, from, state) do
-    old_conn = state.vsock_conn
-    vsock_path = state.vsock_path
-    vm_id = state.id
-    owner = self()
-
-    {_pid, ref} =
-      :erlang.spawn_monitor(fn ->
-        result =
-          try do
-            do_rebuild_vsock_connection(vm_id, old_conn, vsock_path)
-          catch
-            kind, reason -> {:error, {:vsock_unavailable, {kind, reason}}}
-          end
-
-        send(owner, {:vsock_rebuild_result, result})
-      end)
-
-    {:noreply, %{state | vsock_rebuild_waiters: [from], vsock_rebuild_ref: ref}}
+    {:noreply, begin_vsock_rebuild(state, [from])}
   end
 
   def handle_call({:await_pty, _timeout}, _from, %{thaw_vsock_only: true} = state) do
@@ -1943,7 +1935,27 @@ defmodule Mjolnir.VM do
   # the VM stops being "busy" and Health may judge it normally again.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{exec_inflight: inflight} = state)
       when is_map_key(inflight, ref) do
-    {:noreply, %{state | exec_inflight: Map.delete(inflight, ref)}}
+    state = %{state | exec_inflight: Map.delete(inflight, ref)}
+    {:noreply, maybe_rebuild_dropped_vsock(state)}
+  end
+
+  # The persistent connection process exited. A rebuild already in flight owns
+  # the replacement; otherwise start one when the VM is actually running and
+  # nothing is blocked on the old socket.
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{vsock_conn_ref: ref} = state)
+      when is_reference(ref) do
+    Logger.warning("VM #{state.id}: persistent vsock connection died (#{inspect(reason)})")
+
+    state = %{state | vsock_conn: nil, vsock_conn_ref: nil}
+
+    state =
+      if rebuild_in_flight?(state) do
+        state
+      else
+        maybe_rebuild_dropped_vsock(state)
+      end
+
+    {:noreply, state}
   end
 
   # The rebuild spawned by `handle_call(:rebuild_vsock_connection, ...)`
@@ -1955,11 +1967,11 @@ defmodule Mjolnir.VM do
     state =
       case result do
         {:ok, conn} ->
-          %{state | vsock_conn: conn}
+          put_vsock_conn(state, conn)
 
         {:error, reason} ->
           Logger.error("Rebuild vsock conn failed for #{state.id}: #{inspect(reason)}")
-          %{state | vsock_conn: nil}
+          put_vsock_conn(state, nil)
       end
 
     outcome = if match?({:ok, _}, result), do: :ok, else: result
@@ -2484,11 +2496,12 @@ defmodule Mjolnir.VM do
       Process.delete(:boot_partial)
       Process.delete(:boot_rootfs_path)
 
+      state = put_vsock_conn(state, vsock_conn)
+
       {:ok,
        %{
          state
-         | vsock_conn: vsock_conn,
-           iroh_node_id: iroh_info[:node_id],
+         | iroh_node_id: iroh_info[:node_id],
            iroh_json: iroh_info[:ticket],
            ticket: Mjolnir.Ticket.from_hex(iroh_info[:node_id]),
            pty_ready: iroh_info != nil,
@@ -2790,12 +2803,13 @@ defmodule Mjolnir.VM do
          {:ok, publish} <- publish_thawed(state, guest_vsock, vsock_conn, thawed.metadata) do
       iroh_info = publish.iroh
 
+      state = put_vsock_conn(state, vsock_conn)
+
       {:ok,
        %{
          state
          | socket_path: thawed.api_socket,
            vsock_path: guest_vsock,
-           vsock_conn: vsock_conn,
            rootfs_path: thawed.rootfs_path,
            net_config: thawed.net,
            hypervisor_port: thawed.hypervisor_port,
@@ -3259,6 +3273,74 @@ defmodule Mjolnir.VM do
     :ok
   end
 
+  # Spawn the off-process rebuild. `waiters` are GenServer `from` tuples; a
+  # spontaneous rebuild (the connection process died) passes `[]`.
+  defp begin_vsock_rebuild(state, waiters) do
+    old_conn = state.vsock_conn
+    vsock_path = state.vsock_path
+    vm_id = state.id
+    owner = self()
+
+    {_pid, ref} =
+      :erlang.spawn_monitor(fn ->
+        result =
+          try do
+            do_rebuild_vsock_connection(vm_id, old_conn, vsock_path)
+          catch
+            kind, reason -> {:error, {:vsock_unavailable, {kind, reason}}}
+          end
+
+        send(owner, {:vsock_rebuild_result, result})
+      end)
+
+    %{
+      state
+      | vsock_rebuild_waiters: waiters,
+        vsock_rebuild_ref: ref,
+        vsock_rebuild_mono: System.monotonic_time(:millisecond)
+    }
+  end
+
+  @vsock_rebuild_cooldown_ms 2_000
+
+  defp maybe_rebuild_dropped_vsock(state) do
+    if state.state == :running and is_binary(state.vsock_path) and state.vsock_path != "" and
+         is_nil(state.vsock_conn) and not rebuild_in_flight?(state) and
+         map_size(state.exec_inflight || %{}) == 0 and rebuild_cooled_down?(state) do
+      Logger.warning("VM #{state.id}: rebuilding dropped vsock connection")
+      begin_vsock_rebuild(state, [])
+    else
+      state
+    end
+  end
+
+  defp rebuild_cooled_down?(%{vsock_rebuild_mono: nil}), do: true
+
+  defp rebuild_cooled_down?(%{vsock_rebuild_mono: at}) do
+    System.monotonic_time(:millisecond) - at >= @vsock_rebuild_cooldown_ms
+  end
+
+  defp rebuild_in_flight?(state) do
+    state.vsock_rebuild_waiters != [] or is_reference(state.vsock_rebuild_ref)
+  end
+
+  defp put_vsock_conn(state, conn) do
+    state = demonitor_vsock(state)
+
+    if is_pid(conn) do
+      %{state | vsock_conn: conn, vsock_conn_ref: Process.monitor(conn)}
+    else
+      %{state | vsock_conn: nil, vsock_conn_ref: nil}
+    end
+  end
+
+  defp demonitor_vsock(%{vsock_conn_ref: ref} = state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    %{state | vsock_conn_ref: nil}
+  end
+
+  defp demonitor_vsock(state), do: state
+
   # Stops the old Vsock.Connection GenServer (if alive) and starts a fresh one
   # against the same UDS path. Runs entirely off the VM GenServer (called from
   # a spawned worker in `handle_call(:rebuild_vsock_connection, ...)`); it
@@ -3274,7 +3356,11 @@ defmodule Mjolnir.VM do
     end
 
     if vsock_path do
-      Mjolnir.Vsock.Connection.start_link(%{vm_id: vm_id, socket_path: vsock_path})
+      # `start`, not `start_link`. This worker does not trap exits, and a
+      # failed init (`{:stop, :enoent}`) delivers that exit to a linked
+      # caller — the worker dies before it can report, and the VM only sees
+      # "worker died". The VM monitors the pid itself once the result lands.
+      Mjolnir.Vsock.Connection.start(%{vm_id: vm_id, socket_path: vsock_path})
     else
       {:error, :no_vsock_path}
     end
@@ -3612,7 +3698,7 @@ defmodule Mjolnir.VM do
     # even when the guest itself is fine — leaving the next exec to hang on a
     # stale socket (mjolnir-l4i). Rebuild it proactively so the connection is
     # fresh by the time the snapshot call returns.
-    new_state = %{state | vsock_conn: rebuild_vsock_conn(state)}
+    new_state = put_vsock_conn(state, rebuild_vsock_conn(state))
 
     if guest_alive?(new_state) do
       {:ok, :healthy, new_state}

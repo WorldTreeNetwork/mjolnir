@@ -31,6 +31,13 @@ defmodule Mjolnir.Vsock.Connection do
     GenServer.start_link(__MODULE__, opts)
   end
 
+  # Unlinked start for the rebuild worker. A failed `init` must return
+  # `{:error, reason}` to that worker instead of killing it. See
+  # `Mjolnir.VM` `do_rebuild_vsock_connection/3`.
+  def start(opts) do
+    GenServer.start(__MODULE__, opts)
+  end
+
   @doc """
   Execute a command in the guest and wait for response.
 
