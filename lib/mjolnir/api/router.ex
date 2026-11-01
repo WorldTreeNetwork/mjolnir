@@ -1297,8 +1297,8 @@ defmodule Mjolnir.API.Router do
 
   post "/api/secrets/redeem" do
     case Mjolnir.Secrets.Redeem.redeem(conn.body_params) do
-      {:ok, secret} ->
-        json(conn, 200, %{value_b64: Base.encode64(secret)})
+      {:ok, secret, salt} ->
+        json(conn, 200, %{value_b64: Base.encode64(secret), salt_b64: Base.encode64(salt)})
 
       {:error, :not_found} ->
         json(conn, 404, %{error: "not_found"})

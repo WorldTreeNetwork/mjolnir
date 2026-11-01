@@ -33,6 +33,145 @@ defmodule Mjolnir.API.RouterTest do
     |> Router.call(@opts)
   end
 
+  describe "secret ceremony without JWT or operator shortcuts" do
+    setup do
+      keys = [
+        :test_operator,
+        :dev_operator,
+        :secret_store_root,
+        :biscuit_public_hex,
+        :egress_allow_hosts
+      ]
+
+      original = Map.new(keys, &{&1, Application.fetch_env(:mjolnir, &1)})
+      root = Path.join(System.tmp_dir!(), "router-secrets-#{System.unique_integer([:positive])}")
+      Application.put_env(:mjolnir, :test_operator, false)
+      Application.put_env(:mjolnir, :dev_operator, false)
+      Application.put_env(:mjolnir, :auth, bypass_localhost: false)
+      Application.put_env(:mjolnir, :secret_store_root, root)
+      Application.put_env(:mjolnir, :egress_allow_hosts, ["127.0.0.1"])
+      issuer = Mjolnir.Biscuit.keypair()
+      Application.put_env(:mjolnir, :biscuit_public_hex, issuer.public_hex)
+      {public, private} = :crypto.generate_key(:eddsa, :ed25519)
+      fp = Base.encode16(Mjolnir.Biscuit.holder_fingerprint(public), case: :lower)
+      id = "router-secret"
+      value = "router-private-value"
+      salt = :crypto.strong_rand_bytes(32)
+
+      meta = %{
+        "salt_b64" => Base.encode64(salt),
+        "commitment_hex" =>
+          Base.encode16(Mjolnir.Biscuit.secret_commit(salt, value), case: :lower)
+      }
+
+      :ok = Mjolnir.SecretStore.put_opaque("secrets", id, "value", value)
+      :ok = Mjolnir.SecretStore.put_opaque("secrets", id, "meta", Jason.encode!(meta))
+
+      token =
+        issuer.private_hex
+        |> Mjolnir.Biscuit.mint(id, "redeem")
+        |> Mjolnir.Biscuit.append_holder(issuer.public_hex, fp)
+        |> Base.encode64()
+
+      on_exit(fn ->
+        Enum.each(original, fn
+          {key, {:ok, value}} -> Application.put_env(:mjolnir, key, value)
+          {key, :error} -> Application.delete_env(:mjolnir, key)
+        end)
+
+        File.rm_rf!(root)
+      end)
+
+      %{id: id, value: value, salt: salt, token: token, public: public, private: private}
+    end
+
+    test "redeem returns exactly the stored pair and errors contain only a reason", ctx do
+      response = request(:post, "/api/secrets/redeem", ceremony_proof(ctx))
+      assert response.status == 200
+      assert response.assigns.principal_kind == :ceremony
+      assert response.assigns.claims == %{"scope" => ""}
+
+      assert Jason.decode!(response.resp_body) == %{
+               "value_b64" => Base.encode64(ctx.value),
+               "salt_b64" => Base.encode64(ctx.salt)
+             }
+
+      :ok = Mjolnir.SecretStore.delete_opaque("secrets", ctx.id, "meta")
+      response = request(:post, "/api/secrets/redeem", ceremony_proof(ctx))
+      assert response.status == 404
+      assert Jason.decode!(response.resp_body) == %{"error" => "not_found"}
+      response = request(:post, "/api/secrets/redeem", %{})
+      assert response.status == 401
+      assert Jason.decode!(response.resp_body) == %{"error" => "invalid_proof"}
+    end
+
+    test "egress keeps only upstream status and body", ctx do
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+      on_exit(fn -> :gen_tcp.close(listener) end)
+      {:ok, {_, port}} = :inet.sockname(listener)
+
+      upstream =
+        Task.async(fn ->
+          {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+          {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
+
+          :ok =
+            :gen_tcp.send(
+              socket,
+              "HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            )
+
+          :gen_tcp.close(socket)
+          data
+        end)
+
+      params =
+        Map.merge(ceremony_proof(ctx), %{"method" => "GET", "url" => "http://127.0.0.1:#{port}/"})
+
+      response = request(:post, "/api/egress", params)
+      assert response.status == 200
+      assert response.assigns.principal_kind == :ceremony
+
+      assert Jason.decode!(response.resp_body) == %{
+               "upstream_status" => 202,
+               "body_b64" => Base.encode64("ok")
+             }
+
+      assert Task.await(upstream) =~ "Bearer " <> ctx.value
+      :ok = Mjolnir.SecretStore.put_opaque("secrets", ctx.id, "meta", "{}")
+      response = request(:post, "/api/egress", Map.merge(params, ceremony_proof(ctx)))
+      assert response.status == 404
+      assert Jason.decode!(response.resp_body) == %{"error" => "not_found"}
+      assert {:error, :timeout} = :gen_tcp.accept(listener, 50)
+    end
+
+    test "ceremony grants no authority on other routes or methods" do
+      response = request(:get, "/api/vms")
+      assert response.status == 401
+      refute response.assigns[:principal_kind] == :ceremony
+      response = request(:get, "/api/secrets/challenge")
+      assert response.status == 401
+      refute response.assigns[:principal_kind] == :ceremony
+    end
+  end
+
+  defp ceremony_proof(ctx) do
+    challenge = request(:post, "/api/secrets/challenge")
+    assert challenge.status == 200
+    assert challenge.assigns.principal_kind == :ceremony
+    nonce = Jason.decode!(challenge.resp_body)["nonce"]
+    message = Mjolnir.Secrets.Redeem.signing_message(nonce, ctx.token, ctx.id)
+    signature = :crypto.sign(:eddsa, :none, message, [ctx.private, :ed25519])
+
+    %{
+      "secret_id" => ctx.id,
+      "nonce" => nonce,
+      "biscuit" => ctx.token,
+      "public_key" => Base.encode64(ctx.public),
+      "signature" => Base.encode64(signature)
+    }
+  end
+
   describe "GET /api/health" do
     test "returns 200 with status ok" do
       conn = request(:get, "/api/health")

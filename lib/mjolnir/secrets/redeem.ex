@@ -11,12 +11,13 @@ defmodule Mjolnir.Secrets.Redeem do
   with the Ed25519 key named by the holder check. The verifier injects
   `holder(<fingerprint>)` and only then evaluates the token.
 
-  Copy-out (`redeem/1`) returns the bytes to that holder. `egress/1`
+  Copy-out (`redeem/1`) returns the bytes and stored salt to that holder. `egress/1`
   performs the upstream request and returns the response. The secret
   is not in that response and is not logged.
 
-  The secret bytes live in `SecretStore` under `put_opaque("secrets",
-  id, "value", bytes)`.
+  The secret bytes and JSON metadata are read from `SecretStore` opaque
+  objects under `secrets/<id>/value` and `secrets/<id>/meta`. The metadata
+  salt and commitment must match the value before either operation proceeds.
   """
 
   alias Mjolnir.Biscuit
@@ -29,16 +30,16 @@ defmodule Mjolnir.Secrets.Redeem do
   @spec challenge() :: String.t()
   def challenge, do: Nonces.issue()
 
-  @spec redeem(map()) :: {:ok, binary()} | {:error, atom()}
+  @spec redeem(map()) :: {:ok, binary(), binary()} | {:error, atom()}
   def redeem(params) when is_map(params) do
-    with {:ok, secret} <- prove(params) do
-      {:ok, secret}
+    with {:ok, secret, salt} <- prove(params) do
+      {:ok, secret, salt}
     end
   end
 
   @spec egress(map()) :: {:ok, integer(), binary()} | {:error, atom()}
   def egress(params) when is_map(params) do
-    with {:ok, secret} <- prove(params),
+    with {:ok, secret, _salt} <- prove(params),
          {:ok, method, url} <- request(params),
          :ok <- allow_url(url) do
       call_upstream(method, url, secret)
@@ -52,19 +53,19 @@ defmodule Mjolnir.Secrets.Redeem do
     pub_b64 = params["public_key"]
     sig_b64 = params["signature"]
 
-    with true <- is_binary(secret_id) and secret_id != "",
-         true <- is_binary(nonce),
+    with true <- is_binary(nonce),
          :ok <- Nonces.consume(nonce),
+         true <- is_binary(secret_id) and secret_id != "",
          {:ok, biscuit} <- decode64(biscuit_b64),
          {:ok, public} <- decode64(pub_b64),
          {:ok, signature} <- decode64(sig_b64),
          true <- byte_size(public) == 32 and byte_size(signature) == 64,
          message = signing_message(nonce, biscuit_b64, secret_id),
-         true <- :crypto.verify(:eddsa, :none, message, signature, public),
+         true <- :crypto.verify(:eddsa, :none, message, signature, [public, :ed25519]),
          {:ok, fp} <- holder_fp(public),
          :ok <- authorize(biscuit, fp, secret_id),
-         {:ok, secret} <- SecretStore.get_opaque("secrets", secret_id, "value") do
-      {:ok, secret}
+         {:ok, secret, salt} <- read_record(secret_id) do
+      {:ok, secret, salt}
     else
       false -> {:error, :invalid_proof}
       :error -> {:error, :invalid_proof}
@@ -72,6 +73,24 @@ defmodule Mjolnir.Secrets.Redeem do
       {:error, reason} when is_atom(reason) -> {:error, reason}
       {:error, _} -> {:error, :invalid_proof}
     end
+  end
+
+  defp read_record(secret_id) do
+    with {:ok, value} <- SecretStore.get_opaque("secrets", secret_id, "value"),
+         {:ok, meta} <- SecretStore.get_opaque("secrets", secret_id, "meta"),
+         true <- String.valid?(meta),
+         {:ok, %{"salt_b64" => salt_b64, "commitment_hex" => hex}} <- Jason.decode(meta),
+         {:ok, salt} <- decode64(salt_b64),
+         true <- byte_size(salt) == 32,
+         true <- is_binary(hex) and byte_size(hex) == 64,
+         {:ok, commitment} <- Base.decode16(hex, case: :lower),
+         true <- Biscuit.secret_commit(salt, value) == commitment do
+      {:ok, value, salt}
+    else
+      _ -> {:error, :not_found}
+    end
+  rescue
+    _ -> {:error, :biscuit_unavailable}
   end
 
   @doc false
