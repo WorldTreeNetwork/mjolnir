@@ -13,6 +13,8 @@ defmodule Mjolnir.Application do
 
   @impl true
   def start(_type, _args) do
+    Mjolnir.Biscuit.authority()
+
     api_port = Application.get_env(:mjolnir, :api_port, 4000)
 
     children =

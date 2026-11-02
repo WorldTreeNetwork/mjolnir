@@ -45,6 +45,8 @@ config :mjolnir,
   # The host re-injects the escrowed passphrase over vsock on boot + wake.
   # Override at runtime via MJOLNIR_SECRET_ESCROW_DIR.
   secret_escrow_dir: "/var/lib/mjolnir/escrow",
+  # Operator-provisioned mode 0600 Ed25519 seed; never created by the host.
+  biscuit_root_path: "/var/lib/mjolnir/biscuit-root",
 
   # Durability: soft-deleted VM subvolumes are moved to @trash and reaped after
   # this window (default 7 days), so a deletion is recoverable in the interim.

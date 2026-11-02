@@ -1,5 +1,16 @@
 import Config
 
+# Disposable mint root so `mix test` can boot without the operator file at
+# `/var/lib/mjolnir/biscuit-root`. Production config keeps that path and still
+# fails closed when it is missing. The host does not create it. This file is a
+# 32-byte Ed25519 seed, mode 0600, outside the test BTRFS root and escrow.
+# Rewritten on each config load. `biscuit_public_hex` stays unset here so boot
+# publishes the public half of this file.
+biscuit_test_root = "/tmp/mjolnir-test/biscuit-root"
+File.mkdir_p!(Path.dirname(biscuit_test_root))
+File.write!(biscuit_test_root, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower) <> "\n")
+File.chmod!(biscuit_test_root, 0o600)
+
 config :logger, level: :warning
 
 config :mjolnir,
@@ -29,7 +40,8 @@ config :mjolnir,
   # paths don't depend on (or block on) a live guest.
   snapshot_verify_guest: false,
   blake3_bin: Path.expand("native/target/debug/mjolnir-b3"),
-  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit")
+  biscuit_bin: Path.expand("native/target/debug/mjolnir-biscuit"),
+  biscuit_root_path: biscuit_test_root
 
 # Edge-key tests pass a per-test auth_dir. This fallback is still outside the
 # test BTRFS tree and prevents accidental use of the production path.
