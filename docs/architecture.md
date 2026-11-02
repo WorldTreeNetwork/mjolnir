@@ -792,9 +792,10 @@ landed: `native/mjolnir_biscuit` + `Mjolnir.Biscuit` (binary face, no
 HTTP), living spec
 [`biscuit-runtime`](../openspec/specs/biscuit-runtime/spec.md)
 (`add-biscuit-runtime` folded 2026-09-26). Holder fingerprints there
-are identikey-auth v1 §5, *not* `IdentiKey.fingerprint/1`. Remaining
-code landings are later (`add-tokenator-redeem`, `add-capability-mint`,
-`add-capability-hop`). Protocol holder/hop/redeem SHALLs live in
+are identikey-auth v1 §5, *not* `IdentiKey.fingerprint/1`. Redeem
+folded 2026-11-01 (`add-tokenator-redeem`). Remaining code landings
+are later (`add-capability-mint`, `add-capability-hop`). Protocol
+holder/hop/redeem SHALLs live in
 identikey-protocol
 [`identikey-capability-v1.md` §7](https://github.com/identikey/identikey-protocol/blob/main/docs/standards/identikey-capability-v1.md#7-secret-redemption-profile-foreign-secrets)
 (secret-redemption profile; `update-identikey-capability` folded

@@ -34,9 +34,10 @@ Full argument:
 5. **Tokenator sees redemptions.** Accepted and logged (id, holder,
    time, result). Never log secret bytes. Foreign secrets only.
    Recrypt PRE stays for our ciphertext (D-5).
-6. **Code is later nodes.** Runtime / redeem / mint / hop are
-   `add-biscuit-runtime`, `add-tokenator-redeem`,
-   `add-capability-mint`, `add-capability-hop`.
+6. **Code is later nodes.** Runtime / mint / hop remain
+   `add-biscuit-runtime`, `add-capability-mint`, and
+   `add-capability-hop`. Redeem (`add-tokenator-redeem`) folded
+   2026-11-01.
 
 ## Built vs remaining
 
@@ -49,12 +50,15 @@ new overlay port, not `@skip_auth_paths`, no VM-scope JWT;
 holder-bound redeem (signature + `holder(<fp>)`; reused nonce
 fails closed); secret bytes not in logs; Recrypt PRE is not this
 vault. Opaque `put_opaque` exists (Buzz nsec). Real Blake3 NIF is
-not wired (`Sites.Crypto.blake3_hash/1` is SHA-256).
+not wired (`Sites.Crypto.blake3_hash/1` is SHA-256). The redeem
+handler folded 2026-11-01 (`add-tokenator-redeem`): ceremony
+branch before JWT, signed tuple, memory-only nonce, and copy-out
+of `value_b64` and `salt_b64` only when the stored commitment
+matches.
 
 Remaining (do not import as living SHALLs): `add-biscuit-runtime`
-(real Blake3 NIF / authority key), `add-tokenator-redeem`
-(challenge + POST handler; fourth Auth branch; nonce store;
-copy-out bytes), `add-capability-mint` (deposit + mint; `meta`
-owner fingerprint), `add-capability-hop` (signed block per hop).
+(real Blake3 NIF / authority key), `add-capability-mint` (deposit
++ mint; `meta` owner fingerprint), `add-capability-hop` (signed
+block per hop).
 Guild holder class and Papyrus UI are not this capability's first
 act.
