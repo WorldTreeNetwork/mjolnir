@@ -59,6 +59,9 @@ exclusive create, opaque `value`, JSON `meta` (`salt_b64`,
 `commitment_hex`), opaque `owner` fingerprint, holder-checked
 token only after those three objects exist. No HTTP deposit route.
 Authority is the mode-0600 file loaded before redeem is served.
+The daily sites backup excludes `keyspace/_opaque/**`
+(`mjolnir-jhpu`). Copies already on B2 stay until they are deleted
+there.
 
 Remaining, and not this capability's host slice: guild holder
 class, Papyrus mint UI, and VM-exec dual-mode Biscuit

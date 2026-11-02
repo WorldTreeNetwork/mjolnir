@@ -16,6 +16,11 @@
 # The plaintext-cache/ subtree (if present) is excluded — it is a derivable
 # optimization, not source-of-truth data.
 #
+# keyspace/_opaque/ is excluded too. That tree is unsigned secret bytes
+# (foreign secrets, VM identity, git-signing keys). Signed keyspace
+# envelopes stay. hard_delete=false means this exclude does not remove
+# copies already stored on B2.
+#
 # Usage:
 #   backup-sites-b2.sh [--dry-run]
 #
@@ -50,6 +55,7 @@ echo "backup-sites-b2: copying ${SITES_ROOT} -> ${DEST}"
 exec "$RCLONE" copy "$SITES_ROOT" "$DEST" \
   "${DRY_RUN[@]}" \
   --exclude 'plaintext-cache/**' \
+  --exclude 'keyspace/_opaque/**' \
   --fast-list \
   --transfers 8 \
   --checkers 16 \

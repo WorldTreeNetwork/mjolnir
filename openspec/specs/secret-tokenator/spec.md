@@ -320,3 +320,14 @@ The block SHALL restate `check if holder($fp), $fp == "<fp>"` for the fingerprin
 - WHEN `append_hop` is called
 - THEN it returns an error
 - AND no hop token is produced
+
+### Requirement: Sites backup omits the opaque vault
+
+`scripts/backup-sites-b2.sh` SHALL exclude `keyspace/_opaque/**` when it copies `@sites`. It SHALL also exclude `plaintext-cache/**`. Signed keyspace records, blob chunks, manifests, and recording rows SHALL still be copied. The exclude SHALL NOT delete objects already stored on B2.
+
+#### Scenario: Opaque bytes are not in the copy set
+
+- GIVEN a sites tree with `keyspace/_opaque/secrets/<id>/value`, a signed keyspace leaf, and `recordings/<hash>.json`
+- WHEN the sites backup lists what it would copy
+- THEN the opaque value is absent
+- AND the signed leaf and the recording row are present
