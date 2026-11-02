@@ -1,14 +1,19 @@
 # lan-files
 
-Contract. Folded from
+Contract. Architecture folded from
 [`add-lan-file-server`](../../changes/archive/2026-10-24-add-lan-file-server/proposal.md)
-on 2026-10-24 (bead `mjolnir-h2fp.2`). No Mjolnir ADR. Recrypt D-5
-and identikey-capability-v1 are cited, not amended.
+on 2026-10-24 (bead `mjolnir-h2fp.2`). Implementation folded from
+[`add-lan-file-server`](../../changes/archive/2026-11-02-add-lan-file-server/proposal.md)
+on 2026-11-02 (beads `mjolnir-h2fp.3`, `mjolnir-h2fp.4`). No Mjolnir
+ADR. Recrypt D-5 and identikey-capability-v1 are cited, not amended.
 
-Guest Recrypt HTTP, LAN publish, and `meshd` are later landings
-(`mjolnir-h2fp.3`, `mjolnir-h2fp.4`). This file is the requirement
-contract those landings have to meet. It is not a claim that the
-share is running.
+The guest HTTP share and named-interface IPv4 DNAT are in tree.
+`.mesh` discovery is `meshd publish` on the attached router. The
+IPv6 userspace proxy in "LAN and mesh ULA can reach the guest" was
+not built. On 2026-10-31 that proxy stopped being a blocker for
+this share; a key-owned name whose gossiped record carries the
+current IPv4 is Lightning Mesh's. This file still requires the
+proxy until a later change removes it.
 
 ## Purpose
 
