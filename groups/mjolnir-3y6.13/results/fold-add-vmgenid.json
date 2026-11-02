@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "id": "res-add-vmgenid-fold",
+  "packet_id": "pkt-add-vmgenid-fold",
+  "signer": {
+    "id": "agt-grok-4-7",
+    "kind": "model",
+    "harness": "grok",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "agt-grok-4-7"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "openspec/specs/vm-freeze/spec.md",
+      "role": "living-spec"
+    },
+    {
+      "path": "openspec/changes/archive/2026-11-02-add-vmgenid",
+      "role": "archive"
+    }
+  ],
+  "evidence": {
+    "kind": "fold",
+    "base_check": "clean",
+    "living_spec": "openspec/specs/vm-freeze/spec.md",
+    "archive": "openspec/changes/archive/2026-11-02-add-vmgenid",
+    "change_dir_gone": true,
+    "shalls_in_living_spec": true
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": {
+    "sha": "8250f0d",
+    "paths": [
+      "openspec/specs/vm-freeze/spec.md",
+      "docs/LEARNINGS.md",
+      "openspec/changes/archive/2026-11-02-add-vmgenid"
+    ]
+  },
+  "summary": "Folded add-vmgenid into openspec/specs/vm-freeze/spec.md and archived the change at openspec/changes/archive/2026-11-02-add-vmgenid. Base check was clean. openspec/changes/add-vmgenid is gone. No ADR. The fleet kernel was not replaced.",
+  "raw_ref": "groups/mjolnir-3y6.13/results/fold-add-vmgenid.json",
+  "distilled": {
+    "disposition": "pass",
+    "summary": "Living vm-freeze spec has the thaw-id and VMGENID requirements. The change is archived.",
+    "commit_sha": "8250f0d",
+    "living_spec": "openspec/specs/vm-freeze/spec.md",
+    "archive": "openspec/changes/archive/2026-11-02-add-vmgenid",
+    "raw_ref": "groups/mjolnir-3y6.13/results/fold-add-vmgenid.json"
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "agt-grok-4-7",
+    "signed_at": "2026-11-02T23:14:33Z",
+    "content_hash": "sha256:962750d1d33e7b35dad8e02e89faf027cbfb3a8c842977c7ee993794fb5d24c5"
+  }
+}
