@@ -13,72 +13,41 @@
   },
   "artifacts": [
     {
-      "path": "lib/mjolnir/thaw/vmgenid.ex",
-      "role": "observe"
-    },
-    {
-      "path": "native/mjolnir_guest_agent/src/vmgenid.rs",
-      "role": "guest-sysfs"
-    },
-    {
-      "path": "scripts/build-kernel.sh",
-      "role": "sysfs-export"
-    },
-    {
       "path": "openspec/changes/add-vmgenid/tasks.md",
       "role": "proof-note"
     }
   ],
   "evidence": {
     "kind": "journey",
-    "journey": "Disposable thaw on 45.76.77.97 using /var/lib/mjolnir/vmlinux-ch-vmgenid. Capture ff6fcaaf1f6836a22105f394d9e16f97, thaw1 a84eb49c412707ae29d13918a2d9dcf1, thaw2 5569ae7ded97a1102eb464821919686d. sysfs cat matched get_vmgenid. Fleet vmlinux-ch stayed 46139936 bytes. A missing-snapshot restore returned 500 and thaw1 kept its id. No TAP and no gateway ticket.",
+    "journey": "2026-11-02 disposable thaw on 45.76.77.97, side kernel /var/lib/mjolnir/vmlinux-ch-vmgenid with embedded CONFIG_VMGENID=y. Capture 8fb3f3f4ec65c0c13d910ce025269f60 on TAP vg-boot, MAC 02:76:6d:67:00:01. Thaw 1 CID 4026532099 TAP vg-t1 answered reseed_entropy with 32 credited bytes, then set_wall_time with monotonic_stepped false, then generation id 0dd7dd4f94570ac70257f193f3a8814e. A missing-snapshot restore returned HTTP 500 and thaw 1 kept that id. Thaw 2 CID 4026532101 TAP vg-t2, same MAC, own rootfs clone and virtiofsd socket, same reseed-then-clock order, generation id 2f93ccf115a23aeb09cf95b36ab3617f. sysfs matched get_vmgenid. No address and no gateway ticket. Fleet file stayed 46139936 bytes. mjolnir.service stayed active. Proof tree and vg- taps deleted.",
     "exit_code": 0,
-    "output_tail": "8 passed. PASS fleet unchanged."
+    "output_tail": "mix test test/mjolnir/vmgenid_thaw_test.exs seed 826761: 8 passed. Host proof: PASS, fleet unchanged size=46139936."
   },
-  "disposition": "blocked",
+  "disposition": "pass",
   "promoted": false,
   "commit": {
-    "sha": "d3308bc",
+    "sha": "4a26e12",
     "paths": [
-      "lib/mjolnir/thaw/vmgenid.ex",
-      "native/mjolnir_guest_agent/src/vmgenid.rs",
-      "native/mjolnir_guest_agent/src/protocol.rs",
-      "native/mjolnir_guest_agent/src/vsock.rs",
-      "scripts/build-kernel.sh",
-      "test/mjolnir/vmgenid_thaw_test.exs"
+      "openspec/changes/add-vmgenid/tasks.md"
     ]
   },
-  "summary": "Guest sysfs generation ids changed across a disposable thaw and a second thaw. Entropy.reseed and a second-guest TAP were not on that path. The running release was not restarted. Banner stays ACTIVE BUILD.",
+  "summary": "A CONFIG_VMGENID capture on the side kernel showed a guest-visible generation-id change after reseed and the wall step. A second running thaw got its own TAP, CID, and virtiofsd socket, a different id, and no ticket. The first guest kept its id when a second restore failed. The fleet kernel and mjolnir.service were left as they are. Banner stays ACTIVE BUILD.",
   "raw_ref": "groups/mjolnir-3y6.13/results/grok-4-7.json",
   "distilled": {
-    "disposition": "blocked",
-    "summary": "Guest sysfs generation ids changed across a disposable thaw and a second thaw. Entropy.reseed and a second-guest TAP were not on that path.",
+    "disposition": "pass",
+    "summary": "Side-kernel thaw changed the guest generation id after reseed and the wall step. A second running thaw used a new TAP and observed a different id. The fleet kernel was not replaced.",
     "verify_command": "mix test test/mjolnir/vmgenid_thaw_test.exs",
     "verify_exit": 0,
-    "commit_sha": "d3308bc",
+    "commit_sha": "4a26e12",
     "changed_files": [
-      "lib/mjolnir/thaw/vmgenid.ex",
-      "native/mjolnir_guest_agent/src/vmgenid.rs",
-      "native/mjolnir_guest_agent/src/protocol.rs",
-      "native/mjolnir_guest_agent/src/vsock.rs",
-      "native/mjolnir_guest_agent/src/boot_main.rs",
-      "native/mjolnir_guest_agent/src/main.rs",
-      "native/mjolnir_guest_agent/src/entropy.rs",
-      "scripts/build-kernel.sh",
-      "test/mjolnir/vmgenid_thaw_test.exs",
       "openspec/changes/add-vmgenid/tasks.md"
-    ],
-    "blockers": [
-      "Entropy.reseed did not run on the disposable thaw, so the first-thaw gate is still unchecked.",
-      "The snapshot had no net device, so the second guest did not get a new TAP name.",
-      "mjolnir.service was not restarted, so kernel_support still reads the fleet kernel."
     ],
     "raw_ref": "groups/mjolnir-3y6.13/results/grok-4-7.json"
   },
   "signature": {
     "mode": "stand-in",
     "stand_in_id": "agt-grok-4-7",
-    "content_hash": "sha256:4e7412481ddd18f254768e1ffc0f611f1a34fdc9306781d591dc37cec2e1cb26",
-    "signed_at": "2026-10-29T01:01:47Z"
+    "signed_at": "2026-11-02T23:09:50Z",
+    "content_hash": "sha256:c6ab16999877cbdc7baad6140093aeb9ac09621858b11711fcce20733c4a197b"
   }
 }
