@@ -58,8 +58,7 @@ DNAT on the address then held by `wlp191s0`, memory blob-door on
 No IPv6 proxy was added. `cargo test -p mjolnir-lan-files` on this
 fold did not rebuild: `identikey-protocol` HEAD was
 `be1f9a9b8ef988c37d64e6a121e8648537ae6931`, and `build.rs` still
-pins `8cd455c7308e86c50a0b338b82c7d8e814b4b96e`. `mix test` of the
-publish and install files was still compiling `router.ex` when
-this archive was cut, so the R3 check is the test source, not a
-fresh green run. The `192.168.0.0/24` box stays open. Mesh ULA
-routing stays a Lightning Mesh question.
+pins `8cd455c7308e86c50a0b338b82c7d8e814b4b96e`. `mix test` of
+`lan_files_publish_test.exs` and `lan_files_install_test.exs`
+finished after the archive was cut: 9 passed. The `192.168.0.0/24`
+box stays open. Mesh ULA routing stays a Lightning Mesh question.
