@@ -1,6 +1,7 @@
 defmodule Mjolnir.Biscuit do
   @moduledoc """
-  Host Biscuit mint/verify and protocol Blake3 (`mjolnir-axsb.1.3`).
+  Host Biscuit mint/verify and protocol Blake3 (`mjolnir-axsb.1.3`,
+  durable root `mjolnir-reki.1`).
 
   Talks to the `mjolnir-biscuit` binary (same shape as `mjolnir-b3`).
   No HTTP. Login profiles live in `add-biscuit-profiles`.

@@ -50,9 +50,11 @@ Holder fingerprints are the identikey-auth v1 §5 dCBOR map, *not*
 Not built by this node, and named so the gap is not mistaken for
 drift: the HTTP mint at login and the nonce store
 (`add-direct-auth-endpoints`), the `Mjolnir.API.Auth` plug wiring,
-tokenator redeem (`mjolnir-axsb.1.4`), VM-spawn RBAC
-(`mjolnir-k8y.5`), and numeric lifetime windows (config, chosen at
-the endpoints node). The rules below are not config.
+VM-spawn RBAC (`mjolnir-k8y.5`), and numeric lifetime windows
+(config, chosen at the endpoints node). Foreign-secret redeem is
+built in `secret-tokenator` (`mjolnir-reki.3`, which closed
+`mjolnir-axsb.1.4`) and is not a gap in this spec. The rules below
+are not config.
 
 ## Requirements
 

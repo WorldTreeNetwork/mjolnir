@@ -433,7 +433,7 @@ that, not a chown.
   id (Iroh ALPN, host-blind). Do not confuse with `mj secrets set <app> KEY`,
   which is the shipped deploy-secrets merge.
 - **Wrap managed LUKS DEK to IdentiKey** (`mjolnir-k8y.4`)
-- **Biscuit on secrets API** (`mjolnir-k8y.5`)
+- **Biscuit on secrets API** (`mjolnir-k8y.5`) — who may set, list, and inject. Foreign-secret redeem (a GitHub PAT held for a holder) is a different track and has landed: ADR [`0008`](decisions/0008-secret-tokenator.md).
 - **IdentiKey S3 sync**: Sync encrypted LUKS files to S3 for backup/restore across VM instances
 - **Secret rotation**: Re-encrypt with a new passphrase without unmounting
 - **Audit logging**: Log injection attempts (success/failure) with peer identity

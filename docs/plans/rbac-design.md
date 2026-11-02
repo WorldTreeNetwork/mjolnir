@@ -302,14 +302,28 @@ Defer this to Phase 3 — short-lived tokens + epoch rotation cover the common c
 
 ## Implementation Phases
 
+Foreign-secret tokenator is built and is not Phase 1. ADR
+[`0008`](../decisions/0008-secret-tokenator.md) and
+[`secret-tokenator`](../../openspec/specs/secret-tokenator/spec.md)
+cover opaque custody, holder-checked redeem, deposit, and nextKey
+hops (`mjolnir-reki`). The host face is `native/mjolnir_biscuit`
+over `identikey-capability`, not a Rustler NIF. The authority is a
+mode-0600 file loaded at boot, not a keypair generated per process.
+`identikey-secret` (IKEYW `sealed-secret`, domain
+`identikey-secret-v1`) is client custody and is not this vault.
+
+Phase 1 below is still open: VM spawn, exec, and snapshot
+dual-mode beside JWT. `mjolnir-k8y.5` is the still-open Biscuit
+gate on who may set, list, and inject host secrets. Papyrus mint
+and attenuate UI remains `mjolnir-axsb.1` / `mjolnir-axsb.2`.
+
 ### Phase 1: Dual-Mode Auth (non-breaking)
 
 **Goal**: Introduce Biscuit tokens alongside existing JWT auth. No breaking changes.
 
-- Add `biscuit-auth` Rustler NIF to Elixir host
-- Generate Ed25519 keypair at server startup, store in config
-- Mint root Biscuit on VM spawn, return in response (new field)
-- Extend `Mjolnir.API.Auth` to accept `Authorization: Bearer biscuit:<b64>`
+- Reuse `native/mjolnir_biscuit` and the durable authority. Do not add a second biscuit-auth runtime or a Rustler NIF
+- Mint a root Biscuit on VM spawn, return it in the response (new field)
+- Extend `Mjolnir.API.Auth` to accept `Authorization: Bearer biscuit:<b64>` for VM operations. The secrets ceremony branch is already mounted and is not this phase
 - Policy layer gets new clause: `authorize(action, %{capability: biscuit}, resource)`
   that evaluates the Biscuit Datalog instead of checking owner_id
 - Existing JWT auth continues to work identically

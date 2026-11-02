@@ -45,7 +45,7 @@ guest RAM to disk**, which for any LUKS-unlocked VM includes the dm-crypt key.
 | Escrow outside the snapshot boundary | `secret_escrow.ex` | Escrow dir lives outside `btrfs_root`, so `btrfs subvolume snapshot` never captures passphrases |
 | IdentiKey Ed25519 + fingerprints | `sites/identikey.ex` | Blake3→base58 fingerprint, stable across persistence |
 | IdentiKey-rooted keyspace | `secret_store.ex` | `(identikey_fp, key)` signed-envelope store. Signature verify STUBBED |
-| Capability design | `docs/plans/rbac-design.md` | Biscuit, 3 phases, not implemented |
+| Capability design | `docs/plans/rbac-design.md` | VM dual-mode phases not implemented. Foreign-secret tokenator has landed (ADR 0008) |
 
 ### The two existing secrets modes
 

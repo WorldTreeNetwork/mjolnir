@@ -342,6 +342,7 @@ FOKS replaces the need for a custom key wallet. The DEK for each VM's LUKS parti
 | Three-tier storage layout | **Designed** | Tier 1+2 via virtio-fs working; Tier 3 via virtio-blk designed |
 | PRE / Recrypt integration | **Designed** | Phase 3 — `docs/research/zero-knowledge-vm-storage/synthesis.md` |
 | FOKS key management | **Designed** | Phase 2 — requires FOKS server sidecar |
+| Foreign-secret tokenator | **Implemented** | ADR 0008, `openspec/specs/secret-tokenator/spec.md`, epic `mjolnir-reki` |
 | Biscuit auth on Iroh | **Designed** | `docs/plans/rbac-design.md` Phase 2 |
 | Confidential computing (SEV-SNP) | **Future** | Phase 6 — waiting for CH SEV-SNP maturity |
 

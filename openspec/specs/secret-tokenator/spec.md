@@ -12,9 +12,13 @@ on 2026-11-01 (bead `mjolnir-reki.3`). Mint folded from
 [`add-capability-mint`](../../changes/archive/2026-11-01-add-capability-mint/proposal.md)
 on 2026-11-01 (bead `mjolnir-reki.2`). Hop folded from
 [`add-capability-hop`](../../changes/archive/2026-11-01-add-capability-hop/proposal.md)
-on 2026-11-01 (bead `mjolnir-reki.4`). Unimplemented NIF
-SHALLs wait on later changes and are **not** living truth:
-`add-biscuit-runtime` (real Blake3 NIF / authority key).
+on 2026-11-01 (bead `mjolnir-reki.4`). The earlier axsb
+nodes for this profile (`mjolnir-axsb.1.1` through `.1.6`) are
+closed against that landing. Blake3 for this commitment is the
+`mjolnir-biscuit` face (`COMMIT_DOMAIN =
+"mjolnir/secret-commit/v1"`), and the mint root is the durable
+authority in `biscuit-runtime`. `Sites.Crypto.blake3_hash/1`
+remains a SHA-256 stub and is not this commitment.
 
 ## Purpose
 
@@ -67,10 +71,10 @@ already stored with that secret. Redeem SHALL NOT invent a salt.
 
 The pair SHALL already be two opaque objects:
 `SecretStore.get_opaque("secrets", secret_id, "value")` and
-`SecretStore.get_opaque("secrets", secret_id, "meta")`. This change
-SHALL NOT write either object. Deposit and mint remain
-`add-capability-mint`. A test MAY call `put_opaque` for both keys as
-a fixture. `meta` SHALL be UTF-8 JSON. Redeem SHALL read `salt_b64`
+`SecretStore.get_opaque("secrets", secret_id, "meta")`. Redeem
+SHALL NOT write either object. Deposit publishes them; see
+"Deposit mints a holder-checked token" below. A test MAY call
+`put_opaque` for both keys as a fixture. `meta` SHALL be UTF-8 JSON. Redeem SHALL read `salt_b64`
 and `commitment_hex` and SHALL ignore other keys. `salt_b64` SHALL
 decode to exactly 32 bytes. `commitment_hex` SHALL be 64 lowercase
 hex characters. Success SHALL require
