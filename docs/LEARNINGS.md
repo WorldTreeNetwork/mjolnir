@@ -2,6 +2,7 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-11-02 / add-vmgenid:** The fleet file `/var/lib/mjolnir/vmlinux-ch` is still the old kernel (46139936 bytes) and `mjolnir.service` was not restarted, so a production freeze is still a legacy capture.
 - **2026-11-02 / add-lan-file-server:** Named-interface DNAT does not see packets the host generates to its own published address. The second-host proof has to arrive on that interface. A `.mesh` publish of the DHCP address goes stale when the lease moves; the stable owner is an Ed25519 key, and the current IPv4 is a gossiped field on that record. The IPv6 userspace proxy was not built and is not a blocker. Babel's `fc00::/7` deny stays until Lightning Mesh v6.4. The laptop `fd89` address is the stock RA prefix, not the identity-hash ULA.
 - **2026-11-02 / add-lan-file-server:** `native/mjolnir_lan_files/build.rs` refuses to compile unless the identikey-auth and recrypt checkouts are clean at the pinned revisions. A moved sibling HEAD fails the guest build. Do not retarget the pin to make a fold compile.
 - **2026-10-24 / add-lan-file-server:** identikey-auth §5 (`Blake3(dcbor(PublicKey))`) and recrypt-storage-auth `granted_to` (`Blake3(raw Ed25519)`) are different namespaces. The share maps the verified classical key before the cap check. GET also requires the cap root issuer to equal `ownership(h)` from the first put; a self-issued cap is not a read. Stock `recrypt-server` is not this guest (`GET /files/{hash}` is public; storage is not the blob-door).
