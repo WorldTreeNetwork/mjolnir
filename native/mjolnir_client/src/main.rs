@@ -360,12 +360,13 @@ enum Command {
     Deploy {
         /// Path to the app directory (default: current directory)
         path: Option<String>,
-        /// App name (default: directory basename)
+        /// App name. Overrides mjolnir.toml `name`. Defaults to the directory basename.
         #[arg(long)]
         name: Option<String>,
-        /// Memory allocation in MB
-        #[arg(long, default_value = "256")]
-        memory: u32,
+        /// Service VM memory in MB. Overrides mjolnir.toml `memory_mb`.
+        /// When both are omitted, 256.
+        #[arg(long)]
+        memory: Option<u32>,
         /// Bind a custom domain during deploy
         #[arg(long)]
         domain: Option<String>,

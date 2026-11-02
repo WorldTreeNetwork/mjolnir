@@ -46,7 +46,7 @@ pub async fn cmd_deploy(
     token: &Option<String>,
     path: Option<String>,
     name: Option<String>,
-    memory: u32,
+    memory: Option<u32>,
     domain: Option<String>,
     base_image: Option<String>,
     owner: Option<String>,
@@ -64,15 +64,21 @@ pub async fn cmd_deploy(
         bail!("deploy target is not a directory: {}", dir.display());
     }
 
-    // App name: --name flag, else the directory basename.
+    // App name: --name, else mjolnir.toml `name`, else the directory basename.
+    // Memory: --memory, else mjolnir.toml `memory_mb`, else 256.
+    let manifest = manifest_deploy(&dir)?;
     let app_name = match name {
         Some(n) => n,
-        None => dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("could not derive app name from {}", dir.display()))?,
+        None => manifest.name.clone().unwrap_or(
+            dir.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("could not derive app name from {}", dir.display())
+                })?,
+        ),
     };
+    let memory = memory.unwrap_or(manifest.memory_mb.unwrap_or(256));
 
     eprintln!("Packaging {} (honoring .gitignore)...", dir.display());
     let tarball = build_tarball(&dir).context("failed to build deploy tarball")?;
@@ -363,6 +369,55 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestDeploy {
+    name: Option<String>,
+    memory_mb: Option<u32>,
+}
+
+/// Prod defaults from `mjolnir.toml`. Missing file or keys are empty.
+/// Invalid TOML or an out-of-range value fails the deploy.
+fn manifest_deploy(dir: &Path) -> Result<ManifestDeploy> {
+    let path = dir.join("mjolnir.toml");
+    if !path.is_file() {
+        return Ok(ManifestDeploy {
+            name: None,
+            memory_mb: None,
+        });
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("read {}", path.display()))?;
+    parse_manifest_deploy(&raw)
+}
+
+fn parse_manifest_deploy(raw: &str) -> Result<ManifestDeploy> {
+    let value: toml::Value = toml::from_str(raw).context("mjolnir.toml is not valid TOML")?;
+    let root = value
+        .as_table()
+        .context("mjolnir.toml must be a table")?;
+    let name = match root.get("name") {
+        None => None,
+        Some(toml::Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() || s.contains('/') || s.contains("..") || s.contains(char::is_whitespace)
+            {
+                bail!("name must be a single path segment");
+            }
+            Some(s.to_string())
+        }
+        Some(other) => bail!("name must be a string, got {other}"),
+    };
+    let memory_mb = match root.get("memory_mb") {
+        None => None,
+        Some(toml::Value::Integer(n)) if (128..=32_768).contains(n) => Some(*n as u32),
+        Some(toml::Value::Integer(n)) => {
+            bail!("memory_mb must be an integer 128-32768, got {n}")
+        }
+        Some(other) => bail!("memory_mb must be an integer, got {other}"),
+    };
+    Ok(ManifestDeploy { name, memory_mb })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +445,34 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut f = std::fs::File::create(path).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn manifest_deploy_reads_name_and_service_memory() {
+        let parsed = parse_manifest_deploy(
+            r#"
+            name = "product-enrichment"
+            memory_mb = 512
+            [build]
+            vcpus = 2
+            memory_mb = 2048
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ManifestDeploy {
+                name: Some("product-enrichment".into()),
+                memory_mb: Some(512),
+            }
+        );
+        assert!(parse_manifest_deploy("memory_mb = 64").is_err());
+        assert_eq!(
+            parse_manifest_deploy("runtime = \"bun@1.3.14\"")
+                .unwrap()
+                .memory_mb,
+            None
+        );
     }
 
     /// Unique scratch dir under the system temp dir (no tempfile dep).

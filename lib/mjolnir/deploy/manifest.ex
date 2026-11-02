@@ -67,6 +67,8 @@ defmodule Mjolnir.Deploy.Manifest do
   | `start_command` | yes      | command the service VM runs to start the app     |
   | `port`          | yes      | port the app binds inside the VM                 |
   | `steps`         | no       | ordered string or `{ run, inputs }` build steps  |
+  | `name`          | no       | app name for `mj deploy` when `--name` is omitted. The client sends `X-App-Name`. |
+  | `memory_mb`     | no       | service VM RAM for `mj deploy` when `--memory` is omitted (128–32768). The client sends `X-Memory-MB`. `[build].memory_mb` is the build VM. |
   | `build`         | no       | `{ vcpus, memory_mb }` for the build VM only     |
   | `runtime`       | no       | mise runtime spec, e.g. `"rust@1.83"`            |
   | `base_image`    | no       | `@base/` name, e.g. `"ubuntu-24.04"` (6ee1)     |
