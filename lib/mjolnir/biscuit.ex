@@ -179,6 +179,21 @@ defmodule Mjolnir.Biscuit do
     Base.decode64!(b64)
   end
 
+  @doc "Appends one check-only hop using the holder fingerprint already on the token."
+  @spec append_hop(binary(), String.t()) :: binary() | {:error, term()}
+  def append_hop(biscuit, public_hex) when is_binary(biscuit) and is_binary(public_hex) do
+    case rpc(%{
+           op: "append_hop",
+           public_hex: public_hex,
+           biscuit_b64: Base.encode64(biscuit)
+         }) do
+      %{"ok" => true, "biscuit_b64" => b64} when is_binary(b64) -> Base.decode64!(b64)
+      other -> {:error, other}
+    end
+  rescue
+    e -> {:error, e}
+  end
+
   @spec authorize(binary(), String.t(), String.t(), String.t(), String.t(), boolean()) ::
           :ok | {:error, term()}
   def authorize(biscuit, public_hex, fp, resource, operation, inject_holder) do

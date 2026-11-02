@@ -43,6 +43,47 @@ pub fn secret_commit(salt: &[u8], secret: &[u8]) -> [u8; 32] {
     proto_commit(COMMIT_DOMAIN, salt, secret)
 }
 
+/// Record one nextKey hop, preserving the canonical holder binding.
+///
+/// Compare parsed checks, including every query/alternative and scope. Symbols
+/// are only candidates: a fingerprint is accepted only when the entire check
+/// equals the canonical check containing that string literal. This
+/// avoids parsing display text and needs only the re-exported Biscuit type.
+pub fn append_hop(tok: &Biscuit) -> Result<Vec<u8>, Error> {
+    let (_, _, checks, _) = tok
+        .authorizer()
+        .map_err(|e| Error::Biscuit(e.to_string()))?
+        .dump();
+    for index in 0..tok.block_count() {
+        for fp in tok
+            .block_symbols(index)
+            .map_err(|e| Error::Biscuit(e.to_string()))?
+        {
+            // JSON quoting keeps the symbol a single Datalog string literal.
+            let source = format!(
+                "check if holder($fp), $fp == {}",
+                serde_json::to_string(&fp).map_err(|e| Error::Biscuit(e.to_string()))?
+            );
+            let Ok(builder) = Biscuit::builder().check(source.as_str()) else {
+                continue;
+            };
+            let (_, _, mut canonical_checks) = builder.dump();
+            let mut canonical = canonical_checks.remove(0);
+            // Deserialized checks have no builder parameter bookkeeping.
+            for query in &mut canonical.queries {
+                query.parameters = None;
+                query.scope_parameters = None;
+            }
+            if checks.contains(&canonical) {
+                // The protocol helper performs exactly one Biscuit::append
+                // with this check alone, then serializes before returning.
+                return append_holder_check(tok, &fp).map_err(Error::from);
+            }
+        }
+    }
+    Err(Error::Biscuit("canonical holder check missing".into()))
+}
+
 /// Authorize with an optional injected `holder` fact. `inject_holder` is
 /// the BEAM flag; the protocol crate takes `Option<&str>`.
 pub fn authorize_holder(
@@ -90,6 +131,50 @@ mod tests {
         let root = new_keypair();
         let bytes = mint_right(&root, "github-pat-ci", "redeem").unwrap();
         parse(&bytes, root.public()).unwrap();
+    }
+
+    #[test]
+    fn hop_preserves_canonical_holder_check() {
+        let root = new_keypair();
+        let minted = mint_right(&root, "secret", "redeem").unwrap();
+        let held = append_holder_check(&parse(&minted, root.public()).unwrap(), "FP").unwrap();
+        let tok = parse(&held, root.public()).unwrap();
+        let hopped = append_hop(&tok).unwrap();
+        let next = parse(&hopped, root.public()).unwrap();
+        assert_eq!(next.block_count(), tok.block_count() + 1);
+        assert_eq!(
+            next.print_block_source(1).unwrap(),
+            next.print_block_source(2).unwrap()
+        );
+        authorize_holder(&hopped, root.public(), "FP", "secret", "redeem", true).unwrap();
+    }
+
+    #[test]
+    fn hop_requires_an_entire_canonical_check() {
+        let root = new_keypair();
+        for source in [
+            r#"check if holder($fp), $fp == "FP" or true"#,
+            r#"check if holder($fp), $fp.starts_with("FP")"#,
+            r#"check if holder($fp), $fp == "FP", true"#,
+            r#"check all holder($fp), $fp == "FP""#,
+            r#"check if other_holder($fp), $fp == "FP""#,
+            r#"check if true"#,
+        ] {
+            let tok = Biscuit::builder()
+                .check(source)
+                .unwrap()
+                .build(&root)
+                .unwrap();
+            assert!(append_hop(&tok).is_err(), "accepted {source}");
+        }
+
+        // Holder-shaped text inside a fact is not a holder check.
+        let tok = Biscuit::builder()
+            .fact(r#"note("check if holder($fp), $fp == \"FP\";")"#)
+            .unwrap()
+            .build(&root)
+            .unwrap();
+        assert!(append_hop(&tok).is_err());
     }
 
     #[test]

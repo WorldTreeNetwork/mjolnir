@@ -39,6 +39,80 @@ defmodule Mjolnir.BiscuitTest do
     assert {:error, _} = Biscuit.parse(tampered, pub)
   end
 
+  describe "recorded hops" do
+    setup do
+      pair = Biscuit.keypair()
+      minted = Biscuit.mint(pair.private_hex, "github-pat-ci", "redeem")
+      held = Biscuit.append_holder(minted, pair.public_hex, "FP")
+      %{pub: pair.public_hex, minted: minted, held: held}
+    end
+
+    test "a holder-bound mint authorizes with zero hop blocks", %{pub: pub, held: held} do
+      assert [authority, holder] = block_sources(held, pub)
+      assert authority =~ ~s|right("github-pat-ci", "redeem")|
+      assert String.trim(holder) == ~s|check if holder($fp), $fp == "FP";|
+      assert :ok = Biscuit.authorize(held, pub, "FP", "github-pat-ci", "redeem", true)
+      assert {:error, _} = Biscuit.authorize(held, pub, "FP", "github-pat-ci", "redeem", false)
+    end
+
+    test "one hop restates only the same check and preserves all earlier blocks", %{
+      pub: pub,
+      held: held
+    } do
+      hopped = Biscuit.append_hop(held, pub)
+      assert is_binary(hopped)
+      earlier = block_sources(held, pub)
+      assert block_sources(hopped, pub) == earlier ++ [List.last(earlier)]
+      assert :ok = Biscuit.authorize(hopped, pub, "FP", "github-pat-ci", "redeem", true)
+      assert {:error, _} = Biscuit.authorize(hopped, pub, "FP", "github-pat-ci", "redeem", false)
+
+      assert {:error, _} =
+               Biscuit.authorize(hopped, pub, "WRONG", "github-pat-ci", "redeem", true)
+
+      assert {:error, _} = Biscuit.authorize(hopped, pub, "FP", "other-secret", "redeem", true)
+      assert {:error, _} = Biscuit.authorize(hopped, pub, "FP", "github-pat-ci", "write", true)
+    end
+
+    test "repeated identical hops remain valid and keep requiring the holder", %{
+      pub: pub,
+      held: held
+    } do
+      hopped = held |> Biscuit.append_hop(pub) |> Biscuit.append_hop(pub)
+      assert is_binary(hopped)
+      [authority, holder] = block_sources(held, pub)
+      assert block_sources(hopped, pub) == [authority, holder, holder, holder]
+      assert :ok = Biscuit.authorize(hopped, pub, "FP", "github-pat-ci", "redeem", true)
+      assert {:error, _} = Biscuit.authorize(hopped, pub, "FP", "github-pat-ci", "redeem", false)
+    end
+
+    test "a missing holder check or tampering returns an error and no token", %{
+      pub: pub,
+      minted: minted,
+      held: held
+    } do
+      assert {:error, _} = Biscuit.append_hop(minted, pub)
+      <<first, rest::binary>> = held
+      tampered = <<Bitwise.bxor(first, 0xFF), rest::binary>>
+      assert {:error, _} = Biscuit.append_hop(tampered, pub)
+      assert {:error, _} = Biscuit.append_hop(held, Biscuit.keypair().public_hex)
+
+      # The CLI also fails without emitting a JSON token response.
+      request =
+        Jason.encode!(%{op: "append_hop", public_hex: pub, biscuit_b64: Base.encode64(minted)})
+
+      assert {"", 1} = System.cmd(Application.fetch_env!(:mjolnir, :biscuit_bin), [request])
+    end
+
+    defp block_sources(token, public_hex) do
+      request =
+        Jason.encode!(%{op: "parse", public_hex: public_hex, biscuit_b64: Base.encode64(token)})
+
+      assert {out, 0} = System.cmd(Application.fetch_env!(:mjolnir, :biscuit_bin), [request])
+      assert %{"ok" => true, "blocks" => blocks} = Jason.decode!(out)
+      blocks
+    end
+  end
+
   describe "durable production authority" do
     setup do
       keys = [

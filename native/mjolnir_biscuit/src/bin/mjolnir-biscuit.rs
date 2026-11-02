@@ -4,8 +4,8 @@
 //! JSON-in / JSON-out BEAM face for `mjolnir-axsb.1.3`. No HTTP.
 
 use mjolnir_biscuit::{
-    append_holder_check, authorize_holder, blake3_hash, holder_fingerprint, keypair_from_private_hex,
-    mint_right, new_keypair, parse, public_from_hex, secret_commit,
+    append_holder_check, append_hop, authorize_holder, blake3_hash, holder_fingerprint,
+    keypair_from_private_hex, mint_right, new_keypair, parse, public_from_hex, secret_commit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,10 @@ enum Req {
     #[serde(rename = "holder_fp")]
     HolderFp { public_hex: String },
     #[serde(rename = "commit")]
-    Commit { salt_b64: String, secret_b64: String },
+    Commit {
+        salt_b64: String,
+        secret_b64: String,
+    },
     #[serde(rename = "mint")]
     Mint {
         private_hex: String,
@@ -31,6 +34,11 @@ enum Req {
         public_hex: String,
         biscuit_b64: String,
         fp: String,
+    },
+    #[serde(rename = "append_hop")]
+    AppendHop {
+        public_hex: String,
+        biscuit_b64: String,
     },
     #[serde(rename = "authorize")]
     Authorize {
@@ -173,6 +181,21 @@ fn run(req: Req) -> Result<String, String> {
             })
             .unwrap())
         }
+        Req::AppendHop {
+            public_hex,
+            biscuit_b64,
+        } => {
+            let pk = public_from_hex(&public_hex).map_err(|e| e.to_string())?;
+            let bytes = b64(&biscuit_b64)?;
+            let tok = parse(&bytes, pk).map_err(|e| e.to_string())?;
+            let next = append_hop(&tok).map_err(|e| e.to_string())?;
+            use base64::Engine;
+            Ok(serde_json::to_string(&OkBiscuit {
+                ok: true,
+                biscuit_b64: base64::engine::general_purpose::STANDARD.encode(next),
+            })
+            .unwrap())
+        }
         Req::Authorize {
             public_hex,
             biscuit_b64,
@@ -193,8 +216,12 @@ fn run(req: Req) -> Result<String, String> {
         } => {
             let pk = public_from_hex(&public_hex).map_err(|e| e.to_string())?;
             let bytes = b64(&biscuit_b64)?;
-            parse(&bytes, pk).map_err(|e| e.to_string())?;
-            Ok(serde_json::to_string(&OkAuth { ok: true }).unwrap())
+            let tok = parse(&bytes, pk).map_err(|e| e.to_string())?;
+            let blocks = (0..tok.block_count())
+                .map(|i| tok.print_block_source(i))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"ok": true, "blocks": blocks}).to_string())
         }
     }
 }
