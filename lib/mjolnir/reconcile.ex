@@ -201,18 +201,25 @@ defmodule Mjolnir.Reconcile do
 
   defp stop_finished_or_orphan(active_ids) do
     Enum.each(active_ids, fn id ->
-      case StateStore.get(id) do
-        {:ok, %Record{intent: intent}} when intent in [:stopped, :dormant, :failed] ->
-          _ = Mjolnir.VmmScope.stop(id)
-
-        :not_found ->
-          _ = Mjolnir.VmmScope.stop(id)
-
-        _ ->
-          :ok
+      if scope_should_stop?(id, StateStore.get(id)) do
+        _ = Mjolnir.VmmScope.stop(id)
       end
     end)
   end
+
+  @doc false
+  def scope_should_stop?(_id, {:ok, %Record{intent: intent}})
+      when intent in [:stopped, :dormant, :failed],
+      do: true
+
+  def scope_should_stop?(id, :not_found) do
+    # A fresh VM registers before boot, but persists its running record only
+    # after the agent is ready. Do not reap its scope during that window.
+    # Registry lookup must stay nonblocking: the VM can be busy booting.
+    not vm_registered?(id)
+  end
+
+  def scope_should_stop?(_id, _record), do: false
 
   defp drop_unprotected_sockets(active_ids) do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
@@ -232,7 +239,9 @@ defmodule Mjolnir.Reconcile do
     end
   end
 
-  defp vm_registered?(%Record{uuid: uuid}) do
+  defp vm_registered?(%Record{uuid: uuid}), do: vm_registered?(uuid)
+
+  defp vm_registered?(uuid) when is_binary(uuid) do
     registry_taken?(uuid) or registry_taken?({:resume, uuid})
   end
 
