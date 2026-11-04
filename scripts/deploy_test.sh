@@ -288,6 +288,7 @@ if [[ "$*" == *release* ]]; then
   "${ELIXIRC:?}" -o "$ebin" \
     /opt/mjolnir/lib/mjolnir/release.ex \
     /opt/mjolnir/lib/mjolnir/code.ex \
+    /opt/mjolnir/lib/mjolnir/hot_load.ex \
     /opt/mjolnir/lib/mjolnir/cutover.ex
 fi
 exit 0
@@ -440,6 +441,9 @@ defmodule FixtureServer do
           String.starts_with?(raw, "GET /code") ->
             {200, Mjolnir.Code.revision()}
 
+          String.starts_with?(raw, "GET /hotload") ->
+            {200, Mjolnir.HotLoad.stamp()}
+
           String.starts_with?(raw, "POST /rpc") ->
             body = request_body(sock, raw)
             {val, _} = Code.eval_string(body)
@@ -506,13 +510,30 @@ EOF
 compile_old_release() {
     local fix="$1"
     cp "$ROOT/lib/mjolnir/release.ex" "$ROOT/lib/mjolnir/code.ex" \
+        "$ROOT/lib/mjolnir/hot_load.ex" \
         "$ROOT/lib/mjolnir/cutover.ex" "$fix/compile/lib/mjolnir/"
     printf '%s\n' "$(cat "$fix/old-id")" > "$fix/compile/priv/release_id"
     local ebin="$fix/opt/mjolnir/_build/prod/rel/mjolnir/lib/mjolnir-0.1.0/ebin"
     "$ELIXIRC" -o "$ebin" \
         "$fix/compile/lib/mjolnir/release.ex" \
         "$fix/compile/lib/mjolnir/code.ex" \
+        "$fix/compile/lib/mjolnir/hot_load.ex" \
         "$fix/compile/lib/mjolnir/cutover.ex"
+}
+
+# Load Code and HotLoad into the running node while the ebin still holds the
+# old beams. A later overwrite of those files must not change the return
+# values until cutover load_binary's them. HotLoad's name is not in cutover.ex.
+pin_old_beams() {
+    local base="http://127.0.0.1:$(cat /opt/fixture/port)"
+    local health code hot
+    health="$(/usr/bin/curl -fsS "$base/health")"
+    code="$(/usr/bin/curl -fsS "$base/code")"
+    hot="$(/usr/bin/curl -fsS "$base/hotload")"
+    echo "resident before deploy health=$health code=$code hotload=$hot"
+    [[ "$health" == "$OLD_ID" ]] || { echo "health $health != $OLD_ID" >&2; exit 1; }
+    [[ "$code" == "$OLD_ID" ]] || { echo "code $code != $OLD_ID (not resident on the old beam)" >&2; exit 1; }
+    [[ "$hot" == "$OLD_ID" ]] || { echo "hotload $hot != $OLD_ID (not resident on the old beam)" >&2; exit 1; }
 }
 
 inside_main() {
@@ -565,6 +586,9 @@ inside_main() {
             echo $! > /opt/fixture/state/door.pid
         fi
     fi
+
+    # After the cutover proof's fresh node, and before deploy overwrites ebin.
+    pin_old_beams
 
     snapshot_hashes /opt/fixture/before.sha
     door_before="$(sha256sum /opt/mjolnir/bin/mjolnir-blob-door | awk '{print $1}')"
@@ -638,6 +662,8 @@ inside_main() {
             [[ "$health" == "$OLD_ID" ]]
             code="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/code")"
             [[ "$code" == "$OLD_ID" ]]
+            hot="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/hotload")"
+            [[ "$hot" == "$OLD_ID" ]]
             grep -q 'mix release' /opt/fixture/mix.log
             if grep -E '^systemctl restart mjolnir-gateway$' "$slog"; then
                 echo "gateway restarted" >&2
@@ -652,6 +678,8 @@ inside_main() {
             [[ "$health" == "$OLD_ID" ]]
             code="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/code")"
             [[ "$code" == "$OLD_ID" ]]
+            hot="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/hotload")"
+            [[ "$hot" == "$OLD_ID" ]]
             ;;
         cutover)
             [[ "$deploy_status" -eq 0 ]]
@@ -668,6 +696,10 @@ inside_main() {
             [[ "$code" == "$new_id" ]]
             [[ "$code" != "$OLD_ID" ]]
             [[ "$code" == "$health" ]]
+            hot="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/hotload")"
+            [[ "$hot" == "$new_id" ]]
+            [[ "$hot" != "$OLD_ID" ]]
+            [[ "$hot" == "$health" ]]
             door_now="$(sha256sum /opt/mjolnir/bin/mjolnir-blob-door | awk '{print $1}')"
             b3_now="$(sha256sum /opt/mjolnir/bin/mjolnir-b3 | awk '{print $1}')"
             [[ "$door_now" != "$door_before" ]]
