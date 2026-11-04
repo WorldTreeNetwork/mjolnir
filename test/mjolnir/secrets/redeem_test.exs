@@ -64,6 +64,9 @@ defmodule Mjolnir.Secrets.RedeemTest do
       Map.merge(
         %{
           "secret_id" => ctx.id,
+          "audience" => "test",
+          "method" => "REDEEM",
+          "resource" => ctx.id,
           "nonce" => Nonces.issue(),
           "biscuit" => ctx.token,
           "public_key" => Base.encode64(ctx.public)
@@ -71,7 +74,7 @@ defmodule Mjolnir.Secrets.RedeemTest do
         overrides
       )
 
-    message = Redeem.signing_message(params["nonce"], params["biscuit"], params["secret_id"])
+    message = Redeem.signing_message(params["nonce"], params["biscuit"], params)
     signature = :crypto.sign(:eddsa, :none, message, [ctx.private, :ed25519])
     Map.put(params, "signature", Base.encode64(signature))
   end
@@ -163,29 +166,33 @@ defmodule Mjolnir.Secrets.RedeemTest do
     assert Enum.count(results, &(&1 == {:error, :invalid_proof})) == 1
   end
 
-  test "egress sends the value upstream but never returns the pair", ctx do
-    {:ok, listener} =
-      :gen_tcp.listen(0, [:binary, active: false, packet: :raw, ip: {127, 0, 0, 1}])
-
+  defp listener do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
     on_exit(fn -> :gen_tcp.close(listener) end)
     {:ok, {_, port}} = :inet.sockname(listener)
+    {listener, "http://127.0.0.1:#{port}/signed?x=1"}
+  end
 
-    upstream =
-      Task.async(fn ->
-        {:ok, socket} = :gen_tcp.accept(listener, 5_000)
-        {:ok, request} = :gen_tcp.recv(socket, 0, 5_000)
+  defp receive_request(socket, data \\ "") do
+    case :binary.split(data, "\r\n\r\n") do
+      [headers, body] ->
+        [_, length] = Regex.run(~r/content-length: (\d+)/i, headers)
 
-        :ok =
-          :gen_tcp.send(
-            socket,
-            "HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
-          )
+        if byte_size(body) >= String.to_integer(length) do
+          data
+        else
+          {:ok, more} = :gen_tcp.recv(socket, 0, 5_000)
+          receive_request(socket, data <> more)
+        end
 
-        :gen_tcp.close(socket)
-        request
-      end)
+      _ ->
+        {:ok, more} = :gen_tcp.recv(socket, 0, 5_000)
+        receive_request(socket, data <> more)
+    end
+  end
 
-    # Use a valid HTTP header value for this fixture.
+  test "egress forwards the signed method, URL, binary body and exact idempotency key", ctx do
+    {listener, url} = listener()
     value = "upstream-token"
 
     meta =
@@ -197,13 +204,176 @@ defmodule Mjolnir.Secrets.RedeemTest do
 
     :ok = SecretStore.put_opaque("secrets", ctx.id, "value", value)
     :ok = SecretStore.put_opaque("secrets", ctx.id, "meta", Jason.encode!(meta))
-    request = %{"method" => "GET", "url" => "http://127.0.0.1:#{port}/"}
-    assert {:ok, 201, "ok"} = Redeem.egress(Map.merge(proof(ctx), request))
-    assert Task.await(upstream) =~ "Bearer " <> value
+    body = <<0, 255>> <> "hi"
 
-    :ok = SecretStore.delete_opaque("secrets", ctx.id, "meta")
-    assert {:error, :not_found} = Redeem.egress(Map.merge(proof(ctx), request))
+    # Repeating a key still calls upstream; missing and empty keys add no header.
+    for key <- ["Same KEY / Exact", "Same KEY / Exact", "", nil] do
+      upstream =
+        Task.async(fn ->
+          {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+          request = receive_request(socket)
+
+          :ok =
+            :gen_tcp.send(
+              socket,
+              "HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            )
+
+          :gen_tcp.close(socket)
+          request
+        end)
+
+      fields = %{
+        "method" => "PATCH",
+        "resource" => url,
+        "body_b64" => Base.encode64(body),
+        "audience" => "opaque label unrelated to host"
+      }
+
+      fields = if is_nil(key), do: fields, else: Map.put(fields, "idempotency_key", key)
+
+      params =
+        proof(ctx, fields)
+        |> Map.merge(%{
+          "url" => "https://ignored.invalid",
+          "http_method" => "DELETE",
+          "body_digest" => "ignored client digest"
+        })
+
+      assert {:ok, 201, "ok"} = Redeem.egress(params)
+      request = Task.await(upstream)
+      [headers, actual_body] = :binary.split(request, "\r\n\r\n")
+      assert headers =~ "PATCH /signed?x=1 HTTP/1.1"
+      assert String.downcase(headers) =~ "host: 127.0.0.1:"
+      assert headers =~ "Bearer " <> value
+      assert actual_body == body
+
+      if key in [nil, ""] do
+        refute String.downcase(headers) =~ "idempotency-key:"
+      else
+        assert Enum.any?(String.split(headers, "\r\n"), fn line ->
+                 case String.split(line, ": ", parts: 2) do
+                   [name, value] -> String.downcase(name) == "idempotency-key" and value == key
+                   _ -> false
+                 end
+               end)
+      end
+    end
+  end
+
+  test "failed egress proofs burn nonces and make no upstream call", ctx do
+    {listener, url} = listener()
+
+    base = %{
+      "method" => "POST",
+      "resource" => url,
+      "body_b64" => Base.encode64("hi"),
+      "idempotency_key" => "k1"
+    }
+
+    tampered = %{
+      "biscuit" => ctx.token <> "A",
+      "nonce" => Nonces.issue(),
+      "audience" => "other",
+      "method" => "PUT",
+      "resource" => url <> "other",
+      "body_b64" => Base.encode64("bye"),
+      "secret_id" => "other",
+      "idempotency_key" => "k2"
+    }
+
+    invalid = Enum.map(tampered, fn {key, value} -> Map.put(proof(ctx, base), key, value) end)
+
+    invalid =
+      invalid ++
+        [
+          proof(ctx),
+          proof(ctx, Map.put(base, "method", "post")),
+          proof(ctx, Map.put(base, "resource", "https://not-allowed.invalid/"))
+        ]
+
+    for params <- invalid do
+      assert {:error, _} = Redeem.egress(params)
+
+      assert {:error, :invalid_proof} =
+               Redeem.egress(proof(ctx, Map.put(base, "nonce", params["nonce"])))
+    end
+
     assert {:error, :timeout} = :gen_tcp.accept(listener, 50)
+  end
+
+  test "copy-out requires REDEEM, its own resource, and an empty body", ctx do
+    for fields <- [
+          %{"method" => "POST"},
+          %{"method" => "redeem"},
+          %{"resource" => "other"},
+          %{"body_b64" => Base.encode64("hi")}
+        ] do
+      params = proof(ctx, fields)
+      assert {:error, :invalid_proof} = Redeem.redeem(params)
+      assert {:error, :invalid_proof} = Redeem.redeem(proof(ctx, %{"nonce" => params["nonce"]}))
+    end
+
+    assert {:ok, _, _} = Redeem.redeem(proof(ctx, %{"body_b64" => "", "idempotency_key" => ""}))
+  end
+
+  test "malformed JSON types and base64 burn well-formed nonces", ctx do
+    fields =
+      ~w(biscuit audience method resource secret_id body_b64 idempotency_key public_key signature)
+
+    for field <- fields, value <- [nil, 42, true, [], %{}] do
+      params = Map.put(proof(ctx), field, value)
+      assert {:error, _} = Redeem.redeem(params)
+      assert :error = Nonces.consume(params["nonce"])
+    end
+
+    for field <- ~w(biscuit audience method resource secret_id public_key signature) do
+      for value <- [:missing, ""] do
+        params = proof(ctx)
+
+        malformed =
+          if value == :missing, do: Map.delete(params, field), else: Map.put(params, field, value)
+
+        assert {:error, _} = Redeem.redeem(malformed)
+        assert :error = Nonces.consume(params["nonce"])
+      end
+    end
+
+    for body <- ["!", "a", "aGk===", "aG k="] do
+      params = Map.put(proof(ctx), "body_b64", body)
+      assert {:error, _} = Redeem.redeem(params)
+      assert :error = Nonces.consume(params["nonce"])
+    end
+  end
+
+  test "malformed nonces are rejected before consumption", ctx do
+    for nonce <- [
+          nil,
+          42,
+          [],
+          %{},
+          "",
+          "abc",
+          String.duplicate("A", 64),
+          String.duplicate("g", 64)
+        ] do
+      # Insert malformed keys to make the no-consumption guarantee observable.
+      :sys.replace_state(Nonces, &Map.put(&1, nonce, System.monotonic_time(:second) + 60))
+      assert {:error, :invalid_proof} = Redeem.redeem(Map.put(proof(ctx), "nonce", nonce))
+      assert Map.has_key?(:sys.get_state(Nonces), nonce)
+      :sys.replace_state(Nonces, &Map.delete(&1, nonce))
+    end
+  end
+
+  test "the old four-line signature no longer verifies and burns its nonce", ctx do
+    params = proof(ctx)
+    old = "mjolnir/redeem/v1\n" <> params["nonce"] <> "\n" <> params["biscuit"] <> "\n" <> ctx.id
+    signature = :crypto.sign(:eddsa, :none, old, [ctx.private, :ed25519])
+
+    assert {:error, :invalid_proof} =
+             Redeem.redeem(Map.put(params, "signature", Base.encode64(signature)))
+
+    assert :error = Nonces.consume(params["nonce"])
   end
 
   test "a nonce is single use" do
@@ -217,8 +387,27 @@ defmodule Mjolnir.Secrets.RedeemTest do
              Redeem.egress(%{"url" => "https://example.com", "method" => "GET"})
   end
 
-  test "the signing message binds nonce, token, and secret id" do
-    assert Redeem.signing_message("abc", "dG9r", "github-pat") ==
-             "mjolnir/redeem/v1\nabc\ndG9r\ngithub-pat"
+  test "the signing frame matches the independent documented golden hex" do
+    params = %{
+      "biscuit" => "dG9r",
+      "nonce" => String.duplicate("ab", 32),
+      "audience" => "proxy",
+      "method" => "POST",
+      "resource" => "https://127.0.0.1/v1",
+      "body_b64" => "aGk=",
+      "secret_id" => "github-pat",
+      "idempotency_key" => "k1"
+    }
+
+    golden =
+      Base.decode16!(
+        "6d6a6f6c6e69722f72656465656d2f763100000000046447397200000040616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261620000000570726f787900000004504f53540000001468747470733a2f2f3132372e302e302e312f76310000002085052e9aab1b67b6622d94a08441b09fd5b7aca61ee360416d70de5da67d86ca0000000a6769746875622d706174000000026b31",
+        case: :lower
+      )
+
+    assert Redeem.signing_message(params["nonce"], params["biscuit"], params) == golden
+
+    assert Base.encode16(Biscuit.blake3_hash(""), case: :lower) ==
+             "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
   end
 end

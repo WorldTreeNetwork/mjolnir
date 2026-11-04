@@ -126,7 +126,7 @@ defmodule Mjolnir.API.RouterTest do
         end)
 
       params =
-        Map.merge(ceremony_proof(ctx), %{"method" => "GET", "url" => "http://127.0.0.1:#{port}/"})
+        ceremony_proof(ctx, %{"method" => "GET", "resource" => "http://127.0.0.1:#{port}/"})
 
       response = request(:post, "/api/egress", params)
       assert response.status == 200
@@ -139,7 +139,14 @@ defmodule Mjolnir.API.RouterTest do
 
       assert Task.await(upstream) =~ "Bearer " <> ctx.value
       :ok = Mjolnir.SecretStore.put_opaque("secrets", ctx.id, "meta", "{}")
-      response = request(:post, "/api/egress", Map.merge(params, ceremony_proof(ctx)))
+
+      response =
+        request(
+          :post,
+          "/api/egress",
+          ceremony_proof(ctx, Map.take(params, ["method", "resource"]))
+        )
+
       assert response.status == 404
       assert Jason.decode!(response.resp_body) == %{"error" => "not_found"}
       assert {:error, :timeout} = :gen_tcp.accept(listener, 50)
@@ -155,21 +162,29 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
-  defp ceremony_proof(ctx) do
+  defp ceremony_proof(ctx, overrides \\ %{}) do
     challenge = request(:post, "/api/secrets/challenge")
     assert challenge.status == 200
     assert challenge.assigns.principal_kind == :ceremony
     nonce = Jason.decode!(challenge.resp_body)["nonce"]
-    message = Mjolnir.Secrets.Redeem.signing_message(nonce, ctx.token, ctx.id)
-    signature = :crypto.sign(:eddsa, :none, message, [ctx.private, :ed25519])
 
-    %{
-      "secret_id" => ctx.id,
-      "nonce" => nonce,
-      "biscuit" => ctx.token,
-      "public_key" => Base.encode64(ctx.public),
-      "signature" => Base.encode64(signature)
-    }
+    params =
+      Map.merge(
+        %{
+          "secret_id" => ctx.id,
+          "audience" => "test",
+          "method" => "REDEEM",
+          "resource" => ctx.id,
+          "nonce" => nonce,
+          "biscuit" => ctx.token,
+          "public_key" => Base.encode64(ctx.public)
+        },
+        overrides
+      )
+
+    message = Mjolnir.Secrets.Redeem.signing_message(nonce, ctx.token, params)
+    signature = :crypto.sign(:eddsa, :none, message, [ctx.private, :ed25519])
+    Map.put(params, "signature", Base.encode64(signature))
   end
 
   describe "GET /api/health" do

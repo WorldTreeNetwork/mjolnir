@@ -78,6 +78,9 @@ defmodule Mjolnir.Secrets.DepositTest do
 
     params = %{
       "secret_id" => ctx.id,
+      "audience" => "test",
+      "method" => "REDEEM",
+      "resource" => ctx.id,
       "nonce" => Nonces.issue(),
       "biscuit" => Base.encode64(token),
       "public_key" => Base.encode64(ctx.public)
@@ -87,7 +90,7 @@ defmodule Mjolnir.Secrets.DepositTest do
       :crypto.sign(
         :eddsa,
         :none,
-        Redeem.signing_message(params["nonce"], params["biscuit"], ctx.id),
+        Redeem.signing_message(params["nonce"], params["biscuit"], params),
         [ctx.private, :ed25519]
       )
 

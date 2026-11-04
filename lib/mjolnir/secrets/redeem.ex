@@ -4,12 +4,11 @@ defmodule Mjolnir.Secrets.Redeem do
   uses the secret without returning it.
 
   The token is a Biscuit `right(<secret_id>, "redeem")`. Possession of
-  the bytes is not enough. The caller signs
-
-      mjolnir/redeem/v1\\n<nonce>\\n<biscuit-base64>\\n<secret_id>
-
-  with the Ed25519 key named by the holder check. The verifier injects
-  `holder(<fingerprint>)` and only then evaluates the token.
+  the bytes is not enough. The caller signs a NUL-terminated
+  `mjolnir/redeem/v1` domain followed by eight uint32 big-endian
+  length-prefixed fields: biscuit base64, nonce, audience, method,
+  resource, Blake3 of the decoded body, secret id, and idempotency key.
+  The verifier injects `holder(<fingerprint>)` before evaluating the token.
 
   Copy-out (`redeem/1`) returns the bytes and stored salt to that holder. `egress/1`
   performs the upstream request and returns the response. The secret
@@ -24,7 +23,7 @@ defmodule Mjolnir.Secrets.Redeem do
   alias Mjolnir.Secrets.Nonces
   alias Mjolnir.SecretStore
 
-  @domain "mjolnir/redeem/v1"
+  @domain "mjolnir/redeem/v1\0"
   @max_body 1_048_576
 
   @spec challenge() :: String.t()
@@ -32,17 +31,22 @@ defmodule Mjolnir.Secrets.Redeem do
 
   @spec redeem(map()) :: {:ok, binary(), binary()} | {:error, atom()}
   def redeem(params) when is_map(params) do
-    with {:ok, secret, salt} <- prove(params) do
+    with {:ok, secret, salt, body} <- prove(params),
+         true <- params["method"] == "REDEEM" and params["resource"] == params["secret_id"],
+         true <- body == <<>> do
       {:ok, secret, salt}
+    else
+      false -> {:error, :invalid_proof}
+      error -> error
     end
   end
 
   @spec egress(map()) :: {:ok, integer(), binary()} | {:error, atom()}
   def egress(params) when is_map(params) do
-    with {:ok, secret, _salt} <- prove(params),
+    with {:ok, secret, _salt, body} <- prove(params),
          {:ok, method, url} <- request(params),
          :ok <- allow_url(url) do
-      call_upstream(method, url, secret)
+      call_upstream(method, url, secret, body, Map.get(params, "idempotency_key", ""))
     end
   end
 
@@ -53,19 +57,20 @@ defmodule Mjolnir.Secrets.Redeem do
     pub_b64 = params["public_key"]
     sig_b64 = params["signature"]
 
-    with true <- is_binary(nonce),
+    with true <- valid_nonce?(nonce),
          :ok <- Nonces.consume(nonce),
-         true <- is_binary(secret_id) and secret_id != "",
+         true <- valid_fields?(params),
+         {:ok, body} <- decode64(Map.get(params, "body_b64", "")),
          {:ok, biscuit} <- decode64(biscuit_b64),
          {:ok, public} <- decode64(pub_b64),
          {:ok, signature} <- decode64(sig_b64),
          true <- byte_size(public) == 32 and byte_size(signature) == 64,
-         message = signing_message(nonce, biscuit_b64, secret_id),
+         message = frame(nonce, biscuit_b64, params, body),
          true <- :crypto.verify(:eddsa, :none, message, signature, [public, :ed25519]),
          {:ok, fp} <- holder_fp(public),
          :ok <- authorize(biscuit, fp, secret_id),
          {:ok, secret, salt} <- read_record(secret_id) do
-      {:ok, secret, salt}
+      {:ok, secret, salt, body}
     else
       false -> {:error, :invalid_proof}
       :error -> {:error, :invalid_proof}
@@ -73,6 +78,8 @@ defmodule Mjolnir.Secrets.Redeem do
       {:error, reason} when is_atom(reason) -> {:error, reason}
       {:error, _} -> {:error, :invalid_proof}
     end
+  rescue
+    _ -> {:error, :biscuit_unavailable}
   end
 
   defp read_record(secret_id) do
@@ -94,15 +101,49 @@ defmodule Mjolnir.Secrets.Redeem do
   end
 
   @doc false
-  def signing_message(nonce, biscuit_b64, secret_id) do
-    @domain <> "\n" <> nonce <> "\n" <> biscuit_b64 <> "\n" <> secret_id
+  def signing_message(nonce, biscuit_b64, params) when is_map(params) do
+    {:ok, body} = decode64(Map.get(params, "body_b64", ""))
+    frame(nonce, biscuit_b64, params, body)
+  end
+
+  defp frame(nonce, biscuit_b64, params, body) do
+    fields = [
+      biscuit_b64,
+      nonce,
+      params["audience"],
+      params["method"],
+      params["resource"],
+      Biscuit.blake3_hash(body),
+      params["secret_id"],
+      Map.get(params, "idempotency_key", "")
+    ]
+
+    IO.iodata_to_binary([
+      @domain | Enum.map(fields, &<<byte_size(&1)::unsigned-big-32, &1::binary>>)
+    ])
+  end
+
+  defp valid_nonce?(nonce) do
+    is_binary(nonce) and byte_size(nonce) == 64 and
+      Regex.match?(~r/\A[0-9a-f]{64}\z/, nonce)
+  end
+
+  defp valid_fields?(params) do
+    Enum.all?(["biscuit", "audience", "method", "resource", "secret_id"], fn key ->
+      value = params[key]
+      is_binary(value) and value != "" and String.valid?(value)
+    end) and
+      Enum.all?(["body_b64", "idempotency_key", "public_key", "signature"], fn key ->
+        value = Map.get(params, key, "")
+        is_binary(value) and String.valid?(value)
+      end)
   end
 
   defp request(params) do
-    method = params["method"] |> to_string() |> String.upcase()
-    url = params["url"]
+    method = params["method"]
+    url = params["resource"]
 
-    if method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] and is_binary(url) do
+    if method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] do
       {:ok, method, url}
     else
       {:error, :bad_request}
@@ -121,12 +162,20 @@ defmodule Mjolnir.Secrets.Redeem do
     end
   end
 
-  defp call_upstream(method, url, secret) do
+  defp call_upstream(method, url, secret, body, idempotency_key) do
+    headers = [{"authorization", "Bearer " <> secret}]
+
+    headers =
+      if idempotency_key == "",
+        do: headers,
+        else: headers ++ [{"Idempotency-Key", idempotency_key}]
+
     case Req.request(
            method: method,
            url: url,
            redirect: false,
-           headers: [{"authorization", "Bearer " <> secret}],
+           headers: headers,
+           body: body,
            decode_body: false,
            retry: false
          ) do
