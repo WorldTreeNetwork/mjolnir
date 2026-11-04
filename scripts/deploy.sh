@@ -4,7 +4,7 @@ set -euo pipefail
 # Deploy Mjolnir to a remote server.
 #
 # Usage:
-#   ./scripts/deploy.sh <host>                 # rsync + build release + restart service
+#   ./scripts/deploy.sh <host>                 # rsync + build release + hot-cutover (no unit restart)
 #   ./scripts/deploy.sh <host> --agent         # also rebuild guest agent (Iroh P2P on by default)
 #   ./scripts/deploy.sh <host> --agent --no-iroh # rebuild guest agent without Iroh (smaller binary)
 #   ./scripts/deploy.sh <host> --rootfs        # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
@@ -72,7 +72,11 @@ if [[ "$HOST" != *@* ]]; then
     HOST="root@$HOST"
 fi
 
-MISE_ACTIVATE='eval "$($HOME/.local/bin/mise activate bash)"'
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+    MISE_ACTIVATE='eval "$($HOME/.local/bin/mise activate bash)"'
+else
+    MISE_ACTIVATE='true'
+fi
 
 # --- Preflight check for gateway config (TOML preferred, env fallback) ---
 check_gateway_env() {
@@ -197,10 +201,66 @@ echo "=== Deploying to $HOST ==="
 # --- Rsync ---
 echo ""
 echo "--- Syncing code ---"
+# rsync 3.5 applies unqualified excludes on the sender only, so --delete
+# removes gitignored build outputs and host-installed files that are not in
+# the source. Protect those on the receiver. Still delete files under
+# directories the source owns (a removed lib/*.ex must not linger).
+RSYNC_DEST="${MJOLNIR_RSYNC_DEST:-$HOST:$REMOTE_CODE/}"
+PROTECT_FILTER="$(mktemp)"
+{
+    printf '%s\n' \
+        'P /bin/***' \
+        'P /bin/' \
+        'P /_build/***' \
+        'P /_build/' \
+        'P /deps/***' \
+        'P /deps/' \
+        'P /native/target/***' \
+        'P /native/target/' \
+        'P /native/*/target/***' \
+        'P /native/*/target/' \
+        'P /.env' \
+        'P /erl_crash.dump'
+} > "$PROTECT_FILTER"
+
+protect_dest_only() {
+    local dest="$1" root="$2" filter="$3"
+    local path name
+    local -a names=()
+    if [[ "$dest" == *:* ]]; then
+        local host="${dest%%:*}"
+        path="${dest#*:}"
+        path="${path%/}"
+        mapfile -t names < <(ssh "$host" "find '$path' -mindepth 1 -maxdepth 1 -printf '%P\\n'" 2>/dev/null || true)
+    else
+        path="${dest%/}"
+        names=()
+        if [[ -d "$path" ]]; then
+            mapfile -t names < <(find "$path" -mindepth 1 -maxdepth 1 -printf '%P\n' || true)
+        fi
+    fi
+    for name in "${names[@]}"; do
+        [[ -z "$name" || "$name" == *$'\n'* ]] && continue
+        if [[ -e "$root/$name" ]]; then
+            continue
+        fi
+        printf 'P /%s\nP /%s/***\n' "$name" "$name" >> "$filter"
+    done
+}
+protect_dest_only "$RSYNC_DEST" "$PROJECT_ROOT" "$PROTECT_FILTER"
+
+RSYNC_FILTERS=()
+while IFS= read -r rule; do
+    [[ -z "$rule" ]] && continue
+    RSYNC_FILTERS+=(--filter "$rule")
+done < "$PROTECT_FILTER"
+rm -f "$PROTECT_FILTER"
+
 rsync -avz --delete \
     --filter=':- .gitignore' \
     --exclude='.git' \
-    "$PROJECT_ROOT/" "$HOST:$REMOTE_CODE/"
+    "${RSYNC_FILTERS[@]}" \
+    "$PROJECT_ROOT/" "$RSYNC_DEST"
 
 # --- Update systemd service file ---
 echo ""
@@ -255,7 +315,7 @@ ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-redis.sh"
 if $BUILD_GATEWAY; then
     echo ""
     echo "--- Building gateway ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE/native/mjolnir_gateway && cargo build --release"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE/native/mjolnir_gateway && ${MJOLNIR_CARGO:-cargo} build --release"
     ssh "$HOST" "install -m755 $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/mjolnir-gateway"
 fi
 
@@ -285,7 +345,10 @@ fi
 if $BUILD_ELIXIR; then
     echo ""
     echo "--- Building Elixir release ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod mix deps.get && MIX_ENV=prod mix compile && MIX_ENV=prod mix release mjolnir --overwrite"
+    # priv/release_id is compiled into Mjolnir.Release. A new id is how health
+    # tells this release from the one already running.
+    ssh "$HOST" "mkdir -p $REMOTE_CODE/priv && umask 022 && openssl rand -hex 16 > $REMOTE_CODE/priv/release_id"
+    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod ${MJOLNIR_MIX:-mix} deps.get && MIX_ENV=prod ${MJOLNIR_MIX:-mix} compile && MIX_ENV=prod ${MJOLNIR_MIX:-mix} release mjolnir --overwrite"
 else
     echo ""
     echo "--- Skipping Elixir release build (gateway-only deploy; pass --full to also rebuild it) ---"
@@ -299,11 +362,13 @@ if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/nu
     check_gateway_env "$HOST" "$REMOTE_CODE"
 fi
 
-# --- Restart service (skipped in gateway-only mode: --gateway without --full) ---
+# --- Cut over the release (skipped in gateway-only mode: --gateway without --full) ---
+# Do not `systemctl restart mjolnir`. That bounces every guest. An active
+# node loads the new beams; an inactive unit is started.
 if $BUILD_ELIXIR; then
     echo ""
-    echo "--- Restarting mjolnir service ---"
-    ssh "$HOST" "systemctl restart mjolnir && sleep 2 && systemctl status mjolnir --no-pager"
+    echo "--- Cutting over mjolnir release ---"
+    ssh "$HOST" "MJOLNIR_CODE=$REMOTE_CODE bash $REMOTE_CODE/scripts/cutover-release.sh"
 
     echo ""
     echo "--- Named-host certificate renewal timer ---"
@@ -313,15 +378,15 @@ else
     echo "--- Skipping mjolnir service restart (gateway-only deploy; pass --full to also restart it) ---"
 fi
 
-# --- Restart gateway if installed ---
-if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/null" | grep -q enabled; then
+# --- Restart gateway only when this deploy built it ---
+if $BUILD_GATEWAY; then
     echo ""
     echo "--- Restarting gateway service ---"
     ssh "$HOST" "systemctl restart mjolnir-gateway && sleep 1 && systemctl status mjolnir-gateway --no-pager"
 fi
 
-# --- Restart runner if installed ---
-if $BUILD_RUNNER || ssh "$HOST" "systemctl is-enabled forgejo-runner 2>/dev/null" | grep -q enabled; then
+# --- Restart runner only when this deploy built it ---
+if $BUILD_RUNNER; then
     echo ""
     echo "--- Restarting forgejo-runner service ---"
     ssh "$HOST" "systemctl restart forgejo-runner && sleep 1 && systemctl status forgejo-runner --no-pager"

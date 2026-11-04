@@ -33,6 +33,7 @@ packages/*/dist/
 
 # Runtime
 /tmp/
+/priv/release_id
 *.sock
 erl_crash.dump
 .lattice

@@ -73,11 +73,11 @@ just deploy-gateway   # Gateway ONLY — never touches the Elixir service (see b
 just build-ci-image   # Build CI rootfs on server (@base/ci-ubuntu-24.04)
 ```
 
-`--gateway` is **gateway-only**: it builds, installs, and restarts `mjolnir-gateway` but deliberately does *not* run `mix release` or restart the `mjolnir` service. Restarting Elixir is not cheap — it triggers the Cleanup-kills-VMs → Reconcile-resumes-from-StateStore cycle, a brief downtime for every running VM on the host, which is far too much to pay for a gateway change. Add `--full` when you genuinely want both:
+`--gateway` is **gateway-only**: it builds, installs, and restarts `mjolnir-gateway` but deliberately does *not* run `mix release` or cut over the `mjolnir` service. A hand-run `systemctl restart mjolnir` still triggers Cleanup-kills-VMs → Reconcile, which bounces every guest. Deploy does not do that. An active node loads the new beams in place (`scripts/cutover-release.sh`). Add `--full` when you genuinely want the gateway and the Elixir release:
 
 ```bash
 ./scripts/deploy.sh <host> --gateway          # gateway only, VMs untouched
-./scripts/deploy.sh <host> --gateway --full   # gateway AND the Elixir release + restart
+./scripts/deploy.sh <host> --gateway --full   # gateway AND the Elixir release (hot cutover, no unit restart)
 ```
 
 Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still builds and restarts Elixir exactly as before.

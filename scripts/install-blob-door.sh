@@ -12,7 +12,9 @@ set -euo pipefail
 
 ROOT="${MJOLNIR_CODE:-/opt/mjolnir}"
 NATIVE="$ROOT/native"
-BIN_DST="/opt/mjolnir/bin/mjolnir-blob-door"
+BIN_DIR="$ROOT/bin"
+BIN_DST="$BIN_DIR/mjolnir-blob-door"
+B3_DST="$BIN_DIR/mjolnir-b3"
 UNIT_DST="/etc/systemd/system/mjolnir-blob-door.service"
 ENV_DST="/etc/mjolnir/blob-door.env"
 HOST_IP="${MJOLNIR_HOST_API_IP:-10.200.0.1}"
@@ -33,17 +35,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "$HERE/ensure-host-api-addr.sh" --install-unit
 
 echo "=== Building mjolnir-blob-door ==="
-export PATH="${HOME}/.cargo/bin:/root/.cargo/bin:${PATH}"
-if ! command -v cargo >/dev/null; then
-    echo "Error: cargo not on PATH (looked in ~/.cargo/bin)" >&2
-    exit 1
+if [[ -n "${MJOLNIR_CARGO:-}" ]]; then
+    CARGO="$MJOLNIR_CARGO"
+else
+    export PATH="${HOME}/.cargo/bin:/root/.cargo/bin:${PATH}"
+    if ! command -v cargo >/dev/null; then
+        echo "Error: cargo not on PATH (looked in ~/.cargo/bin)" >&2
+        exit 1
+    fi
+    CARGO=cargo
 fi
 cd "$NATIVE"
 # Linux host; crate does not need recrypt-core.
-cargo build -p mjolnir-blob-door --release
-install -d /opt/mjolnir/bin
+# A failed build stops here, before any install or systemctl stop.
+"$CARGO" build -p mjolnir-blob-door --release
+install -d "$BIN_DIR"
 install -m 0755 "$NATIVE/target/release/mjolnir-blob-door" "$BIN_DST"
-install -m 0755 "$NATIVE/target/release/mjolnir-b3" /opt/mjolnir/bin/mjolnir-b3
+install -m 0755 "$NATIVE/target/release/mjolnir-b3" "$B3_DST"
+if [[ ! -s "$BIN_DST" || ! -s "$B3_DST" ]]; then
+    echo "Error: blob door install did not leave binaries at $BIN_DIR; not stopping" >&2
+    exit 1
+fi
 install -m 0644 "$ROOT/systemd/mjolnir-blob-door.service" "$UNIT_DST"
 
 # Cache must not resolve under btrfs_root. Snapshots of that volume pin CoW
@@ -208,6 +220,11 @@ resolve_and_refuse_btrfs_cache
 provision_env
 ensure_cache_dir
 configure_systemd_cache_path
+# Stop only after the unit path already holds the new non-empty binary.
+if [[ ! -s "$BIN_DST" || ! -s "$B3_DST" ]]; then
+    echo "Error: refusing to stop mjolnir-blob-door; replacement binary is missing" >&2
+    exit 1
+fi
 if systemctl is-active --quiet mjolnir-blob-door 2>/dev/null; then
     systemctl stop mjolnir-blob-door
 fi
@@ -228,6 +245,10 @@ else
 fi
 
 echo "=== systemd restart door (Elixir untouched) ==="
+if [[ ! -s "$BIN_DST" || ! -s "$B3_DST" ]]; then
+    echo "Error: not restarting mjolnir-blob-door; $BIN_DST is missing" >&2
+    exit 1
+fi
 systemctl daemon-reload
 systemctl enable mjolnir-blob-door
 # enable --now will not pick up a replaced binary if the unit is already active

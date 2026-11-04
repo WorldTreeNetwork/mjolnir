@@ -131,7 +131,7 @@ defmodule Mjolnir.API.Router do
 
   # Health check — no auth required (skipped by Auth plug)
   get "/api/health" do
-    json(conn, 200, %{status: "ok"})
+    json(conn, 200, %{status: "ok", release: Mjolnir.Release.id()})
   end
 
   # Passkey login at auth.identikey.me (authorization-code + PKCE).

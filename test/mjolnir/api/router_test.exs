@@ -178,6 +178,7 @@ defmodule Mjolnir.API.RouterTest do
       assert conn.status == 200
       body = Jason.decode!(conn.resp_body)
       assert body["status"] == "ok"
+      assert is_binary(body["release"]) and body["release"] != ""
     end
   end
 
