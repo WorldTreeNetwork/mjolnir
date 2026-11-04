@@ -145,6 +145,7 @@ for a in "$@"; do
     *) unit="$a" ;;
   esac
 done
+unit="${unit%.service}"
 
 door_sha() {
   local f=/opt/mjolnir/bin/mjolnir-blob-door
@@ -178,6 +179,52 @@ kill_node() {
   echo inactive > "$STATE/mjolnir"
 }
 
+# systemd 262: an explicit stop or restart of a unit also stops or restarts
+# units that Requires= it. The fixture reads installed unit files so a
+# hotel-ip restart is visible as a redis and blob-door restart.
+apply_unit() {
+  local verb="$1" name="$2"
+  name="${name%.service}"
+  if [[ "$name" == "mjolnir" ]]; then
+    kill_node
+  elif [[ "$name" == "mjolnir-blob-door" ]]; then
+    door_sha
+    if [[ -f "$STATE/door.pid" ]]; then
+      kill "$(cat "$STATE/door.pid")" 2>/dev/null || true
+    fi
+    if [[ "$verb" == "restart" ]]; then
+      echo active > "$STATE/$name"
+    else
+      echo inactive > "$STATE/$name"
+    fi
+  else
+    if [[ "$verb" == "stop" ]]; then
+      echo inactive > "$STATE/$name"
+    else
+      echo active > "$STATE/$name"
+    fi
+  fi
+  propagate_requires "$verb" "$name"
+}
+
+propagate_requires() {
+  local verb="$1" name="$2"
+  local f dep
+  shopt -s nullglob
+  for f in /etc/systemd/system/*.service /usr/lib/systemd/system/*.service /lib/systemd/system/*.service; do
+    [[ -f "$f" ]] || continue
+    dep="$(basename "$f" .service)"
+    [[ "$dep" == "$name" ]] && continue
+    if grep -Eq "^Requires=(.*[[:space:]])?${name}(\.service)?([[:space:]]|$)" "$f"; then
+      local mark="$STATE/propagated-${verb}-${name}-${dep}"
+      [[ -e "$mark" ]] && continue
+      : > "$mark"
+      echo "systemctl $verb $dep" >> "$LOG"
+      apply_unit "$verb" "$dep"
+    fi
+  done
+}
+
 case "$cmd" in
   is-active)
     st="$(cat "$STATE/$unit" 2>/dev/null || echo inactive)"
@@ -191,21 +238,8 @@ case "$cmd" in
     esac
     ;;
   restart|stop)
-    if [[ "$unit" == "mjolnir" ]]; then
-      kill_node
-    elif [[ "$unit" == "mjolnir-blob-door" ]]; then
-      door_sha
-      if [[ -f "$STATE/door.pid" ]]; then
-        kill "$(cat "$STATE/door.pid")" 2>/dev/null || true
-      fi
-      if [[ "$cmd" == "restart" ]]; then
-        echo active > "$STATE/$unit"
-      else
-        echo inactive > "$STATE/$unit"
-      fi
-    else
-      echo active > "$STATE/$unit"
-    fi
+    rm -f "$STATE"/propagated-"$cmd"-*
+    apply_unit "$cmd" "$unit"
     ;;
   start)
     echo active > "$STATE/${unit:-unknown}"
@@ -253,6 +287,7 @@ if [[ "$*" == *release* ]]; then
   mkdir -p "$ebin"
   "${ELIXIRC:?}" -o "$ebin" \
     /opt/mjolnir/lib/mjolnir/release.ex \
+    /opt/mjolnir/lib/mjolnir/code.ex \
     /opt/mjolnir/lib/mjolnir/cutover.ex
 fi
 exit 0
@@ -287,6 +322,10 @@ EOF
 #!/bin/bash
 if [[ "$*" == *route* ]]; then
   echo "default via 203.0.113.1 dev eth0"
+elif [[ "$*" == *"addr show dummy-mjolnir"* ]]; then
+  echo "    inet 10.200.0.1/32 scope global dummy-mjolnir"
+elif [[ "$*" == *"link show dummy-mjolnir"* ]]; then
+  echo "2: dummy-mjolnir: <BROADCAST,NOARP,UP,LOWER_UP> mtu 1500"
 fi
 exit 0
 EOF
@@ -342,9 +381,12 @@ seed_tree() {
     printf 'BLOB_DOOR_BIND=10.200.0.1:7222\n' > "$fix/etc/mjolnir/blob-door.env"
     chmod 0600 "$fix/etc/mjolnir/blob-door.env"
 
-    for unit in mjolnir mjolnir-redis mjolnir-blob-door; do
+    for unit in mjolnir mjolnir-redis mjolnir-blob-door mjolnir-hotel-ip; do
         echo active > "$fix/opt/fixture/state/$unit"
     done
+    cp -a "$ROOT/systemd/mjolnir-blob-door.service" \
+        "$ROOT/systemd/mjolnir-redis.service" \
+        "$fix/etc/systemd/system/"
 
     mkdir -p "$fix/opt/mjolnir/systemd" "$fix/opt/mjolnir/scripts/systemd"
     cp -a "$ROOT/systemd/mjolnir-redis.service" "$ROOT/systemd/mjolnir-redis.conf" \
@@ -394,6 +436,9 @@ defmodule FixtureServer do
         cond do
           String.starts_with?(raw, "GET /health") ->
             {200, Mjolnir.Release.id()}
+
+          String.starts_with?(raw, "GET /code") ->
+            {200, Mjolnir.Code.revision()}
 
           String.starts_with?(raw, "POST /rpc") ->
             body = request_body(sock, raw)
@@ -460,10 +505,14 @@ EOF
 
 compile_old_release() {
     local fix="$1"
-    cp "$ROOT/lib/mjolnir/release.ex" "$ROOT/lib/mjolnir/cutover.ex" "$fix/compile/lib/mjolnir/"
+    cp "$ROOT/lib/mjolnir/release.ex" "$ROOT/lib/mjolnir/code.ex" \
+        "$ROOT/lib/mjolnir/cutover.ex" "$fix/compile/lib/mjolnir/"
     printf '%s\n' "$(cat "$fix/old-id")" > "$fix/compile/priv/release_id"
     local ebin="$fix/opt/mjolnir/_build/prod/rel/mjolnir/lib/mjolnir-0.1.0/ebin"
-    "$ELIXIRC" -o "$ebin" "$fix/compile/lib/mjolnir/release.ex" "$fix/compile/lib/mjolnir/cutover.ex"
+    "$ELIXIRC" -o "$ebin" \
+        "$fix/compile/lib/mjolnir/release.ex" \
+        "$fix/compile/lib/mjolnir/code.ex" \
+        "$fix/compile/lib/mjolnir/cutover.ex"
 }
 
 inside_main() {
@@ -483,6 +532,7 @@ inside_main() {
     echo active > /opt/fixture/state/mjolnir
     echo active > /opt/fixture/state/mjolnir-redis
     echo active > /opt/fixture/state/mjolnir-blob-door
+    echo active > /opt/fixture/state/mjolnir-hotel-ip
     sleep 3600 &
     echo $! > /opt/fixture/state/door.pid
 
@@ -507,6 +557,8 @@ inside_main() {
         : > /opt/fixture/systemctl.log
         echo active > /opt/fixture/state/mjolnir
         echo active > /opt/fixture/state/mjolnir-blob-door
+        echo active > /opt/fixture/state/mjolnir-hotel-ip
+        echo active > /opt/fixture/state/mjolnir-redis
         # door sleeper was not part of the node group; restart mjolnir did not kill it
         if ! kill -0 "$(cat /opt/fixture/state/door.pid)" 2>/dev/null; then
             sleep 3600 &
@@ -539,6 +591,10 @@ inside_main() {
     fi
     if grep -E '^systemctl restart forgejo-runner$' "$slog"; then
         echo "forgejo-runner was restarted" >&2
+        exit 1
+    fi
+    if grep -E '^systemctl (restart|stop) mjolnir-hotel-ip(\.service)?$' "$slog"; then
+        echo "hotel-ip was restarted while the address was already up" >&2
         exit 1
     fi
 
@@ -580,6 +636,8 @@ inside_main() {
             [[ "$deploy_status" -ne 0 ]]
             health="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/health")"
             [[ "$health" == "$OLD_ID" ]]
+            code="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/code")"
+            [[ "$code" == "$OLD_ID" ]]
             grep -q 'mix release' /opt/fixture/mix.log
             if grep -E '^systemctl restart mjolnir-gateway$' "$slog"; then
                 echo "gateway restarted" >&2
@@ -592,6 +650,8 @@ inside_main() {
             grep -E '^systemctl restart mjolnir-gateway$' "$slog" >/dev/null
             health="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/health")"
             [[ "$health" == "$OLD_ID" ]]
+            code="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/code")"
+            [[ "$code" == "$OLD_ID" ]]
             ;;
         cutover)
             [[ "$deploy_status" -eq 0 ]]
@@ -604,6 +664,10 @@ inside_main() {
             [[ "$health" == "$new_id" ]]
             [[ "$health" != "$OLD_ID" ]]
             [[ -n "$health" ]]
+            code="$(/usr/bin/curl -fsS "http://127.0.0.1:$(cat /opt/fixture/port)/code")"
+            [[ "$code" == "$new_id" ]]
+            [[ "$code" != "$OLD_ID" ]]
+            [[ "$code" == "$health" ]]
             door_now="$(sha256sum /opt/mjolnir/bin/mjolnir-blob-door | awk '{print $1}')"
             b3_now="$(sha256sum /opt/mjolnir/bin/mjolnir-b3 | awk '{print $1}')"
             [[ "$door_now" != "$door_before" ]]

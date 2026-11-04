@@ -73,10 +73,20 @@ if [[ "$INSTALL_UNIT" -eq 1 ]]; then
     install -m 0644 "$unit_src" /etc/systemd/system/mjolnir-hotel-ip.service
     systemctl daemon-reload
     systemctl enable mjolnir-hotel-ip.service
-    # restart, not start: an older RemainAfterExit oneshot of the same name
-    # stays active and would not re-run the new ExecStart.
-    systemctl restart mjolnir-hotel-ip.service
-    echo "mjolnir-hotel-ip.service enabled"
+    # systemd 262 stops or restarts every unit that Requires= this one when
+    # this unit is restarted. mjolnir-redis and mjolnir-blob-door both
+    # Requires= it, so a restart here bounces them before their own install
+    # steps have put a new binary in place. Skip when the oneshot is already
+    # active and the address is already on dummy-mjolnir.
+    if systemctl is-active --quiet mjolnir-hotel-ip.service \
+        && ip addr show dummy-mjolnir 2>/dev/null | grep -q "inet ${HOST_IP}/32"; then
+        echo "mjolnir-hotel-ip.service already active with ${HOST_IP}/32; not restarting"
+    else
+        # restart, not start: an older RemainAfterExit oneshot of the same name
+        # stays active and would not re-run the new ExecStart.
+        systemctl restart mjolnir-hotel-ip.service
+        echo "mjolnir-hotel-ip.service enabled"
+    fi
 else
     assign_host_api_addr
 fi
