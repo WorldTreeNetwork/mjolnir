@@ -243,7 +243,8 @@ defmodule Mjolnir.VM do
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
-    with :ok <- reject_memory_snapshot_spawn(opts),
+    with {:ok, opts} <- resolve_spawn_network(opts),
+         :ok <- reject_memory_snapshot_spawn(opts),
          :ok <- reject_live_iroh_identity(opts) do
       do_spawn(Map.put(opts, :id, Mjolnir.VmId.generate()))
     end
@@ -1132,7 +1133,8 @@ defmodule Mjolnir.VM do
   def spawn_with_id(opts) do
     vm_id = opts[:id] || raise ArgumentError, ":id is required for spawn_with_id"
 
-    with :ok <- reject_memory_snapshot_spawn(opts) do
+    with {:ok, opts} <- resolve_spawn_network(opts),
+         :ok <- reject_memory_snapshot_spawn(opts) do
       do_spawn(Map.put(opts, :id, vm_id))
     end
   end
@@ -1201,7 +1203,8 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp resume_opts(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg} = record) do
+  @doc false
+  def resume_opts(%Mjolnir.StateStore.Record{uuid: uuid, spawn_config: cfg} = record) do
     %{
       id: uuid,
       base_image: Map.get(cfg, "base_image"),
@@ -1310,14 +1313,28 @@ defmodule Mjolnir.VM do
     Process.flag(:trap_exit, true)
     opts = Map.update!(opts, :id, &Mjolnir.VmId.storage_id/1)
 
-    with :ok <- store_identity(opts),
+    with {:ok, opts} <- resolve_spawn_network(opts),
+         :ok <- store_identity(opts),
          :ok <- store_git_signing(opts) do
       init_state(opts)
     else
       {:error, reason} ->
-        Logger.error("VM #{opts.id} refused spawn: opaque store failed (#{inspect(reason)})")
+        Logger.error("VM #{opts.id} refused spawn: #{inspect(reason)}")
 
-        {:stop, :normal}
+        # Keep the existing opaque-store failure behavior. Class refusal must
+        # propagate to callers before any guest is started.
+        {:stop, if(reason == :proxy_guest_iroh_forbidden, do: reason, else: :normal)}
+    end
+  end
+
+  @doc false
+  def resolve_spawn_network(opts) do
+    base_image = opts[:base_image] || Application.get_env(:mjolnir, :default_base_image)
+    class = Mjolnir.ProxyGuest.image_class(base_image)
+    default = Application.get_env(:mjolnir, :enable_iroh, true)
+
+    with {:ok, enabled} <- Mjolnir.ProxyGuest.resolve_iroh(class, opts[:enable_iroh], default) do
+      {:ok, Map.put(opts, :enable_iroh, enabled)}
     end
   end
 
@@ -1355,12 +1372,7 @@ defmodule Mjolnir.VM do
     # Resolve SSH public key: spawn opts > app config > nil
     ssh_key = opts[:ssh_public_key] || Application.get_env(:mjolnir, :default_ssh_public_key)
 
-    # Resolve enable_iroh: spawn opts > app config > true
-    enable_iroh =
-      case opts[:enable_iroh] do
-        nil -> Application.get_env(:mjolnir, :enable_iroh, true)
-        val -> val
-      end
+    enable_iroh = Map.fetch!(opts, :enable_iroh)
 
     # Resolve hypervisor: spawn opts > app config > default
     hypervisor = opts[:hypervisor] || Mjolnir.Hypervisor.impl()
