@@ -1,0 +1,22 @@
+Stock unit:
+ACTIVE briefly, then Result=exit-code NRestarts=5 ActiveState=failed
+journal: journal storage unavailable
+/var/lib/identikey-api-proxy -> private/identikey-api-proxy
+
+Binary with a real 0700 directory:
+identikey-api-proxy: alive; egress locked
+ss: tcp LISTEN 127.0.0.1:8787 users identikey-api-p
+iroh log: sockets=[127.0.0.1:<ephemeral>]
+
+Unrestricted root in the guest:
+default dev eth0 scope link
+10.200.0.1:4000 OK
+1.1.1.1:443 OK
+
+Transient unit IPAddressDeny=any IPAddressAllow=localhost RestrictAddressFamilies=AF_INET:
+127.0.0.1:8787 OK
+10.200.0.1:4000 FAIL
+1.1.1.1:443 FAIL
+
+Guest agent endpoint (not the proxy unit) included a public relay and a public IP.
+The pre-existing local VM was not stopped.

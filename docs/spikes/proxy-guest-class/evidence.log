@@ -1,0 +1,31 @@
+Throwaway base @base/proxy-guest-class-spike, cloned from ubuntu-24.04, deleted after the run.
+Ordinary base still had: ip route add default dev eth0
+Spike script had: while ip route del default
+
+Boot guest 44vHonfMKSUUTG6NposQ66 guest_ip 10.219.106.50 enable_iroh false
+relay_word no
+has_ticket no
+has_iroh_addr no
+journal: Guest network configured: 10.219.106.50
+journal: Iroh disabled for VM 44vHonfMKSUUTG6NposQ66
+
+boot route: 10.200.0.1 dev eth0 scope link
+boot resolv: nameserver 127.0.0.1
+unit active, LISTEN 127.0.0.1:8787
+
+root: ROOT_LOOP OK ROOT_HOST OK ROOT_PUB FAIL
+unit cgroup joined: UNIT_LOOP OK UNIT_HOST OK UNIT_PUB FAIL
+
+heal max_level 2:
+guest_agent_ping ok skipped
+vsock_connection ok skipped
+iroh_connection ok skipped
+guest_network dead no_default_route healed
+journal: Health.heal guest_network = {:dead, :no_default_route}, attempting heal
+journal: Guest network configured: 10.219.106.50
+
+after heal: same route, same resolv, unit active, same connect results
+
+Earlier guest 5RYkLgdZeizg2mvRVTLUUV, stock script, enable_iroh false:
+heal skipped guest_network because a default route was present.
+After replacing the script and running it, heal re-ran Guest network configured and left only 10.200.0.1/32 and nameserver 127.0.0.1.

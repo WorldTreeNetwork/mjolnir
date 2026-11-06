@@ -1,0 +1,28 @@
+# /etc/systemd/system/identikey-api-proxy.service.d/data-dir.conf
+# Installed only on the throwaway guest rootfs. The stock unit file was copied, not edited.
+
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/identikey-api-proxy serve --config /etc/identikey-api-proxy/registry.json --data-dir /var/lib/private/identikey-api-proxy
+WorkingDirectory=/var/lib/private/identikey-api-proxy
+IPAddressAllow=10.200.0.1/32
+
+# Probe, run as root via the operator exec socket, after the unit was active.
+# Joining the service cgroup is what puts the process under IPAddressAllow.
+
+try() {
+  local label="$1" host="$2" port="$3"
+  if timeout 3 bash -c "echo >/dev/tcp/${host}/${port}"; then
+    echo "$label OK"
+  else
+    echo "$label FAIL"
+  fi
+}
+try ROOT_LOOP 127.0.0.1 8787
+try ROOT_HOST 10.200.0.1 4000
+try ROOT_PUB 1.1.1.1 443
+cg=$(systemctl show -p ControlGroup --value identikey-api-proxy.service)
+echo $$ > "/sys/fs/cgroup${cg}/cgroup.procs"
+try UNIT_LOOP 127.0.0.1 8787
+try UNIT_HOST 10.200.0.1 4000
+try UNIT_PUB 1.1.1.1 443

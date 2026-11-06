@@ -2,6 +2,10 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-11-05 / add-proxy-guest-net:** The stock `identikey-api-proxy.service` is not the egress boundary. Its `DynamicUser` `StateDirectory` is a symlink, and `Journal::open` exits before bind. A data-dir drop-in points `--data-dir` at the real mode-0700 directory and adds `IPAddressAllow=10.200.0.1/32`. The stock localhost allowlist cannot open the host API.
+- **2026-11-05 / add-proxy-guest-net:** The class signal is `base_image`, not `enable_iroh`. An ordinary `ubuntu-24.04` image spawned with `enable_iroh` false keeps the stock `mjolnir-network-setup`, the default route, and the public resolvers. The monitor's automatic heal is level 1, so it does not re-run network setup; only a level-2 heal runs the proxy script.
+- **2026-11-05 / add-proxy-guest-net:** This host's guest kernel is built with `CONFIG_IPV6` unset. A non-loopback IPv6 connect cannot succeed for root either. Acceptance records that attempt and still fails if the proxy unit opens it.
+
 - **2026-11-02 / add-vmgenid:** The fleet file `/var/lib/mjolnir/vmlinux-ch` is still the old kernel (46139936 bytes) and `mjolnir.service` was not restarted, so a production freeze is still a legacy capture.
 - **2026-11-02 / add-lan-file-server:** Named-interface DNAT does not see packets the host generates to its own published address. The second-host proof has to arrive on that interface. A `.mesh` publish of the DHCP address goes stale when the lease moves; the stable owner is an Ed25519 key, and the current IPv4 is a gossiped field on that record. The IPv6 userspace proxy was not built and is not a blocker. Babel's `fc00::/7` deny stays until Lightning Mesh v6.4. The laptop `fd89` address is the stock RA prefix, not the identity-hash ULA.
 - **2026-11-02 / add-lan-file-server:** `native/mjolnir_lan_files/build.rs` refuses to compile unless the identikey-auth and recrypt checkouts are clean at the pinned revisions. A moved sibling HEAD fails the guest build. Do not retarget the pin to make a fold compile.

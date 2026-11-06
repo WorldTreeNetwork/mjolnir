@@ -1,0 +1,53 @@
+Guest 9TUCQ3Tec59PiWR33KmHWq, local operator socket, ubuntu-24.04, 2026-11-04T23:58:04Z to 2026-11-04T23:58:49Z.
+Pre-existing local VM was not stopped. Spawn body is omitted here.
+
+active=active
+MainPID=832
+Result=success
+NRestarts=0
+ExecMainStatus=0
+ControlGroup=/system.slice/identikey-api-proxy.service
+ActiveState=active
+SubState=running
+
+symbolic link 777 0 '/var/lib/identikey-api-proxy' -> 'private/identikey-api-proxy'
+directory 700 63503 '/var/lib/private/identikey-api-proxy'
+
+LISTEN 0 128 127.0.0.1:8787 users:(("identikey-api-p",pid=832,fd=13))
+
+journal:
+Started identikey-api-proxy.service - IdentiKey API Proxy (locked bootstrap).
+identikey-api-proxy: sockets=[127.0.0.1:60850]; ephemeral identity, application locked
+identikey-api-proxy: alive; egress locked
+
+route before edit: default dev eth0 scope link
+resolv before edit: nameserver 8.8.8.8 / nameserver 1.1.1.1
+
+merged drop-in:
+ExecStart=/usr/local/bin/identikey-api-proxy serve --config /etc/identikey-api-proxy/registry.json --data-dir /var/lib/private/identikey-api-proxy
+WorkingDirectory=/var/lib/private/identikey-api-proxy
+IPAddressAllow=10.200.0.1/32
+(stock unit still has IPAddressDeny=any and IPAddressAllow=localhost)
+
+root control: ROOT_LOOP OK, ROOT_HOST OK, ROOT_PUB OK
+service cgroup joined=yes: UNIT_LOOP OK, UNIT_HOST OK, UNIT_PUB FAIL
+
+guest agent endpoint included a relay URL and a public address. Values omitted.
+
+after manual route edit:
+10.200.0.1 dev eth0 scope link
+nameserver 127.0.0.1
+root: ROOT_LOOP OK, ROOT_HOST OK, ROOT_PUB FAIL
+unit: UNIT_LOOP OK, UNIT_HOST OK, UNIT_PUB FAIL
+
+35s later, and again after further monitor ticks:
+10.200.0.1 dev eth0 scope link
+nameserver 127.0.0.1
+unit still active
+
+journal (local time):
+15:58:27 Health.Monitor degraded guest_network={:dead, :no_default_route}, attempting L1 heal
+15:58:58 same
+15:59:28 same
+15:59:58 same
+No "Guest network configured" line in that window.

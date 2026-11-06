@@ -1,0 +1,13 @@
+fixtures ok
+Create snapshot of '/var/lib/mjolnir/btrfs/@base/ubuntu-24.04' in '/var/lib/mjolnir/btrfs/@base/proxy-guest-class-spike'
+proxy DFRX7fzZJTatr3phBUKVwM 10.212.32.244
+OK proxy spawned without a relay
+OK boot pin
+OK confinement while a default route exists
+OK routes removed before heal
+OK level-2 heal restored the pin
+OK stored base_image and enable_iroh false
+OK reboot resumed the pin and the unit boundary
+OK ordinary image with enable_iroh false keeps the public route
+ACCEPT_OK
+EXIT:0

@@ -1,0 +1,26 @@
+#!/bin/bash
+# Proxy-class mjolnir-network-setup. Installed only on the throwaway base.
+set -e
+IP="$1"
+if [[ -z "$IP" ]]; then
+    echo "Usage: mjolnir-network-setup <ip>" >&2
+    exit 1
+fi
+/sbin/ip addr add "${IP}/32" dev eth0 2>/dev/null || true
+/sbin/ip link set eth0 up
+while /sbin/ip route del default 2>/dev/null; do
+    true
+done
+/sbin/ip route replace 10.200.0.1/32 dev eth0
+printf 'nameserver 127.0.0.1\n' > /etc/resolv.conf
+echo "Network configured: $IP"
+
+# Spawn body, local operator socket:
+# {"base_image":"proxy-guest-class-spike","memory_mb":1024,"vcpus":2,"restart_policy":"never","enable_iroh":false}
+#
+# Drop-in, same as proxy-data-dir:
+# [Service]
+# ExecStart=
+# ExecStart=/usr/local/bin/identikey-api-proxy serve --config /etc/identikey-api-proxy/registry.json --data-dir /var/lib/private/identikey-api-proxy
+# WorkingDirectory=/var/lib/private/identikey-api-proxy
+# IPAddressAllow=10.200.0.1/32
