@@ -1,0 +1,40 @@
+# host ironlab doctor (trimmed)
+[PASS] PCI c3:00.1  NPU6 / Krackan Point (0x17f0 rev 0x20) iron_device=npu2
+[PASS] device node  /dev/accel/accel0
+[PASS] firmware  /lib/firmware/amdnpu (1502_00, 17f0_10, 17f0_11)
+[PASS] amdxdna  module loaded
+[PASS] memlock  RLIMIT_MEMLOCK unlimited
+[PASS] XRT  Version              : 2.21.75
+
+# host just hello
+NPU vector add: PASS
+  Match: True
+
+# sidecar bind
+aie-npu-path sidecar 10.200.0.1:7422 fd=4 fw=1.1.2.64
+
+# host curl health
+{"ok": true, "accel": "/dev/accel/accel0", "accel_open": true, "fw_version": "1.1.2.64", "pid": 1450797}
+
+# spawn
+id=Awrn8teovvzhNoRQDg3JLr guest_ip=10.199.131.206 state=running
+
+# guest GET /health
+{"output":"{\"ok\": true, \"accel\": \"/dev/accel/accel0\", \"accel_open\": true, \"fw_version\": \"1.1.2.64\", \"pid\": 1450797}"}
+
+# guest POST /hello
+{"ok": true, "match": true, "returncode": 0, "dt_ms": 716, "fw_version": "1.1.2.64"}
+NPU vector add: PASS
+  Got:      [10 11 12 13 14 15 16 17 18 19]...
+  Match: True
+
+# guest has no device
+ls: cannot access '/dev/accel': No such file or directory
+ls: cannot access '/dev/dri': No such file or directory
+
+# xrt-smi validate (not the claim)
+Error(s)              : No archive found, skipping test
+Test Status           : [FAILED]
+
+# IOMMU
+/sys/kernel/iommu_groups/26/devices/0000:c3:00.1
