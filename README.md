@@ -125,6 +125,13 @@ You can also pass the host inline without `.env`: `just host=root@1.2.3.4 status
 
 Run `just --list` for everything — deploys, host management, IdentiKey Sites, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`). VM lifecycle and health live in `mj` (see above); a quick `mj doctor` confirms the server is reachable and healthy.
 
+For a planned host reboot or poweroff, use the
+[controlled maintenance runbook](docs/runbooks/controlled-reboot.md). The
+standard-library Python operator tool starts with a read-only plan, then requires
+`--execute` to quiesce declared services, verify an off-host backup and request the
+host action. It journals the operation and verifies the original guests recover.
+It never uses the destructive VM kill API to prepare for host maintenance.
+
 ---
 
 ## Run your own server

@@ -41,6 +41,8 @@ erl_crash.dump
 .env
 boot-image/
 .mjolnir-dev/
+.mjolnir-maintenance/
+__pycache__/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

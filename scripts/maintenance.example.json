@@ -1,0 +1,39 @@
+{
+  "expected_kernel": "6.8.0-147-generic",
+  "application_units": ["manual-worker-*.service"],
+  "dependency_units": ["postgresql@*.service", "redis-server.service", "minio.service"],
+  "keep_guest_units": [],
+  "pause_host_units": ["mjolnir-gateway.service"],
+  "backup_hooks": [
+    {
+      "name": "host-postgres",
+      "argv": ["/bin/bash", "-euo", "pipefail", "-c", "umask 077; pg_dumpall -h /run/mjolnir -U mjolnir_admin | gzip > {run_dir}/postgres-all.sql.gz"],
+      "exports": ["postgres-all.sql.gz"]
+    },
+    {
+      "name": "guest-postgres",
+      "app": "example-stateful",
+      "argv": ["/bin/bash", "-euo", "pipefail", "-c", "umask 077; runuser -u postgres -- pg_dumpall | gzip > {guest_run_dir}/postgres-all.sql.gz"],
+      "exports": ["postgres-all.sql.gz"]
+    }
+  ],
+  "readiness_probes": [
+    {
+      "name": "host-postgres-ready",
+      "argv": ["pg_isready", "-h", "/run/mjolnir", "-U", "mjolnir_admin"],
+      "stdout_pattern": "accepting connections"
+    },
+    {
+      "name": "guest-postgres-ready",
+      "app": "example-stateful",
+      "argv": ["pg_isready"],
+      "stdout_pattern": "accepting connections"
+    }
+  ],
+  "http_urls": ["https://example.invalid/health"],
+  "max_backup_bytes": 4294967296,
+  "max_logical_bytes": 17179869184,
+  "reserve_bytes": 1073741824,
+  "command_timeout": 120,
+  "sync_timeout": 60
+}
