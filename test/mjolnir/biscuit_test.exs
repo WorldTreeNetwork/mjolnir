@@ -115,6 +115,8 @@ defmodule Mjolnir.BiscuitTest do
 
   describe "durable production authority" do
     setup do
+      app_started? = Process.whereis(Mjolnir.Supervisor) != nil
+
       keys = [
         :biscuit_root_path,
         :biscuit_public_hex,
@@ -149,6 +151,12 @@ defmodule Mjolnir.BiscuitTest do
         end
 
         File.rm_rf!(dir)
+
+        # Boot-failure checks stop the shared app; restore it after restoring
+        # its authority/config so later tests do not inherit a stopped tree.
+        if app_started? do
+          assert {:ok, _} = Application.ensure_all_started(:mjolnir)
+        end
       end)
 
       %{dir: dir, root: root, pair: pair}

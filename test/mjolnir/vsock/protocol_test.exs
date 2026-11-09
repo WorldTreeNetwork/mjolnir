@@ -448,6 +448,7 @@ defmodule Mjolnir.Vsock.ProtocolTest do
 
       assert msg["entries"] == %{
                "BUZZ_PRIVATE_KEY" => "nsec1test",
+               "NOSTR_PRIVATE_KEY" => "nsec1test",
                "BUZZ_RELAY_URL" => "wss://relay.test"
              }
 

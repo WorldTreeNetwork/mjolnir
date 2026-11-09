@@ -204,7 +204,7 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
 
       task =
         Task.async(fn ->
-          System.cmd("sh", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
+          System.cmd("bash", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
             stderr_to_stdout: true
           )
         end)
@@ -415,7 +415,7 @@ defmodule Mjolnir.MemorySnapshotRestoreTest do
 
       task =
         Task.async(fn ->
-          System.cmd("sh", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
+          System.cmd("bash", ["-c", "exec -a \"virtiofsd --socket-path=#{path}\" sleep 3"],
             stderr_to_stdout: true
           )
         end)
