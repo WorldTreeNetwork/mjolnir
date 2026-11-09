@@ -266,10 +266,11 @@ install_erlang_elixir() {
     # Use mise for reliable version management (faster than asdf, compatible syntax)
     log_info "Installing mise for Erlang/Elixir version management..."
 
-    # Install Erlang build dependencies
+    # Install Erlang build dependencies. PDF documentation tools (FOP/Batik)
+    # are not needed for the host runtime and pull in unused Commons IO.
     apt-get update
     apt-get install -y autoconf libncurses5-dev libssl-dev \
-        libgl1-mesa-dev libglu1-mesa-dev libpng-dev libssh-dev unixodbc-dev xsltproc fop \
+        libgl1-mesa-dev libglu1-mesa-dev libpng-dev libssh-dev unixodbc-dev xsltproc \
         libxml2-utils libncurses-dev openjdk-17-jdk 2>/dev/null || true
     # Keep Erlang's optional wx tools, but omit wxWebView: Mjolnir is headless
     # and webview pulls in an unused WebKit browser engine (CVE-2026-3909).
