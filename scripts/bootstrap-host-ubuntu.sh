@@ -271,8 +271,10 @@ install_erlang_elixir() {
     apt-get install -y autoconf libncurses5-dev libssl-dev \
         libgl1-mesa-dev libglu1-mesa-dev libpng-dev libssh-dev unixodbc-dev xsltproc fop \
         libxml2-utils libncurses-dev openjdk-17-jdk 2>/dev/null || true
-    # wxWidgets libs vary by distro version; try both naming conventions
-    apt-get install -y libwxgtk3.2-dev libwxgtk-webview3.2-dev 2>/dev/null || \
+    # Keep Erlang's optional wx tools, but omit wxWebView: Mjolnir is headless
+    # and webview pulls in an unused WebKit browser engine (CVE-2026-3909).
+    # wxWidgets libs vary by distro version; try both naming conventions.
+    apt-get install -y libwxgtk3.2-dev 2>/dev/null || \
         apt-get install -y libwxgtk3.0-gtk3-dev 2>/dev/null || true
 
     # Install mise if not present
