@@ -128,9 +128,17 @@ defmodule Mjolnir.Postgres.SupervisorTest do
 
   defp find_bin_dir do
     cond do
-      File.regular?("/usr/bin/postgres") -> "/usr/bin"
-      File.regular?("/usr/local/bin/postgres") -> "/usr/local/bin"
-      true -> "/usr/bin"
+      executable = System.find_executable("postgres") ->
+        Path.dirname(executable)
+
+      File.regular?("/usr/bin/postgres") ->
+        "/usr/bin"
+
+      File.regular?("/usr/local/bin/postgres") ->
+        "/usr/local/bin"
+
+      true ->
+        Config.detect_bin_dir()
     end
   end
 

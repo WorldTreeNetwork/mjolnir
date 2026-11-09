@@ -76,7 +76,7 @@ defmodule Mjolnir.Postgres.TenantsTest do
     path = Path.join(ctx.secrets_dir, "hypersigil-api.json")
     assert File.regular?(path)
     %{"DATABASE_URL" => url} = Jason.decode!(File.read!(path))
-    assert url =~ ~r{^postgres://hypersigil:[^@]+@10\.200\.0\.1:5432/hypersigil$}
+    assert url =~ ~r{^postgres://hypersigil:[^@]+@10\.200\.0\.1:5432/hypersigil\?sslmode=disable$}
 
     assert %{name: "hypersigil", slug: "hypersigil-api"} in Tenants.list()
 
@@ -183,6 +183,9 @@ defmodule Mjolnir.Postgres.TenantsTest do
 
   defp find_bin_dir do
     cond do
+      executable = System.find_executable("postgres") ->
+        Path.dirname(executable)
+
       File.regular?("/usr/bin/postgres") ->
         "/usr/bin"
 
@@ -196,7 +199,7 @@ defmodule Mjolnir.Postgres.TenantsTest do
         "/usr/local/bin"
 
       true ->
-        "/usr/bin"
+        Config.detect_bin_dir()
     end
   end
 

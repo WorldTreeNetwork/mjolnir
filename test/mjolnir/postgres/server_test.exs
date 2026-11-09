@@ -101,6 +101,10 @@ defmodule Mjolnir.Postgres.ServerTest do
   end
 
   test "missing tenant listen IP fails closed and does not listen on *", ctx do
+    # Keep the separate host-API address check satisfied without requiring
+    # privileges to create the production dummy interface in this fixture.
+    Process.flag(:trap_exit, true)
+    Application.put_env(:mjolnir, :host_api_ip, "127.0.0.1")
     Application.put_env(:mjolnir, :pg_tenant_listen_ip, "203.0.113.1")
     refute Mjolnir.Network.ip_assigned?("203.0.113.1")
 
@@ -144,9 +148,17 @@ defmodule Mjolnir.Postgres.ServerTest do
 
   defp find_bin_dir do
     cond do
-      File.regular?("/usr/bin/postgres") -> "/usr/bin"
-      File.regular?("/usr/local/bin/postgres") -> "/usr/local/bin"
-      true -> "/usr/bin"
+      executable = System.find_executable("postgres") ->
+        Path.dirname(executable)
+
+      File.regular?("/usr/bin/postgres") ->
+        "/usr/bin"
+
+      File.regular?("/usr/local/bin/postgres") ->
+        "/usr/local/bin"
+
+      true ->
+        Config.detect_bin_dir()
     end
   end
 
@@ -161,7 +173,8 @@ defmodule Mjolnir.Postgres.ServerTest do
       :pg_bootstrap_role,
       :pg_roles,
       :pg_ident_users,
-      :pg_tenant_listen_ip
+      :pg_tenant_listen_ip,
+      :host_api_ip
     ]
 
     for k <- keys, into: %{}, do: {k, Application.get_env(:mjolnir, k)}
