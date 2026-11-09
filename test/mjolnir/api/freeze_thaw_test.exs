@@ -121,6 +121,63 @@ defmodule Mjolnir.API.FreezeThawTest do
   end
 
   describe "POST /api/vms spawn from memory snapshot" do
+    test "many optional settings still refuse a memory snapshot before spawning", %{root: root} do
+      write_snapshot(root, "configured-frozen", %{})
+      mem = Path.join([root, "@snapshots", "configured-frozen.mem"])
+      File.mkdir_p!(mem)
+      File.write!(Path.join(mem, "state.json"), "{}")
+      previous = Application.fetch_env(:mjolnir, :allowed_mount_prefixes)
+      Application.put_env(:mjolnir, :allowed_mount_prefixes, [root <> "/"])
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:mjolnir, :allowed_mount_prefixes, value)
+          :error -> Application.delete_env(:mjolnir, :allowed_mount_prefixes)
+        end
+      end)
+
+      conn =
+        request(:post, "/api/vms", %{
+          snapshot: "configured-frozen",
+          base_image: "ubuntu-24.04",
+          memory_mb: 512,
+          vcpus: 1,
+          preserve_iroh_key: false,
+          git_signing: false,
+          enable_iroh: false,
+          metadata: %{},
+          restart_policy: "always",
+          secrets_mode: "managed",
+          secrets: %{"TOKEN" => "fixture-only-secret"},
+          extra_mounts: [%{tag: "data", path: Path.join(root, "data"), mode: "ro"}]
+        })
+
+      assert conn.status == 400
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"] == "memory_snapshot_requires_thaw"
+      assert body["snapshot"] == "configured-frozen"
+      refute conn.resp_body =~ "fixture-only-secret"
+    end
+
+    test "later validation errors retain precedence without exposing secrets" do
+      conn =
+        request(:post, "/api/vms", %{
+          base_image: "../invalid",
+          git_signing: "invalid",
+          restart_policy: "invalid",
+          extra_mounts: "invalid",
+          secrets_mode: "none",
+          secrets: %{"TOKEN" => "fixture-only-secret"}
+        })
+
+      assert conn.status == 400
+
+      assert Jason.decode!(conn.resp_body)["error"] ==
+               "secrets may only be provided with secrets_mode 'managed'"
+
+      refute conn.resp_body =~ "fixture-only-secret"
+    end
+
     test "refuses rather than cold-booting", %{root: root} do
       write_snapshot(root, "frozen", %{})
       mem = Path.join([root, "@snapshots", "frozen.mem"])

@@ -231,7 +231,9 @@ defmodule Mjolnir.API.Router do
     conn = require_scope(conn, "vms:spawn")
 
     unless conn.halted do
-      opts = %{}
+      # Accumulate optional fields before building one map. Repeated conditional
+      # Map.put calls make Elixir 1.20 infer exponentially many map shapes.
+      opts = []
 
       # Validate base_image if provided (path traversal prevention)
       opts =
@@ -241,26 +243,26 @@ defmodule Mjolnir.API.Router do
 
           base_image ->
             case Validation.validate_safe_name(base_image, "base_image") do
-              {:ok, name} -> Map.put(opts, :base_image, name)
-              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+              {:ok, name} -> Keyword.put(opts, :base_image, name)
+              {:error, msg} -> Keyword.put(opts, :_validation_error, msg)
             end
         end
 
       opts =
         case conn.body_params["memory_mb"] do
           nil -> opts
-          val -> Map.put(opts, :memory_mb, Validation.validate_integer(val, 512, 128, 32_768))
+          val -> Keyword.put(opts, :memory_mb, Validation.validate_integer(val, 512, 128, 32_768))
         end
 
       opts =
         case conn.body_params["vcpus"] do
           nil -> opts
-          val -> Map.put(opts, :vcpus, Validation.validate_integer(val, 1, 1, 64))
+          val -> Keyword.put(opts, :vcpus, Validation.validate_integer(val, 1, 1, 64))
         end
 
       opts =
         if conn.body_params["ssh_public_key"],
-          do: Map.put(opts, :ssh_public_key, conn.body_params["ssh_public_key"]),
+          do: Keyword.put(opts, :ssh_public_key, conn.body_params["ssh_public_key"]),
           else: opts
 
       opts =
@@ -270,27 +272,27 @@ defmodule Mjolnir.API.Router do
 
           snapshot ->
             case Validation.validate_safe_name(snapshot, "snapshot") do
-              {:ok, name} -> Map.put(opts, :snapshot, name)
-              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+              {:ok, name} -> Keyword.put(opts, :snapshot, name)
+              {:error, msg} -> Keyword.put(opts, :_validation_error, msg)
             end
         end
 
       opts =
         if conn.body_params["preserve_iroh_key"],
-          do: Map.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
+          do: Keyword.put(opts, :preserve_iroh_key, conn.body_params["preserve_iroh_key"]),
           else: opts
 
       opts =
         case conn.body_params["git_signing"] do
-          true -> Map.put(opts, :git_signing, true)
-          false -> Map.put(opts, :git_signing, false)
+          true -> Keyword.put(opts, :git_signing, true)
+          false -> Keyword.put(opts, :git_signing, false)
           nil -> opts
-          _ -> Map.put(opts, :_validation_error, "git_signing must be a boolean")
+          _ -> Keyword.put(opts, :_validation_error, "git_signing must be a boolean")
         end
 
       opts =
         if Map.has_key?(conn.body_params, "enable_iroh"),
-          do: Map.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
+          do: Keyword.put(opts, :enable_iroh, conn.body_params["enable_iroh"]),
           else: opts
 
       # Opaque orchestrator labels. Bounded because they are persisted on every
@@ -303,30 +305,30 @@ defmodule Mjolnir.API.Router do
 
           metadata ->
             case Validation.validate_metadata(metadata) do
-              {:ok, normalized} -> Map.put(opts, :metadata, normalized)
-              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+              {:ok, normalized} -> Keyword.put(opts, :metadata, normalized)
+              {:error, msg} -> Keyword.put(opts, :_validation_error, msg)
             end
         end
 
       opts =
         case conn.body_params["secrets_mode"] do
           "managed" ->
-            Map.put(opts, :secrets_mode, :managed)
+            Keyword.put(opts, :secrets_mode, :managed)
 
           "persistent" ->
-            Map.put(opts, :secrets_mode, :persistent)
+            Keyword.put(opts, :secrets_mode, :persistent)
 
           "ephemeral" ->
-            Map.put(opts, :secrets_mode, :ephemeral)
+            Keyword.put(opts, :secrets_mode, :ephemeral)
 
           "none" ->
-            Map.put(opts, :secrets_mode, :none)
+            Keyword.put(opts, :secrets_mode, :none)
 
           nil ->
             opts
 
           _ ->
-            Map.put(
+            Keyword.put(
               opts,
               :_validation_error,
               "secrets_mode must be 'managed', 'persistent', 'ephemeral', or 'none'"
@@ -345,13 +347,13 @@ defmodule Mjolnir.API.Router do
             opts
 
           "always" ->
-            Map.put(opts, :restart_policy, :always)
+            Keyword.put(opts, :restart_policy, :always)
 
           "never" ->
-            Map.put(opts, :restart_policy, :never)
+            Keyword.put(opts, :restart_policy, :never)
 
           _ ->
-            Map.put(opts, :_validation_error, "restart_policy must be 'always' or 'never'")
+            Keyword.put(opts, :_validation_error, "restart_policy must be 'always' or 'never'")
         end
 
       opts =
@@ -381,12 +383,12 @@ defmodule Mjolnir.API.Router do
               end)
 
             case parsed do
-              {:ok, entries} -> Map.put(opts, :extra_mounts, Enum.reverse(entries))
-              {:error, msg} -> Map.put(opts, :_validation_error, msg)
+              {:ok, entries} -> Keyword.put(opts, :extra_mounts, Enum.reverse(entries))
+              {:error, msg} -> Keyword.put(opts, :_validation_error, msg)
             end
 
           _ ->
-            Map.put(opts, :_validation_error, "extra_mounts must be an array")
+            Keyword.put(opts, :_validation_error, "extra_mounts must be an array")
         end
 
       # Buzz agent identity (nsec + relay). Stored in SecretStore, never on the
@@ -397,10 +399,10 @@ defmodule Mjolnir.API.Router do
             opts
 
           {:ok, identity} ->
-            Map.put(opts, :identity, identity)
+            Keyword.put(opts, :identity, identity)
 
           {:error, msg} ->
-            Map.put(opts, :_validation_error, msg)
+            Keyword.put(opts, :_validation_error, msg)
         end
 
       # Optional secret material delivered into the LUKS volume on first boot
@@ -413,21 +415,21 @@ defmodule Mjolnir.API.Router do
           secrets when is_map(secrets) and map_size(secrets) > 0 ->
             cond do
               opts[:secrets_mode] != :managed ->
-                Map.put(
+                Keyword.put(
                   opts,
                   :_validation_error,
                   "secrets may only be provided with secrets_mode 'managed'"
                 )
 
               not Enum.all?(secrets, fn {k, v} -> is_binary(k) and is_binary(v) end) ->
-                Map.put(
+                Keyword.put(
                   opts,
                   :_validation_error,
                   "secrets must be a flat object of string keys to string values"
                 )
 
               true ->
-                Map.put(opts, :secrets, secrets)
+                Keyword.put(opts, :secrets, secrets)
             end
 
           secrets when is_map(secrets) ->
@@ -435,7 +437,7 @@ defmodule Mjolnir.API.Router do
             opts
 
           _ ->
-            Map.put(opts, :_validation_error, "secrets must be a JSON object")
+            Keyword.put(opts, :_validation_error, "secrets must be a JSON object")
         end
 
       # Short-circuit on any validation error (base_image, snapshot, etc.)
@@ -443,9 +445,9 @@ defmodule Mjolnir.API.Router do
         json(conn, 400, %{error: opts[:_validation_error]})
       else
         # Stamp ownership from authenticated user
-        opts = Map.put(opts, :owner_id, conn.assigns[:user_id])
+        opts = Keyword.put(opts, :owner_id, conn.assigns[:user_id])
         # Remove sentinel key before passing to VM.spawn
-        opts = Map.delete(opts, :_validation_error)
+        opts = opts |> Keyword.delete(:_validation_error) |> Map.new()
 
         try do
           case spawn_rejecting_memory_snapshot(opts) do

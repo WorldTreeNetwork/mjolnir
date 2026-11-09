@@ -40,7 +40,7 @@ CH_VERSION="54.0"
 # v54.0 x86_64 static binary. The GitHub release publishes no .sha256 asset.
 CH_SHA256_X86_64="4f4f98a3d661a40f3e5272627cc895a1b2e525f2f6bedf5f895f9cd21ba5c65b"
 # Minimum versions (used for validation)
-MIN_ELIXIR_VERSION="1.20"
+MIN_ELIXIR_VERSION="1.20.5"
 # Populated by install_postgres() with the discovered server bin dir
 # (e.g. /usr/lib/postgresql/16/bin); written into /etc/mjolnir/env by
 # setup_systemd_service().
@@ -251,8 +251,8 @@ install_erlang_elixir() {
     # Check if already installed with correct version
     if command -v elixir &>/dev/null; then
         local current_elixir
-        current_elixir=$(elixir --version 2>/dev/null | grep -oP 'Elixir \K[0-9]+\.[0-9]+' || echo "0")
-        if [[ "$current_elixir" == "$MIN_ELIXIR_VERSION"* ]] || [[ "$current_elixir" > "$MIN_ELIXIR_VERSION" ]]; then
+        current_elixir=$(elixir --version 2>/dev/null | grep -oP 'Elixir \K[0-9]+\.[0-9]+\.[0-9]+(?= |$)' || echo "0")
+        if dpkg --compare-versions "$current_elixir" ge "$MIN_ELIXIR_VERSION"; then
             log_success "Elixir $current_elixir already installed"
             # Ensure hex and rebar are installed
             mix local.hex --force --if-missing
@@ -296,7 +296,7 @@ install_erlang_elixir() {
     fi
 
     local erlang_version="27.3.4.19"
-    local elixir_version="1.20.4-otp-27"
+    local elixir_version="1.20.5-otp-27"
 
     log_info "Installing Erlang $erlang_version (this takes a while)..."
     mise use -g erlang@"$erlang_version"
