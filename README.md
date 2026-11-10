@@ -123,6 +123,11 @@ just server-networking           # IP forwarding, NAT rules, TAP interfaces
 
 You can also pass the host inline without `.env`: `just host=root@1.2.3.4 status`.
 
+Full server deployments build a versioned tree under `/opt/mjolnir-releases/`,
+then switch `/opt/mjolnir` and verify a controlled controller restart with rollback.
+See [Application releases](docs/runbooks/application-releases.md) for backups,
+verification, gateway-only deployments, and the controller-only maintenance path.
+
 Run `just --list` for everything — deploys, host management, IdentiKey Sites, and the Forge host-config reconciler (`just forge-plan`, `just forge-apply`). VM lifecycle and health live in `mj` (see above); a quick `mj doctor` confirms the server is reachable and healthy.
 
 For a planned host reboot or poweroff, use the

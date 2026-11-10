@@ -1,34 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Build a complete versioned tree, then activate it through /opt/mjolnir.
+# --gateway alone updates only the gateway; --full includes the controller.
+# --app-only updates the controller/runtime/dependencies without host sidecars.
 set -euo pipefail
-
-# Deploy Mjolnir to a remote server.
-#
-# Usage:
-#   ./scripts/deploy.sh <host>                 # rsync + build release + hot-cutover (no unit restart)
-#   ./scripts/deploy.sh <host> --agent         # also rebuild guest agent (Iroh P2P on by default)
-#   ./scripts/deploy.sh <host> --agent --no-iroh # rebuild guest agent without Iroh (smaller binary)
-#   ./scripts/deploy.sh <host> --rootfs        # rebuild rootfs only (distro via ROOTFS_DISTRO, default: arch)
-#   ./scripts/deploy.sh <host> --gateway       # GATEWAY-ONLY: build+install+restart mjolnir-gateway.
-#                                               # Does NOT run `mix release` or restart the mjolnir
-#                                               # service (that bounces every running VM), so this is
-#                                               # the safe way to ship a gateway-only change.
-#   ./scripts/deploy.sh <host> --gateway --full # gateway AND the full Elixir release + restart
-#   ./scripts/deploy.sh                       # uses MJOLNIR_HOST or prompts
-#
-# Examples:
-#   ./scripts/deploy.sh root@45.76.77.97
-#   ./scripts/deploy.sh root@45.76.77.97 --agent
-#   ./scripts/deploy.sh root@45.76.77.97 --rootfs
-#   ./scripts/deploy.sh root@45.76.77.97 --gateway
-#   ./scripts/deploy.sh root@45.76.77.97 --gateway --full
-#   MJOLNIR_HOST=root@mybox ./scripts/deploy.sh
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-REMOTE_CODE="/opt/mjolnir"
-REMOTE_BTRFS="/var/lib/mjolnir/btrfs"
-
-# Parse args
+remote() { ssh -o BatchMode=yes "$HOST" "set -e; $1"; }
+ACTIVE_CODE=/opt/mjolnir
+RELEASES=/opt/mjolnir-releases
 HOST=""
 BUILD_AGENT=false
 BUILD_ROOTFS=false
@@ -36,7 +15,7 @@ BUILD_GATEWAY=false
 BUILD_RUNNER=false
 AGENT_IROH=true
 FULL_DEPLOY=false
-
+APP_ONLY=false
 for arg in "$@"; do
     case "$arg" in
         --agent) BUILD_AGENT=true ;;
@@ -45,357 +24,78 @@ for arg in "$@"; do
         --gateway) BUILD_GATEWAY=true ;;
         --runner) BUILD_RUNNER=true ;;
         --full) FULL_DEPLOY=true ;;
-        -*) echo "Unknown flag: $arg"; exit 1 ;;
+        --app-only) APP_ONLY=true ;;
+        -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
         *) HOST="$arg" ;;
     esac
 done
-
-# --gateway alone is gateway-only: it must NOT trigger a `mix release` +
-# `systemctl restart mjolnir` (that bounces every running VM via the
-# Cleanup-kills-VMs -> Reconcile-resumes-from-StateStore cycle). Pass --full
-# alongside --gateway to explicitly request both. Without --gateway, the
-# Elixir release/restart always runs (preserves plain `deploy.sh <host>`).
+HOST="${HOST:-${MJOLNIR_HOST:-}}"
+[[ -n "$HOST" ]] || { echo "Usage: $0 user@host [--app-only | --gateway [--full]] [--agent] [--rootfs] [--runner]" >&2; exit 1; }
+[[ "$HOST" == *@* ]] || HOST="root@$HOST"
+if $APP_ONLY && { $BUILD_AGENT || $BUILD_ROOTFS || $BUILD_GATEWAY || $BUILD_RUNNER; }; then
+    echo '--app-only cannot be combined with sidecar/guest build options' >&2; exit 1
+fi
+BUILD_ELIXIR=true
 if $BUILD_GATEWAY && ! $FULL_DEPLOY; then
     BUILD_ELIXIR=false
-else
-    BUILD_ELIXIR=true
+    if $BUILD_AGENT || $BUILD_ROOTFS || $BUILD_RUNNER; then
+        echo 'Use --full when combining --gateway with other build options' >&2; exit 1
+    fi
 fi
 
-HOST="${HOST:-${MJOLNIR_HOST:-}}"
-if [[ -z "$HOST" ]]; then
-    echo "Usage: $0 <user@host> [--agent] [--rootfs]"
-    exit 1
-fi
-
-# Ensure host has user@ prefix
-if [[ "$HOST" != *@* ]]; then
-    HOST="root@$HOST"
-fi
-
-if [[ -x "$HOME/.local/bin/mise" ]]; then
-    MISE_ACTIVATE='eval "$($HOME/.local/bin/mise activate bash)"'
-else
-    MISE_ACTIVATE='true'
-fi
-
-# --- Preflight check for gateway config (TOML preferred, env fallback) ---
-check_gateway_env() {
-    local host="$1"
-    local remote_code="$2"
-
-    # Helper: color output if terminal supports it
-    local yellow='' red='' green='' reset=''
-    if [ -t 1 ]; then
-        yellow='\e[33m'
-        red='\e[31m'
-        green='\e[32m'
-        reset='\e[0m'
-    fi
-
-    # If /etc/mjolnir/gateway.toml exists, TOML is authoritative and env is
-    # ignored at startup (spec Decision 10). Skip the env preflight.
-    if ssh "$host" "[ -f /etc/mjolnir/gateway.toml ]" 2>/dev/null; then
-        printf "\n=== Gateway Config Preflight (TOML mode) ===\n"
-        printf "${green}/etc/mjolnir/gateway.toml present — TOML is authoritative.${reset}\n"
-        printf "${yellow}Note: /etc/mjolnir/gateway.env is ignored while TOML is present.${reset}\n"
-        # Lightweight parseability check; the gateway does full validation at startup.
-        # Python3 tomllib is available on recent distros (3.11+).
-        if ssh "$host" "python3 -c 'import tomllib; tomllib.loads(open(\"/etc/mjolnir/gateway.toml\").read())'" 2>/dev/null; then
-            printf "${green}TOML parses cleanly.${reset}\n"
-        else
-            printf "${red}WARN: /etc/mjolnir/gateway.toml failed to parse — gateway will refuse to start.${reset}\n"
-            printf "${red}Check gateway logs after deploy: journalctl -u mjolnir-gateway${reset}\n"
-        fi
-        printf "=== End Preflight Check ===\n\n"
-        return 0
-    fi
-
-    # Check if /etc/mjolnir/gateway.env exists on the host
-    if ! ssh "$host" "[ -f /etc/mjolnir/gateway.env ]" 2>/dev/null; then
-        printf "${yellow}=== WARN: Gateway config not found ===${reset}\n"
-        printf "${yellow}Neither /etc/mjolnir/gateway.toml nor /etc/mjolnir/gateway.env exists.${reset}\n"
-        printf "${yellow}To set up the gateway config, pick one:${reset}\n"
-        printf "${yellow}  TOML (preferred for multi-apex / local-routes):${reset}\n"
-        printf "${yellow}    cp $remote_code/systemd/gateway.toml.example /etc/mjolnir/gateway.toml${reset}\n"
-        printf "${yellow}  Env (legacy single-apex):${reset}\n"
-        printf "${yellow}    cp $remote_code/systemd/gateway.env.example /etc/mjolnir/gateway.env${reset}\n"
-        printf "${yellow}Then edit the file and re-run the deploy script.${reset}\n"
-        printf "${yellow}Proceeding with deploy (gateway service may not start cleanly).${reset}\n"
-        return 0
-    fi
-
-    printf "\n=== Gateway Environment Preflight Check (env mode) ===\n"
-
-    # Extract example keys
-    local example_keys=$(ssh "$host" "grep -E '^[A-Z_]+=.*' '$remote_code/systemd/gateway.env.example' | cut -d= -f1 | sort -u" 2>/dev/null || echo "")
-
-    # Extract host keys
-    local host_keys=$(ssh "$host" "grep -E '^[A-Z_]+=.*' /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f1 | sort -u" || echo "")
-
-    # Find missing or empty keys
-    local missing_keys=()
-    while IFS= read -r key; do
-        if [ -z "$key" ]; then
-            continue
-        fi
-        # Check if key exists in host env and is non-empty
-        local host_value=$(ssh "$host" "grep -E \"^${key}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "")
-        if [ -z "$host_value" ]; then
-            missing_keys+=("$key")
-        fi
-    done <<< "$example_keys"
-
-    # Report missing keys
-    if [ ${#missing_keys[@]} -gt 0 ]; then
-        printf "${yellow}Missing or empty keys (from example):${reset}\n"
-        for key in "${missing_keys[@]}"; do
-            printf "  ${yellow}${key}${reset}\n"
-        done
-    fi
-
-    # Check ACME requirements if enabled
-    local acme_enabled=$(ssh "$host" "grep -E '^GATEWAY_ACME=enabled' /etc/mjolnir/gateway.env 2>/dev/null" || echo "")
-    if [ -n "$acme_enabled" ]; then
-        printf "\n${yellow}ACME is enabled. Checking required fields...${reset}\n"
-
-        local acme_required=("CLOUDFLARE_API_TOKEN" "GATEWAY_ACME_EMAIL" "GATEWAY_ACME_DOMAINS")
-        local acme_missing=()
-
-        for key in "${acme_required[@]}"; do
-            local value=$(ssh "$host" "grep -E \"^${key}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "")
-            if [ -z "$value" ]; then
-                acme_missing+=("$key")
-            fi
-        done
-
-        if [ ${#acme_missing[@]} -gt 0 ]; then
-            printf "${red}ACME enabled but missing/empty required fields:${reset}\n"
-            for key in "${acme_missing[@]}"; do
-                printf "  ${red}${key}${reset}\n"
-            done
-        else
-            printf "${yellow}All ACME required fields are set.${reset}\n"
-        fi
-    fi
-
-    # Report currently-set TLS/ACME values (redacted)
-    printf "\n=== Current TLS/ACME Configuration ===\n"
-
-    local tls_vars=("GATEWAY_LISTEN" "GATEWAY_TLS_LISTEN" "GATEWAY_TLS_CERT" "GATEWAY_TLS_KEY" "GATEWAY_ACME" "GATEWAY_ACME_DIRECTORY" "GATEWAY_ACME_DOMAINS" "CLOUDFLARE_API_TOKEN")
-
-    for var in "${tls_vars[@]}"; do
-        local value=$(ssh "$host" "grep -E \"^${var}=\" /etc/mjolnir/gateway.env 2>/dev/null | cut -d= -f2-" || echo "(unset)")
-
-        if [ "$var" = "CLOUDFLARE_API_TOKEN" ] && [ "$value" != "(unset)" ] && [ -n "$value" ]; then
-            value="(set)"
-        fi
-
-        printf "  %s=%s\n" "$var" "$value"
-    done
-
-    printf "=== End Preflight Check ===\n\n"
+# Refuse the old layout before rsync can overwrite any running files.
+remote "test -L $ACTIVE_CODE && test -d $ACTIVE_CODE" || {
+    echo 'Migrate the existing installation to the versioned-release symlink first.' >&2; exit 1;
 }
-
-echo "=== Deploying to $HOST ==="
-
-# --- Rsync ---
-echo ""
-echo "--- Syncing code ---"
-# rsync 3.5 applies unqualified excludes on the sender only, so --delete
-# removes gitignored build outputs and host-installed files that are not in
-# the source. Protect those on the receiver. Still delete files under
-# directories the source owns (a removed lib/*.ex must not linger).
-RSYNC_DEST="${MJOLNIR_RSYNC_DEST:-$HOST:$REMOTE_CODE/}"
-PROTECT_FILTER="$(mktemp)"
-{
-    printf '%s\n' \
-        'P /bin/***' \
-        'P /bin/' \
-        'P /_build/***' \
-        'P /_build/' \
-        'P /deps/***' \
-        'P /deps/' \
-        'P /native/target/***' \
-        'P /native/target/' \
-        'P /native/*/target/***' \
-        'P /native/*/target/' \
-        'P /.env' \
-        'P /erl_crash.dump'
-} > "$PROTECT_FILTER"
-
-protect_dest_only() {
-    local dest="$1" root="$2" filter="$3"
-    local path name
-    local -a names=()
-    if [[ "$dest" == *:* ]]; then
-        local host="${dest%%:*}"
-        path="${dest#*:}"
-        path="${path%/}"
-        mapfile -t names < <(ssh "$host" "find '$path' -mindepth 1 -maxdepth 1 -printf '%P\\n'" 2>/dev/null || true)
-    else
-        path="${dest%/}"
-        names=()
-        if [[ -d "$path" ]]; then
-            mapfile -t names < <(find "$path" -mindepth 1 -maxdepth 1 -printf '%P\n' || true)
-        fi
-    fi
-    for name in "${names[@]}"; do
-        [[ -z "$name" || "$name" == *$'\n'* ]] && continue
-        if [[ -e "$root/$name" ]]; then
-            continue
-        fi
-        printf 'P /%s\nP /%s/***\n' "$name" "$name" >> "$filter"
-    done
-}
-protect_dest_only "$RSYNC_DEST" "$PROJECT_ROOT" "$PROTECT_FILTER"
-
-RSYNC_FILTERS=()
-while IFS= read -r rule; do
-    [[ -z "$rule" ]] && continue
-    RSYNC_FILTERS+=(--filter "$rule")
-done < "$PROTECT_FILTER"
-rm -f "$PROTECT_FILTER"
-
-rsync -avz --delete \
-    --filter=':- .gitignore' \
-    --exclude='.git' \
-    "${RSYNC_FILTERS[@]}" \
-    "$PROJECT_ROOT/" "$RSYNC_DEST"
-
-# --- Update systemd service file ---
-echo ""
-echo "--- Updating systemd service ---"
-ssh "$HOST" "cp $REMOTE_CODE/systemd/mjolnir.service /etc/systemd/system/mjolnir.service && systemctl daemon-reload"
-
-# --- Guest agent + rootfs (optional, before release build) ---
+REVISION="$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD)"
+RELEASE_NAME="$REVISION-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+REMOTE_CODE="$RELEASES/$RELEASE_NAME"
+# Send the current staging helper, not a possibly old installed version.
+remote "python3 - stage '$RELEASE_NAME'" < "$SCRIPT_DIR/release_control.py"
+# Each destination is new. Never rsync through the active symlink. Receiver
+# caches/helpers seeded by stage are protected; removed source files disappear.
+rsync -az --delete --filter=':- .gitignore' --exclude='.git' --exclude='.env' \
+    --exclude='.beads' --exclude='.beads.gate.lock' \
+    --filter='P /bin/***' --filter='P /_build/***' --filter='P /deps/***' \
+    --filter='P /native/**/target/***' --filter='P /native/target/***' \
+    "$PROJECT_ROOT/" "$HOST:$REMOTE_CODE/"
+remote "printf '%s\\n' '$REVISION' > '$REMOTE_CODE/.source-revision'"
+# Trust the staged tool pins explicitly; use mise exec in noninteractive shells.
+# shellcheck disable=SC2016 # Expanded by the remote shell.
+MISE_ACTIVATE='export PATH=/root/.local/bin:/root/.cargo/bin:$PATH; command -v mise >/dev/null'
+remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; mise trust .mise.toml"
 if $BUILD_AGENT; then
     AGENT_FLAGS=""
-    if ! $AGENT_IROH; then
-        AGENT_FLAGS="--no-iroh"
-    fi
-    echo ""
-    echo "--- Building guest agent (musl static binary) ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && ./scripts/build-guest-agent.sh $AGENT_FLAGS"
+    $AGENT_IROH || AGENT_FLAGS=--no-iroh
+    remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; mise exec -- ./scripts/build-guest-agent.sh $AGENT_FLAGS"
 fi
-
 if $BUILD_ROOTFS; then
     DISTRO="${ROOTFS_DISTRO:-arch}"
-    echo ""
-    echo "--- Rebuilding rootfs (distro: $DISTRO) ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent sudo bash scripts/build-rootfs-${DISTRO}.sh $REMOTE_BTRFS/@base/${DISTRO}"
+    [[ "$DISTRO" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo 'Invalid ROOTFS_DISTRO' >&2; exit 1; }
+    remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent bash scripts/build-rootfs-$DISTRO.sh /var/lib/mjolnir/btrfs/@base/$DISTRO"
 fi
-
-# --- Host API address (before sidecars; does not restart Elixir) ---
-# dummy-mjolnir holds 10.200.0.1/32. TAP guests ARP that interface.
-# Sidecars bind it. This does not fall back to lo.
-echo ""
-echo "--- Ensuring host modules and guest NAT ---"
-ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-modules.sh"
-ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-nat.sh --install-unit"
-
-echo ""
-echo "--- Ensuring host API address (dummy-mjolnir) ---"
-ssh "$HOST" "bash $REMOTE_CODE/scripts/ensure-host-api-addr.sh --install-unit"
-
-# --- Blob door sidecar (always; does not restart Elixir) ---
-# Host process on 10.200.0.1:7222. Same rsync as everything else; cargo is
-# incremental after the first build. Never a just verb — just deploy.
-echo ""
-echo "--- Installing blob door ---"
-ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-blob-door.sh"
-
-# --- Redis sidecar (always; does not restart Elixir) ---
-# Host process on 10.200.0.1:6379. Restart Redis only if conf/unit/binary
-# changed. Never a just verb — just deploy.
-echo ""
-echo "--- Installing redis sidecar ---"
-ssh "$HOST" "cd $REMOTE_CODE && bash scripts/install-redis.sh"
-
-# --- Build gateway (optional) ---
 if $BUILD_GATEWAY; then
-    echo ""
-    echo "--- Building gateway ---"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE/native/mjolnir_gateway && ${MJOLNIR_CARGO:-cargo} build --release"
-    ssh "$HOST" "install -m755 $REMOTE_CODE/native/target/release/mjolnir-gateway /usr/local/bin/mjolnir-gateway"
+    remote "$MISE_ACTIVATE; cd '$REMOTE_CODE/native/mjolnir_gateway'; mise exec -- cargo build --release"
+    remote "python3 -c 'import tomllib; tomllib.load(open(\"/etc/mjolnir/gateway.toml\", \"rb\"))'"
 fi
-
-# --- Build Forgejo runner with Mjolnir VM backend (optional) ---
-if $BUILD_RUNNER; then
-    echo ""
-    echo "--- Building Forgejo runner (Mjolnir VM backend) ---"
-
-    RUNNER_REPO="http://10.255.255.1:3000/identikey/forgejo-runner.git"
-    RUNNER_BRANCH="mjolnir"
-
-    # Clone or update the fork
-    ssh "$HOST" "if [ ! -d /opt/forgejo-runner-build/.git ]; then \
-        git clone -b $RUNNER_BRANCH $RUNNER_REPO /opt/forgejo-runner-build; \
-    else \
-        cd /opt/forgejo-runner-build && git fetch origin && git checkout $RUNNER_BRANCH && git reset --hard origin/$RUNNER_BRANCH; \
-    fi"
-
-    # Build
-    ssh "$HOST" "cd /opt/forgejo-runner-build && go build -o /usr/local/bin/forgejo-runner-mjolnir ."
-
-    # Install systemd service
-    ssh "$HOST" "cp $REMOTE_CODE/systemd/forgejo-runner.service /etc/systemd/system/forgejo-runner.service && systemctl daemon-reload"
-fi
-
-# --- Build Elixir release (skipped in gateway-only mode: --gateway without --full) ---
 if $BUILD_ELIXIR; then
-    echo ""
-    echo "--- Building Elixir release ---"
-    # priv/release_id is compiled into Mjolnir.Release. A new id is how health
-    # tells this release from the one already running.
-    ssh "$HOST" "mkdir -p $REMOTE_CODE/priv && umask 022 && openssl rand -hex 16 > $REMOTE_CODE/priv/release_id"
-    ssh "$HOST" "$MISE_ACTIVATE && cd $REMOTE_CODE && MIX_ENV=prod ${MJOLNIR_MIX:-mix} deps.get && MIX_ENV=prod ${MJOLNIR_MIX:-mix} compile && MIX_ENV=prod ${MJOLNIR_MIX:-mix} release mjolnir --overwrite"
-else
-    echo ""
-    echo "--- Skipping Elixir release build (gateway-only deploy; pass --full to also rebuild it) ---"
+    remote "systemd-run --quiet --wait --pipe --collect --property=User=root --property=SetLoginEnvironment=yes --property=CPUQuota=200% --property=MemoryMax=4G --unit='mjolnir-build-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/build-release.sh' '$REMOTE_CODE' '$RELEASE_NAME'"
+    if ! $APP_ONLY; then
+        # Finish native compilation before changing the running controller.
+        remote "$MISE_ACTIVATE; cd '$REMOTE_CODE/native'; mise exec -- cargo build -p mjolnir-blob-door --release"
+    fi
+    # Remote systemd owns activation so an SSH disconnect cannot abandon rollback.
+    remote "systemd-run --quiet --wait --pipe --collect --unit='mjolnir-release-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/cutover-release.sh' '$REMOTE_CODE'"
+    if ! $APP_ONLY; then
+        remote "bash $ACTIVE_CODE/scripts/ensure-host-modules.sh; bash $ACTIVE_CODE/scripts/ensure-host-nat.sh --install-unit; bash $ACTIVE_CODE/scripts/ensure-host-api-addr.sh --install-unit"
+        remote "cd $ACTIVE_CODE; bash scripts/install-blob-door.sh --install-only; bash scripts/install-redis.sh"
+        remote "cp $ACTIVE_CODE/systemd/mjolnir-cert-renew.service $ACTIVE_CODE/systemd/mjolnir-cert-renew.timer /etc/systemd/system/; systemctl daemon-reload; systemctl enable --now mjolnir-cert-renew.timer"
+    fi
 fi
-
-# --- Update gateway systemd service ---
-ssh "$HOST" "if [ -f $REMOTE_CODE/systemd/mjolnir-gateway.service ]; then cp $REMOTE_CODE/systemd/mjolnir-gateway.service /etc/systemd/system/mjolnir-gateway.service && systemctl daemon-reload; fi"
-
-# --- Preflight gateway env check (if gateway is/will be enabled) ---
-if $BUILD_GATEWAY || ssh "$HOST" "systemctl is-enabled mjolnir-gateway 2>/dev/null" | grep -q enabled; then
-    check_gateway_env "$HOST" "$REMOTE_CODE"
-fi
-
-# --- Cut over the release (skipped in gateway-only mode: --gateway without --full) ---
-# Do not `systemctl restart mjolnir`. That bounces every guest. An active
-# node loads the new beams; an inactive unit is started.
-if $BUILD_ELIXIR; then
-    echo ""
-    echo "--- Cutting over mjolnir release ---"
-    ssh "$HOST" "MJOLNIR_CODE=$REMOTE_CODE bash $REMOTE_CODE/scripts/cutover-release.sh"
-
-    echo ""
-    echo "--- Named-host certificate renewal timer ---"
-    ssh "$HOST" "cp $REMOTE_CODE/systemd/mjolnir-cert-renew.service $REMOTE_CODE/systemd/mjolnir-cert-renew.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl enable mjolnir-cert-renew.timer && systemctl start mjolnir-cert-renew.service"
-else
-    echo ""
-    echo "--- Skipping mjolnir service restart (gateway-only deploy; pass --full to also restart it) ---"
-fi
-
-# --- Restart gateway only when this deploy built it ---
 if $BUILD_GATEWAY; then
-    echo ""
-    echo "--- Restarting gateway service ---"
-    ssh "$HOST" "systemctl restart mjolnir-gateway && sleep 1 && systemctl status mjolnir-gateway --no-pager"
+    remote "install -m755 '$REMOTE_CODE/native/target/release/mjolnir-gateway' /usr/local/bin/mjolnir-gateway; cp '$REMOTE_CODE/systemd/mjolnir-gateway.service' /etc/systemd/system/; systemctl daemon-reload; systemctl restart mjolnir-gateway; systemctl is-active --quiet mjolnir-gateway"
 fi
-
-# --- Restart runner only when this deploy built it ---
 if $BUILD_RUNNER; then
-    echo ""
-    echo "--- Restarting forgejo-runner service ---"
-    ssh "$HOST" "systemctl restart forgejo-runner && sleep 1 && systemctl status forgejo-runner --no-pager"
+    remote 'set -e; if test ! -d /opt/forgejo-runner-build/.git; then git clone -b mjolnir http://10.255.255.1:3000/identikey/forgejo-runner.git /opt/forgejo-runner-build; else git -C /opt/forgejo-runner-build fetch origin; git -C /opt/forgejo-runner-build checkout mjolnir; git -C /opt/forgejo-runner-build reset --hard origin/mjolnir; fi; cd /opt/forgejo-runner-build; go build -o /usr/local/bin/forgejo-runner-mjolnir .; systemctl restart forgejo-runner; systemctl is-active --quiet forgejo-runner'
 fi
-
-echo ""
-echo "=== Deploy complete ==="
-echo ""
-echo "Logs:         ssh $HOST journalctl -u mjolnir -f"
-echo "Gateway logs: ssh $HOST journalctl -u mjolnir-gateway -f"
-echo "Runner logs:  ssh $HOST journalctl -u forgejo-runner -f"
-echo "Remote shell: ssh $HOST /opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir remote"
+echo "Deploy complete. Active controller: $ACTIVE_CODE; staged tree: $REMOTE_CODE"

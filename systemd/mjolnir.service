@@ -7,6 +7,8 @@ StartLimitBurst=5
 
 [Service]
 Type=exec
+User=root
+SetLoginEnvironment=yes
 WorkingDirectory=/opt/mjolnir
 
 # '-' skips a path that is not on this host (/etc/ufw on Arch). A missing
@@ -17,6 +19,8 @@ ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir start
 ExecStop=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir stop
 
 EnvironmentFile=/etc/mjolnir/env
+# The release launcher derives its root from /opt/mjolnir after resolving the symlink.
+UnsetEnvironment=RELEASE_ROOT
 
 # --- Filesystem hardening ---
 # strict: /usr, /boot, /efi read-only; only ReadWritePaths are writable
@@ -48,7 +52,7 @@ RuntimeDirectoryMode=0750
 LimitNOFILE=65536
 
 # --- Lifecycle ---
-# Kill the entire cgroup (VMs, virtiofsd, all child processes) on service stop
+# Stop controller-owned children. Live VMs run in independent scopes.
 KillMode=control-group
 TimeoutStopSec=30
 

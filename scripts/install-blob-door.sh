@@ -39,7 +39,7 @@ if [[ -n "${MJOLNIR_CARGO:-}" ]]; then
     CARGO="$MJOLNIR_CARGO"
 else
     export PATH="${HOME}/.cargo/bin:/root/.cargo/bin:${PATH}"
-    if ! command -v cargo >/dev/null; then
+    if [[ "${1:-}" != "--install-only" ]] && ! command -v cargo >/dev/null; then
         echo "Error: cargo not on PATH (looked in ~/.cargo/bin)" >&2
         exit 1
     fi
@@ -48,7 +48,9 @@ fi
 cd "$NATIVE"
 # Linux host; crate does not need recrypt-core.
 # A failed build stops here, before any install or systemctl stop.
-"$CARGO" build -p mjolnir-blob-door --release
+if [[ "${1:-}" != "--install-only" ]]; then
+    "$CARGO" build -p mjolnir-blob-door --release
+fi
 install -d "$BIN_DIR"
 install -m 0755 "$NATIVE/target/release/mjolnir-blob-door" "$BIN_DST"
 install -m 0755 "$NATIVE/target/release/mjolnir-b3" "$B3_DST"
