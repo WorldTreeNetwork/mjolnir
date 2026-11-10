@@ -61,6 +61,32 @@ defmodule Mjolnir.Postgres.ServerTest do
     refute pid_alive?(os_pid)
   end
 
+  test "shutdown is clean and bounded with an idle client pool", ctx do
+    {:ok, pid} = Server.start_link([])
+    assert Server.await_ready(15_000) == :ok
+    cfg = Config.resolve()
+
+    {:ok, client} =
+      Postgrex.start_link(
+        socket_dir: ctx.socket_dir,
+        username: "mjolnir_admin",
+        database: "postgres",
+        backoff_type: :stop
+      )
+
+    Process.unlink(client)
+    on_exit(fn -> if Process.alive?(client), do: GenServer.stop(client) end)
+    assert %Postgrex.Result{rows: [[1]]} = Postgrex.query!(client, "SELECT 1", [])
+    started = System.monotonic_time(:millisecond)
+    GenServer.stop(pid, :normal, 15_000)
+    assert System.monotonic_time(:millisecond) - started < 5_000
+
+    {control, 0} =
+      System.cmd(Path.join(cfg.bin_dir, "pg_controldata"), [ctx.data_dir], env: [{"LC_ALL", "C"}])
+
+    assert control =~ ~r/Database cluster state:\s+shut down/
+  end
+
   test "writes the expected conf files with ident map", ctx do
     {:ok, pid} = Server.start_link([])
     assert Server.await_ready(15_000) == :ok

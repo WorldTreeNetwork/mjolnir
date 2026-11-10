@@ -18,7 +18,7 @@ defmodule Mjolnir.Postgres.Server do
     so its supervisor can decide whether to crash the app.
   - The Postgres process is owned by the Port; if it exits, the GenServer
     crashes and its supervisor restarts the whole thing.
-  - `terminate/2` sends SIGTERM to the OS pid and waits up to 10s for clean
+  - `terminate/2` requests fast shutdown (SIGINT) and waits up to 10s for clean
     shutdown.
 
   ## Config
@@ -115,8 +115,13 @@ defmodule Mjolnir.Postgres.Server do
   def terminate(_reason, %{port: nil}), do: :ok
 
   def terminate(reason, %{config: config, os_pid: pid, port: port}) when is_integer(pid) do
-    Logger.info("Postgres.Server: terminating reason=#{inspect(reason)}; SIGTERM pg pid=#{pid}")
-    _ = System.cmd("kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
+    Logger.info(
+      "Postgres.Server: terminating reason=#{inspect(reason)}; clean fast shutdown pg pid=#{pid}"
+    )
+
+    # SIGTERM waits for idle client pools forever. SIGINT disconnects them
+    # and performs a clean checkpoint before the postmaster exits.
+    _ = System.cmd("kill", ["-INT", Integer.to_string(pid)], stderr_to_stdout: true)
 
     if not wait_pid_gone(pid, 10_000) do
       Logger.warning("Postgres.Server: pg pid=#{pid} did not exit; SIGKILL")
