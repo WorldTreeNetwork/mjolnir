@@ -35,7 +35,9 @@ Every deployment creates a new tree, copying dependency/build caches and install
 helpers without hardlinks. Rsync never writes through the active symlink. The
 host's `.mise.toml` pins select the compiler/runtime through `mise exec`. Native
 compilation and the Hex advisory/retirement audit finish before controller
-activation. Build and activation run as separate transient systemd units and
+activation. Elixir and native builds each run with a two-CPU quota and4GiB memory limit;
+native compilation also limits Cargo to one concurrent job. Build and activation
+run as separate transient systemd units and
 survive SSH disconnection. A disconnected build can finish, but deployment does
 not automatically advance from build into activation after its client exits.
 
@@ -101,7 +103,7 @@ publication; root can still change them, so use the deploy procedure.
 bash scripts/deploy_test.sh -v
 python3 -m unittest discover -s scripts -p test_controlled_reboot.py
 python3 scripts/test_native_workspace.py -v
-shellcheck scripts/deploy.sh scripts/build-release.sh scripts/cutover-release.sh
+shellcheck scripts/deploy.sh scripts/build-release.sh scripts/build-native.sh scripts/cutover-release.sh
 ```
 
 The deployment tests exercise the actual shell procedure with isolated transport

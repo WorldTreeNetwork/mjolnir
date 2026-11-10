@@ -213,7 +213,7 @@ import json,os,sys
 with open(os.environ['CALLS'],'a') as f:f.write(json.dumps([os.path.basename(sys.argv[0]),*sys.argv[1:]])+'\\n')
 command=' '.join(sys.argv[1:])
 fail=os.environ.get('FAIL','')
-if (fail=='layout' and 'test -L /opt/mjolnir' in command) or (fail=='build' and 'scripts/build-release.sh' in command) or (fail=='activation' and 'scripts/cutover-release.sh' in command):sys.exit(1)
+if (fail=='layout' and 'test -L /opt/mjolnir' in command) or (fail=='build' and 'scripts/build-release.sh' in command) or (fail=='activation' and 'scripts/cutover-release.sh' in command) or (fail=='native' and 'scripts/build-native.sh' in command):sys.exit(1)
 if os.path.basename(sys.argv[0])=='git':print('0123456789ab')
 if 'python3 - stage' in command:sys.stdin.read()
 '''
@@ -266,6 +266,27 @@ if 'python3 - stage' in command:sys.stdin.read()
         self.assertNotIn('cutover-release.sh', str(calls))
         self.assertNotIn('install-blob-door.sh', str(calls))
 
+    def test_native_builds_are_bounded_and_finish_before_activation(self):
+        result, calls = self.invoke(['--agent'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [' '.join(call) for call in calls]
+        native = [i for i,c in enumerate(commands) if 'scripts/build-native.sh' in c]
+        activate = next(i for i,c in enumerate(commands) if 'scripts/cutover-release.sh' in c)
+        self.assertEqual(len(native), 2)
+        for i in native:
+            self.assertLess(i, activate)
+            self.assertIn('systemd-run', commands[i])
+            self.assertIn('CPUQuota=200%', commands[i])
+            self.assertIn('MemoryMax=4G', commands[i])
+
+    def test_native_failure_never_activates_or_installs_sidecars(self):
+        for flags in [[], ['--agent'], ['--gateway']]:
+            result, calls = self.invoke(flags, failure='native')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('cutover-release.sh', str(calls))
+            self.assertNotIn('install-blob-door.sh', str(calls))
+            self.assertNotIn('install -m755', str(calls))
+
     def test_failed_activation_stops_deploy_before_sidecars(self):
         result, calls = self.invoke(failure='activation')
         self.assertNotEqual(result.returncode, 0)
@@ -284,6 +305,28 @@ if 'python3 - stage' in command:sys.stdin.read()
 
 
 class BuildProcedureTests(unittest.TestCase):
+    def test_native_dispatch_uses_staged_tree_and_one_cargo_job(self):
+        for kind in ['agent', 'blob', 'gateway']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                (base / 'native/mjolnir_gateway').mkdir(parents=True)
+                stub = base / 'mise'
+                stub.write_text('#!/usr/bin/env python3\nimport os,json,sys\nwith open(os.environ["NATIVE_CALLS"],"w") as f:json.dump({"args":sys.argv[1:],"jobs":os.environ["CARGO_BUILD_JOBS"],"cwd":os.getcwd()},f)\n')
+                stub.chmod(0o755)
+                calls = base / 'calls.json'
+                env = dict(os.environ, PATH=str(base) + os.pathsep + os.environ['PATH'],
+                           NATIVE_CALLS=str(calls), CARGO_BUILD_JOBS='99')
+                arguments = ['--no-iroh'] if kind == 'agent' else []
+                result = subprocess.run(['bash', str(REPO / 'scripts/build-native.sh'), str(base), kind, *arguments],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                call = json.loads(calls.read_text())
+                self.assertEqual(call['jobs'], '1')
+                self.assertTrue(Path(call['cwd']).is_relative_to(base.resolve()))
+                self.assertIn('build-guest-agent.sh' if kind == 'agent' else 'cargo', ' '.join(call['args']))
+                if kind == 'agent':self.assertIn('--no-iroh', call['args'])
+                else:self.assertIn('--locked', call['args'])
+
     def test_build_and_audit_failures_prevent_packaging(self):
         for failure in ['', 'deps.get', 'compile', 'findings']:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:

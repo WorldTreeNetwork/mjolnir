@@ -64,10 +64,14 @@ remote "printf '%s\\n' '$REVISION' > '$REMOTE_CODE/.source-revision'"
 # shellcheck disable=SC2016 # Expanded by the remote shell.
 MISE_ACTIVATE='export PATH=/root/.local/bin:/root/.cargo/bin:$PATH; command -v mise >/dev/null'
 remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; mise trust .mise.toml"
+native_build() {
+    local kind="$1" flags="${2:-}"
+    remote "systemd-run --quiet --wait --pipe --collect --property=User=root --property=SetLoginEnvironment=yes --property=CPUQuota=200% --property=MemoryMax=4G --unit='mjolnir-native-$kind-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/build-native.sh' '$REMOTE_CODE' '$kind' $flags"
+}
 if $BUILD_AGENT; then
     AGENT_FLAGS=""
     $AGENT_IROH || AGENT_FLAGS=--no-iroh
-    remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; mise exec -- ./scripts/build-guest-agent.sh $AGENT_FLAGS"
+    native_build agent "$AGENT_FLAGS"
 fi
 if $BUILD_ROOTFS; then
     DISTRO="${ROOTFS_DISTRO:-arch}"
@@ -75,14 +79,14 @@ if $BUILD_ROOTFS; then
     remote "$MISE_ACTIVATE; cd '$REMOTE_CODE'; AGENT_BIN=native/target/x86_64-unknown-linux-musl/release/mjolnir-agent bash scripts/build-rootfs-$DISTRO.sh /var/lib/mjolnir/btrfs/@base/$DISTRO"
 fi
 if $BUILD_GATEWAY; then
-    remote "$MISE_ACTIVATE; cd '$REMOTE_CODE/native/mjolnir_gateway'; mise exec -- cargo build --release --locked"
+    native_build gateway
     remote "python3 -c 'import tomllib; tomllib.load(open(\"/etc/mjolnir/gateway.toml\", \"rb\"))'"
 fi
 if $BUILD_ELIXIR; then
     remote "systemd-run --quiet --wait --pipe --collect --property=User=root --property=SetLoginEnvironment=yes --property=CPUQuota=200% --property=MemoryMax=4G --unit='mjolnir-build-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/build-release.sh' '$REMOTE_CODE' '$RELEASE_NAME'"
     if ! $APP_ONLY; then
         # Finish native compilation before changing the running controller.
-        remote "$MISE_ACTIVATE; cd '$REMOTE_CODE/native'; mise exec -- cargo build -p mjolnir-blob-door --release --locked"
+        native_build blob
     fi
     # Remote systemd owns activation so an SSH disconnect cannot abandon rollback.
     remote "systemd-run --quiet --wait --pipe --collect --unit='mjolnir-release-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/cutover-release.sh' '$REMOTE_CODE'"
