@@ -40,7 +40,7 @@ fi
 
 # Build static binary via zigbuild (hermetic musl, no system loader dependency)
 echo "Building release binary..."
-cargo zigbuild --release --target x86_64-unknown-linux-musl --bin mjolnir-agent $FEATURES
+cargo zigbuild --release --locked --target x86_64-unknown-linux-musl --bin mjolnir-agent $FEATURES
 
 # Cargo workspace puts the binary in the workspace root's target dir
 BINARY="../target/x86_64-unknown-linux-musl/release/mjolnir-agent"

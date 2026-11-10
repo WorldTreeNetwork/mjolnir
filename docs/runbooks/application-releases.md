@@ -23,6 +23,10 @@ just host=root@server deploy
 ./scripts/deploy.sh root@server --gateway --full
 ```
 
+The core Rust workspace is portable across release directories. The optional
+LAN-files guest executable has its own workspace/lockfile because it requires
+pinned sibling source checkouts; see its README for explicit builds.
+
 Existing `--agent`, `--rootfs`, `--runner`, and `--no-iroh` options remain.
 Gateway-only cannot be combined with those options without `--full`.
 The deployment syncs the working tree, as before; commit intended changes first.
@@ -96,6 +100,7 @@ publication; root can still change them, so use the deploy procedure.
 ```sh
 bash scripts/deploy_test.sh -v
 python3 -m unittest discover -s scripts -p test_controlled_reboot.py
+python3 scripts/test_native_workspace.py -v
 shellcheck scripts/deploy.sh scripts/build-release.sh scripts/cutover-release.sh
 ```
 

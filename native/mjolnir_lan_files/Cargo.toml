@@ -24,3 +24,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+# Keep optional checkout-based guest builds separate from portable host tooling.
+[workspace]
+resolver = "2"
+
+[patch.crates-io]
+bindgen = { path = "vendor/bindgen" }

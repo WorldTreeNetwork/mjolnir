@@ -66,7 +66,19 @@ they are deliberately recorded rather than claiming an untested remote pin.
 The upstream storage-auth dependency enables recrypt-core's native crypto
 features, so its OpenFHE/liboqs build prerequisites also apply here.
 
-The native workspace patches bindgen 0.71.1 with the upstream Clang 22+ type
+This optional executable has its own workspace and lockfile. Core host,
+gateway and agent builds do not require these sibling checkouts. From the
+Mjolnir repository root, build it explicitly:
+
+```sh
+cargo build --release --manifest-path native/mjolnir_lan_files/Cargo.toml
+```
+
+The executable is under `native/mjolnir_lan_files/target/release/`; set
+`MJOLNIR_LAN_FILES_BIN` to that path when configuring its guest. The previous
+shared `native/target` output is no longer the default for this optional build.
+
+The standalone workspace patches bindgen 0.71.1 with the upstream Clang 22+ type
 completeness fix required by oqs-sys 0.11. See
 [`vendor/bindgen/PATCH.md`](vendor/bindgen/PATCH.md) for provenance and removal
 conditions. The liboqs source remains in the upstream oqs-sys dependency;

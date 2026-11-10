@@ -49,7 +49,7 @@ cd "$NATIVE"
 # Linux host; crate does not need recrypt-core.
 # A failed build stops here, before any install or systemctl stop.
 if [[ "${1:-}" != "--install-only" ]]; then
-    "$CARGO" build -p mjolnir-blob-door --release
+    "$CARGO" build -p mjolnir-blob-door --release --locked
 fi
 install -d "$BIN_DIR"
 install -m 0755 "$NATIVE/target/release/mjolnir-blob-door" "$BIN_DST"

@@ -184,6 +184,7 @@ smoke-domains-snapshot: _require-host
 
 # Bootstrap a fresh server (rsync code + run bootstrap script)
 bootstrap: _require-host
+    ssh {{host}} "test ! -L /opt/mjolnir || { echo 'Existing versioned install: use just deploy instead of bootstrap' >&2; exit 1; }"
     rsync -avz --delete --filter=':- .gitignore' --exclude='.git' . {{host}}:/opt/mjolnir/
     ssh {{host}} 'export PATH="$HOME/.local/bin:$PATH" && \
         command -v mise >/dev/null 2>&1 && mise trust /opt/mjolnir/.mise.toml 2>/dev/null; \
