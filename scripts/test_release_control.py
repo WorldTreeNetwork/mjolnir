@@ -161,6 +161,18 @@ class ActivationTests(unittest.TestCase):
         self.assertTrue((staged / 'native/target/release/mjolnir-agent').exists())
         self.assertFalse((staged / 'native/target/release/deps/huge').exists())
 
+    def test_new_vms_do_not_invalidate_preserved_baseline(self):
+        host = release.Host(self.state, self.active)
+        before = {'host_boot': 'host', 'processes': {'vm': 123}, 'guests': {'vm': {'BOOT': 'same'}}}
+        with patch.object(host, 'health', return_value='new'), \
+             patch.object(host, 'processes', return_value={'vm': 123, 'new-vm': 456}), \
+             patch.object(host, 'guests', return_value=before['guests']) as guests, \
+             patch.object(host, 'public_status', return_value={}), \
+             patch.object(host, 'verify_runtime'), patch.object(Path, 'read_text', return_value='host'), \
+             patch.object(release, 'run'):
+            host.ready('new', before, self.new)
+            guests.assert_called_once_with(before['processes'])
+
     def test_public_endpoint_regression_fails_before_runtime_rpc(self):
         host = release.Host(self.state, self.active)
         before = {'host_boot': 'host', 'processes': {}, 'guests': {},

@@ -147,9 +147,9 @@ class Host:
         if Path('/proc/sys/kernel/random/boot_id').read_text().strip() != before['host_boot']:
             raise RuntimeError('Host boot changed')
         current = self.processes()
-        if current != before['processes']:
+        if any(current.get(vm) != pid for vm, pid in before['processes'].items()):
             raise RuntimeError('VM process set changed')
-        if self.guests(current) != before['guests']:
+        if self.guests(before['processes']) != before['guests']:
             raise RuntimeError('Guest boot, agent or secret mount changed')
         http = self.public_status()
         for url, status in before.get('http', {}).items():
