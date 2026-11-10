@@ -71,12 +71,9 @@ defmodule Mjolnir.MixProject do
       {:typed_struct, "~> 0.3"},
       {:uuid, "~> 1.1"},
       {:websock_adapter, "~> 0.5"},
-      # Held at 0.7.x deliberately (mjolnir-ctv): `~> 0.7` let the CVE sweep
-      # drag in 0.12.0 — five minor versions of a young library, none of it
-      # required, since ex_mcp carries no advisories. Widen this as its own
-      # change with the MCP tests actually exercised, not as a side effect of
-      # a security bump.
-      {:ex_mcp, "~> 0.7.4"}
+      # Security-supported handler/transport API. The HTTP mount explicitly
+      # keeps the legacy protocol era while existing clients migrate.
+      {:ex_mcp, "~> 1.8.1"}
       # Blake3 is `mjolnir-b3` (native/mjolnir_blob_door), not the rustler
       # `:blake3` NIF. Fingerprints stay SHA-256 as minted.
     ]

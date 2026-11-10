@@ -14,11 +14,49 @@ defmodule Mjolnir.MCP.ServerTest do
     :ok
   end
 
-  defp mcp_request(body) when is_map(body) do
-    conn(:post, "/mcp", Jason.encode!(body))
-    |> Map.put(:remote_ip, {127, 0, 0, 1})
-    |> put_req_header("content-type", "application/json")
-    |> Router.call(@opts)
+  defp post_mcp(body, session \\ nil) do
+    conn =
+      conn(:post, "/mcp", Jason.encode!(body))
+      |> Map.put(:remote_ip, {127, 0, 0, 1})
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("accept", "application/json, text/event-stream")
+      |> put_req_header("mcp-protocol-version", "2025-06-18")
+
+    conn = if session, do: put_req_header(conn, "mcp-session-id", session), else: conn
+    Router.call(conn, @opts)
+  end
+
+  defp mcp_request(%{"method" => "initialize"} = body) do
+    response = post_mcp(body)
+
+    Enum.each(get_resp_header(response, "mcp-session-id"), fn session ->
+      on_exit(fn -> ExMCP.SessionManager.terminate_session(session) end)
+    end)
+
+    response
+  end
+
+  defp mcp_request(body) do
+    initialized =
+      mcp_request(%{
+        "jsonrpc" => "2.0",
+        "id" => "setup",
+        "method" => "initialize",
+        "params" => %{
+          "protocolVersion" => "2025-06-18",
+          "capabilities" => %{},
+          "clientInfo" => %{"name" => "test", "version" => "0.1"}
+        }
+      })
+
+    assert initialized.status == 200
+    [session] = get_resp_header(initialized, "mcp-session-id")
+
+    notification =
+      post_mcp(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, session)
+
+    assert notification.status in [200, 202, 204]
+    post_mcp(body, session)
   end
 
   describe "MCP initialize" do
@@ -80,40 +118,80 @@ defmodule Mjolnir.MCP.ServerTest do
   end
 
   describe "MCP tools/call" do
-    test "list_vms returns empty list in test env" do
-      # Call handler directly — ExMCP's Plug.Test stateless path has a bug
-      # where handle_tools_call/4 doesn't handle the 3-tuple returns that
-      # the @callback spec mandates. Real HTTP requests work fine.
-      result = Mjolnir.MCP.Server.handle_tool_call("list_vms", %{}, %{})
+    test "list_vms is served through the HTTP transport" do
+      response =
+        mcp_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "tools/call",
+          "params" => %{"name" => "list_vms", "arguments" => %{}}
+        })
 
-      assert {:ok, %{content: content}, _state} = result
-      assert [%{"type" => "text", "text" => text}] = content
-      inner = Jason.decode!(text)
-      assert inner["vms"] == []
+      assert response.status == 200
+
+      [%{"type" => "text", "text" => text}] =
+        Jason.decode!(response.resp_body)["result"]["content"]
+
+      assert is_list(Jason.decode!(text)["vms"])
     end
 
-    test "get_vm returns error for non-existent VM" do
-      # Call handler directly — ExMCP's Plug.Test stateless path has a bug
-      # where handle_tools_call/4 doesn't handle the 3-tuple returns that
-      # the @callback spec mandates. Real HTTP requests work fine.
-      result = Mjolnir.MCP.Server.handle_tool_call("get_vm", %{"vm_id" => "nonexistent"}, %{})
+    test "get_vm reports a missing VM as a tool error" do
+      response =
+        mcp_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "tools/call",
+          "params" => %{"name" => "get_vm", "arguments" => %{"vm_id" => "nonexistent"}}
+        })
 
-      assert {:ok, %{content: content, is_error?: true}, _state} = result
-      assert [%{"type" => "text", "text" => text}] = content
-      assert text =~ "not found"
+      assert response.status == 200
+      result = Jason.decode!(response.resp_body)["result"]
+      assert result["isError"] == true
+      [%{"text" => text}] = result["content"]
+      assert String.downcase(text) =~ "not found"
     end
 
-    test "list_dormant returns dormant list" do
-      # Call handler directly — ExMCP's Plug.Test stateless path has a bug
-      # where handle_tools_call/4 doesn't handle the 3-tuple returns that
-      # the @callback spec mandates. Real HTTP requests work fine.
-      result = Mjolnir.MCP.Server.handle_tool_call("list_dormant", %{}, %{})
+    test "list_dormant is served through the HTTP transport" do
+      response =
+        mcp_request(%{
+          "jsonrpc" => "2.0",
+          "id" => 5,
+          "method" => "tools/call",
+          "params" => %{"name" => "list_dormant", "arguments" => %{}}
+        })
 
-      assert {:ok, %{content: content}, _state} = result
-      assert [%{"type" => "text", "text" => text}] = content
-      inner = Jason.decode!(text)
-      assert is_list(inner["dormant"])
+      assert response.status == 200
+      [%{"text" => text}] = Jason.decode!(response.resp_body)["result"]["content"]
+      assert is_list(Jason.decode!(text)["dormant"])
     end
+  end
+
+  test "resources retain their URIs and JSON content through the transport" do
+    response =
+      mcp_request(%{"jsonrpc" => "2.0", "id" => 8, "method" => "resources/list", "params" => %{}})
+
+    assert response.status == 200
+    resources = Jason.decode!(response.resp_body)["result"]["resources"]
+
+    assert Enum.sort(Enum.map(resources, & &1["uri"])) == [
+             "mjolnir://dormant",
+             "mjolnir://snapshots",
+             "mjolnir://vms"
+           ]
+
+    response =
+      mcp_request(%{
+        "jsonrpc" => "2.0",
+        "id" => 9,
+        "method" => "resources/read",
+        "params" => %{"uri" => "mjolnir://vms"}
+      })
+
+    assert response.status == 200
+    [content] = Jason.decode!(response.resp_body)["result"]["contents"]
+    assert content["uri"] == "mjolnir://vms"
+    assert content["mimeType"] == "application/json"
+    assert is_list(Jason.decode!(content["text"])["vms"])
   end
 
   describe "MCP auth enforcement" do

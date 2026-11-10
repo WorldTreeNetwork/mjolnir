@@ -7,15 +7,20 @@ defmodule Mjolnir.MCP.Server do
   MCP protocol.
   """
 
-  use ExMCP.Server
+  use ExMCP.Server.Handler
+  use ExMCP.Server.DSL, name: "mjolnir", version: "0.1.0"
+
+  alias Mjolnir.MCP.Authorization
+
+  @impl GenServer
+  def init(context) when is_map(context), do: {:ok, context}
+  def init(_), do: {:ok, %{}}
 
   # ── Tools ──────────────────────────────────────────────
 
-  deftool "spawn_vm" do
-    meta do
-      name("Spawn VM")
-      description("Create and boot a new microVM. Returns the VM's UUID and status.")
-    end
+  tool "spawn_vm" do
+    title("Spawn VM")
+    description("Create and boot a new microVM. Returns the VM's UUID and status.")
 
     input_schema(%{
       type: "object",
@@ -44,38 +49,38 @@ defmodule Mjolnir.MCP.Server do
         enable_iroh: %{type: "boolean", description: "Enable Iroh P2P networking."}
       }
     })
+
+    run(fn args, state -> dispatch_tool("spawn_vm", args, state) end)
   end
 
-  deftool "list_vms" do
-    meta do
-      name("List VMs")
-      description("List all running microVMs with state and connectivity info.")
-    end
+  tool "list_vms" do
+    title("List VMs")
+    description("List all running microVMs with state and connectivity info.")
 
     input_schema(%{type: "object", properties: %{}})
+
+    run(fn args, state -> dispatch_tool("list_vms", args, state) end)
   end
 
-  deftool "get_vm" do
-    meta do
-      name("Get VM")
-      description("Get detailed info about a specific VM.")
-    end
+  tool "get_vm" do
+    title("Get VM")
+    description("Get detailed info about a specific VM.")
 
     input_schema(%{
       type: "object",
       properties: %{vm_id: %{type: "string", description: "UUID of the target VM."}},
       required: ["vm_id"]
     })
+
+    run(fn args, state -> dispatch_tool("get_vm", args, state) end)
   end
 
-  deftool "exec" do
-    meta do
-      name("Execute Command")
+  tool "exec" do
+    title("Execute Command")
 
-      description(
-        "Execute a shell command inside a running VM. Returns stdout, stderr, and exit code."
-      )
-    end
+    description(
+      "Execute a shell command inside a running VM. Returns stdout, stderr, and exit code."
+    )
 
     input_schema(%{
       type: "object",
@@ -91,26 +96,26 @@ defmodule Mjolnir.MCP.Server do
       },
       required: ["vm_id", "command"]
     })
+
+    run(fn args, state -> dispatch_tool("exec", args, state) end)
   end
 
-  deftool "stop_vm" do
-    meta do
-      name("Stop VM")
-      description("Stop and destroy a running VM. Irreversible.")
-    end
+  tool "stop_vm" do
+    title("Stop VM")
+    description("Stop and destroy a running VM. Irreversible.")
 
     input_schema(%{
       type: "object",
       properties: %{vm_id: %{type: "string", description: "UUID of the VM to stop."}},
       required: ["vm_id"]
     })
+
+    run(fn args, state -> dispatch_tool("stop_vm", args, state) end)
   end
 
-  deftool "create_snapshot" do
-    meta do
-      name("Create Snapshot")
-      description("Snapshot a running VM's filesystem via BTRFS CoW.")
-    end
+  tool "create_snapshot" do
+    title("Create Snapshot")
+    description("Snapshot a running VM's filesystem via BTRFS CoW.")
 
     input_schema(%{
       type: "object",
@@ -120,48 +125,48 @@ defmodule Mjolnir.MCP.Server do
       },
       required: ["vm_id", "name"]
     })
+
+    run(fn args, state -> dispatch_tool("create_snapshot", args, state) end)
   end
 
-  deftool "list_snapshots" do
-    meta do
-      name("List Snapshots")
-      description("List all available snapshots.")
-    end
+  tool "list_snapshots" do
+    title("List Snapshots")
+    description("List all available snapshots.")
 
     input_schema(%{type: "object", properties: %{}})
+
+    run(fn args, state -> dispatch_tool("list_snapshots", args, state) end)
   end
 
-  deftool "get_snapshot" do
-    meta do
-      name("Get Snapshot")
-      description("Get metadata for a specific snapshot.")
-    end
+  tool "get_snapshot" do
+    title("Get Snapshot")
+    description("Get metadata for a specific snapshot.")
 
     input_schema(%{
       type: "object",
       properties: %{name: %{type: "string", description: "Snapshot name."}},
       required: ["name"]
     })
+
+    run(fn args, state -> dispatch_tool("get_snapshot", args, state) end)
   end
 
-  deftool "delete_snapshot" do
-    meta do
-      name("Delete Snapshot")
-      description("Permanently delete a snapshot.")
-    end
+  tool "delete_snapshot" do
+    title("Delete Snapshot")
+    description("Permanently delete a snapshot.")
 
     input_schema(%{
       type: "object",
       properties: %{name: %{type: "string", description: "Snapshot name to delete."}},
       required: ["name"]
     })
+
+    run(fn args, state -> dispatch_tool("delete_snapshot", args, state) end)
   end
 
-  deftool "deliver_message" do
-    meta do
-      name("Deliver Message")
-      description("Send a message to a VM for inter-VM communication or coroutine wake-up.")
-    end
+  tool "deliver_message" do
+    title("Deliver Message")
+    description("Send a message to a VM for inter-VM communication or coroutine wake-up.")
 
     input_schema(%{
       type: "object",
@@ -176,35 +181,35 @@ defmodule Mjolnir.MCP.Server do
       },
       required: ["vm_id"]
     })
+
+    run(fn args, state -> dispatch_tool("deliver_message", args, state) end)
   end
 
-  deftool "get_connection_ticket" do
-    meta do
-      name("Get Connection Ticket")
-      description("Get an Iroh connection ticket for P2P shell access.")
-    end
+  tool "get_connection_ticket" do
+    title("Get Connection Ticket")
+    description("Get an Iroh connection ticket for P2P shell access.")
 
     input_schema(%{
       type: "object",
       properties: %{vm_id: %{type: "string", description: "UUID of the VM."}},
       required: ["vm_id"]
     })
+
+    run(fn args, state -> dispatch_tool("get_connection_ticket", args, state) end)
   end
 
-  deftool "list_dormant" do
-    meta do
-      name("List Dormant VMs")
-      description("List VMs snapshotted and stopped, awaiting messages to restore.")
-    end
+  tool "list_dormant" do
+    title("List Dormant VMs")
+    description("List VMs snapshotted and stopped, awaiting messages to restore.")
 
     input_schema(%{type: "object", properties: %{}})
+
+    run(fn args, state -> dispatch_tool("list_dormant", args, state) end)
   end
 
-  deftool "await_pty" do
-    meta do
-      name("Await PTY")
-      description("Wait for VM PTY/shell readiness. Returns connection ticket.")
-    end
+  tool "await_pty" do
+    title("Await PTY")
+    description("Wait for VM PTY/shell readiness. Returns connection ticket.")
 
     input_schema(%{
       type: "object",
@@ -214,54 +219,59 @@ defmodule Mjolnir.MCP.Server do
       },
       required: ["vm_id"]
     })
+
+    run(fn args, state -> dispatch_tool("await_pty", args, state) end)
   end
 
   # ── Resources ──────────────────────────────────────────
 
-  defresource "mjolnir://vms" do
-    meta do
-      name("VM List")
-      description("All running VMs with status summary")
-    end
+  resource "mjolnir://vms" do
+    name("VM List")
+    description("All running VMs with status summary")
 
     mime_type("application/json")
+
+    read(fn %{uri: uri}, state -> read_resource(uri, state) end)
   end
 
-  defresource "mjolnir://snapshots" do
-    meta do
-      name("Snapshot List")
-      description("All available snapshots with metadata")
-    end
+  resource "mjolnir://snapshots" do
+    name("Snapshot List")
+    description("All available snapshots with metadata")
 
     mime_type("application/json")
+
+    read(fn %{uri: uri}, state -> read_resource(uri, state) end)
   end
 
-  defresource "mjolnir://dormant" do
-    meta do
-      name("Dormant VMs")
-      description("Dormant VMs with pending message counts")
-    end
+  resource "mjolnir://dormant" do
+    name("Dormant VMs")
+    description("Dormant VMs with pending message counts")
 
     mime_type("application/json")
+
+    read(fn %{uri: uri}, state -> read_resource(uri, state) end)
   end
 
   # ── Tool Handlers ──────────────────────────────────────
 
-  @impl true
   def handle_tool_call("spawn_vm", args, state) do
-    opts = args_to_spawn_opts(args)
+    opts = args_to_spawn_opts(args) |> Map.put(:owner_id, state[:user_id])
 
     case Mjolnir.VM.spawn(opts) do
       {:ok, vm} ->
         {:ok, %{content: [text(Jason.encode!(Mjolnir.API.Views.render_vm(vm)))]}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Spawn failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Spawn failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
   def handle_tool_call("list_vms", _args, state) do
-    vms = Mjolnir.VM.list() |> Enum.map(&Mjolnir.API.Views.render_vm_summary/1)
+    vms =
+      Mjolnir.VM.list()
+      |> Enum.filter(&Authorization.visible?(state, &1))
+      |> Enum.map(&Mjolnir.API.Views.render_vm_summary/1)
+
     {:ok, %{content: [text(Jason.encode!(%{vms: vms}))]}, state}
   end
 
@@ -271,12 +281,12 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(Jason.encode!(Mjolnir.API.Views.render_vm(vm)))]}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
 
       # Registered but wedged (mjolnir-8ie): distinguish from "gone" so callers
       # don't treat an unreachable VM as destroyed.
       {:error, :unreachable} ->
-        {:ok, %{content: [text("VM unreachable: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM unreachable: #{id}")], isError: true}, state}
     end
   end
 
@@ -291,10 +301,10 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text("Exit code #{code}\n#{stderr}")]}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Exec failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Exec failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -304,10 +314,10 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(~s({"ok": true}))]}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Stop failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Stop failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -317,23 +327,24 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(Jason.encode!(metadata))]}, state}
 
       {:error, {:snapshot_exists, _}} ->
-        {:ok, %{content: [text("Snapshot '#{name}' already exists")], is_error?: true}, state}
+        {:ok, %{content: [text("Snapshot '#{name}' already exists")], isError: true}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Snapshot failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Snapshot failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
   def handle_tool_call("list_snapshots", _args, state) do
     case Mjolnir.BTRFS.list_snapshots() do
       {:ok, snapshots} ->
+        snapshots = Enum.filter(snapshots, &Authorization.visible?(state, &1))
         {:ok, %{content: [text(Jason.encode!(%{snapshots: snapshots}))]}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -343,10 +354,10 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(Jason.encode!(metadata))]}, state}
 
       {:error, {:snapshot_not_found, _}} ->
-        {:ok, %{content: [text("Snapshot not found: #{name}")], is_error?: true}, state}
+        {:ok, %{content: [text("Snapshot not found: #{name}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -356,10 +367,10 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(~s({"ok": true}))]}, state}
 
       {:error, {:snapshot_not_found, _}} ->
-        {:ok, %{content: [text("Snapshot not found: #{name}")], is_error?: true}, state}
+        {:ok, %{content: [text("Snapshot not found: #{name}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -374,10 +385,10 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(body)]}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
 
       {:error, reason} ->
-        {:ok, %{content: [text("Failed: #{inspect(reason)}")], is_error?: true}, state}
+        {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
     end
   end
 
@@ -388,17 +399,18 @@ defmodule Mjolnir.MCP.Server do
 
       {:error, :not_ready} ->
         {:ok,
-         %{content: [text("VM not ready — Iroh endpoint still initializing")], is_error?: true},
+         %{content: [text("VM not ready — Iroh endpoint still initializing")], isError: true},
          state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
     end
   end
 
   def handle_tool_call("list_dormant", _args, state) do
     dormant =
       Mjolnir.DormantRegistry.list()
+      |> Enum.filter(&Authorization.visible?(state, &1))
       |> Enum.map(fn entry ->
         %{
           vm_id: entry.vm_id,
@@ -420,31 +432,39 @@ defmodule Mjolnir.MCP.Server do
         {:ok, %{content: [text(Jason.encode!(%{ticket: ticket}))]}, state}
 
       {:error, :timeout} ->
-        {:ok, %{content: [text("Timed out waiting for PTY readiness")], is_error?: true}, state}
+        {:ok, %{content: [text("Timed out waiting for PTY readiness")], isError: true}, state}
 
       {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], is_error?: true}, state}
+        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
     end
   end
 
   # ── Resource Handlers ──────────────────────────────────
 
-  @impl true
   def handle_resource_read("mjolnir://vms", _uri, state) do
-    vms = Mjolnir.VM.list() |> Enum.map(&Mjolnir.API.Views.render_vm_summary/1)
+    vms =
+      Mjolnir.VM.list()
+      |> Enum.filter(&Authorization.visible?(state, &1))
+      |> Enum.map(&Mjolnir.API.Views.render_vm_summary/1)
+
     {:ok, [json(%{vms: vms})], state}
   end
 
   def handle_resource_read("mjolnir://snapshots", _uri, state) do
     case Mjolnir.BTRFS.list_snapshots() do
-      {:ok, snapshots} -> {:ok, [json(%{snapshots: snapshots})], state}
-      {:error, reason} -> {:error, inspect(reason), state}
+      {:ok, snapshots} ->
+        {:ok, [json(%{snapshots: Enum.filter(snapshots, &Authorization.visible?(state, &1))})],
+         state}
+
+      {:error, reason} ->
+        {:error, inspect(reason), state}
     end
   end
 
   def handle_resource_read("mjolnir://dormant", _uri, state) do
     dormant =
       Mjolnir.DormantRegistry.list()
+      |> Enum.filter(&Authorization.visible?(state, &1))
       |> Enum.map(fn e ->
         %{
           vm_id: e.vm_id,
@@ -455,6 +475,31 @@ defmodule Mjolnir.MCP.Server do
 
     {:ok, [json(%{dormant: dormant})], state}
   end
+
+  defp dispatch_tool(name, args, state) do
+    case Authorization.authorize_tool(state, name, args) do
+      :ok -> handle_tool_call(name, args, state)
+      {:error, reason} -> {:ok, %{content: [text(reason)], isError: true}, state}
+    end
+  end
+
+  defp read_resource(uri, state) do
+    with :ok <- Authorization.authorize_resource(state, uri),
+         {:ok, contents, next_state} <- handle_resource_read(uri, uri, state) do
+      contents =
+        Enum.map(contents, fn item ->
+          %{uri: uri, mimeType: "application/json", text: item["text"]}
+        end)
+
+      {:ok, contents, next_state}
+    else
+      {:error, reason} -> {:error, reason, state}
+      {:error, reason, next_state} -> {:error, reason, next_state}
+    end
+  end
+
+  defp text(value), do: %{"type" => "text", "text" => value}
+  defp json(value), do: text(Jason.encode!(value))
 
   # ── Helpers ────────────────────────────────────────────
 
