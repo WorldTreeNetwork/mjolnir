@@ -1446,12 +1446,7 @@ defmodule Mjolnir.VM do
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
     vsock_path = state.hypervisor.vsock_path(socket_dir, state.id)
 
-    new_state = %{
-      state
-      | state: :running,
-        socket_path: socket_path,
-        vsock_path: vsock_path
-    }
+    new_state = attach_control_state(%{state | socket_path: socket_path, vsock_path: vsock_path})
 
     send(self(), :lan_files_publish)
 
@@ -3898,6 +3893,56 @@ defmodule Mjolnir.VM do
   # be exercised directly against a hand-built %Mjolnir.VM{} struct in tests,
   # the same way Mjolnir.CILease.stamp_runtime/3 is tested directly rather
   # than through a full VM boot.
+  @doc false
+  def attach_control_state(state, opts \\ []) do
+    network = Keyword.get(opts, :network, &Mjolnir.Network.recover_tap/1)
+
+    connect =
+      Keyword.get(opts, :connect, fn id, path -> do_rebuild_vsock_connection(id, nil, path) end)
+
+    iroh = Keyword.get(opts, :iroh, &query_iroh_status(&1, 1_000))
+
+    root =
+      Path.join([
+        Application.fetch_env!(:mjolnir, :btrfs_root),
+        Application.get_env(:mjolnir, :vm_storage_subdir, "@vms"),
+        state.id
+      ])
+
+    net =
+      case network.(state.id) do
+        {:ok, config} -> config
+        _ -> nil
+      end
+
+    identity = if state.enable_iroh, do: iroh.(state.vsock_path), else: {:ok, %{ready: false}}
+    attached = %{state | state: :running, net_config: net, rootfs_path: root}
+
+    attached =
+      case identity do
+        {:ok, %{ready: true, node_id: node, ticket: ticket}} ->
+          %{
+            attached
+            | iroh_node_id: node,
+              iroh_json: ticket,
+              ticket: Mjolnir.Ticket.from_hex(node),
+              pty_ready: true
+          }
+
+        _ ->
+          attached
+      end
+
+    case connect.(state.id, state.vsock_path) do
+      {:ok, connection} ->
+        put_vsock_conn(attached, connection)
+
+      {:error, reason} ->
+        Logger.warning("Live VM #{state.id} control connection unavailable: #{inspect(reason)}")
+        attached
+    end
+  end
+
   @doc false
   @spec build_running_record(t()) :: Mjolnir.StateStore.Record.t()
   def build_running_record(state) do

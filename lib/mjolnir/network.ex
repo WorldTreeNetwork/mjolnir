@@ -79,6 +79,41 @@ defmodule Mjolnir.Network do
     end
   end
 
+  @doc "Read the existing TAP route during live adoption; never changes networking."
+  def recover_tap(vm_id) do
+    tap = tap_name(vm_id)
+
+    case System.cmd("ip", ["-j", "-4", "route", "show", "dev", tap], stderr_to_stdout: true) do
+      {json, 0} ->
+        with {:ok, routes} <- Jason.decode(json), do: recover_tap(vm_id, routes)
+
+      _ ->
+        {:error, :tap_route_unavailable}
+    end
+  rescue
+    _ -> {:error, :tap_route_unavailable}
+  end
+
+  @doc false
+  def recover_tap(vm_id, routes) when is_list(routes) do
+    addresses =
+      for %{"dst" => dst} <- routes,
+          ip = String.replace_suffix(dst, "/32", ""),
+          {:ok, {10, second, _, _}} = parsed <- [:inet.parse_ipv4_address(String.to_charlist(ip))],
+          second >= 192,
+          second <= 255,
+          not reserved_host_ip?(ip),
+          do: {ip, parsed}
+
+    case Enum.uniq(addresses) do
+      [{ip, _}] ->
+        {:ok, %{tap_name: tap_name(vm_id), guest_ip: ip, guest_mac: generate_mac(vm_id)}}
+
+      _ ->
+        {:error, :ambiguous_or_missing_tap_route}
+    end
+  end
+
   @doc """
   Idempotent host-side TAP repair.
 
@@ -490,7 +525,8 @@ defmodule Mjolnir.Network do
              is_integer(publish_port) and publish_port in 1..65535 and publish_port != 7222 and
              is_integer(http_port) and http_port in 1..65535 and http_port != 7222 and
              is_binary(interface) and interface != "" and is_binary(tap) and tap != "" do
-      raise ArgumentError, "LAN files requires explicit IPv4 addresses, interfaces and non-door ports"
+      raise ArgumentError,
+            "LAN files requires explicit IPv4 addresses, interfaces and non-door ports"
     end
 
     port = Integer.to_string(publish_port)
@@ -501,12 +537,44 @@ defmodule Mjolnir.Network do
     # Install permission before DNAT; remove DNAT first on teardown.
     [
       {"filter", "FORWARD",
-       ["-i", interface, "-o", tap, "-p", "tcp", "-d", guest, "--dport", target_port,
-        "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "--ctdir", "ORIGINAL"] ++
+       [
+         "-i",
+         interface,
+         "-o",
+         tap,
+         "-p",
+         "tcp",
+         "-d",
+         guest,
+         "--dport",
+         target_port,
+         "-m",
+         "conntrack",
+         "--ctstate",
+         "NEW,ESTABLISHED",
+         "--ctdir",
+         "ORIGINAL"
+       ] ++
          original ++ tag ++ ["-j", "ACCEPT"]},
       {"filter", "FORWARD",
-       ["-i", tap, "-o", interface, "-p", "tcp", "-s", guest, "--sport", target_port,
-        "-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY"] ++
+       [
+         "-i",
+         tap,
+         "-o",
+         interface,
+         "-p",
+         "tcp",
+         "-s",
+         guest,
+         "--sport",
+         target_port,
+         "-m",
+         "conntrack",
+         "--ctstate",
+         "ESTABLISHED",
+         "--ctdir",
+         "REPLY"
+       ] ++
          original ++ tag ++ ["-j", "ACCEPT"]},
       {"nat", "PREROUTING",
        ["-i", interface, "-d", address <> "/32", "-p", "tcp", "--dport", port] ++
