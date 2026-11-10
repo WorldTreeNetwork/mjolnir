@@ -247,4 +247,36 @@ defmodule Mjolnir.MCP.AuthorizationTest do
 
     assert MCPPlug.call(conn, []).status == 403
   end
+
+  test "session rights binding survives token refresh but rejects attenuated reuse" do
+    original = actor("alice", "vms:read vms:spawn")
+
+    assert Authorization.session_principal(original) ==
+             Authorization.session_principal(actor("alice", "openid vms:spawn vms:read"))
+
+    session = initialize(original)
+
+    response =
+      request(
+        actor("alice", "vms:read"),
+        %{"jsonrpc" => "2.0", "id" => 10, "method" => "tools/list", "params" => %{}},
+        session
+      )
+
+    assert response.status in [400, 403, 404]
+    assert is_map(Jason.decode!(response.resp_body)["error"])
+  end
+
+  test "raw bodies have a bounded size and malformed JSON is refused" do
+    for {body, expected} <- [{"{", 400}, {String.duplicate("x", 1_000_001), 413}] do
+      conn =
+        Plug.Test.conn(:post, "/mcp", body)
+        |> put_req_header("content-type", "application/json")
+        |> assign(:principal_kind, :user)
+        |> assign(:user_id, "alice")
+        |> assign(:claims, %{"scope" => "vms:read"})
+
+      assert MCPPlug.call(conn, []).status == expected
+    end
+  end
 end

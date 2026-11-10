@@ -70,5 +70,46 @@ defmodule Mjolnir.MCP.WireTest do
     assert result.status == 200
     [%{"type" => "text", "text" => text}] = result.body["result"]["content"]
     assert is_list(Jason.decode!(text)["vms"])
+    parent = self()
+
+    stream_headers = [
+      {"accept", "text/event-stream"} | Enum.reject(headers, fn {name, _} -> name == "accept" end)
+    ]
+
+    stream_result =
+      Req.get(url,
+        headers: stream_headers,
+        retry: false,
+        receive_timeout: 5_000,
+        into: fn {:data, data}, pair ->
+          send(parent, {:sse_data, elem(pair, 1).status, elem(pair, 1).headers, data})
+          {:halt, pair}
+        end
+      )
+
+    assert match?({:ok, _}, stream_result) or
+             match?({:error, %Req.TransportError{reason: :closed}}, stream_result)
+
+    assert_receive {:sse_data, 200, stream_headers, data}
+
+    assert Enum.any?(
+             stream_headers["content-type"],
+             &String.starts_with?(&1, "text/event-stream")
+           )
+
+    assert byte_size(data) > 0
+    assert {:ok, _} = ExMCP.SessionManager.get_session(session)
+    {:ok, deleted} = Req.delete(url, headers: headers, retry: false)
+    assert deleted.status in [200, 202, 204]
+    assert {:ok, %{status: :terminated}} = ExMCP.SessionManager.get_session(session)
+
+    {:ok, expired} =
+      Req.post(url,
+        json: %{"jsonrpc" => "2.0", "id" => 11, "method" => "tools/list", "params" => %{}},
+        headers: headers,
+        retry: false
+      )
+
+    assert expired.status in [400, 404]
   end
 end

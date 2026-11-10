@@ -13,18 +13,25 @@ defmodule Mjolnir.MCP.Plug do
 
     with {:ok, conn} <- prepare_request(conn),
          true <- Authorization.request_allowed?(context, conn.body_params) do
-      ExMCP.HttpPlug.call(
-        conn,
-        ExMCP.HttpPlug.init(
-          handler: Mjolnir.MCP.Server,
-          handler_opts: context,
-          principal_id: context.user_id,
-          protocol_mode: :legacy_only,
-          legacy_http_sse: true,
-          server_info: %{name: "mjolnir", version: to_string(Application.spec(:mjolnir, :vsn))},
-          cors_enabled: false
+      transport = fn connection ->
+        ExMCP.HttpPlug.call(
+          connection,
+          ExMCP.HttpPlug.init(
+            handler: Mjolnir.MCP.Server,
+            handler_opts: context,
+            handler_call_timeout: 310_000,
+            principal_id: Authorization.session_principal(context),
+            protocol_mode: :legacy_only,
+            legacy_http_sse: true,
+            server_info: %{name: "mjolnir", version: to_string(Application.spec(:mjolnir, :vsn))},
+            cors_enabled: false
+          )
         )
-      )
+      end
+
+      if conn.method == "GET",
+        do: Mjolnir.MCP.StreamOwner.run(conn, transport),
+        else: transport.(conn)
     else
       false -> reject(conn, 403, "insufficient_scope")
       {:error, status} -> reject(conn, status, "invalid_request")

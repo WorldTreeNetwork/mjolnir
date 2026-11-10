@@ -42,6 +42,18 @@ defmodule Mjolnir.MCP.Authorization do
     }
   end
 
+  def session_principal(context) do
+    scopes =
+      @scopes
+      |> Map.values()
+      |> Enum.uniq()
+      |> Enum.filter(&has_scope?(context, &1))
+      |> Enum.sort()
+
+    :crypto.hash(:sha256, Jason.encode!([context.kind, context.user_id, scopes]))
+    |> Base.encode16(case: :lower)
+  end
+
   def control_principal?(%{kind: :operator, user_id: "localhost"}), do: true
 
   def control_principal?(%{kind: :user, user_id: uid}) when is_binary(uid) do
@@ -129,6 +141,8 @@ defmodule Mjolnir.MCP.Authorization do
     end
   end
 
+  defp authorize_vm(_, _, _), do: {:error, "Not found"}
+
   # A stalled VM is not a missing VM. Preserve that distinction for its
   # owner/operator without disclosing another owner's durable record.
   defp unavailable_vm(context, id, action) do
@@ -143,8 +157,6 @@ defmodule Mjolnir.MCP.Authorization do
       _ -> {:error, "Not found"}
     end
   end
-
-  defp authorize_vm(_, _, _), do: {:error, "Not found"}
 
   defp authorize_snapshot(context, name, action) when is_binary(name) do
     with {:ok, _} <- Mjolnir.API.Validation.validate_safe_name(name, "snapshot name"),
