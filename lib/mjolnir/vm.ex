@@ -199,6 +199,7 @@ defmodule Mjolnir.VM do
           optional(:identity) => Mjolnir.Identity.t(),
           optional(:git_signing) => boolean(),
           optional(:restart_policy) => :always | :never,
+          optional(:metadata) => map(),
           optional(:await_boot_timeout) => timeout(),
           optional(:id) => vm_id(),
           optional(:thaw) => String.t()
@@ -235,6 +236,9 @@ defmodule Mjolnir.VM do
     the record is finalized to `:stopped` with the rootfs preserved. Use it for
     any workload where the guest may legitimately end itself and must stay
     ended — see `Mjolnir.Reconcile`'s moduledoc.
+  - `:metadata` - string labels persisted on the StateStore record
+    (`%{"purpose" => "deploy-build"}`). Opaque to the VM. CI reclaim matches
+    `"purpose" => "ci"` only.
 
   ## Examples
 

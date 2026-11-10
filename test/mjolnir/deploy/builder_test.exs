@@ -34,6 +34,7 @@ defmodule Mjolnir.Deploy.BuilderTest do
     prefix = Keyword.get(opts, :prefix, "deploy-")
     fail_on = Keyword.get(opts, :exec_fail_on)
     spawn_result = Keyword.get(opts, :spawn_result, {:ok, %{id: "build-vm-1"}})
+    stop_result = Keyword.get(opts, :stop_result, :ok)
 
     snapshots = Enum.map(existing, fn id -> %{name: prefix <> id} end)
 
@@ -57,7 +58,7 @@ defmodule Mjolnir.Deploy.BuilderTest do
       update_snapshot_metadata: fn _name, meta -> {:ok, meta} end,
       stop: fn vm_id ->
         Agent.update(agent, &[{:stop, vm_id} | &1])
-        :ok
+        stop_result
       end,
       diagnostics: fn vm_id, ctx ->
         Agent.update(agent, &[{:diagnostics, vm_id, ctx} | &1])
@@ -69,6 +70,26 @@ defmodule Mjolnir.Deploy.BuilderTest do
   end
 
   defp events(agent), do: agent |> Agent.get(& &1) |> Enum.reverse()
+
+  # A build VM whose StateStore row survived stop. get/trash/delete are
+  # recorded so the test can see the purge without touching the real store.
+  defp preserved_record_ops(agent, opts) do
+    recording_ops(agent, opts)
+    |> Map.merge(%{
+      get_record: fn vm_id ->
+        Agent.update(agent, &[{:get_record, vm_id} | &1])
+        {:ok, %{uuid: vm_id}}
+      end,
+      trash_subvolume: fn path, trash_opts ->
+        Agent.update(agent, &[{:trash_subvolume, path, trash_opts} | &1])
+        {:ok, path}
+      end,
+      delete_record: fn vm_id ->
+        Agent.update(agent, &[{:delete_record, vm_id} | &1])
+        :ok
+      end
+    })
+  end
 
   setup do
     {:ok, agent} = start_supervised({Agent, fn -> [] end})
@@ -237,6 +258,72 @@ defmodule Mjolnir.Deploy.BuilderTest do
       assert Enum.count(ev, &match?({:snapshot, _, _}, &1)) == 1
       # Teardown always runs — the last event is the stop.
       assert List.last(ev) == {:stop, "build-vm-1"}
+    end
+
+    test "trashes a preserved record when stop can no longer see the VM", %{agent: agent} do
+      ops =
+        preserved_record_ops(agent, existing: [], stop_result: {:error, :not_found})
+
+      assert {:ok, _} = Builder.build(@base, [hd(steps())], ops: ops)
+
+      ev = events(agent)
+      assert {:stop, "build-vm-1"} = Enum.find(ev, &match?({:stop, _}, &1))
+
+      assert {:trash_subvolume, path, []} =
+               Enum.find(ev, &match?({:trash_subvolume, _, _}, &1))
+
+      assert path == Mjolnir.Reconcile.rootfs_path("build-vm-1")
+      assert String.ends_with?(path, "/@vms/build-vm-1")
+
+      stop_at = Enum.find_index(ev, &match?({:stop, _}, &1))
+      trash_at = Enum.find_index(ev, &match?({:trash_subvolume, _, _}, &1))
+      delete_at = Enum.find_index(ev, &match?({:delete_record, _}, &1))
+      assert stop_at < trash_at
+      assert trash_at < delete_at
+      assert {:delete_record, "build-vm-1"} = Enum.at(ev, delete_at)
+    end
+
+    test "trashes a preserved record when stop returns ok after a force-kill", %{agent: agent} do
+      ops = preserved_record_ops(agent, existing: [])
+
+      assert {:ok, _} = Builder.build(@base, [hd(steps())], ops: ops)
+
+      assert {:delete_record, "build-vm-1"} = List.last(events(agent))
+    end
+
+    test "leaves the record when the rootfs cannot be trashed", %{agent: agent} do
+      ops =
+        preserved_record_ops(agent, existing: [])
+        |> Map.put(:trash_subvolume, fn path, opts ->
+          Agent.update(agent, &[{:trash_subvolume, path, opts} | &1])
+          {:error, :busy}
+        end)
+        |> Map.put(:delete_record, fn _vm_id ->
+          flunk("deleted the record while its rootfs was still in place")
+        end)
+
+      assert {:ok, _} = Builder.build(@base, [hd(steps())], ops: ops)
+
+      assert {:trash_subvolume, _, []} =
+               Enum.find(events(agent), &match?({:trash_subvolume, _, _}, &1))
+    end
+
+    test "does not trash when stop already removed the record", %{agent: agent} do
+      ops =
+        recording_ops(agent, existing: [])
+        |> Map.put(:get_record, fn vm_id ->
+          Agent.update(agent, &[{:get_record, vm_id} | &1])
+          :not_found
+        end)
+        |> Map.put(:trash_subvolume, fn _, _ ->
+          flunk("trashed a rootfs whose record was already gone")
+        end)
+        |> Map.put(:delete_record, fn _ ->
+          flunk("deleted a record stop had already removed")
+        end)
+
+      assert {:ok, _} = Builder.build(@base, [hd(steps())], ops: ops)
+      assert {:get_record, "build-vm-1"} = List.last(events(agent))
     end
 
     test "surfaces a spawn failure without running any steps", %{agent: agent} do

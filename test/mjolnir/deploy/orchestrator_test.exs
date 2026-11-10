@@ -175,6 +175,21 @@ defmodule Mjolnir.Deploy.OrchestratorTest do
       {:build, _, _, opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
       assert opts[:spawn_opts][:vcpus] == 5
       assert opts[:spawn_opts][:memory_mb] == 8192
+      assert opts[:spawn_opts][:restart_policy] == :never
+      assert opts[:spawn_opts][:metadata] == %{"purpose" => "deploy-build"}
+    end
+
+    test "service VMs do not inherit the build VM restart policy", %{agent: agent, dir: dir} do
+      ops = recording_ops(agent, [])
+      assert {:ok, _} = Orchestrator.deploy("app", dir, ops: ops, memory_mb: 1024)
+
+      {:build, _, _, build_opts} = Enum.find(events(agent), &match?({:build, _, _, _}, &1))
+      {:run, _, _, _, run_opts} = Enum.find(events(agent), &match?({:run, _, _, _, _}, &1))
+
+      assert build_opts[:spawn_opts][:restart_policy] == :never
+      assert build_opts[:spawn_opts][:metadata]["purpose"] == "deploy-build"
+      refute Map.has_key?(run_opts[:spawn_opts], :restart_policy)
+      refute Map.has_key?(run_opts[:spawn_opts], :metadata)
     end
 
     test "clamps build sizing, reports it, and leaves service memory alone", %{

@@ -61,7 +61,11 @@ defmodule Mjolnir.Deploy.Builder do
           exec: (String.t(), String.t(), keyword() -> {:ok, String.t()} | {:error, term()}),
           snapshot: (String.t(), String.t(), keyword() -> {:ok, map()} | {:error, term()}),
           update_snapshot_metadata: (String.t(), map() -> {:ok, map()} | {:error, term()}),
-          stop: (String.t() -> :ok | {:error, term()})
+          stop: (String.t() -> :ok | {:error, term()}),
+          get_record: (String.t() -> {:ok, map()} | :not_found | term()),
+          trash_subvolume: (String.t(), keyword() -> :ok | {:ok, String.t()} | {:error, term()}),
+          delete_record: (String.t() -> :ok | {:error, term()}),
+          await_stopped: (String.t() -> :ok)
         }
 
   @typedoc "A successful build outcome."
@@ -218,6 +222,15 @@ defmodule Mjolnir.Deploy.Builder do
       %{diagnostics_dir: nil, highlights: []}
   end
 
+  # VM.stop deletes the row only when the GenServer is still :running and the
+  # stop is :normal. Three leak paths leave the row (and the @vms subvolume):
+  # the hypervisor already exited, so stop is :not_found; a wedged :infinity
+  # exec makes stop time out, force-kill, and return :ok while terminate
+  # preserves the rootfs; the BEAM dies before this `after` runs and Reconcile
+  # later sees a :running row. The build has already promoted its layers to
+  # deploy-* snapshots, so this subvolume is not a desk. Trash it and delete
+  # the row. :never on the spawn is what stops a row this purge misses from
+  # being resumed; it does not delete the disk.
   defp discard_vm(ops, vm_id) do
     case ops.stop.(vm_id) do
       :ok ->
@@ -226,9 +239,117 @@ defmodule Mjolnir.Deploy.Builder do
       {:error, reason} ->
         # Teardown failure must not mask the build outcome; log and move on.
         Logger.warning("Deploy.Builder: failed to discard build VM #{vm_id}: #{inspect(reason)}")
+    end
+
+    _ = await_stopped(ops, vm_id)
+    _ = purge_preserved_record(ops, vm_id)
+    :ok
+  end
+
+  defp await_stopped(ops, vm_id) do
+    ops.await_stopped.(vm_id)
+  rescue
+    e ->
+      Logger.warning(
+        "Deploy.Builder: wait for build VM #{vm_id} to exit raised: #{Exception.message(e)}"
+      )
+
+      :ok
+  end
+
+  # Bound the wait so a GenServer that never deregisters cannot pin the deploy.
+  # Same budget as VM.stop. Already-gone is the common case and returns at once.
+  defp await_vm_stopped(vm_id) do
+    timeout = Application.get_env(:mjolnir, :vm_stop_timeout_ms, 10_000)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    poll_until_stopped(vm_id, deadline)
+  end
+
+  defp poll_until_stopped(vm_id, deadline) do
+    case Mjolnir.VM.status(vm_id) do
+      {:error, :not_found} ->
+        :ok
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          Logger.warning("Deploy.Builder: build VM #{vm_id} still registered after stop")
+          :ok
+        else
+          Process.sleep(50)
+          poll_until_stopped(vm_id, deadline)
+        end
+    end
+  end
+
+  defp purge_preserved_record(ops, vm_id) do
+    case ops.get_record.(vm_id) do
+      {:ok, record} ->
+        trash_preserved_rootfs(ops, vm_id, record)
+
+      :not_found ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "Deploy.Builder: could not read record for build VM #{vm_id}: #{inspect(other)}"
+        )
+
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning("Deploy.Builder: purge of build VM #{vm_id} raised: #{Exception.message(e)}")
+
+      :ok
+  end
+
+  defp trash_preserved_rootfs(ops, vm_id, record) do
+    case preserved_rootfs(record) do
+      {:ok, path} ->
+        case ops.trash_subvolume.(path, []) do
+          :ok ->
+            delete_preserved_record(ops, vm_id)
+
+          {:ok, _dest} ->
+            delete_preserved_record(ops, vm_id)
+
+          other ->
+            # Leave the row. Deleting it would orphan a subvolume nothing lists.
+            Logger.warning(
+              "Deploy.Builder: build VM #{vm_id} rootfs stayed at #{path}: #{inspect(other)}"
+            )
+
+            :ok
+        end
+
+      :error ->
+        Logger.warning("Deploy.Builder: build VM #{vm_id} record has no uuid; row kept")
         :ok
     end
   end
+
+  defp delete_preserved_record(ops, vm_id) do
+    case ops.delete_record.(vm_id) do
+      :ok ->
+        :ok
+
+      other ->
+        Logger.warning(
+          "Deploy.Builder: failed to delete preserved record for build VM #{vm_id}: #{inspect(other)}"
+        )
+
+        :ok
+    end
+  end
+
+  # No resume sidecar. deploy-* snapshots already hold the layers. A sidecar
+  # copied from the :running record would let `mj trash restore` hand the
+  # builder back to Reconcile.
+  defp preserved_rootfs(%{uuid: uuid}) when is_binary(uuid) do
+    {:ok, Mjolnir.Reconcile.rootfs_path(uuid)}
+  end
+
+  defp preserved_rootfs(_), do: :error
 
   # --- planning helpers ------------------------------------------------------
 
@@ -312,6 +433,10 @@ defmodule Mjolnir.Deploy.Builder do
       snapshot: &Mjolnir.VM.snapshot/3,
       update_snapshot_metadata: &Mjolnir.BTRFS.update_snapshot_metadata/2,
       stop: &Mjolnir.VM.stop/1,
+      get_record: &Mjolnir.StateStore.get/1,
+      trash_subvolume: &Mjolnir.BTRFS.trash_subvolume/2,
+      delete_record: &Mjolnir.StateStore.delete/1,
+      await_stopped: &await_vm_stopped/1,
       diagnostics: &Mjolnir.Deploy.Diagnostics.capture/2
     }
   end

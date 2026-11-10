@@ -433,6 +433,11 @@ defmodule Mjolnir.Deploy.Orchestrator do
 
   # --- build / run option assembly -------------------------------------------
 
+  # restart_policy :never makes Reconcile finalize a stranded build VM instead
+  # of resuming it. Finalize keeps the rootfs (that is the Buzz-agent desk),
+  # so Builder.discard_vm still trashes @vms/<id> and deletes the row.
+  # metadata purpose "deploy-build" labels the row. CI reaping matches only
+  # purpose "ci", and this tag must stay a different string.
   defp build_opts(base_image, src_dir, deployer, build_size) do
     [
       base_image: base_image,
@@ -440,7 +445,9 @@ defmodule Mjolnir.Deploy.Orchestrator do
         extra_mounts: [%{tag: "src", shared_dir: src_dir, opts: []}],
         owner_id: deployer,
         vcpus: build_size.vcpus,
-        memory_mb: build_size.memory_mb
+        memory_mb: build_size.memory_mb,
+        restart_policy: :never,
+        metadata: %{"purpose" => "deploy-build"}
       }
     ]
   end
