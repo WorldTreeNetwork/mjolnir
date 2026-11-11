@@ -1,0 +1,127 @@
+2026-11-11T05:16:24Z spike aie-occupancy-lock start host=Framework5070 kernel=7.2.14-arch1-1
+2026-11-11T05:16:24Z user=dorje euid=1000 XDG_RUNTIME_DIR=/run/user/1000
+2026-11-11T05:16:24Z ironlab=/home/dorje/work/AI/parakeet-aie/target/debug/ironlab
+2026-11-11T05:16:24Z sidecar=/home/dorje/work/WorldTree/mjolnir/docs/spikes/aie-occupancy-lock/sidecar.py
+occupancy_dir=/run/user/1000/ironlab
+lock=/run/user/1000/ironlab/occupancy.lock
+state=/run/user/1000/ironlab/occupancy.json
+live_state=null
+2026-11-11T05:16:24Z quoted_lock_path=/run/user/1000/ironlab/occupancy.lock
+ironlab 0.1.0
+package manager: pacman
+  [PASS] PCI c3:00.1  NPU6 / Krackan Point (0x17f0 rev 0x20) iron_device=npu2
+  [PASS] device node  /dev/accel/accel0
+  [PASS] firmware  /lib/firmware/amdnpu (1502_00, 17f0_10, 17f0_11)
+  [PASS] amdxdna  module loaded
+  [PASS] memlock  RLIMIT_MEMLOCK unlimited
+  [PASS] XRT  Version              : 2.21.75
+  [PASS] toolchain pins  mlir_aie_git = "https://github.com/Xilinx/mlir-aie"; mlir_aie_rev = "b2fc5aa5eda35877ddbcce110708dc138410d642"; xdna_driver_git = "https://github.com/amd/xdna-driver"; xdna_driver_rev = "beb9e450fe123ecdf395453971576179cedcf1dd"; xrt_git = "https://github.com/Xilinx/XRT"; xrt_rev = "82a29bd90ff9233653532ca2243c28c7764b2680"; xrt_version = "2.21.75"; peano_version = "21.0.0.2026040201+986b3623"; peano_wheel = "https://github.com/Xilinx/llvm-aie/releases/download/nightly/llvm_aie-21.0.0.2026040201+986b3623-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"; firmware_url = "https://gitlab.com/kernel-firmware/drm-firmware/-/raw/amd-ipu-staging/amdnpu/17f0_10/1.7_npu.sbin.1.1.2.64"; firmware_install = "/lib/firmware/amdnpu/17f0_10/npu.dev.sbin"
+         hint: see toolchain-pins.toml; just fetch-sources checks these revs out
+npu: NPU6 / Krackan Point at c3:00.1 (supported)
+occupancy: idle
+2026-11-11T05:16:24Z === TEST 1a ironlab load holds, sidecar try-lock refused ===
+2026-11-11T05:16:24Z ironlab load pid=540966 xclbin=/home/dorje/work/AI/parakeet-aie/third_party/xdna-driver/src/shim_ve2/Runner/latency/validate.xclbin
+claimed NPU (pid 540966) — loading /home/dorje/work/AI/parakeet-aie/third_party/xdna-driver/src/shim_ve2/Runner/latency/validate.xclbin
+npu: NPU6 / Krackan Point at c3:00.1 (supported)
+occupancy: pid 540966 bundle Some("/home/dorje/work/AI/parakeet-aie/third_party/xdna-driver/src/shim_ve2/Runner/latency/validate.xclbin") for 0s exe Some("/home/dorje/work/AI/parakeet-aie/target/debug/ironlab")
+2026-11-11T05:16:24Z occupancy.json={
+  "pid": 540966,
+  "bundle": "/home/dorje/work/AI/parakeet-aie/third_party/xdna-driver/src/shim_ve2/Runner/latency/validate.xclbin",
+  "started_unix": 1794374184,
+  "exe": "/home/dorje/work/AI/parakeet-aie/target/debug/ironlab"
+}
+XRT build version: 2.21.75
+Build hash: 4eb1f4392a012b4e6eca759762389c612537f7c7
+Build date: 2026-09-04 21:21:04
+Git branch: makepkg
+PID: 540966
+UID: 1000
+[Wed Nov 11 05:16:24 2026 GMT]
+HOST: Framework5070
+EXE: /home/dorje/work/AI/parakeet-aie/target/debug/ironlab
+[XRT] ERROR: load_axlf: Operation not supported
+xclbin bitstream load: xrtDeviceLoadXclbinFile failed rc=-1
+on XDNA this is expected (load_axlf ENOTSUP). occupancy is held.
+holding occupancy. Ctrl-C to unload.
+2026-11-11T05:16:24Z probe[ironlab-holds-sidecar-try] rc=1 out=TRY occupied NPU is occupied by pid 540966 (bundle '/home/dorje/work/AI/parakeet-aie/third_party/xdna-driver/src/shim_ve2/Runner/latency/validate.xclbin', started_unix=1794374184)
+lock=/run/user/1000/ironlab/occupancy.lock
+2026-11-11T05:16:24Z PASS ironlab-holds-sidecar-try: second process refused
+released
+2026-11-11T05:16:25Z === TEST 1b sidecar holds, ironlab load refused ===
+HOLD claimed pid=541004 worker=541007 inherit=True lock=/run/user/1000/ironlab/occupancy.lock bundle='sidecar-vs-ironlab'
+2026-11-11T05:16:25Z sidecar hold pid=541004 worker=541007 ready=541004 541007
+2026-11-11T05:16:25Z occupancy.json={
+  "pid": 541004,
+  "bundle": "sidecar-vs-ironlab",
+  "started_unix": 1794374185,
+  "exe": "/home/dorje/.local/share/mise/installs/python/3.14.4/bin/python3.14"
+}
+npu: NPU6 / Krackan Point at c3:00.1 (supported)
+occupancy: pid 541004 bundle Some("sidecar-vs-ironlab") for 0s exe Some("/home/dorje/.local/share/mise/installs/python/3.14.4/bin/python3.14")
+2026-11-11T05:16:25Z ironlab load while sidecar holds rc=1 out=load refused: NPU is occupied by pid 541004 (bundle Some("sidecar-vs-ironlab"), started_unix=1794374185)
+2026-11-11T05:16:25Z PASS 1b: ironlab refused while sidecar holds same lock=/run/user/1000/ironlab/occupancy.lock
+2026-11-11T05:16:25Z probe[sidecar-holds-second-python] rc=1 out=TRY occupied NPU is occupied by pid 541004 (bundle 'sidecar-vs-ironlab', started_unix=1794374185)
+lock=/run/user/1000/ironlab/occupancy.lock
+2026-11-11T05:16:25Z PASS sidecar-holds-second-python: second process refused
+HOLD cancel/timeout: wait for worker 541007 before flock release
+HOLD released after quiescence rc=-15
+npu: NPU6 / Krackan Point at c3:00.1 (supported)
+occupancy: idle
+2026-11-11T05:16:25Z probe[after-1b-release] rc=0 out=TRY claimed pid=541051 lock=/run/user/1000/ironlab/occupancy.lock bundle='probe-after-1b-release'
+TRY released
+2026-11-11T05:16:25Z PASS after-1b-release: try-lock admitted after release
+2026-11-11T05:16:25Z === TEST 2a timeout: request expires, worker still alive, flock held ===
+TIMEOUT claimed pid=541063 worker=541066 lock=/run/user/1000/ironlab/occupancy.lock
+TIMEOUT request expired; worker_alive=True flock_still_held=yes (not releasing yet)
+2026-11-11T05:16:26Z timeout sidecar pid=541063 worker=541066 expired=worker=541066 alive=True
+2026-11-11T05:16:26Z worker still alive pid=541066 during request timeout (required)
+2026-11-11T05:16:26Z probe[timeout-worker-still-alive] rc=1 out=TRY occupied NPU is occupied by pid 541063 (bundle 'sidecar-timeout', started_unix=1794374185)
+lock=/run/user/1000/ironlab/occupancy.lock
+2026-11-11T05:16:26Z PASS timeout-worker-still-alive: second process refused
+TIMEOUT worker reaped rc=0; releasing flock
+TIMEOUT released after quiescence
+2026-11-11T05:16:31Z probe[after-timeout-quiescence] rc=0 out=TRY claimed pid=541204 lock=/run/user/1000/ironlab/occupancy.lock bundle='probe-after-timeout-quiescence'
+TRY released
+2026-11-11T05:16:31Z PASS after-timeout-quiescence: try-lock admitted after release
+2026-11-11T05:16:31Z === TEST 2b cancel: SIGTERM waits for worker, second try refused until then ===
+HOLD claimed pid=541215 worker=541218 inherit=True lock=/run/user/1000/ironlab/occupancy.lock bundle='sidecar-cancel'
+2026-11-11T05:16:31Z cancel sidecar pid=541215 worker=541218; sending SIGTERM (request cancel)
+HOLD cancel/timeout: wait for worker 541218 before flock release
+HOLD released after quiescence rc=-15
+2026-11-11T05:16:31Z PASS 2b: sidecar and worker both gone after cancel (fast worker)
+2026-11-11T05:16:31Z probe[after-cancel-quiescence] rc=0 out=TRY claimed pid=541248 lock=/run/user/1000/ironlab/occupancy.lock bundle='probe-after-cancel-quiescence'
+TRY released
+2026-11-11T05:16:31Z PASS after-cancel-quiescence: try-lock admitted after release
+2026-11-11T05:16:31Z === TEST 3a SIGKILL sidecar, worker inherits flock, second claim refused ===
+HOLD claimed pid=541259 worker=541262 inherit=True lock=/run/user/1000/ironlab/occupancy.lock bundle='sidecar-restart'
+2026-11-11T05:16:31Z restart sidecar pid=541259 worker=541262 (waiting for self-SIGKILL)
+HOLD self-SIGKILL pid=541259 worker still 541262
+2026-11-11T05:16:32Z sidecar dead? yes worker_alive=yes
+2026-11-11T05:16:32Z occupancy.json after SIGKILL={
+  "pid": 541259,
+  "bundle": "sidecar-restart",
+  "started_unix": 1794374191,
+  "exe": "/home/dorje/.local/share/mise/installs/python/3.14.4/bin/python3.14"
+}
+2026-11-11T05:16:32Z probe[restart-orphan-worker-holds-flock] rc=1 out=TRY occupied NPU is occupied by pid 0 (bundle 'flock-held-no-live-json', started_unix=0)
+lock=/run/user/1000/ironlab/occupancy.lock
+2026-11-11T05:16:32Z PASS restart-orphan-worker-holds-flock: second process refused
+2026-11-11T05:16:32Z waiting for inherited worker 541262 to exit
+2026-11-11T05:16:39Z probe[after-orphan-worker-reaped] rc=0 out=TRY claimed pid=541495 lock=/run/user/1000/ironlab/occupancy.lock bundle='probe-after-orphan-worker-reaped'
+TRY released
+2026-11-11T05:16:39Z PASS after-orphan-worker-reaped: try-lock admitted after release
+2026-11-11T05:16:39Z === TEST 3b control: SIGKILL without inherit → occupancy.rs steal admits while worker lives ===
+HOLD claimed pid=541506 worker=541509 inherit=False lock=/run/user/1000/ironlab/occupancy.lock bundle='sidecar-naive'
+HOLD self-SIGKILL pid=541506 worker still 541509
+2026-11-11T05:16:40Z naive sidecar dead worker_alive=yes json={
+  "pid": 541506,
+  "bundle": "sidecar-naive",
+  "started_unix": 1794374200,
+  "exe": "/home/dorje/.local/share/mise/installs/python/3.14.4/bin/python3.14"
+}
+2026-11-11T05:16:40Z naive probe rc=0 out=TRY claimed pid=541545 lock=/run/user/1000/ironlab/occupancy.lock bundle='probe-naive-steal'
+TRY released
+2026-11-11T05:16:40Z NOTE 3b: without inherit, try-lock SUCCEEDED while orphan worker 541509 lived (occupancy.rs steal). This is why cooperating sidecar must inherit the flock fd or refuse on live worker pid.
+npu: NPU6 / Krackan Point at c3:00.1 (supported)
+occupancy: idle
+2026-11-11T05:16:40Z === SUMMARY pass=11 fail=0 lock=/run/user/1000/ironlab/occupancy.lock ===
