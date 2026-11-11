@@ -2,6 +2,7 @@ defmodule Mjolnir.SecretStoreTest do
   use ExUnit.Case, async: false
 
   alias Mjolnir.SecretStore
+  alias Mjolnir.Aie.Offer
   alias Mjolnir.Sites.{HeadRecord, IdentiKey}
 
   setup do
@@ -117,5 +118,60 @@ defmodule Mjolnir.SecretStoreTest do
     assert :ok = SecretStore.delete_opaque("vms", "vm-1", "identity")
     assert :not_found = SecretStore.get_opaque("vms", "vm-1", "identity")
     assert :ok = SecretStore.delete_opaque_id("vms", "vm-1")
+  end
+
+  defp signed_offer(keypair, fp, attrs \\ []) do
+    offer = %Offer{
+      version: 1,
+      owner_fp: fp,
+      offer_id: Keyword.get(attrs, :offer_id, "npu"),
+      vm_id: Keyword.get(attrs, :vm_id, "vm-1"),
+      being_pubkey: keypair.ed25519_public,
+      sequence: Keyword.get(attrs, :sequence, 1),
+      guild: Keyword.get(attrs, :guild, nil),
+      design_ids: Keyword.get(attrs, :design_ids, ["npu2"]),
+      max_wall_time: Keyword.get(attrs, :max_wall_time, 30),
+      tombstone: Keyword.get(attrs, :tombstone, false),
+      signature: nil
+    }
+
+    Offer.serialize(Offer.sign(offer, keypair))
+  end
+
+  test "offer leaf sniffs without breaking HEAD put/get", %{keypair: kp, fp: fp} do
+    {key, envelope} = signed_head(kp, fp)
+    assert :ok = SecretStore.put(fp, key, envelope)
+
+    offer_bytes = signed_offer(kp, fp)
+    assert :ok = SecretStore.put(fp, Offer.key("npu"), offer_bytes)
+    assert {:ok, ^offer_bytes} = SecretStore.get(fp, Offer.key("npu"))
+    assert {:ok, ^envelope} = SecretStore.get(fp, key)
+  end
+
+  test "offer sequence floor refuses put at or below current including retired bytes", %{
+    keypair: kp,
+    fp: fp
+  } do
+    live = signed_offer(kp, fp, sequence: 1)
+    assert :ok = SecretStore.put(fp, Offer.key("npu"), live)
+    assert {:error, :sequence_floor} = SecretStore.put(fp, Offer.key("npu"), live)
+
+    tomb = signed_offer(kp, fp, sequence: 2, tombstone: true)
+    assert :ok = SecretStore.put(fp, Offer.key("npu"), tomb)
+    assert {:ok, ^tomb} = SecretStore.get(fp, Offer.key("npu"))
+    assert {:error, :sequence_floor} = SecretStore.put(fp, Offer.key("npu"), live)
+    assert {:error, :sequence_floor} = SecretStore.put(fp, Offer.key("npu"), tomb)
+
+    nxt = signed_offer(kp, fp, sequence: 3)
+    assert :ok = SecretStore.put(fp, Offer.key("npu"), nxt)
+  end
+
+  test "offer delete retains a signed tombstone as the floor", %{keypair: kp, fp: fp} do
+    live = signed_offer(kp, fp, sequence: 1)
+    assert :ok = SecretStore.put(fp, Offer.key("npu"), live)
+    tomb = signed_offer(kp, fp, sequence: 2, tombstone: true)
+    assert :ok = SecretStore.delete(fp, Offer.key("npu"), tomb)
+    assert {:ok, ^tomb} = SecretStore.get(fp, Offer.key("npu"))
+    assert {:error, :sequence_floor} = SecretStore.put(fp, Offer.key("npu"), live)
   end
 end

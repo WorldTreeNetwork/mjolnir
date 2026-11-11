@@ -31,6 +31,7 @@ defmodule Mjolnir.SecretStore do
   use GenServer
   require Logger
 
+  alias Mjolnir.Aie.Offer
   alias Mjolnir.Sites.{AliasRecord, HeadRecord, IdentiKey, Manifest}
 
   @type identikey_fp :: String.t()
@@ -254,6 +255,7 @@ defmodule Mjolnir.SecretStore do
   @impl true
   def handle_call({:put, identikey_fp, key, envelope}, _from, state) do
     with :ok <- verify_envelope(identikey_fp, envelope),
+         :ok <- maybe_enforce_offer_floor(identikey_fp, key, envelope),
          :ok <- write_atomic(identikey_fp, key, envelope),
          :ok <- maybe_write_alias_index(identikey_fp, key) do
       {:reply, :ok, state}
@@ -264,21 +266,28 @@ defmodule Mjolnir.SecretStore do
 
   def handle_call({:delete, identikey_fp, key, tombstone}, _from, state) do
     with :ok <- verify_envelope(identikey_fp, tombstone) do
-      path = record_path(identikey_fp, key)
+      cond do
+        offer_record?(tombstone) or Offer.offer_key?(key) or stored_offer?(identikey_fp, key) ->
+          reply = retain_offer_tombstone(identikey_fp, key, tombstone)
+          {:reply, reply, state}
 
-      reply =
-        case File.rm(path) do
-          :ok -> :ok
-          {:error, :enoent} -> :ok
-          {:error, _} = err -> err
-        end
+        true ->
+          path = record_path(identikey_fp, key)
 
-      # Remove reverse alias index entry when deleting an alias record.
-      # Only the IdentiKey that currently holds the index entry can clear it
-      # — prevents one IdentiKey from removing another's claim via tombstone.
-      maybe_delete_alias_index(identikey_fp, key)
+          reply =
+            case File.rm(path) do
+              :ok -> :ok
+              {:error, :enoent} -> :ok
+              {:error, _} = err -> err
+            end
 
-      {:reply, reply, state}
+          # Remove reverse alias index entry when deleting an alias record.
+          # Only the IdentiKey that currently holds the index entry can clear it
+          # — prevents one IdentiKey from removing another's claim via tombstone.
+          maybe_delete_alias_index(identikey_fp, key)
+
+          {:reply, reply, state}
+      end
     else
       {:error, _} = err -> {:reply, err, state}
     end
@@ -612,9 +621,11 @@ defmodule Mjolnir.SecretStore do
   # ---------------------------------------------------------------------------
 
   # Rejects trivially empty envelopes without parsing.
-  defp verify_envelope(_identikey_fp, <<>>), do: {:error, :empty_envelope}
+  # Recrypt MultiSig wiring stays this seam.
+  @doc false
+  def verify_envelope(_identikey_fp, <<>>), do: {:error, :empty_envelope}
 
-  defp verify_envelope(identikey_fp, bytes) when is_binary(bytes) do
+  def verify_envelope(identikey_fp, bytes) when is_binary(bytes) do
     case Jason.decode(bytes) do
       {:error, _} ->
         {:error, :bad_envelope_json}
@@ -731,6 +742,13 @@ defmodule Mjolnir.SecretStore do
           {:error, _} = err -> err
         end
 
+      # AIE offer leaf (has "being_pubkey" + "offer_id")
+      offer_record?(bytes) ->
+        case Offer.parse(bytes) do
+          {:ok, r} -> {:ok, Offer.canonical_signing_bytes(r)}
+          {:error, _} = err -> err
+        end
+
       true ->
         {:error, :unrecognized_envelope_type}
     end
@@ -754,6 +772,85 @@ defmodule Mjolnir.SecretStore do
     case Jason.decode(bytes) do
       {:ok, raw} -> Map.has_key?(raw, "fqdn")
       _ -> false
+    end
+  end
+
+  defp offer_record?(bytes) do
+    case Jason.decode(bytes) do
+      {:ok, raw} -> Map.has_key?(raw, "being_pubkey") and Map.has_key?(raw, "offer_id")
+      _ -> false
+    end
+  end
+
+  defp stored_offer?(identikey_fp, key) do
+    case get(identikey_fp, key) do
+      {:ok, bytes} -> offer_record?(bytes)
+      _ -> false
+    end
+  end
+
+  # Offer sequence is a floor. Put at or below it, including re-put of the
+  # exact retired bytes, is refused. Tombstones stay at the key.
+  defp maybe_enforce_offer_floor(identikey_fp, key, envelope) do
+    if offer_record?(envelope) do
+      enforce_offer_floor(identikey_fp, key, envelope)
+    else
+      :ok
+    end
+  end
+
+  defp enforce_offer_floor(identikey_fp, key, envelope) do
+    with {:ok, incoming} <- Offer.parse(envelope),
+         :ok <- match_offer_key(key, incoming),
+         :ok <- match_offer_owner(identikey_fp, incoming) do
+      case get(identikey_fp, key) do
+        :not_found ->
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+
+        {:ok, existing} ->
+          cond do
+            existing == envelope ->
+              {:error, :sequence_floor}
+
+            not offer_record?(existing) ->
+              {:error, :offer_key_occupied}
+
+            true ->
+              case Offer.parse(existing) do
+                {:ok, current} when incoming.sequence > current.sequence ->
+                  :ok
+
+                {:ok, _current} ->
+                  {:error, :sequence_floor}
+
+                {:error, _} = err ->
+                  err
+              end
+          end
+      end
+    end
+  end
+
+  defp match_offer_key(key, incoming) do
+    if key == Offer.key(incoming.offer_id), do: :ok, else: {:error, :offer_key_mismatch}
+  end
+
+  defp match_offer_owner(identikey_fp, incoming) do
+    if identikey_fp == incoming.owner_fp, do: :ok, else: {:error, :owner_mismatch}
+  end
+
+  defp retain_offer_tombstone(identikey_fp, key, tombstone) do
+    with {:ok, offer} <- Offer.parse(tombstone),
+         true <- offer.tombstone,
+         :ok <- maybe_enforce_offer_floor(identikey_fp, key, tombstone),
+         :ok <- write_atomic(identikey_fp, key, tombstone) do
+      :ok
+    else
+      false -> {:error, :not_a_tombstone}
+      {:error, _} = err -> err
     end
   end
 end
