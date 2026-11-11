@@ -48,6 +48,10 @@ rule for that port is missing.
 | **Orchestrator API** | `http://10.200.0.1:4000` | Every VM (auth required except host loopback) | `api_url` in `vm.json` |
 | **Postgres** (declared tenant DBs) | `10.200.0.1:5432` (scram) | App VMs with a provisioned tenant | `DATABASE_URL` in deploy secrets — **not** in `vm.json` |
 | **Redis** (sessions / cache / queues) | `10.200.0.1:6379` (AUTH) | App VMs with a provisioned secret | `REDIS_URL` in deploy secrets — **not** in `vm.json` |
+| **AIE compute** (NPU jobs by overlay RPC)¹ | `http://10.200.0.1:7422` | VMs holding an execute right on a signed offer | `aie_url` in `vm.json`; omitted when off |
+
+¹ Not built. The contract is [ADR 0015](../decisions/0015-aie-compute-sidecar.md);
+the sidecar lands in `add-aie-host-sidecar`.
 
 Not sidecars: MinIO (rejected — not v1, not a later cache), B2 itself
 (only the door holds those keys), the public gateway (Iroh/HTTPS in, not

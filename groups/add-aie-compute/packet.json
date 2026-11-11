@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-aie-compute-adr",
+  "node_id": "mjolnir-io3b.2",
+  "capability": "aie-compute",
+  "change_id": "add-aie-compute",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sonnet-known",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "claude-sonnet-5-5",
+    "effort": "low",
+    "signing": { "mode": "stand-in", "stand_in_id": "sonnet-known" }
+  },
+  "goal": "Land the architecture act for add-aie-compute (bead mjolnir-io3b.2). Astra accepted in openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md.\n\n1. Write docs/decisions/0015-aie-compute-sidecar.md in the same shape as docs/decisions/0005-host-sidecar-tenant-hotel.md (Status Accepted, Change, One screen, Built vs remaining). One screen MUST match openspec/changes/add-aie-compute/design.md section 'ADR 0015 one screen'. Link the inflight change, the spike finding docs/spikes/aie-npu-path/finding.md, and the advise accept. Living spec path is openspec/specs/aie-compute/spec.md (not folded yet). Built vs remaining: this node ships the ADR and contract; sidecar/mint/offers/guild are named children.\n2. In docs/guide/host-sidecars.md Catalog table, add an AIE compute row for http://10.200.0.1:7422 / locator aie_url, with a not-built footnote that the sidecar lands in add-aie-host-sidecar. Do not invent bind/install details.\n3. Architecture tests: do not add Elixir tests. Confirm every Requirement in openspec/changes/add-aie-compute/specs/aie-compute/spec.md has named Scenario headings, and list those scenario names under Built vs remaining or a short Scenarios section in the ADR so implement nodes can close them.\n4. Check the three remaining act boxes in openspec/changes/add-aie-compute/tasks.md. Leave advise history boxes as they are.\n\nMatch existing ADR and catalog prose. Do not implement a sidecar. Do not fold living specs. Do not flip the proposal banner. Do not activate child nodes. Occupancy spike aie-occupancy-lock stays unverified for add-aie-host-sidecar.",
+  "anchors": [
+    {
+      "symbol": "openspec/changes/add-aie-compute/design.md",
+      "invariant": "ADR 0015 one screen is the accepted contract summary"
+    },
+    {
+      "symbol": "docs/guide/host-sidecars.md",
+      "invariant": "Catalog rows are overlay locators on 10.200.0.1; INPUT not FORWARD"
+    },
+    {
+      "symbol": "docs/spikes/aie-npu-path/finding.md",
+      "invariant": "overlay RPC go; guest has no /dev/accel"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f docs/decisions/0015-aie-compute-sidecar.md && rg -q 'aie_url' docs/guide/host-sidecars.md && rg -q '7422' docs/guide/host-sidecars.md && rg -q -- '- \\[x\\] ADR 0015' openspec/changes/add-aie-compute/tasks.md && rg -q -- '- \\[x\\] Point `docs/guide/host-sidecars.md`' openspec/changes/add-aie-compute/tasks.md && rg -q -- '- \\[x\\] Architecture tests' openspec/changes/add-aie-compute/tasks.md"
+  },
+  "out_of_scope": [
+    { "item": "Sidecar unit / bind / INPUT install", "tracked_as": "add-aie-host-sidecar" },
+    { "item": "mj verb and HTTP route shape", "tracked_as": "add-aie-guest-offer" },
+    { "item": "SecretStore offer leaf", "tracked_as": "add-aie-keyspace-claims" },
+    { "item": "member(ks, pk) inject implementation", "tracked_as": "add-guild-compute-holder" },
+    { "item": "Fold living aie-compute spec", "tracked_as": "fold after implement nodes" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "docs/decisions/0015-aie-compute-sidecar.md",
+      "docs/guide/host-sidecars.md",
+      "openspec/changes/add-aie-compute/tasks.md"
+    ],
+    "do_not": ["fold", "implement sidecar", "flip banner", "deploy", "push"]
+  },
+  "inherited": [
+    "Advise accept 2026-11-11 astra-arch-review. Prior send-backs 2026-11-07 and 2026-11-10 are history.",
+    "Incarnation is Blake3 of the canonical signed offer leaf on the execute right.",
+    "Membership is revalidated at admission; enqueue evidence unused.",
+    "Spike aie-npu-path go. Spike aie-occupancy-lock unverified, owned by add-aie-host-sidecar.",
+    "Campaign mjolnir-io3b. Children stay blocked."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "worker"
+}

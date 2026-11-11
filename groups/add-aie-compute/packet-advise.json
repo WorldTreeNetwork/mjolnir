@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-advise-add-aie-compute-astra-3",
+  "node_id": "add-aie-compute",
+  "capability": "aie-compute",
+  "change_id": "add-aie-compute",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "astra-arch-review",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6-astra",
+    "effort": "high",
+    "signing": { "mode": "stand-in", "stand_in_id": "astra-arch-review" }
+  },
+  "goal": "ADVISE add-aie-compute (fresh pass after send-back). Architecture. Author family is grok. You are Astra (gpt-6-astra), other-family reader (high-blast protocol). Return to the same READER that sent the prior reviews back.\n\nWHY: The Framework5070 NPU already runs IRON Lab AIE kernels on the host. Sharing that compute through a Mjolnir VM has no capability, no overlay locator, no offer principal, and no IdentiKey grant. VFIO is the GPU story; Cloud Hypervisor has no PCI devices. A guest that received /dev/accel would need host KMD and would fight IRON occupancy. The product ask is easy share, keyed by IdentiKey keyspaces and guilds.\n\nLiving specs (no living aie-compute yet):\n- openspec/specs/biscuit-runtime/spec.md — Ed25519 Biscuits, holder check via injected holder(fp), identikey-auth v1 §5 fingerprint, crate has no HTTP\n- openspec/specs/blob-store/spec.md — overlay locator inject into vm.json (blob_door_url pattern this change copies)\n- openspec/changes/archive/2026-09-10-update-identikey-capability/specs/identikey-capability/spec.md Requirement: Guild holder class is not v1 — mint without guild; membership is a later injected fact\n\nCited code and evidence (blind take):\n- lib/mjolnir/cloud_hypervisor/config.ex:57-75 — vm.create payload has payload/cpus/memory/fs/vsock/rng/serial/console/net; no PCI/devices\n- lib/mjolnir/vm.ex:2449-2454 — host_api_ip + blob_door_url inject\n- lib/mjolnir/vsock/protocol.ex:181-197 — configure_identity writes vm.json with optional blob_door_url only\n- lib/mjolnir/biscuit.ex:54-68 — authority() loads the host production mint root\n- lib/mjolnir/biscuit.ex:169-209 — append_holder / authorize with inject_holder; crate has no HTTP\n- lib/mjolnir/secrets/redeem.ex:53-73 — request proof (nonce consume, Ed25519 verify, then authorize) lives outside the biscuit evaluator\n- lib/mjolnir/secret_store.ex:1-28 — keyspace (identikey_fp, key) signed envelopes; module header still says STUBBED\n- lib/mjolnir/secret_store.ex:711-728 — canonical_bytes sniffs HeadRecord/Manifest/AliasRecord; unknown envelope types are not a free-form store\n- docs/guide/host-sidecars.md:23-41 — dummy-mjolnir 10.200.0.1, INPUT, vm.json locators\n- docs/spikes/aie-npu-path/finding.md — go: guest overlay RPC ran IRON vector-add, no /dev/accel\n- docs/LEARNINGS.md:41 — 2026-08-27 compute-fabric: resource = claims on capacity; no speculative asset in spawn\n\nWrite openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md. Do not overwrite reviews/2026-11-07-advise.md or reviews/2026-11-10-advise.md.\nBLIND PASS: Why + living spec + cited code first, 10-line independent take, then open design.md / tasks.md and the delta specs/aie-compute/spec.md. Steelman against the take. Do not implement. Do not fold. Do not flip the banner. Do not accept-with-nits. If you accept, check the remaining Fresh advise box on tasks.md and record this review path in the review body. If you send-back, add owed boxes on tasks.md.",
+  "anchors": [
+    {
+      "symbol": "lib/mjolnir/cloud_hypervisor/config.ex",
+      "invariant": "vm.create has no PCI devices"
+    },
+    {
+      "symbol": "lib/mjolnir/vsock/protocol.ex",
+      "invariant": "vm.json locators today are vm_id, api_url, optional blob_door_url"
+    },
+    {
+      "symbol": "lib/mjolnir/secrets/redeem.ex",
+      "invariant": "possession proof and nonce consume live outside the biscuit crate"
+    },
+    {
+      "symbol": "docs/spikes/aie-npu-path/finding.md",
+      "invariant": "overlay RPC go; guest has no /dev/accel"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "test -f openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md"
+  },
+  "out_of_scope": [
+    { "item": "Sidecar unit / bind / INPUT install", "tracked_as": "add-aie-host-sidecar" },
+    { "item": "mj verb and HTTP route shape", "tracked_as": "add-aie-guest-offer" },
+    { "item": "SecretStore offer leaf", "tracked_as": "add-aie-keyspace-claims" },
+    { "item": "member(ks, pk) inject implementation", "tracked_as": "add-guild-compute-holder" },
+    { "item": "VFIO / virtio-accel / mjolnir-03x", "tracked_as": "out-of-dag" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "openspec/changes/add-aie-compute/reviews",
+      "openspec/changes/add-aie-compute/tasks.md"
+    ],
+    "do_not": ["fold", "act", "implement", "flip banner", "deploy"]
+  },
+  "inherited": [
+    "Code HEAD 60d9d85 is the spike commit. The change directory is uncommitted working tree.",
+    "Author family grok. High-blast protocol. vary-reader reason: send-back; last_reader astra-arch-review.",
+    "Prior reviews: 2026-11-07-advise.md and 2026-11-10-advise.md (both send-back). Evaluate the current contract independently; do not rubber-stamp.",
+    "Steer 2026-11-07: sidecar RPC, VM principal, keyspace offers + guild inject. Spike aie-npu-path go.",
+    "Campaign is roll on pinned mjolnir-io3b. Bare run does not activate blocked children. This node only.",
+    "LEARNINGS 2026-08-27 compute-fabric: claims on capacity; guild tag matching is money/registry, not a NIF in this repo."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "architecture",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "reader"
+}
