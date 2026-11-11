@@ -129,6 +129,7 @@ defmodule Mjolnir.API.Router do
   # splice of `GET /` does not need to be the operator. `/api` and
   # `/auth` fall through to Auth.
   plug(Mjolnir.API.VanityHostPlug)
+  plug(Mjolnir.API.AieRouter)
   plug(Mjolnir.API.Auth)
   plug(:match)
   plug(:dispatch)

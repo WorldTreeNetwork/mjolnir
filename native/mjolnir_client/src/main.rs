@@ -16,6 +16,7 @@ mod api;
 mod auth;
 mod cert;
 mod config;
+mod compute;
 mod connect;
 mod deploy;
 mod dev_manifest;
@@ -46,6 +47,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Share VM-being NPU offers and run host-catalog jobs
+    Compute {
+        #[command(subcommand)]
+        command: compute::Command,
+    },
     // --- VM Operations ---
     /// Spawn a new VM
     #[command(next_help_heading = "VM Operations")]
@@ -918,6 +924,7 @@ async fn main() {
     let json = cli.json;
 
     let result: anyhow::Result<()> = match cli.command {
+        Command::Compute { command } => compute::run(command, &profile).await,
         // --- VM Operations ---
         Command::Spawn {
             api,

@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "id": "pkt-act-add-aie-guest-offer",
+  "node_id": "mjolnir-io3b.6",
+  "change_id": "add-aie-guest-offer",
+  "capability": "aie-compute",
+  "requester": {
+    "id": "agt-conductor",
+    "kind": "group",
+    "harness": "grok",
+    "signing": { "mode": "stand-in", "stand_in_id": "agt-conductor" }
+  },
+  "assignee": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6.1-sol",
+    "signing": { "mode": "stand-in", "stand_in_id": "sol-implement" }
+  },
+  "goal": "Implement add-aie-guest-offer (mjolnir-io3b.6) per openspec/changes/add-aie-guest-offer (ACTIVE BUILD). Named activate 2026-11-11; not and-run.\n\n1. mj compute share publishes (or points at) the current signed offer for this VM being. mj compute run mints a holder-bound execute token and POSTs the catalog job. Spawn does not mint capacity. Sidecar OS user is not the offer principal.\n2. v1 execute is POST {aie_url}/v1/execute. Sidecar already binds that path (design_id, optional pending_id). Body names host-catalog design_id and bounded input bytes. Not OpenAI chat-completions. Audience is this host mint-root fingerprint, not overlay origin alone.\n3. Mint holder-checked mjolnir/aie-execute/v1 biscuit bytes. Mjolnir.Aie.Offer.mint/2 already copies incarnation only; this node mints the biscuit onto right(\"<owner_fp>/<offer_id>/<incarnation>\", \"aie-execute\").\n4. Guest or mj retries the same pending_id while occupancy attempt_id is live. After abandon, restart, cancel, or max queue age, obtain a fresh nonce and enqueue again. Retries do not reset enqueue time.\n5. Third identity without a grant is 403. Guests still have no /dev/accel.\n6. Close architecture scenarios: VM being is the offer principal; guest retry of live pending_id. Check boxes in openspec/changes/add-aie-guest-offer/tasks.md.\n\nVerify with MIX_BUILD_PATH=/tmp/mjolnir-io3b6-build (isolated; default _build may be locked). Elixir 1.20 type-check of VM/Router is slow if you touch router.ex; do not treat that as hang. Stay on HEAD. Work only constraints.paths. Focused verify once. Write groups/mjolnir-io3b.6/results/<assignee>.json. Do not fold. Do not fold parent add-aie-compute.",
+  "anchors": [
+    {
+      "symbol": "Mjolnir.Aie.Offer.mint/2",
+      "invariant": "copies incarnation only; this node mints biscuit bytes"
+    },
+    {
+      "symbol": "native/mjolnir_aie_sidecar/src/main.rs execute",
+      "invariant": "POST /v1/execute already exists; client retry repeats pending_id"
+    },
+    {
+      "symbol": "Mjolnir.Biscuit.authorize",
+      "invariant": "stays inject_holder; no Datalog member; audience is mint-root fp"
+    }
+  ],
+  "acceptance": {
+    "kind": "command",
+    "command": "MIX_BUILD_PATH=/tmp/mjolnir-io3b6-build mix test test/mjolnir/aie/execute_test.exs --exclude integration --exclude postgres --exclude e2e"
+  },
+  "out_of_scope": [
+    { "item": "Sidecar unit / admit / occupancy", "tracked_as": "add-aie-host-sidecar" },
+    { "item": "Offer leaf codec", "tracked_as": "add-aie-keyspace-claims" },
+    { "item": "Guild inject / aie_delegate", "tracked_as": "add-guild-compute-holder" },
+    { "item": "OpenAI-compat chat API", "tracked_as": "deferred not v1" },
+    { "item": "Fold parent add-aie-compute", "tracked_as": "fold after this landing" }
+  ],
+  "constraints": {
+    "permission": "write",
+    "paths": [
+      "lib/mjolnir/aie/execute.ex",
+      "lib/mjolnir/aie/offer.ex",
+      "lib/mjolnir/api/aie_router.ex",
+      "lib/mjolnir/api/router.ex",
+      "native/mjolnir_client/src/main.rs",
+      "native/mjolnir_client/src/compute.rs",
+      "native/mjolnir_aie_sidecar/src/main.rs",
+      "test/mjolnir/aie/execute_test.exs",
+      "docs/guide/host-sidecars.md",
+      "openspec/changes/add-aie-guest-offer/tasks.md"
+    ],
+    "do_not": ["fold", "deploy", "push"]
+  },
+  "inherited": [
+    "Campaign mjolnir-io3b. Named activate 2026-11-11 of .6 only. Not and-run.",
+    "Sidecar closed 4183d3c fold b481aea: overlay 7422, admit sock, occupancy inherit-fd. Focused verify 74/75 baseline-red on inject_identity NOSTR_PRIVATE_KEY in identity.ex (outside this write-set).",
+    "Keyspace 63a9c9f / 25f5cf4. Guild b7c4842 / c42cd88. Occupancy spike go 798a94b.",
+    "ADR 0015 Decision 4 guest slice: pending_id retry while attempt live; mint copies incarnation; POST {aie_url}/v1/execute.",
+    "Do not fold parent add-aie-compute. Do not touch identity.ex."
+  ],
+  "load_class": "intention-critical",
+  "rigor": "change",
+  "density": "explicit",
+  "surface": "packet-only",
+  "role": "worker"
+}

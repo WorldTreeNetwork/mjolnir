@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "id": "res-act-add-aie-guest-offer",
+  "packet_id": "pkt-act-add-aie-guest-offer",
+  "node_id": "mjolnir-io3b.6",
+  "change_id": "add-aie-guest-offer",
+  "signer": {
+    "id": "sol-implement",
+    "kind": "model",
+    "harness": "codex",
+    "interface": "gpt-6.1-sol",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "sol-implement"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "lib/mjolnir/aie/execute.ex",
+      "role": "implementation",
+      "content_hash": "sha256:533f92f4c00fc9d50eb8fd552cd6333320d650cd60f40b44f1e64cf346900d8e"
+    },
+    {
+      "path": "lib/mjolnir/api/aie_router.ex",
+      "role": "implementation",
+      "content_hash": "sha256:623cc39f8ef00788494eb8b3e626d169cf98db388a235499c4a7f2f9085d562a"
+    },
+    {
+      "path": "lib/mjolnir/api/router.ex",
+      "role": "implementation",
+      "content_hash": "sha256:5b5b9a670947cebc22205865de9e2d657af73e524bcb29cc69b04eb20bb215f2"
+    },
+    {
+      "path": "native/mjolnir_client/src/main.rs",
+      "role": "implementation",
+      "content_hash": "sha256:d0e3081c41403b0916136108c8ff80060cc45589979a1ad6c938929bc82df543"
+    },
+    {
+      "path": "native/mjolnir_client/src/compute.rs",
+      "role": "implementation",
+      "content_hash": "sha256:61a623e545a6b297724394ee6d90abadd7fac3cb18c0b04b6e5ecd9333ad3b98"
+    },
+    {
+      "path": "native/mjolnir_aie_sidecar/src/main.rs",
+      "role": "implementation",
+      "content_hash": "sha256:19581a8e38d34ea67782aa8e46f3c2b553c300ad019c3f43511248c03ddaf5e1"
+    },
+    {
+      "path": "test/mjolnir/aie/execute_test.exs",
+      "role": "test",
+      "content_hash": "sha256:2818dae461c57022d5a08b4857f88b1d4abfca8ef78764c222ecaca17661470c"
+    },
+    {
+      "path": "docs/guide/host-sidecars.md",
+      "role": "documentation",
+      "content_hash": "sha256:15d2e13928361dabf8851c9b8917d4ad09308b8138ed50dbcbb089fdf85e3a94"
+    },
+    {
+      "path": "openspec/changes/add-aie-guest-offer/tasks.md",
+      "role": "documentation",
+      "content_hash": "sha256:570d81c17faab2033f5c697b41420a153004e6c9f38148194767de66be4cfe2c"
+    }
+  ],
+  "evidence": {
+    "kind": "command",
+    "command": "MIX_BUILD_PATH=/tmp/mjolnir-io3b6-build mix test test/mjolnir/aie/execute_test.exs --exclude integration --exclude postgres --exclude e2e",
+    "exit_code": 2,
+    "exunit": {
+      "passed": 7,
+      "total": 8
+    },
+    "native_client": {
+      "passed": 2,
+      "failed": 0,
+      "proof_bytes_match_beam": true
+    },
+    "native_sidecar": {
+      "compile_errors": 3,
+      "runtime_test_executed": false,
+      "error_paths": [
+        "native/mjolnir_aie_sidecar/src/occupancy.rs:46",
+        "native/mjolnir_aie_sidecar/src/occupancy.rs:76",
+        "native/mjolnir_aie_sidecar/src/occupancy.rs:148"
+      ]
+    },
+    "cargo_lock_unchanged": true,
+    "raw_ref": "/tmp/mjolnir-io3b6-verify.log",
+    "log_hash": "sha256:297936e3aa27be2aee3b1f7c6508a94e6ea5855b02b5a2732a1017b5cd551674",
+    "note": "An initial incomplete compilation was cancelled before tests when the enqueue flow was refined. The final-source focused command completed once; no verification rerun."
+  },
+  "disposition": "baseline-red",
+  "promoted": false,
+  "commit": null,
+  "summary": "Implemented VM-being offer share/grants, holder-bound host-root execute minting, signed bounded catalog jobs, and persisted pending_id retries. Seven Elixir tests and two Rust client tests passed. Native sidecar runtime test is blocked by three unchanged occupancy.rs build errors. Worker edits only; conductor persists. No fold, deploy, commit or push.",
+  "blockers": [
+    "Native sidecar runtime verification blocked by unchanged occupancy.rs: E0433 at line 76 (nix user feature missing for Uid), E0308 at lines 46 and 148 (flock expects RawFd, receives &File). occupancy.rs and Cargo.toml are outside constraints.paths.",
+    "The inherited workspace Cargo.lock omits the sidecar entry; native checks resolved a temporary selected-workspace copy. The conductor-owned lockfile remains byte-for-byte unchanged."
+  ],
+  "raw_ref": "/tmp/mjolnir-io3b6-verify.log",
+  "distilled": {
+    "disposition": "baseline-red",
+    "summary": "Implemented VM-being offer share/grants, holder-bound host-root execute minting, signed bounded catalog jobs, and persisted pending_id retries. Seven Elixir tests and two Rust client tests passed. Native sidecar runtime test is blocked by three unchanged occupancy.rs build errors. Worker edits only; conductor persists. No fold, deploy, commit or push.",
+    "commit_sha": null,
+    "blockers": [
+      "Native sidecar runtime verification blocked by unchanged occupancy.rs: E0433 at line 76 (nix user feature missing for Uid), E0308 at lines 46 and 148 (flock expects RawFd, receives &File). occupancy.rs and Cargo.toml are outside constraints.paths.",
+      "The inherited workspace Cargo.lock omits the sidecar entry; native checks resolved a temporary selected-workspace copy. The conductor-owned lockfile remains byte-for-byte unchanged."
+    ],
+    "raw_ref": "/tmp/mjolnir-io3b6-verify.log"
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "sol-implement",
+    "signed_at": "2026-11-11T17:39:57.336655Z",
+    "content_hash": "sha256:a0ad442c96f66754d75d623ea23ab51bbb6485e66f286057bb0e4e1e8fbd86d0"
+  }
+}

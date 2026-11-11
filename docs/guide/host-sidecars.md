@@ -56,7 +56,7 @@ rule for that port is missing.
 `/run/mjolnir/aie-admit.sock` (`0660` root:`mjolnir-aie`), not
 `operator.sock`. Occupancy is IRON Lab `occupancy.lock`. The contract is
 [ADR 0015](../decisions/0015-aie-compute-sidecar.md). HTTP execute shape
-is `add-aie-guest-offer`. `aie_url` is omitted from the example above when
+is `POST {aie_url}/v1/execute` (catalog design + bounded input). `aie_url` is omitted from the example above when
 the unit is down or `/dev/accel/accel0` is missing.
 
 Not sidecars: MinIO (rejected — not v1, not a later cache), B2 itself
@@ -152,6 +152,73 @@ is refused. Install rides `just deploy` (`scripts/install-aie-sidecar.sh`).
 jq -r .aie_url /etc/mjolnir/vm.json
 # null / missing when the unit is off or there is no accel node
 ```
+
+The offer principal is the allowlisted **VM being's IdentiKey**. The
+`mjolnir-aie` OS account opens the device; it cannot grant capacity. Spawn
+does not publish an offer or mint an execute token. `share` points at the
+current signed leaf already published under that being's keyspace:
+
+```bash
+mj compute share OWNER_FP npu
+# Offer owner grants a second VM holder (public key is base64 Ed25519):
+mj compute share OWNER_FP npu --keypair-file being.json \
+  --grant-to HOLDER_PUBLIC_KEY > grant.json
+# Consumer uses its own key, never the offering VM's private key:
+mj compute run OWNER_FP npu vector-add --keypair-file consumer.json \
+  --grant-file grant.json --input input.bin --state-file job.json
+# Recover after a CLI restart or a lost HTTP reply:
+mj compute run OWNER_FP npu vector-add --keypair-file consumer.json \
+  --input input.bin --state-file job.json --resume
+```
+
+The owner can run with its own key and omit `--grant-file`. For a guild
+use `--member-public-key BASE64_MEMBER_KEY` to select the current
+member-signed delegation; membership is rechecked after the occupancy
+lock. The keypair file uses `ed25519_public` and `ed25519_secret` (base64
+32-byte keys, as with `mj sites`). Locators come from
+`/etc/mjolnir/vm.json`; outside a guest, supply `--api` and `--aie-url`.
+An absent `aie_url` refuses execution. Input is at most 1 MiB and reaches
+the catalog worker on stdin. Guests receive neither `/dev/accel` nor
+`/dev/dri`; a guest path or xclbin is not a catalog design.
+
+`GET /api/aie/challenge` returns a single-use nonce and the host mint-root
+holder fingerprint (lowercase hex), which is the audience. An overlay URL
+alone is insufficient. `POST /api/aie/mint` accepts an owner-signed request
+to grant a holder, or an existing holder's signed refresh. It mints a
+holder-checked Biscuit with
+`right("OWNER_FP/OFFER_ID/INCARNATION", "aie-execute")`. A third identity
+without that grant receives 403. `Offer.mint/2` still only copies the
+incarnation from the current verified leaf.
+
+`POST {aie_url}/v1/execute` without `pending_id` verifies the execute
+proof through `/api/aie/prepare`, enqueues through `aie-admit.sock` (which
+consumes the nonce), and returns `pending_id` before starting any worker.
+The client saves its proof and that id, then repeats the execute call with
+`{"design_id":"vector-add","pending_id":"pnd_…","proof":{…}}`.
+The proof includes base64 input, Biscuit, public key and signature, the
+nonce, audience, resource, method `POST`, design and idempotency key.
+The sidecar takes the occupancy lock, calls `/api/aie/check` to revalidate
+that stored proof, current being/offer and guild, and admits through
+`aie-admit.sock`. These AIE HTTP ceremonies verify their own proofs and
+confer no operator scopes. `AIE_BEAM_ADDR` defaults to `10.200.0.1:4000`;
+it is a host-controlled address, never supplied by the guest.
+
+The signed message is `mjolnir/aie-execute/v1` plus NUL, followed by
+uint32 big-endian length-prefixed fields in this order: Biscuit base64,
+nonce, audience, method, resource, raw Blake3 of decoded input, design id,
+idempotency key, holder public key (empty on execute), and member key
+(empty for personal offers). Mint uses `mjolnir/aie-mint/v1` plus NUL,
+method `MINT`, empty input/design, and the target holder public key.
+
+While an attempt is live, the client repeats the exact same proof and
+`pending_id`; enqueue time stays fixed. A lost reply does not mint or
+consume another nonce. A short-lived completed result is status only and
+never authorizes another load. After abandonment, cancellation, sidecar
+or BEAM restart, or queue expiry, the old reference cannot load. The
+client records a terminal failure; run again without `--resume` to obtain
+a fresh nonce and enqueue a new job. A lost enqueue reply has not started
+a worker and also requires a fresh nonce. Pending state files contain
+capability material and are written atomically with mode 0600.
 
 ADR: [`0015`](../decisions/0015-aie-compute-sidecar.md).
 
