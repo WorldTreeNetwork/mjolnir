@@ -90,7 +90,26 @@
   },
   "disposition": "baseline-red",
   "promoted": false,
-  "commit": null,
+  "commit": {
+    "sha": "ca9f00f",
+    "paths": [
+      "lib/mjolnir/aie/execute.ex",
+      "lib/mjolnir/api/aie_router.ex",
+      "lib/mjolnir/api/router.ex",
+      "native/mjolnir_client/src/main.rs",
+      "native/mjolnir_client/src/compute.rs",
+      "native/mjolnir_aie_sidecar/src/main.rs",
+      "test/mjolnir/aie/execute_test.exs",
+      "docs/guide/host-sidecars.md",
+      "openspec/changes/add-aie-guest-offer/proposal.md",
+      "openspec/changes/add-aie-guest-offer/steer.md",
+      "openspec/changes/add-aie-guest-offer/design.md",
+      "openspec/changes/add-aie-guest-offer/tasks.md",
+      "openspec/changes/add-aie-guest-offer/specs/aie-compute/spec.md",
+      "groups/mjolnir-io3b.6/packet.json",
+      "groups/mjolnir-io3b.6/results/sol-implement.json"
+    ]
+  },
   "summary": "Implemented VM-being offer share/grants, holder-bound host-root execute minting, signed bounded catalog jobs, and persisted pending_id retries. Seven Elixir tests and two Rust client tests passed. Native sidecar runtime test is blocked by three unchanged occupancy.rs build errors. Worker edits only; conductor persists. No fold, deploy, commit or push.",
   "blockers": [
     "Native sidecar runtime verification blocked by unchanged occupancy.rs: E0433 at line 76 (nix user feature missing for Uid), E0308 at lines 46 and 148 (flock expects RawFd, receives &File). occupancy.rs and Cargo.toml are outside constraints.paths.",
@@ -111,6 +130,6 @@
     "mode": "stand-in",
     "stand_in_id": "sol-implement",
     "signed_at": "2026-11-11T17:39:57.336655Z",
-    "content_hash": "sha256:a0ad442c96f66754d75d623ea23ab51bbb6485e66f286057bb0e4e1e8fbd86d0"
+    "content_hash": "sha256:4fbc8570d68a6631f368df2c594c9a0613e25c29553179ec7086fbf811c345a1"
   }
 }
