@@ -7,6 +7,15 @@ Activated by the campaign grant on `mjolnir-io3b` ("activate", 2026-11-07).
 Spike `aie-npu-path` is `go`
 ([`docs/spikes/aie-npu-path/finding.md`](../../../docs/spikes/aie-npu-path/finding.md)).
 
+**Preparation (2026-11-11, R5/R6/R6a):** revised. Upstream:
+`reviews/2026-11-11-advise-2.md` and `reviews/2026-11-11-advise-3.md`
+send-backs. Authority: campaign grant on `mjolnir-io3b`
+(architecture contract only). Outcome: dedicated `aie-admit.sock`,
+BEAM `pending_id`, occupancy `attempt_id` load authority (cached
+dispatched is status-only). Historical Astra accept does not cover
+this revision. Fresh advise owed. Occupancy hyp still unverified
+(gates sidecar act).
+
 ## Why
 
 The Framework5070 NPU (AMD Strix Halo / Krackan, `amdxdna`,
@@ -28,13 +37,19 @@ easy share, keyed by IdentiKey keyspaces and guilds.
 - Locator `aie_url` in `/etc/mjolnir/vm.json` when the sidecar is
   up. Absent when there is no NPU or the unit is off.
 - Execute is a holder-checked Biscuit right bound to an offer
-  incarnation (Blake3 of the signed leaf). Guild-scoped offers add
-  a verifier-injected `member(ks, pk)` fact from an admission-time
-  lookup. Token crypto does not change (identikey-capability D5).
-- Capacity is a signed SecretStore keyspace record. Spawn does not
-  mint a capacity asset. Replacement mints a new incarnation.
-- Occupancy: the sidecar serializes NPU programs (IRON Lab flock).
-  Two guests do not load two designs at once.
+  incarnation (Blake3 of the signed leaf). The BEAM admits on
+  `/run/mjolnir/aie-admit.sock` (distinct from the root-only
+  operator socket); the sidecar enforces. The BEAM owns pending
+  request state; `pending_id` binds the verified frame for
+  at-most-one dispatch. Guild-scoped offers inject `member(ks, pk)`
+  plus a member-signed delegation to the consumer VM holder.
+  Token crypto does not change (identikey-capability D5).
+- Capacity is a signed SecretStore keyspace record on an
+  operator allowlist of offering VMs. Spawn does not mint a
+  capacity asset. Sequence + tombstone floor; whole-offer
+  revocation for v1.
+- Occupancy: try-lock, revalidate under deadline, then load.
+  v1 job is a host-catalog design id plus bounded input.
 - Capability `aie-compute` (ADDED). Materialized by fold after the
   implement nodes land. This change writes the contract and the ADR.
 
@@ -58,7 +73,9 @@ verb. This change decides who may run and where the bytes live.
   Correct until fold.
 - **Failed** — a later change VFIO-binds the NPU, injects
   `/dev/accel` into the guest, mints capacity inside `VM.spawn/1`,
-  or treats the host process as the IdentiKey principal.
+  treats the host process as the IdentiKey principal, lets the
+  sidecar admit without the BEAM, grants the sidecar the operator
+  socket, or loads a guest xclbin.
 - **Off** — no `/dev/accel/accel0` (or the unit is stopped). No
   `aie_url`. Blob-door, Postgres, and Redis locators unchanged.
 
@@ -74,7 +91,9 @@ verb. This change decides who may run and where the bytes live.
   (`mjolnir-io3b.4`)
 - VFIO / virtio-accel
 - OTP-only host worker (`mjolnir-03x`)
-- OpenAI-compatible vs native IRON client (unmenued; guest-offer)
+- OpenAI-compatible vs native IRON client — pinned at
+  `add-aie-guest-offer` activate: native `POST /v1/execute` +
+  `mj compute` (not chat-completions)
 - Production Vultr host without an NPU
 - Parakeet ASR encoder (IRON Lab operators, not this capability)
 - Investor instruments / Registry ferry matching
@@ -87,5 +106,7 @@ Outcome: revised. Upstream `mjolnir-io3b.1` closed. Spike go at
 vector-add `Match: True`, guest had no `/dev/accel`. Steer 2026-11-07:
 sidecar RPC, VM principal, keyspace offers + guild inject. Authority:
 campaign grant on `mjolnir-io3b` ("activate"). This node only.
-Fresh advise is owed before act. Act of this change is the ADR, not
-the sidecar.
+Fable 5.2 consult 2026-11-11: caution. Pins in this revision.
+`Fresh advise after preparation` is owed; Astra's 2026-11-11 accept
+does not cover this contract. Act remaining: amend ADR 0015
+one-screen. Not the sidecar.

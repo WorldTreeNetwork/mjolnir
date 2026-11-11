@@ -1,12 +1,12 @@
 # ADR 0015 — AIE compute as a host sidecar
 
-**Status:** Accepted (2026-11-11); **amended 2026-11-11** after fable-5.2 consult and Astra send-backs (R5/R6/R6a) — fresh advise owed
-**Change:** [`add-aie-compute`](../../openspec/changes/add-aie-compute/proposal.md) (inflight)
-**Living spec:** `openspec/specs/aie-compute/spec.md` (not folded yet)
+**Status:** Accepted (2026-11-11); **folded 2026-11-11**
+**Change:** [`add-aie-compute`](../../openspec/changes/archive/2026-11-11-add-aie-compute/proposal.md)
+**Living spec:** `openspec/specs/aie-compute/spec.md`
 **Spike:** [`aie-npu-path`](../spikes/aie-npu-path/finding.md) — overlay RPC go; the guest has no `/dev/accel`
-**Advise:** [`reviews/2026-11-11-advise.md`](../../openspec/changes/add-aie-compute/reviews/2026-11-11-advise.md) — accepted (historical); pass-2 and pass-3 send-back R5/R6/R6a; this amendment does not inherit those verdicts
+**Advise:** [`reviews/2026-11-11-advise-4.md`](../../openspec/changes/archive/2026-11-11-add-aie-compute/reviews/2026-11-11-advise-4.md) — Astra pass-4 accept; prior pass-2/3 send-backs R5/R6/R6a are historical
 **Consult:** [`fable-5.2-consult.md`](../../groups/add-aie-compute/results/fable-5.2-consult.md) — caution
-**Full argument:** [`openspec/changes/add-aie-compute/design.md`](../../openspec/changes/add-aie-compute/design.md)
+**Full argument:** [`design.md`](../../openspec/changes/archive/2026-11-11-add-aie-compute/design.md)
 
 ## One screen
 
@@ -39,13 +39,15 @@ admits; sidecar enforces. Incarnation is Blake3 of the canonical
 signed offer leaf; sequence + tombstone floor; whole-offer
 revocation for v1. Holder is the consumer VM. Membership is
 revalidated after try-lock. The offer principal is the sharing
-VM IdentiKey, not the sidecar process.
+VM IdentiKey, not the sidecar process. Architecture remaining
+ADDED (device, locator map, scoped admit channel, holder-checked
+Biscuit, occupancy flock identity) unioned into that living spec.
 
-Remaining, as named children:
+Remaining: none / folded.
 
-- Fold parent `add-aie-compute` after this landing.
-
-Folded 2026-11-11: `add-aie-host-sidecar`, `add-aie-keyspace-claims`, `add-guild-compute-holder`, `add-aie-guest-offer`. Occupancy spike is go.
+Folded 2026-11-11: `add-aie-host-sidecar`, `add-aie-keyspace-claims`,
+`add-guild-compute-holder`, `add-aie-guest-offer`, `add-aie-compute`.
+Occupancy spike is go.
 
 ## Scenarios
 

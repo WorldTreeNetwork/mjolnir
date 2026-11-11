@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-11-11 / add-aie-compute:** Folding architecture after the four child folds is a union of remaining named ADDED (device, locator map, scoped admit channel, holder-checked Biscuit, occupancy flock identity) onto living `aie-compute`. Do not replace child headings. Occupancy.rs nix `user`/`flock` compile errors stay host-sidecar leftover (see add-aie-guest-offer), not a reason to refuse this fold.
+
 - **2026-11-11 / add-aie-guest-offer:** Focused verify was baseline-red on `native/mjolnir_aie_sidecar/src/occupancy.rs` (nix `user` feature for `Uid`; nix 0.29 `flock` wants `RawFd`, not `&File`). That is host-sidecar leftover, not guest-offer. Elixir live-pending retry and principal scenarios passed.
 
 - **2026-11-05 / add-proxy-guest-net:** The stock `identikey-api-proxy.service` is not the egress boundary. Its `DynamicUser` `StateDirectory` is a symlink, and `Journal::open` exits before bind. A data-dir drop-in points `--data-dir` at the real mode-0700 directory and adds `IPAddressAllow=10.200.0.1/32`. The stock localhost allowlist cannot open the host API.

@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "id": "res-fold-add-aie-compute",
+  "packet_id": "pkt-fold-add-aie-compute",
+  "node_id": "mjolnir-io3b.2",
+  "change_id": "add-aie-compute",
+  "signer": {
+    "id": "opus-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "claude-opus-5-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-fold"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "openspec/specs/aie-compute/spec.md",
+      "role": "living-spec"
+    },
+    {
+      "path": "openspec/changes/archive/2026-11-11-add-aie-compute",
+      "role": "archive"
+    },
+    {
+      "path": "docs/architecture.md",
+      "role": "architecture"
+    },
+    {
+      "path": "docs/decisions/0015-aie-compute-sidecar.md",
+      "role": "adr"
+    },
+    {
+      "path": "docs/LEARNINGS.md",
+      "role": "learnings"
+    }
+  ],
+  "evidence": {
+    "kind": "fold",
+    "base_check": "clean",
+    "living_specs": [
+      "openspec/specs/aie-compute/spec.md"
+    ],
+    "archive": "openspec/changes/archive/2026-11-11-add-aie-compute",
+    "change_dir_gone": true,
+    "shalls_in_living_spec": true,
+    "child_headings_kept": true,
+    "adr_amendment": "docs/decisions/0015-aie-compute-sidecar.md remaining none/folded",
+    "learnings": [
+      "2026-11-11 / add-aie-compute: union remaining named ADDED onto living aie-compute; occupancy.rs nix user/flock leftover is not a refuse"
+    ]
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": null,
+  "summary": "Folded architecture add-aie-compute remaining ADDED into living openspec/specs/aie-compute/spec.md as a union (device, locator map, scoped admit channel, holder-checked Biscuit, occupancy flock identity, plus extra guild/capacity clauses). Child-folded headings were kept. Archived at openspec/changes/archive/2026-11-11-add-aie-compute. openspec/changes/add-aie-compute is gone. Every SHALL this change claimed is in openspec/specs/. ADR 0015 remaining is none/folded. docs/architecture.md catalog names this fold. One LEARNINGS line; occupancy.rs nix compile errors stay host-sidecar leftover. Did not git push. Stayed on main HEAD.",
+  "raw_ref": "groups/add-aie-compute/results/opus-fold.json",
+  "distilled": {
+    "disposition": "pass",
+    "summary": "Living aie-compute spec holds architecture remaining SHALLs unioned with child clauses. The change is archived. ADR 0015 remaining is none/folded.",
+    "commit_sha": null,
+    "living_spec": "openspec/specs/aie-compute/spec.md",
+    "archive": "openspec/changes/archive/2026-11-11-add-aie-compute",
+    "raw_ref": "groups/add-aie-compute/results/opus-fold.json"
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "opus-fold",
+    "signed_at": "2026-11-11T17:49:28Z",
+    "content_hash": "sha256:9d7c3197cfd88b47b99299276f3c71ceb8603a7c43f5439177c66e18fb4ca7be"
+  }
+}
