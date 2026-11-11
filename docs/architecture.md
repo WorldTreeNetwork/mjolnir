@@ -766,7 +766,13 @@ Reserved overlay IP `:host_api_ip` (`10.200.0.1` on `dummy-mjolnir`).
 Blob door `:7222` (`blob_door_url`), orchestrator API `:4000`
 (`api_url`), tenant Postgres `:5432` (provisioned `DATABASE_URL`),
 Redis `:6379` (provisioned `REDIS_URL`, ADR
-[`0007`](decisions/0007-host-sidecar-redis.md)).
+[`0007`](decisions/0007-host-sidecar-redis.md)), AIE compute `:7422`
+(`aie_url` when the unit is up and `/dev/accel/accel0` exists; omitted
+when off; ADR
+[`0015`](decisions/0015-aie-compute-sidecar.md); living spec
+[`aie-compute`](../openspec/specs/aie-compute/spec.md),
+`add-aie-host-sidecar` folded 2026-11-11; architecture
+`add-aie-compute` still inflight).
 Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
 `:app_log`) are ADR
 [`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2

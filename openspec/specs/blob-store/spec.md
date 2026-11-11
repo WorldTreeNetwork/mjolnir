@@ -11,7 +11,9 @@ on 2026-08-19, and
 [`add-blob-door-byte-pump`](../../changes/archive/2026-09-20-add-blob-door-byte-pump/proposal.md)
 on 2026-09-20, and
 [`add-recording-blob`](../../changes/archive/2026-10-21-add-recording-blob/proposal.md)
-on 2026-10-21. Decisions that are not yet code (iroh-blobs working
+on 2026-10-21, and
+[`add-aie-host-sidecar`](../../changes/archive/2026-11-11-add-aie-host-sidecar/proposal.md)
+on 2026-11-11 (locator map). Decisions that are not yet code (iroh-blobs working
 set, encryption) live in
 [`docs/decisions/0003-blob-store-mesh.md`](../../../docs/decisions/0003-blob-store-mesh.md).
 
@@ -293,10 +295,15 @@ NOT be treated as the path.
 
 ### Requirement: Guests are told the door URL, never B2 keys
 
-On every boot the host SHALL inject `blob_door_url` (the overlay
-HTTP origin, e.g. `http://10.200.0.1:7222`) into the guest via
-vsock `configure_identity`. The guest SHALL persist it in
-`/etc/mjolnir/vm.json` next to `api_url`. The guest SHALL NOT
+On every boot the host SHALL inject locators as a map via vsock
+`configure_identity`. The guest SHALL persist that map in
+`/etc/mjolnir/vm.json`. The map SHALL include `api_url` and
+`blob_door_url` (the overlay HTTP origin, e.g.
+`http://10.200.0.1:7222`). When the AIE sidecar is up and
+`/dev/accel/accel0` exists, the map SHALL also include `aie_url`
+(e.g. `http://10.200.0.1:7422`). When the sidecar is stopped or
+the device is missing, the host SHALL omit `aie_url` and SHALL
+NOT remove `api_url` or `blob_door_url`. The guest SHALL NOT
 receive `B2_*` credentials or the door's environment file.
 
 #### Scenario: Fresh spawn
@@ -304,7 +311,22 @@ receive `B2_*` credentials or the door's environment file.
 - GIVEN a VM has booted
 - WHEN `/etc/mjolnir/vm.json` is read
 - THEN it contains `blob_door_url` equal to `http://10.200.0.1:7222`
+- AND locators are a map
 - AND it does not contain a B2 application key
+
+#### Scenario: AIE locator when the sidecar is up
+
+- GIVEN `/dev/accel/accel0` and a running AIE sidecar
+- WHEN a guest boots
+- THEN `aie_url` is present in the locator map
+- AND `blob_door_url` is still present
+
+#### Scenario: AIE locator omitted when off
+
+- GIVEN no `/dev/accel/accel0` or a stopped AIE sidecar
+- WHEN a guest boots
+- THEN `aie_url` is absent
+- AND `blob_door_url` is unchanged
 
 #### Scenario: B2 keys appear in the guest
 
