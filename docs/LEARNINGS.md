@@ -2,6 +2,8 @@
 
 Hard-won facts from folded changes. One dated line each.
 
+- **2026-11-11 / add-aie-guest-offer:** Focused verify was baseline-red on `native/mjolnir_aie_sidecar/src/occupancy.rs` (nix `user` feature for `Uid`; nix 0.29 `flock` wants `RawFd`, not `&File`). That is host-sidecar leftover, not guest-offer. Elixir live-pending retry and principal scenarios passed.
+
 - **2026-11-05 / add-proxy-guest-net:** The stock `identikey-api-proxy.service` is not the egress boundary. Its `DynamicUser` `StateDirectory` is a symlink, and `Journal::open` exits before bind. A data-dir drop-in points `--data-dir` at the real mode-0700 directory and adds `IPAddressAllow=10.200.0.1/32`. The stock localhost allowlist cannot open the host API.
 - **2026-11-05 / add-proxy-guest-net:** The class signal is `base_image`, not `enable_iroh`. An ordinary `ubuntu-24.04` image spawned with `enable_iroh` false keeps the stock `mjolnir-network-setup`, the default route, and the public resolvers. The monitor's automatic heal is level 1, so it does not re-run network setup; only a level-2 heal runs the proxy script.
 - **2026-11-05 / add-proxy-guest-net:** This host's guest kernel is built with `CONFIG_IPV6` unset. A non-loopback IPv6 connect cannot succeed for root either. Acceptance records that attempt and still fails if the proxy unit opens it.

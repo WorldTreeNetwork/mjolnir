@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "id": "res-fold-add-aie-guest-offer",
+  "packet_id": "pkt-fold-add-aie-guest-offer",
+  "node_id": "mjolnir-io3b.6",
+  "change_id": "add-aie-guest-offer",
+  "signer": {
+    "id": "opus-fold",
+    "kind": "model",
+    "harness": "claude",
+    "interface": "claude-opus-5-5",
+    "signing": {
+      "mode": "stand-in",
+      "stand_in_id": "opus-fold"
+    }
+  },
+  "artifacts": [
+    {
+      "path": "openspec/specs/aie-compute/spec.md",
+      "role": "living-spec"
+    },
+    {
+      "path": "openspec/changes/archive/2026-11-11-add-aie-guest-offer",
+      "role": "archive"
+    },
+    {
+      "path": "docs/architecture.md",
+      "role": "architecture"
+    },
+    {
+      "path": "docs/decisions/0015-aie-compute-sidecar.md",
+      "role": "adr"
+    },
+    {
+      "path": "docs/LEARNINGS.md",
+      "role": "learnings"
+    }
+  ],
+  "evidence": {
+    "kind": "fold",
+    "base_check": "clean",
+    "living_specs": [
+      "openspec/specs/aie-compute/spec.md"
+    ],
+    "archive": "openspec/changes/archive/2026-11-11-add-aie-guest-offer",
+    "change_dir_gone": true,
+    "shalls_in_living_spec": true,
+    "parent_inflight": "openspec/changes/add-aie-compute",
+    "adr_amendment": "docs/decisions/0015-aie-compute-sidecar.md",
+    "learnings": [
+      "2026-11-11 / add-aie-guest-offer: occupancy.rs nix user/flock compile errors are host-sidecar leftover, not guest-offer"
+    ]
+  },
+  "disposition": "pass",
+  "promoted": false,
+  "commit": null,
+  "summary": "Folded add-aie-guest-offer ADDED requirements (VM being is the offer principal; Guests execute on the locator with mj; Guest retries a live pending_id) onto living openspec/specs/aie-compute/spec.md. Archived at openspec/changes/archive/2026-11-11-add-aie-guest-offer. Base check was clean. openspec/changes/add-aie-guest-offer is gone. Every SHALL from this change is in the living spec. Architecture add-aie-compute stays inflight. ADR 0015 Built vs remaining now lists only the parent fold. docs/architecture.md catalog names this fold. One LEARNINGS line for occupancy.rs baseline-red outside this change. Did not fold add-aie-compute. Did not git push.",
+  "raw_ref": "groups/mjolnir-io3b.6/results/opus-fold.json",
+  "distilled": {
+    "disposition": "pass",
+    "summary": "Living aie-compute spec holds this change's SHALLs. The guest-offer change is archived. add-aie-compute stays inflight.",
+    "commit_sha": null,
+    "living_spec": "openspec/specs/aie-compute/spec.md",
+    "archive": "openspec/changes/archive/2026-11-11-add-aie-guest-offer",
+    "raw_ref": "groups/mjolnir-io3b.6/results/opus-fold.json"
+  },
+  "signature": {
+    "mode": "stand-in",
+    "stand_in_id": "opus-fold",
+    "signed_at": "2026-11-11T17:44:29Z",
+    "content_hash": "sha256:902b3921ab587a62dced9aaf86444f008f4618da827bd0395ebb5d1c201c57ce"
+  }
+}

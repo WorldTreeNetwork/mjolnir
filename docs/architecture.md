@@ -771,9 +771,9 @@ Redis `:6379` (provisioned `REDIS_URL`, ADR
 when off; ADR
 [`0015`](decisions/0015-aie-compute-sidecar.md); living spec
 [`aie-compute`](../openspec/specs/aie-compute/spec.md),
-`add-aie-host-sidecar`, `add-aie-keyspace-claims`, and
-`add-guild-compute-holder` folded 2026-11-11; architecture
-`add-aie-compute` still inflight).
+`add-aie-host-sidecar`, `add-aie-keyspace-claims`,
+`add-guild-compute-holder`, and `add-aie-guest-offer` folded
+2026-11-11; architecture `add-aie-compute` still inflight).
 Typed application logs (pino → RFC 3164 syslog MSG JSON → EventBus
 `:app_log`) are ADR
 [`0010`](decisions/0010-typed-log.md). Guest `/dev/log` vsock ch2
