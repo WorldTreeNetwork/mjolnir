@@ -28,7 +28,8 @@ On every boot the host injects `/etc/mjolnir/vm.json`:
 {
   "vm_id": "…",
   "api_url": "http://10.200.0.1:4000",
-  "blob_door_url": "http://10.200.0.1:7222"
+  "blob_door_url": "http://10.200.0.1:7222",
+  "aie_url": "http://10.200.0.1:7422"
 }
 ```
 
@@ -50,8 +51,13 @@ rule for that port is missing.
 | **Redis** (sessions / cache / queues) | `10.200.0.1:6379` (AUTH) | App VMs with a provisioned secret | `REDIS_URL` in deploy secrets — **not** in `vm.json` |
 | **AIE compute** (NPU jobs by overlay RPC)¹ | `http://10.200.0.1:7422` | VMs holding an execute right on a signed offer | `aie_url` in `vm.json`; omitted when off |
 
-¹ Not built. The contract is [ADR 0015](../decisions/0015-aie-compute-sidecar.md);
-the sidecar lands in `add-aie-host-sidecar`.
+¹ Built. Unit `mjolnir-aie` (user `mjolnir-aie`, not root) on dummy-mjolnir
+`:7422`, INPUT, catalog design ids only. BEAM admit is
+`/run/mjolnir/aie-admit.sock` (`0660` root:`mjolnir-aie`), not
+`operator.sock`. Occupancy is IRON Lab `occupancy.lock`. The contract is
+[ADR 0015](../decisions/0015-aie-compute-sidecar.md). HTTP execute shape
+is `add-aie-guest-offer`. `aie_url` is omitted from the example above when
+the unit is down or `/dev/accel/accel0` is missing.
 
 Not sidecars: MinIO (rejected — not v1, not a later cache), B2 itself
 (only the door holds those keys), the public gateway (Iroh/HTTPS in, not
@@ -130,6 +136,24 @@ ADR: [`0007`](../decisions/0007-host-sidecar-redis.md).
 `api_url` is how in-guest helpers (snapshot trigger, etc.) call back
 to Mjolnir. Guests are not on `127.0.0.1`, so they do not get the
 localhost auth bypass — they need a token like any other API client.
+
+---
+
+## AIE compute
+
+NPU jobs over overlay HTTP. The guest never receives `/dev/accel`. The
+sidecar opens `accel0` as `mjolnir-aie`, binds `10.200.0.1:7422`, and
+calls BEAM enqueue/admission on `aie-admit.sock`. Occupancy is the same
+flock `ironlab` uses (`$XDG_RUNTIME_DIR/ironlab/occupancy.lock`); the
+XRT worker inherits that fd. Catalog design ids only — a guest xclbin
+is refused. Install rides `just deploy` (`scripts/install-aie-sidecar.sh`).
+
+```bash
+jq -r .aie_url /etc/mjolnir/vm.json
+# null / missing when the unit is off or there is no accel node
+```
+
+ADR: [`0015`](../decisions/0015-aie-compute-sidecar.md).
 
 ---
 

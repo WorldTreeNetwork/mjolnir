@@ -2450,7 +2450,15 @@ defmodule Mjolnir.VM do
       api_url = "http://#{host_ip}:#{api_port}"
       blob_door_url = "http://#{host_ip}:7222"
 
-      case maybe_configure_identity(state, probe, vsock_path, state.id, api_url, blob_door_url) do
+      locators = %{"blob_door_url" => blob_door_url}
+
+      locators =
+        case Mjolnir.AIE.Sidecar.locator_url() do
+          url when is_binary(url) -> Map.put(locators, "aie_url", url)
+          _ -> locators
+        end
+
+      case maybe_configure_identity(state, probe, vsock_path, state.id, api_url, locators) do
         :ok -> Logger.info("VM identity ok for VM #{state.id}")
         :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
         {:error, reason} -> Logger.warning("VM identity injection failed: #{inspect(reason)}")
@@ -2998,8 +3006,8 @@ defmodule Mjolnir.VM do
 
   # Always re-inject: blob_door_url must land on resume of guests that
   # booted before add-blob-door-overlay. Identity write is idempotent.
-  defp maybe_configure_identity(_state, _probe, vsock_path, vm_id, api_url, blob_door_url),
-    do: configure_identity(vsock_path, vm_id, api_url, blob_door_url)
+  defp maybe_configure_identity(_state, _probe, vsock_path, vm_id, api_url, locators),
+    do: configure_identity(vsock_path, vm_id, api_url, locators)
 
   defp maybe_configure_iroh(%__MODULE__{resume_mode: true}, _probe, vsock_path, true) do
     case query_iroh_status(vsock_path) do
@@ -3228,8 +3236,8 @@ defmodule Mjolnir.VM do
     end
   end
 
-  defp configure_identity(vsock_path, vm_id, api_url, blob_door_url) do
-    request = Mjolnir.Vsock.Protocol.configure_identity_request(vm_id, api_url, blob_door_url)
+  defp configure_identity(vsock_path, vm_id, api_url, locators) do
+    request = Mjolnir.Vsock.Protocol.configure_identity_request(vm_id, api_url, locators)
 
     case vsock_request(vsock_path, request) do
       {:ok, %{"exit_code" => 0}} ->

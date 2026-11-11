@@ -78,6 +78,14 @@ config :mjolnir,
 
   # HTTP API
   api_port: 4000,
+  # Overlay address guests ARP (dummy-mjolnir). Sidecars bind here, never 0.0.0.0.
+  host_api_ip: "10.200.0.1",
+  aie_compute_port: 7422,
+  # Prod runtime sets /run/mjolnir/aie-admit.sock. Tests leave this unset.
+  aie_admit_socket: nil,
+  aie_max_queue_age_ms: 60_000,
+  aie_admit_deadline_ms: 5_000,
+  aie_catalog_ids: ["vector-add", "validate", "npu2-vector-add"],
 
   # Dormant registry persist interval (ms). 0 = instant (flush every change).
   dormant_flush_delay_ms: 250,

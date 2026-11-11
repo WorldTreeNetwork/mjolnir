@@ -64,6 +64,13 @@ pub enum VsockRequest {
         /// that omit the field still deserialize.
         #[serde(default)]
         blob_door_url: Option<String>,
+        /// Overlay origin of mjolnir-aie. Omitted when the sidecar is off.
+        #[serde(default)]
+        aie_url: Option<String>,
+        /// Locator map (`blob_door_url`, optional `aie_url`). Flattened into
+        /// `/etc/mjolnir/vm.json` together with top-level convenience keys.
+        #[serde(default)]
+        locators: Option<serde_json::Map<String, serde_json::Value>>,
     },
     #[cfg(feature = "iroh")]
     #[serde(rename = "configure_iroh")]
@@ -415,3 +422,39 @@ impl IrohReady {
         }
     }
 }
+
+/// Flat `/etc/mjolnir/vm.json` document from a configure_identity request.
+pub fn identity_json(
+    vm_id: &str,
+    api_url: &str,
+    blob_door_url: Option<String>,
+    aie_url: Option<String>,
+    locators: Option<serde_json::Map<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let mut identity = serde_json::json!({
+        "vm_id": vm_id,
+        "api_url": api_url
+    });
+    let mut locators = locators.unwrap_or_default();
+    if let Some(url) = blob_door_url.filter(|u| !u.is_empty()) {
+        locators
+            .entry("blob_door_url")
+            .or_insert_with(|| serde_json::Value::String(url.clone()));
+        identity["blob_door_url"] = serde_json::Value::String(url);
+    }
+    if let Some(url) = aie_url.filter(|u| !u.is_empty()) {
+        locators
+            .entry("aie_url")
+            .or_insert_with(|| serde_json::Value::String(url.clone()));
+        identity["aie_url"] = serde_json::Value::String(url);
+    }
+    for (key, value) in locators {
+        if let serde_json::Value::String(s) = &value {
+            if !s.is_empty() {
+                identity[key] = serde_json::Value::String(s.clone());
+            }
+        }
+    }
+    identity
+}
+

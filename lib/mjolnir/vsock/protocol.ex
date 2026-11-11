@@ -180,22 +180,58 @@ defmodule Mjolnir.Vsock.Protocol do
 
   @doc """
   Build a configure_identity request message.
-  Guest agent writes /etc/mjolnir/vm.json with vm_id, api_url, and
-  optional blob_door_url (overlay origin of mjolnir-blob-door).
+
+  Locators are a map. `blob_door_url` stays (top-level and in the map) so
+  older guests still persist it. `aie_url` is present only when supplied.
   """
-  def configure_identity_request(vm_id, api_url, blob_door_url \\ nil, request_id \\ nil) do
-    base = %{
+  def configure_identity_request(vm_id, api_url, locators \\ %{}, request_id \\ nil)
+
+  def configure_identity_request(vm_id, api_url, locators, request_id) when is_map(locators) do
+    blob = locator_value(locators, "blob_door_url")
+    aie = locator_value(locators, "aie_url")
+
+    locators_wire =
+      %{}
+      |> maybe_put_locator("blob_door_url", blob)
+      |> maybe_put_locator("aie_url", aie)
+
+    %{
       "type" => "configure_identity",
       "id" => request_id || UUID.uuid4(),
       "vm_id" => vm_id,
-      "api_url" => api_url
+      "api_url" => api_url,
+      "locators" => locators_wire
     }
+    |> maybe_put_locator("blob_door_url", blob)
+    |> maybe_put_locator("aie_url", aie)
+  end
 
-    case blob_door_url do
-      url when is_binary(url) and url != "" -> Map.put(base, "blob_door_url", url)
-      _ -> base
+  def configure_identity_request(vm_id, api_url, blob_door_url, request_id)
+      when is_binary(blob_door_url) or is_nil(blob_door_url) do
+    locators =
+      case blob_door_url do
+        url when is_binary(url) and url != "" -> %{"blob_door_url" => url}
+        _ -> %{}
+      end
+
+    configure_identity_request(vm_id, api_url, locators, request_id)
+  end
+
+  defp locator_value(locators, key) do
+    atom =
+      Enum.find(Map.keys(locators), fn
+        k when is_atom(k) -> Atom.to_string(k) == key
+        _ -> false
+      end)
+
+    case locators[key] || (atom && locators[atom]) do
+      url when is_binary(url) and url != "" -> url
+      _ -> nil
     end
   end
+
+  defp maybe_put_locator(map, _key, nil), do: map
+  defp maybe_put_locator(map, key, value), do: Map.put(map, key, value)
 
   @doc """
   Build a get_iroh_status request message.

@@ -265,6 +265,42 @@ defmodule Mjolnir.Vsock.ProtocolTest do
         )
 
       assert request["blob_door_url"] == "http://10.200.0.1:7222"
+      assert request["locators"]["blob_door_url"] == "http://10.200.0.1:7222"
+      refute Map.has_key?(request, "aie_url")
+      refute Map.has_key?(request["locators"], "aie_url")
+    end
+
+    test "configure_identity locators are a map with optional aie_url" do
+      request =
+        Protocol.configure_identity_request(
+          "vm-123",
+          "http://10.200.0.1:4000",
+          %{
+            "blob_door_url" => "http://10.200.0.1:7222",
+            "aie_url" => "http://10.200.0.1:7422"
+          }
+        )
+
+      assert request["locators"] == %{
+               "blob_door_url" => "http://10.200.0.1:7222",
+               "aie_url" => "http://10.200.0.1:7422"
+             }
+
+      assert request["blob_door_url"] == "http://10.200.0.1:7222"
+      assert request["aie_url"] == "http://10.200.0.1:7422"
+    end
+
+    test "configure_identity omits aie_url when off" do
+      request =
+        Protocol.configure_identity_request(
+          "vm-123",
+          "http://10.200.0.1:4000",
+          %{"blob_door_url" => "http://10.200.0.1:7222"}
+        )
+
+      refute Map.has_key?(request, "aie_url")
+      refute Map.has_key?(request["locators"], "aie_url")
+      assert request["blob_door_url"] == "http://10.200.0.1:7222"
     end
 
     test "get_iroh_status_request/1 still works" do

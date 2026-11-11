@@ -87,12 +87,13 @@ if $BUILD_ELIXIR; then
     if ! $APP_ONLY; then
         # Finish native compilation before changing the running controller.
         native_build blob
+        native_build aie
     fi
     # Remote systemd owns activation so an SSH disconnect cannot abandon rollback.
     remote "systemd-run --quiet --wait --pipe --collect --unit='mjolnir-release-$RELEASE_NAME' /bin/bash '$REMOTE_CODE/scripts/cutover-release.sh' '$REMOTE_CODE'"
     if ! $APP_ONLY; then
         remote "bash $ACTIVE_CODE/scripts/ensure-host-modules.sh; bash $ACTIVE_CODE/scripts/ensure-host-nat.sh --install-unit; bash $ACTIVE_CODE/scripts/ensure-host-api-addr.sh --install-unit"
-        remote "cd $ACTIVE_CODE; bash scripts/install-blob-door.sh --install-only; bash scripts/install-redis.sh"
+        remote "cd $ACTIVE_CODE; bash scripts/install-blob-door.sh --install-only; bash scripts/install-redis.sh; bash scripts/install-aie-sidecar.sh --install-only"
         remote "cp $ACTIVE_CODE/systemd/mjolnir-cert-renew.service $ACTIVE_CODE/systemd/mjolnir-cert-renew.timer /etc/systemd/system/; systemctl daemon-reload; systemctl enable --now mjolnir-cert-renew.timer"
     fi
 fi

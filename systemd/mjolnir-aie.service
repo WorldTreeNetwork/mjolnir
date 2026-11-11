@@ -1,0 +1,29 @@
+[Unit]
+Description=Mjolnir AIE compute sidecar
+After=network.target mjolnir-hotel-ip.service mjolnir.service
+Requires=mjolnir-hotel-ip.service
+Documentation=docs/guide/host-sidecars.md
+Documentation=docs/decisions/0015-aie-compute-sidecar.md
+
+[Service]
+Type=exec
+User=mjolnir-aie
+Group=mjolnir-aie
+SupplementaryGroups=render
+WorkingDirectory=/opt/mjolnir
+ExecStart=/opt/mjolnir/bin/mjolnir-aie
+EnvironmentFile=-/etc/mjolnir/aie.env
+# Overlay bind + accel node. Never operator.sock.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/accel/accel0 rw
+# Occupancy flock lives under the IRON user's XDG_RUNTIME_DIR.
+ReadWritePaths=/run
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -27,9 +27,18 @@ end
 
 if config_env() == :prod do
   config :mjolnir,
-    operator_socket: System.get_env("MJOLNIR_OPERATOR_SOCKET", "/run/mjolnir/operator.sock")
+    operator_socket: System.get_env("MJOLNIR_OPERATOR_SOCKET", "/run/mjolnir/operator.sock"),
+    aie_admit_socket: System.get_env("MJOLNIR_AIE_ADMIT_SOCKET", "/run/mjolnir/aie-admit.sock")
 
   config :mjolnir, isolate_guests: true
+end
+
+if port = System.get_env("MJOLNIR_AIE_COMPUTE_PORT") do
+  config :mjolnir, aie_compute_port: String.to_integer(port)
+end
+
+if ip = System.get_env("MJOLNIR_HOST_API_IP") do
+  config :mjolnir, host_api_ip: ip
 end
 
 if pub = System.get_env("MJOLNIR_BISCUIT_PUBLIC_HEX") do

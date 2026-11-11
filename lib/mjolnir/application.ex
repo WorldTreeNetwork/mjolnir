@@ -118,13 +118,17 @@ defmodule Mjolnir.Application do
           # Single-use nonces for holder-bound secret redeem.
           Mjolnir.Secrets.Nonces,
 
+          # AIE pending table (in-memory; restart invalidates pending_id).
+          Mjolnir.AIE.Pending,
+
           # HTTP API. TCP. A loopback peer is not the operator.
           {Bandit,
            plug: Mjolnir.API.Router,
            port: api_port,
            thousand_island_options: [read_timeout: :infinity]}
         ] ++
-        operator_listener()
+        operator_listener() ++
+        aie_admit_listener()
 
     opts = [strategy: :one_for_one, name: Mjolnir.Supervisor]
 
@@ -133,6 +137,7 @@ defmodule Mjolnir.Application do
 
     with {:ok, pid} <- Supervisor.start_link(children, opts) do
       chmod_operator_socket()
+      chmod_aie_admit_socket()
       maybe_isolate_guests()
       {:ok, pid}
     end
@@ -162,6 +167,36 @@ defmodule Mjolnir.Application do
     case Application.get_env(:mjolnir, :operator_socket) do
       path when is_binary(path) -> File.chmod(path, 0o600)
       _ -> :ok
+    end
+  end
+
+  defp aie_admit_listener do
+    case Application.get_env(:mjolnir, :aie_admit_socket) do
+      path when is_binary(path) and path != "" ->
+        File.rm(path)
+        File.mkdir_p!(Path.dirname(path))
+
+        [
+          {Bandit,
+           plug: Mjolnir.AIE.Admit,
+           scheme: :http,
+           port: 0,
+           ip: {:local, path},
+           thousand_island_options: [read_timeout: :infinity]}
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp chmod_aie_admit_socket do
+    case Application.get_env(:mjolnir, :aie_admit_socket) do
+      path when is_binary(path) and path != "" ->
+        Mjolnir.AIE.Admit.apply_socket_perms(path)
+
+      _ ->
+        :ok
     end
   end
 

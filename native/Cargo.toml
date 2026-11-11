@@ -6,6 +6,7 @@ members = [
     "mjolnir_client",
     "mjolnir_gateway",
     "mjolnir_blob_door",
+    "mjolnir_aie_sidecar",
     "mjolnir_biscuit",
 ]
 resolver = "2"

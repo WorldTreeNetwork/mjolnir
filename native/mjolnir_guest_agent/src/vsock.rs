@@ -906,20 +906,22 @@ async fn handle_request(
             vm_id,
             api_url,
             blob_door_url,
+            aie_url,
+            locators,
         } => {
             info!(
-                "ConfigureIdentity: vm_id={}, api_url={}, blob_door_url={:?}",
-                vm_id, api_url, blob_door_url
+                "ConfigureIdentity: vm_id={}, api_url={}, blob_door_url={:?}, aie_url={:?}",
+                vm_id, api_url, blob_door_url, aie_url
+            );
+            let identity = crate::protocol::identity_json(
+                &vm_id,
+                &api_url,
+                blob_door_url,
+                aie_url,
+                locators,
             );
             let result = (|| -> std::io::Result<()> {
                 std::fs::create_dir_all("/etc/mjolnir")?;
-                let mut identity = serde_json::json!({
-                    "vm_id": vm_id,
-                    "api_url": api_url
-                });
-                if let Some(url) = blob_door_url.filter(|u| !u.is_empty()) {
-                    identity["blob_door_url"] = serde_json::Value::String(url);
-                }
                 std::fs::write(
                     "/etc/mjolnir/vm.json",
                     serde_json::to_string_pretty(&identity).unwrap(),
