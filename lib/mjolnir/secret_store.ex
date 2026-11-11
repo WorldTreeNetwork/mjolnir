@@ -31,7 +31,7 @@ defmodule Mjolnir.SecretStore do
   use GenServer
   require Logger
 
-  alias Mjolnir.Aie.Offer
+  alias Mjolnir.Aie.{Delegate, Offer}
   alias Mjolnir.Sites.{AliasRecord, HeadRecord, IdentiKey, Manifest}
 
   @type identikey_fp :: String.t()
@@ -256,6 +256,7 @@ defmodule Mjolnir.SecretStore do
   def handle_call({:put, identikey_fp, key, envelope}, _from, state) do
     with :ok <- verify_envelope(identikey_fp, envelope),
          :ok <- maybe_enforce_offer_floor(identikey_fp, key, envelope),
+         :ok <- maybe_enforce_delegate_floor(identikey_fp, key, envelope),
          :ok <- write_atomic(identikey_fp, key, envelope),
          :ok <- maybe_write_alias_index(identikey_fp, key) do
       {:reply, :ok, state}
@@ -267,6 +268,10 @@ defmodule Mjolnir.SecretStore do
   def handle_call({:delete, identikey_fp, key, tombstone}, _from, state) do
     with :ok <- verify_envelope(identikey_fp, tombstone) do
       cond do
+        Delegate.delegate_key?(key) or delegate_record?(tombstone) or
+            stored_delegate?(identikey_fp, key) ->
+          {:reply, {:error, :delegate_delete_forbidden}, state}
+
         offer_record?(tombstone) or Offer.offer_key?(key) or stored_offer?(identikey_fp, key) ->
           reply = retain_offer_tombstone(identikey_fp, key, tombstone)
           {:reply, reply, state}
@@ -719,8 +724,14 @@ defmodule Mjolnir.SecretStore do
 
   # Rebuild the canonical bytes that were signed: re-parse as the appropriate
   # struct and call canonical_signing_bytes/1 on it.
-  defp canonical_bytes_without_sig(bytes, _raw) do
+  defp canonical_bytes_without_sig(bytes, raw) do
     cond do
+      delegate_type?(raw) ->
+        case Delegate.parse(bytes) do
+          {:ok, r} -> {:ok, Delegate.canonical_signing_bytes(r)}
+          {:error, _} = err -> err
+        end
+
       # Try HeadRecord first (has "snapshot_hash" field)
       head_record?(bytes) ->
         case HeadRecord.parse(bytes) do
@@ -787,6 +798,101 @@ defmodule Mjolnir.SecretStore do
       {:ok, bytes} -> offer_record?(bytes)
       _ -> false
     end
+  end
+
+  defp stored_delegate?(identikey_fp, key) do
+    case get(identikey_fp, key) do
+      {:ok, bytes} -> delegate_record?(bytes)
+      _ -> false
+    end
+  end
+
+  defp delegate_record?(bytes) when is_binary(bytes), do: Delegate.record?(bytes)
+  defp delegate_record?(_), do: false
+
+  defp delegate_type?(raw) when is_map(raw) do
+    raw["type"] in [Delegate.grant_type(), Delegate.withdraw_type()]
+  end
+
+  defp delegate_type?(_), do: false
+
+  # One record is the floor. Put requires sequence > current (missing = 0).
+  # Generic delete cannot mutate this key; unrelated codecs cannot either.
+  defp maybe_enforce_delegate_floor(identikey_fp, key, envelope) do
+    delegate_env? = delegate_record?(envelope)
+    delegate_key? = Delegate.delegate_key?(key)
+    stored? = stored_delegate?(identikey_fp, key)
+
+    cond do
+      not (delegate_env? or delegate_key? or stored?) ->
+        :ok
+
+      not delegate_env? ->
+        {:error, :delegate_key_protected}
+
+      true ->
+        enforce_delegate_floor(identikey_fp, key, envelope)
+    end
+  end
+
+  defp enforce_delegate_floor(identikey_fp, key, envelope) do
+    with {:ok, incoming} <- Delegate.parse(envelope),
+         :ok <- match_delegate_key(key, incoming),
+         :ok <- match_delegate_owner(identikey_fp, incoming) do
+      case get(identikey_fp, key) do
+        :not_found ->
+          :ok
+
+        {:error, _reason} ->
+          {:error, :unreadable}
+
+        {:ok, existing} ->
+          cond do
+            existing == envelope ->
+              {:error, :sequence_floor}
+
+            not delegate_record?(existing) ->
+              {:error, :corrupt_current}
+
+            true ->
+              case Delegate.parse(existing) do
+                {:ok, current} ->
+                  compare_delegate_sequence(current, incoming)
+
+                {:error, _} ->
+                  {:error, :corrupt_current}
+              end
+          end
+      end
+    else
+      {:error, :malformed} -> {:error, :malformed}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp compare_delegate_sequence(current, incoming) do
+    cond do
+      incoming.member_pk != current.member_pk or incoming.holder_fp != current.holder_fp ->
+        {:error, :wrong_target}
+
+      incoming.sequence > current.sequence ->
+        :ok
+
+      true ->
+        {:error, :sequence_floor}
+    end
+  end
+
+  defp match_delegate_key(key, incoming) do
+    if key == Delegate.key(incoming.holder_fp),
+      do: :ok,
+      else: {:error, :delegate_key_mismatch}
+  end
+
+  defp match_delegate_owner(identikey_fp, incoming) do
+    if identikey_fp == IdentiKey.fingerprint(incoming.member_pk),
+      do: :ok,
+      else: {:error, :wrong_namespace}
   end
 
   # Offer sequence is a floor. Put at or below it, including re-put of the
