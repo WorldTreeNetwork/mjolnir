@@ -7,9 +7,14 @@ remain in `/var/lib/mjolnir` and `/etc/mjolnir`.
 
 ## Deploy
 
-Before restarting the controller, take fresh protected database/configuration
-backups, verify an off-host copy, and retain a tested restore path. A controller
-restart briefly interrupts its API and tenant PostgreSQL connections; guest
+Before restarting a production controller, take fresh protected database/configuration
+backups, verify an off-host copy, and retain a tested restore path. On local
+development and other non-production hosts, a protected local backup with a
+verified restore is sufficient; an off-host destination is optional and must not
+block an upgrade. Include durable signing keys in the protected backup and retain
+the previous release for rollback in either environment.
+
+A controller restart briefly interrupts its API and tenant PostgreSQL connections; guest
 hypervisors stay in independent systemd scopes. Active database transactions
 must quiesce before activation, and clients must tolerate reconnecting.
 
