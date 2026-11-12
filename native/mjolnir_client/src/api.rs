@@ -27,6 +27,7 @@ pub async fn cmd_spawn(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    owner: &Option<String>,
     connect: bool,
     memory_mb: &Option<u32>,
     snapshot: &Option<String>,
@@ -40,6 +41,7 @@ pub async fn cmd_spawn(
             profile,
             api_flag,
             token,
+            owner,
             name,
             manifest_path,
             dry_run,
@@ -80,11 +82,19 @@ pub async fn cmd_spawn(
         snapshot: snapshot.clone(),
         base_image: base_image.clone(),
         ssh_public_key,
+        owner_id: owner.clone(),
         ..SpawnOptions::default()
     };
 
     eprintln!("Spawning VM...");
-    let resp = spawn_vm(&client, base, &opts).await?;
+    let resp = if let Some(sock) = operator_socket() {
+        let owner_id = owner.as_deref().context(
+            "operator spawn requires --owner (canonical base58 XID). The operator principal is not an account",
+        )?;
+        spawn_operator_socket(&sock, owner_id, &opts).await?
+    } else {
+        spawn_vm(&client, base, &opts).await?
+    };
 
     // Print the VM id prominently and early: every follow-up verb (exec, kill,
     // info, snapshot) takes this id, not the ticket. Without it printed here,
@@ -94,9 +104,16 @@ pub async fn cmd_spawn(
     // for anything scripting off `mj spawn` output.
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
 
-    // If shell not ready yet, await it.
+    // If shell not ready yet, await it. The operator socket has no bearer
+    // token, so the wait has to use the same socket as the spawn.
     let ticket = if resp.shell_ready == Some(true) {
         resp.ticket.clone()
+    } else if let Some(sock) = operator_socket() {
+        eprintln!("Waiting for shell...");
+        let owner_id = owner.as_deref().context(
+            "operator spawn requires --owner (canonical base58 XID). The operator principal is not an account",
+        )?;
+        Some(await_operator_pty(&sock, owner_id, &resp.id, 30_000).await?)
     } else {
         eprintln!("Waiting for shell...");
         Some(await_pty(&client, base, &resp.id, 30000).await?)
@@ -125,6 +142,81 @@ pub async fn cmd_spawn(
     }
 
     Ok(())
+}
+
+fn operator_socket() -> Option<String> {
+    std::env::var("MJOLNIR_OPERATOR_SOCKET")
+        .ok()
+        .map(|sock| sock.trim().to_string())
+        .filter(|sock| !sock.is_empty())
+}
+
+/// `MJOLNIR_OPERATOR_SOCKET` is the break-glass listener. curl speaks Unix
+/// sockets; reqwest does not. The socket mode is the credential, so this
+/// path sends no bearer token. `--owner` is the account stamped on the VM.
+async fn spawn_operator_socket(
+    sock: &str,
+    owner_id: &str,
+    opts: &SpawnOptions,
+) -> Result<SpawnResponse> {
+    let text = curl_operator(sock, "POST", "/api/vms", owner_id, Some(&spawn_body(opts))).await?;
+    serde_json::from_str(&text).context("failed to parse spawn response")
+}
+
+async fn await_operator_pty(
+    sock: &str,
+    owner_id: &str,
+    id: &str,
+    timeout_ms: u64,
+) -> Result<String> {
+    let path = format!("/api/vms/{id}/await-pty");
+    let body = serde_json::json!({ "timeout": timeout_ms });
+    let text = curl_operator(sock, "POST", &path, owner_id, Some(&body)).await?;
+    let resp: serde_json::Value =
+        serde_json::from_str(&text).context("failed to parse await-pty response")?;
+    resp["ticket"]
+        .as_str()
+        .map(str::to_string)
+        .context("await-pty response missing ticket")
+}
+
+async fn curl_operator(
+    sock: &str,
+    method: &str,
+    path: &str,
+    owner_id: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<String> {
+    let mut cmd = tokio::process::Command::new("curl");
+    cmd.arg("-sS")
+        .arg("-w")
+        .arg("\n%{http_code}")
+        .arg("--unix-socket")
+        .arg(sock)
+        .arg("-X")
+        .arg(method)
+        .arg("-H")
+        .arg(format!("X-Owner-Id: {owner_id}"))
+        .arg("-H")
+        .arg("Content-Type: application/json");
+    if let Some(body) = body {
+        cmd.arg("--data").arg(body.to_string());
+    }
+    cmd.arg(format!("http://localhost{path}"));
+    let out = cmd.output().await.context("operator socket curl failed")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "operator socket curl failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let text = String::from_utf8(out.stdout).context("operator socket response was not utf-8")?;
+    let (payload, code) = text.rsplit_once('\n').unwrap_or((text.as_str(), ""));
+    let code: u16 = code.trim().parse().unwrap_or(0);
+    if !(200..300).contains(&code) {
+        anyhow::bail!("spawn: server returned {code} — {}", payload.trim());
+    }
+    Ok(payload.to_string())
 }
 
 /// Turn repeated `--filter key=value` flags into `metadata.<key>=<value>` query
@@ -938,6 +1030,7 @@ async fn cmd_spawn_target(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    owner: &Option<String>,
     name: &str,
     path: &str,
     dry_run: bool,
@@ -945,6 +1038,11 @@ async fn cmd_spawn_target(
     snapshot_override: &Option<String>,
     base_override: &Option<String>,
 ) -> Result<()> {
+    if operator_socket().is_some() {
+        anyhow::bail!(
+            "mj spawn --target uses the configured API. Unset MJOLNIR_OPERATOR_SOCKET, or spawn without --target and pass --owner"
+        );
+    }
     let dev = crate::dev_manifest::load(std::path::Path::new(path), name)?;
     eprintln!(
         "target {name}: {} memory={} port={} sign={}",
@@ -965,11 +1063,17 @@ async fn cmd_spawn_target(
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
     if let Some(existing) = find_target_vm(&client, base, name).await? {
-        eprintln!(
-            "reusing {name} VM {} (already running)",
-            existing.id
-        );
-        return finish_target(&client, base, &existing.id, existing.web_url, existing.ticket, name, &dev).await;
+        eprintln!("reusing {name} VM {} (already running)", existing.id);
+        return finish_target(
+            &client,
+            base,
+            &existing.id,
+            existing.web_url,
+            existing.ticket,
+            name,
+            &dev,
+        )
+        .await;
     }
 
     let ssh_public_key = crate::config::resolve_ssh_key_path().and_then(|key_path| {
@@ -998,15 +1102,17 @@ async fn cmd_spawn_target(
         preserve_iroh_key: Some(dev.preserve_iroh_key),
         git_signing: Some(dev.git_sign),
         metadata: Some(metadata),
+        owner_id: owner.clone(),
     };
 
     eprintln!("Spawning target {name}...");
-    let spawned = client
+    let mut req = client
         .post(format!("{}/api/vms", base))
-        .json(&spawn_body(&opts))
-        .send()
-        .await
-        .context("failed to send spawn request")?;
+        .json(&spawn_body(&opts));
+    if let Some(owner_id) = owner {
+        req = req.header("X-Owner-Id", owner_id);
+    }
+    let spawned = req.send().await.context("failed to send spawn request")?;
     if spawned.status() == reqwest::StatusCode::CONFLICT {
         let body: serde_json::Value = spawned.json().await.context("409 body")?;
         let id = body["vm_id"]
@@ -1014,20 +1120,36 @@ async fn cmd_spawn_target(
             .context("iroh_identity_in_use missing vm_id")?
             .to_string();
         eprintln!("reusing {name} VM {id} (Iroh identity already live)");
-        let url = body.get("web_url").and_then(|v| v.as_str()).map(str::to_string);
-        let ticket = body.get("ticket").and_then(|v| v.as_str()).map(str::to_string);
+        let url = body
+            .get("web_url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let ticket = body
+            .get("ticket")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         return finish_target(&client, base, &id, url, ticket, name, &dev).await;
     }
-    let spawned = spawned
-        .error_for_status()
-        .context("spawn request failed")?;
-    let resp: SpawnResponse = spawned.json().await.context("failed to parse spawn response")?;
+    let spawned = spawned.error_for_status().context("spawn request failed")?;
+    let resp: SpawnResponse = spawned
+        .json()
+        .await
+        .context("failed to parse spawn response")?;
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
     if resp.shell_ready != Some(true) {
         eprintln!("Waiting for shell...");
         let _ = await_pty(&client, base, &resp.id, 120_000).await?;
     }
-    finish_target(&client, base, &resp.id, resp.web_url, resp.ticket, name, &dev).await
+    finish_target(
+        &client,
+        base,
+        &resp.id,
+        resp.web_url,
+        resp.ticket,
+        name,
+        &dev,
+    )
+    .await
 }
 
 fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
@@ -1475,6 +1597,7 @@ mod tests {
         let profile = crate::config::Profile::default();
         let result = super::cmd_spawn(
             &profile,
+            &None,
             &None,
             &None,
             false,

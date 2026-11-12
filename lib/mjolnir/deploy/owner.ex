@@ -2,8 +2,9 @@ defmodule Mjolnir.Deploy.Owner do
   @moduledoc """
   Who a deploy is stamped as.
 
-  A loopback deploy with no credential authenticates as `localhost`. That
-  string is not an account. The host names the real owner with `X-Owner-Id`.
+  A loopback deploy or an operator-socket spawn with no credential
+  authenticates as `localhost`. That string is not an account. The host
+  names the real owner with `X-Owner-Id`.
   The value is the canonical base58 text form of a 32-byte XID (Bitcoin
   alphabet, leading `0x00` kept as `1`). That is the identikey-protocol
   spelling of a short id, and it is the public OIDC `sub`.

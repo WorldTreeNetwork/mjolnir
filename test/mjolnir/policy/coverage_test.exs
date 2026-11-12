@@ -28,8 +28,10 @@ defmodule Mjolnir.Policy.CoverageTest do
     "Policy.Snapshot.authorize",
     # inline ownership filter (vm list, snapshot list, dormant list)
     ~S|user_id == "localhost" or|,
-    # ownership stamped at resource creation (spawn)
+    # ownership stamped at resource creation (spawn). The operator
+    # principal is not an owner; Deploy.Owner.resolve names the account.
     ":owner_id, conn.assigns",
+    "Deploy.Owner.resolve",
     # deployed-app ownership (mjolnir-xuv): registry-entry owner checks for the
     # domain endpoints, POST /api/deploy (checked inside handle_deploy, once the
     # app name is known from the uploaded source), and the /api/apps list filter

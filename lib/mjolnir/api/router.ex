@@ -4,7 +4,16 @@ defmodule Mjolnir.API.Router do
 
   Provides RESTful endpoints for spawning, listing, inspecting,
   executing commands in, and stopping microVMs. Authentication is
-  handled by `Mjolnir.API.Auth` (JWT or localhost bypass).
+  handled by `Mjolnir.API.Auth` (JWT or the operator socket).
+
+  ## `POST /api/vms` ownership
+
+  The operator principal is the string `localhost`. That is not an
+  account, and it is not stored as `owner_id`. An operator spawn must
+  send `X-Owner-Id`, a canonical base58 XID, or the route returns `400`
+  `owner_required` / `invalid_owner` before a VM is created. A signed-in
+  caller is stamped as their `sub`. The header cannot impersonate, and a
+  body `owner_id` is ignored.
 
   ## Deploy API contract (v0)
 
@@ -444,39 +453,51 @@ defmodule Mjolnir.API.Router do
       if opts[:_validation_error] do
         json(conn, 400, %{error: opts[:_validation_error]})
       else
-        # Stamp ownership from authenticated user
-        opts = Keyword.put(opts, :owner_id, conn.assigns[:user_id])
-        # Remove sentinel key before passing to VM.spawn
-        opts = opts |> Keyword.delete(:_validation_error) |> Map.new()
+        # The operator principal is "localhost", which list/info then hide
+        # from every real account. Resolve the same way deploy does.
+        case Mjolnir.Deploy.Owner.resolve(
+               conn.assigns[:user_id],
+               conn |> get_req_header("x-owner-id") |> List.first()
+             ) do
+          {:error, reason} ->
+            json(conn, 400, %{error: Atom.to_string(reason)})
 
-        try do
-          case spawn_rejecting_memory_snapshot(opts) do
-            {:error, {:memory_snapshot_requires_thaw, name}} ->
-              json(conn, 400, %{
-                error: "memory_snapshot_requires_thaw",
-                snapshot: name,
-                hint: "mj thaw #{name}"
-              })
+          {:ok, owner_id} ->
+            opts =
+              opts
+              |> Keyword.put(:owner_id, owner_id)
+              |> Keyword.delete(:_validation_error)
+              |> Map.new()
 
-            {:ok, vm} ->
-              json(conn, 201, Views.render_vm(vm))
+            try do
+              case spawn_rejecting_memory_snapshot(opts) do
+                {:error, {:memory_snapshot_requires_thaw, name}} ->
+                  json(conn, 400, %{
+                    error: "memory_snapshot_requires_thaw",
+                    snapshot: name,
+                    hint: "mj thaw #{name}"
+                  })
 
-            {:error, {:iroh_identity_in_use, id, ticket}} ->
-              json(conn, 409, %{
-                error: "iroh_identity_in_use",
-                vm_id: id,
-                ticket: ticket,
-                hint: "that snapshot's Iroh key is already live; reuse this VM"
-              })
+                {:ok, vm} ->
+                  json(conn, 201, Views.render_vm(vm))
 
-            {:error, reason} ->
-              Logger.error("VM spawn failed: #{inspect(reason)}")
-              spawn_failure(conn, reason)
-          end
-        catch
-          :exit, reason ->
-            Logger.error("VM spawn crashed: #{inspect(reason)}")
-            spawn_failure(conn, reason)
+                {:error, {:iroh_identity_in_use, id, ticket}} ->
+                  json(conn, 409, %{
+                    error: "iroh_identity_in_use",
+                    vm_id: id,
+                    ticket: ticket,
+                    hint: "that snapshot's Iroh key is already live; reuse this VM"
+                  })
+
+                {:error, reason} ->
+                  Logger.error("VM spawn failed: #{inspect(reason)}")
+                  spawn_failure(conn, reason)
+              end
+            catch
+              :exit, reason ->
+                Logger.error("VM spawn crashed: #{inspect(reason)}")
+                spawn_failure(conn, reason)
+            end
         end
       end
     else

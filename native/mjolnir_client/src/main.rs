@@ -59,6 +59,12 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Owner stamped on an operator-socket spawn (X-Owner-Id). Canonical
+        /// base58 XID. The server ignores this header unless the request is
+        /// the operator principal, and rejects anything that is not that spelling.
+        /// Required when `MJOLNIR_OPERATOR_SOCKET` is set.
+        #[arg(long)]
+        owner: Option<String>,
         /// Memory allocation in MB (default: 512)
         #[arg(long)]
         memory: Option<u32>,
@@ -917,6 +923,7 @@ async fn main() {
             api,
             connect,
             token,
+            owner,
             memory,
             snapshot,
             base,
@@ -928,6 +935,7 @@ async fn main() {
                 &profile,
                 &api,
                 &token,
+                &owner,
                 connect,
                 &memory,
                 &snapshot,

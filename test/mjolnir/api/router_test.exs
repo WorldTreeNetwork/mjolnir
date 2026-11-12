@@ -787,6 +787,32 @@ defmodule Mjolnir.API.RouterTest do
   # Different 32 bytes, base58. Used to prove a redeploy cannot retarget.
   @other_owner "3dLGACrVKP67MtW4kwbG54JqBGS5nSb46uZVkJNueWKJ"
 
+  describe "POST /api/vms owner" do
+    test "the operator principal is not stored as an owner" do
+      conn = request(:post, "/api/vms", %{})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_required"
+    end
+
+    test "a non-canonical X-Owner-Id is refused before a VM is created" do
+      conn =
+        conn(:post, "/api/vms", "{}")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-owner-id", String.duplicate("ab", 32))
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "invalid_owner"
+    end
+
+    test "a body owner_id cannot stand in for the header" do
+      conn = request(:post, "/api/vms", %{owner_id: @deploy_owner})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_required"
+    end
+  end
+
   describe "POST /api/deploy" do
     test "400 owner_required before the body is considered" do
       conn =

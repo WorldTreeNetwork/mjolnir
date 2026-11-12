@@ -425,6 +425,9 @@ pub struct SpawnOptions {
     pub preserve_iroh_key: Option<bool>,
     pub git_signing: Option<bool>,
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Canonical base58 XID sent as `X-Owner-Id`. The server stores it only
+    /// when the caller is the operator principal. A signed-in `sub` ignores it.
+    pub owner_id: Option<String>,
 }
 
 /// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
@@ -465,10 +468,13 @@ pub async fn spawn_vm(
         body["metadata"] = serde_json::Value::Object(metadata.clone());
     }
 
-    client
+    let mut req = client
         .post(format!("{}/api/vms", base.trim_end_matches('/')))
-        .json(&body)
-        .send()
+        .json(&body);
+    if let Some(owner_id) = &opts.owner_id {
+        req = req.header("X-Owner-Id", owner_id);
+    }
+    req.send()
         .await
         .context("failed to send spawn request")?
         .error_for_status()

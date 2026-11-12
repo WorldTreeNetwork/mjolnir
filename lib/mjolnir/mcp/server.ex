@@ -46,7 +46,12 @@ defmodule Mjolnir.MCP.Server do
           type: "string",
           description: "Restore from named snapshot instead of fresh base."
         },
-        enable_iroh: %{type: "boolean", description: "Enable Iroh P2P networking."}
+        enable_iroh: %{type: "boolean", description: "Enable Iroh P2P networking."},
+        owner_id: %{
+          type: "string",
+          description:
+            "Canonical base58 XID. Required when the caller is the operator. Ignored for a signed-in account."
+        }
       }
     })
 
@@ -255,14 +260,20 @@ defmodule Mjolnir.MCP.Server do
   # ── Tool Handlers ──────────────────────────────────────
 
   def handle_tool_call("spawn_vm", args, state) do
-    opts = args_to_spawn_opts(args) |> Map.put(:owner_id, state[:user_id])
-
-    case Mjolnir.VM.spawn(opts) do
-      {:ok, vm} ->
-        {:ok, %{content: [text(Jason.encode!(Mjolnir.API.Views.render_vm(vm)))]}, state}
-
+    case Mjolnir.Deploy.Owner.resolve(state[:user_id], args["owner_id"]) do
       {:error, reason} ->
-        {:ok, %{content: [text("Spawn failed: #{inspect(reason)}")], isError: true}, state}
+        {:ok, %{content: [text("Spawn refused: #{reason}")], isError: true}, state}
+
+      {:ok, owner_id} ->
+        opts = args_to_spawn_opts(args) |> Map.put(:owner_id, owner_id)
+
+        case Mjolnir.VM.spawn(opts) do
+          {:ok, vm} ->
+            {:ok, %{content: [text(Jason.encode!(Mjolnir.API.Views.render_vm(vm)))]}, state}
+
+          {:error, reason} ->
+            {:ok, %{content: [text("Spawn failed: #{inspect(reason)}")], isError: true}, state}
+        end
     end
   end
 

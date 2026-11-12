@@ -6,6 +6,8 @@ defmodule Mjolnir.API.FreezeThawTest do
   alias Mjolnir.API.Router
 
   @opts Router.init([])
+  # 32 bytes of 0xAB. Operator spawn refuses to persist "localhost".
+  @owner "CZ8YUVdk7znjrUmnb5n7kgySk9yRAsQDYmyCxzfSky9t"
 
   setup do
     original_auth = Application.get_env(:mjolnir, :auth, [])
@@ -25,13 +27,22 @@ defmodule Mjolnir.API.FreezeThawTest do
     {:ok, root: tmp}
   end
 
-  defp request(method, path, body \\ nil) do
+  defp request(method, path, body \\ nil, headers \\ []) do
     conn = conn(method, path, body && Jason.encode!(body))
 
     conn
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("content-type", "application/json")
+    |> then(fn conn ->
+      Enum.reduce(headers, conn, fn {key, value}, conn ->
+        put_req_header(conn, key, value)
+      end)
+    end)
     |> Router.call(@opts)
+  end
+
+  defp owned_spawn(body) do
+    request(:post, "/api/vms", body, [{"x-owner-id", @owner}])
   end
 
   defp write_snapshot(root, name, attrs) do
@@ -137,7 +148,7 @@ defmodule Mjolnir.API.FreezeThawTest do
       end)
 
       conn =
-        request(:post, "/api/vms", %{
+        owned_spawn(%{
           snapshot: "configured-frozen",
           base_image: "ubuntu-24.04",
           memory_mb: 512,
@@ -184,11 +195,22 @@ defmodule Mjolnir.API.FreezeThawTest do
       File.mkdir_p!(mem)
       File.write!(Path.join(mem, "state.json"), "{}")
 
-      conn = request(:post, "/api/vms", %{snapshot: "frozen"})
+      conn = owned_spawn(%{snapshot: "frozen"})
       assert conn.status == 400
       body = Jason.decode!(conn.resp_body)
       assert body["error"] == "memory_snapshot_requires_thaw"
       assert body["snapshot"] == "frozen"
+    end
+
+    test "an operator spawn without X-Owner-Id never reaches the snapshot check", %{root: root} do
+      write_snapshot(root, "frozen", %{})
+      mem = Path.join([root, "@snapshots", "frozen.mem"])
+      File.mkdir_p!(mem)
+      File.write!(Path.join(mem, "state.json"), "{}")
+
+      conn = request(:post, "/api/vms", %{snapshot: "frozen"})
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "owner_required"
     end
   end
 end
