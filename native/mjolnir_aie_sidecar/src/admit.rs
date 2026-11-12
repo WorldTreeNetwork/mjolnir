@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! HTTP client for `/run/mjolnir/aie-admit.sock`. Not operator.sock.
 
-use std::io;
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -54,9 +53,4 @@ async fn post(socket: &Path, path: &str, body: &Value) -> Result<Value, String> 
     };
     let body = text[idx + 4..].trim();
     serde_json::from_str(body).map_err(|e| format!("{e}: {body}"))
-}
-
-#[allow(dead_code)]
-pub fn _io_err(msg: impl Into<String>) -> io::Error {
-    io::Error::other(msg.into())
 }

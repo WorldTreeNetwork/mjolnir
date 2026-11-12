@@ -11,7 +11,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nix::fcntl::{flock, FlockArg};
+use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -23,7 +23,7 @@ pub struct OccupancyState {
 }
 
 pub struct OccupancyGuard {
-    file: File,
+    file: Option<Flock<File>>,
     state: OccupancyState,
     path: PathBuf,
     released: bool,
@@ -31,7 +31,10 @@ pub struct OccupancyGuard {
 
 impl OccupancyGuard {
     pub fn raw_fd(&self) -> RawFd {
-        self.file.as_raw_fd()
+        self.file
+            .as_ref()
+            .expect("occupancy guard already released")
+            .as_raw_fd()
     }
 
     pub fn state(&self) -> &OccupancyState {
@@ -43,7 +46,9 @@ impl OccupancyGuard {
             return;
         }
         let _ = clear_state_if_ours(&self.path, self.state.pid);
-        let _ = flock(&self.file, FlockArg::Unlock);
+        if let Some(flock) = self.file.take() {
+            let _ = flock.unlock();
+        }
         self.released = true;
     }
 }
@@ -145,9 +150,10 @@ pub fn try_lock(bundle: Option<&str>) -> Result<OccupancyGuard, TryLockError> {
         .read(true)
         .write(true)
         .open(lock_path())?;
-    match flock(&file, FlockArg::LockExclusiveNonblock) {
-        Ok(()) => {}
-        Err(nix::errno::Errno::EWOULDBLOCK | nix::errno::Errno::EAGAIN) => {
+    let file = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        Ok(locked) => locked,
+        // Linux defines EAGAIN as EWOULDBLOCK; match one so the other is not dead.
+        Err((_, nix::errno::Errno::EWOULDBLOCK)) => {
             if let Some(state) = read_state() {
                 return Err(TryLockError::Occupied {
                     pid: state.pid,
@@ -161,11 +167,11 @@ pub fn try_lock(bundle: Option<&str>) -> Result<OccupancyGuard, TryLockError> {
                 started_unix: 0,
             });
         }
-        Err(e) => return Err(TryLockError::Io(std::io::Error::from(e))),
-    }
+        Err((_, e)) => return Err(TryLockError::Io(std::io::Error::from(e))),
+    };
     let state = write_state(bundle)?;
     Ok(OccupancyGuard {
-        file,
+        file: Some(file),
         state,
         path: state_path(),
         released: false,

@@ -288,8 +288,7 @@ defmodule Mjolnir.Aie.ExecuteTest do
 
     on_exit(fn -> File.rm(vector) end)
 
-    # The inherited workspace lock omits the sidecar. Resolve in a temporary
-    # source snapshot so verification never rewrites a conductor-owned lock.
+    # Snapshot native/ so this test never rewrites the repo Cargo.lock.
     workspace = vector <> ".native"
     File.mkdir_p!(workspace)
     on_exit(fn -> File.rm_rf!(workspace) end)

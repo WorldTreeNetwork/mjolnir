@@ -16,25 +16,26 @@ impl Catalog {
             .map(str::to_string)
             .collect();
         let mut argv = HashMap::new();
-        if let Ok(path) = std::env::var("AIE_CATALOG") {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(arr) = v.get("designs").and_then(|d| d.as_array()) {
-                        ids = arr
-                            .iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect();
-                    }
-                    if let Some(map) = v.get("argv").and_then(|d| d.as_object()) {
-                        for (k, val) in map {
-                            if let Some(args) = val.as_array() {
-                                argv.insert(
-                                    k.clone(),
-                                    args.iter()
-                                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                                        .collect(),
-                                );
-                            }
+        let path = std::env::var("AIE_CATALOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_catalog_path());
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(arr) = v.get("designs").and_then(|d| d.as_array()) {
+                    ids = arr
+                        .iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+                if let Some(map) = v.get("argv").and_then(|d| d.as_object()) {
+                    for (k, val) in map {
+                        if let Some(args) = val.as_array() {
+                            argv.insert(
+                                k.clone(),
+                                args.iter()
+                                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                    .collect(),
+                            );
                         }
                     }
                 }

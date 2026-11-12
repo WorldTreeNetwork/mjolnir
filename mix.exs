@@ -12,6 +12,10 @@ defmodule Mjolnir.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       elixirc_paths: elixirc_paths(Mix.env()),
+      # Elixir 1.20 signature inference of Mjolnir.API.Router / Mjolnir.VM is a
+      # single-process pass that can stall mix compile for hours. Prod deploys
+      # already skip it; keep the same flag in-tree so tests and releases finish.
+      elixirc_options: [infer_signatures: false],
       releases: releases()
     ]
   end

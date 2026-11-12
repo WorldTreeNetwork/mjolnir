@@ -188,9 +188,17 @@ async fn execute(
         job.retained_since
     };
     let guard = occupancy::try_lock(Some(&body.design_id)).map_err(|e| match e {
-        TryLockError::Occupied { .. } => err(StatusCode::CONFLICT, "occupied"),
+        TryLockError::Occupied {
+            pid,
+            bundle,
+            started_unix,
+        } => {
+            tracing::info!(pid, ?bundle, started_unix, "aie occupied");
+            err(StatusCode::CONFLICT, "occupied")
+        }
         TryLockError::Io(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     })?;
+    tracing::info!(pid = guard.state().pid, bundle = ?guard.state().bundle, "aie occupancy acquired");
     let result = start_attempt(app.clone(), body, pending_id.clone(), enqueued, guard).await;
     if result.is_err() {
         // Any abandoned attempt invalidates its queued reference, including
