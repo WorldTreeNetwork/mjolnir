@@ -5,7 +5,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-remote() { ssh -o BatchMode=yes "$HOST" "set -e; $1"; }
+remote() { ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=12 "$HOST" "set -e; $1"; }
 ACTIVE_CODE=/opt/mjolnir
 RELEASES=/opt/mjolnir-releases
 HOST=""
