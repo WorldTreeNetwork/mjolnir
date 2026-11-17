@@ -41,8 +41,11 @@ first launch after a browser download.
 
 ```bash
 tar xzf mj-<target>.tar.gz
-install -m 755 mj ~/.local/bin/mj
+sudo install -m 755 mj /usr/local/bin/mj
 ```
+
+`/usr/local/bin` is already on the default `PATH`. Leave Homebrew's prefix
+(`/opt/homebrew/bin` on Apple Silicon) to `brew`.
 
 `scripts/package-cli-release.sh` builds that archive from a `mjolnir` binary.
 `scripts/publish-cli-release.sh` uploads it to Forgejo.

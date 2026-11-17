@@ -161,9 +161,14 @@ saves a raw binary as mode 644.
 Install
 
   tar xzf mj-${TARGET}.tar.gz
-  install -m 755 mj ~/.local/bin/mj
+  sudo install -m 755 mj /usr/local/bin/mj
 
-Put ~/.local/bin on PATH, then:
+/usr/local/bin is on the default PATH (/etc/paths on macOS, the usual
+PATH on Linux). If that directory does not exist yet:
+
+  sudo mkdir -p /usr/local/bin
+
+Then:
 
   mj --version
   mj login
@@ -201,7 +206,7 @@ Download \`mj-${TARGET}.tar.gz\`. It extracts to an executable named \`mj\` and 
 
 \`\`\`
 tar xzf mj-${TARGET}.tar.gz
-install -m 755 mj ~/.local/bin/mj
+sudo install -m 755 mj /usr/local/bin/mj
 mj --version
 \`\`\`
 
