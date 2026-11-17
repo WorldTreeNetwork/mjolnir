@@ -97,6 +97,11 @@ clean:
 build-client:
     ./scripts/build-client.sh
 
+# tar.gz whose member is an executable named mj. On macOS this Developer ID
+# signs and notarizes (profile mjolnir) before writing dist/.
+package-client binary:
+    ./scripts/package-cli-release.sh {{binary}}
+
 # ═══════════════════════════════════════════════════════════════════════
 # Deploy
 # ═══════════════════════════════════════════════════════════════════════

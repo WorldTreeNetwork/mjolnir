@@ -81,6 +81,11 @@ jobs:
           ./target/release/mjolnir --help > /dev/null
           sha256sum target/release/mjolnir
 
+      # tar.gz, not the raw binary. The member is named mj and is mode 0755.
+      # This job is Linux, so the script does not Apple-sign.
+      - name: Package mj
+        run: ./scripts/package-cli-release.sh native/target/release/mjolnir
+
       # forgejo/, not actions/. The upstream action bundles @actions/artifact
       # v2, which refuses to talk to any host that is not github.com — Forgejo
       # reads as GHES and it fails with GHESNotSupportedError before making a
@@ -88,8 +93,8 @@ jobs:
       - name: Publish mj
         uses: forgejo/upload-artifact@v4
         with:
-          name: mj-x86_64-linux
-          path: native/target/release/mjolnir
+          name: mj-x86_64-unknown-linux-gnu
+          path: dist/mj-x86_64-unknown-linux-gnu.tar.gz
           if-no-files-found: error
           # Quoted strings, not YAML booleans, and passed explicitly rather
           # than relying on the action's defaults. Both habits are cheap

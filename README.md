@@ -34,6 +34,19 @@ The `mj` CLI (also installed as `mjolnir`) talks to a Mjolnir server's HTTP API.
 ./scripts/build-client.sh --install
 ```
 
+A Forgejo release is a tar.gz, not the raw binary. The archive member is
+already named `mj` and is mode 0755. macOS release builds are signed with
+Developer ID and notarized; an ad-hoc or unnotarized binary is killed on
+first launch after a browser download.
+
+```bash
+tar xzf mj-<target>.tar.gz
+install -m 755 mj ~/.local/bin/mj
+```
+
+`scripts/package-cli-release.sh` builds that archive from a `mjolnir` binary.
+`scripts/publish-cli-release.sh` uploads it to Forgejo.
+
 ### Spawn a VM in three commands
 
 ```bash

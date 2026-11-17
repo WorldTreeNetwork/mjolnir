@@ -29,6 +29,7 @@ packages/*/dist/
 # Test/Dev
 /cover/
 /doc/
+/dist/
 *.log
 
 # Runtime
