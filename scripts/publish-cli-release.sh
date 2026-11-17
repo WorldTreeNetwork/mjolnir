@@ -74,14 +74,17 @@ for stale in list(existing):
     # Previous releases attached the raw binary (no suffix), which browsers
     # save as mode 644. The downloadable file is now mj-<target>.tar.gz.
     if stale.startswith("mj-") and "." not in stale:
-        request(f"/releases/assets/{existing[stale]['id']}", method="DELETE")
+        request(f"/releases/{release['id']}/assets/{existing[stale]['id']}", method="DELETE")
         del existing[stale]
 
+allowed = {"SHA256SUMS", "build-info.json"}
 for path in sorted(dist.iterdir()):
-    if not path.is_file() or path.name == "RELEASE_NOTES.md":
+    if not path.is_file():
+        continue
+    if path.name not in allowed and not path.name.endswith(".tar.gz"):
         continue
     if path.name in existing:
-        request(f"/releases/assets/{existing[path.name]['id']}", method="DELETE")
+        request(f"/releases/{release['id']}/assets/{existing[path.name]['id']}", method="DELETE")
     boundary = uuid.uuid4().hex
     payload = (
         f'--{boundary}\r\n'

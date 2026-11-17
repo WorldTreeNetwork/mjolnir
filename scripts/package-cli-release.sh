@@ -93,10 +93,17 @@ EOF
   local zip="$STAGE/mj.zip"
   ditto -c -k --keepParent "$STAGE/mj" "$zip"
   xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
-  xcrun stapler staple "$STAGE/mj"
+  # stapler only attaches tickets to app bundles, UDIF disk images, and
+  # flat installer packages. A standalone Mach-O is rejected with error 73
+  # (it tries to write mj/Contents/CodeResources). Gatekeeper still allows
+  # a quarantined first launch by fetching this ticket online.
   notarized=true
   rm -f "$zip"
 }
+
+# Version comes from the input binary. Running the signed copy here would
+# count as its first launch and hide a Gatekeeper quarantine failure.
+version="$("$BINARY" --version 2>/dev/null | head -n 1 || true)"
 
 case "$SIGN" in
   developer-id)
@@ -115,7 +122,6 @@ case "$SIGN" in
     ;;
 esac
 
-version="$("$STAGE/mj" --version 2>/dev/null | head -n 1 || true)"
 commit="${MJOLNIR_CLI_COMMIT:-}"
 if [[ -z "$commit" ]]; then
   commit="$(git -C "$ROOT" rev-parse HEAD)"
@@ -125,12 +131,11 @@ if [[ "$notarized" == true ]]; then
   mac_note="$(cat <<EOF
 macOS
 
-This build is signed with Developer ID and notarized, so a quarantined
-browser download is allowed to run. If macOS still kills mj (exit 137):
+This build is signed with Developer ID and notarized. A quarantined
+browser download is allowed to run while the Mac can reach Apple to
+fetch the ticket. If macOS kills mj (exit 137), usually while offline:
 
   xattr -d com.apple.quarantine mj
-  codesign --verify --verbose=2 mj
-  spctl --assess --type execute --verbose=4 mj
 EOF
 )"
 else
