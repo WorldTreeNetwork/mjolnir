@@ -4,8 +4,8 @@ name: Build mj client
 # — and publishes it as a downloadable artifact.
 #
 # The runner label `ubuntu-24.04` maps to `mjolnir:ci-ubuntu-24.04`, our base
-# image, which carries rust + zig via mise (see scripts/lib/mise.sh). Because
-# nothing caches between VMs yet (mjolnir-5xn), expect ~10 minutes cold.
+# image, which carries rust + zig via mise (see scripts/lib/mise.sh). Each
+# job starts cold and has its own one-hour runner deadline.
 
 on:
   push:
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test-client:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -39,16 +39,10 @@ jobs:
         working-directory: native
         run: cargo test -p mjolnir-protocol -p mjolnir-client
 
-      - name: Build release
-        working-directory: native
-        run: cargo build --release -p mjolnir-client
-
-      - name: Verify the binary runs
-        working-directory: native
-        run: |
-          ./target/release/mjolnir --version
-          ./target/release/mjolnir --help > /dev/null
-          sha256sum target/release/mjolnir
+  test-agent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
 
       # The guest agent cannot build on macOS (tokio-vsock is Linux-only), so
       # its tests never run on a developer laptop — CI is the only place they
@@ -69,6 +63,23 @@ jobs:
           }
           tmux -V
           cargo test -p mjolnir-guest-agent --bin mjolnir-agent --features full
+
+  build:
+    needs: [test-client, test-agent]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release
+        working-directory: native
+        run: cargo build --release -p mjolnir-client
+
+      - name: Verify the binary runs
+        working-directory: native
+        run: |
+          ./target/release/mjolnir --version
+          ./target/release/mjolnir --help > /dev/null
+          sha256sum target/release/mjolnir
 
       # forgejo/, not actions/. The upstream action bundles @actions/artifact
       # v2, which refuses to talk to any host that is not github.com — Forgejo
