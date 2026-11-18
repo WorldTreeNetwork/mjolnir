@@ -43,7 +43,7 @@ name.
 mj spawn --base ubuntu-24.04 --memory 2048
 # copy scripts/hosted-being-bootstrap.sh in via exec, then:
 #   bash /tmp/hosted-being-bootstrap.sh
-curl -fsSL https://raw.githubusercontent.com/identikey/mjolnir/main/scripts/hosted-being-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/WorldTreeNetwork/mjolnir/main/scripts/hosted-being-bootstrap.sh | bash
 ```
 
 Bootstrap installs bun, grok CLI, clones

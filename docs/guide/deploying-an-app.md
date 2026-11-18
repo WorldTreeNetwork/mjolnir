@@ -72,7 +72,7 @@ The two-stage Dockerfile most web apps use maps almost 1:1 onto the deploy layer
 
 | Dockerfile | Mjolnir | Notes |
 |---|---|---|
-| `FROM node:23-alpine` | reflink clone of `@base/ubuntu-24.04` | runtimes installed via `mise` as a cached layer |
+| `FROM node:23-alpine` | reflink clone of a `@base/` image (`deploy-node-bun` by default; `base_image` in `mjolnir.toml` or `--base` to change) | `deploy-node-bun` ships mise, node and bun; other runtimes install via `mise` as a cached layer |
 | `RUN bun install` | build step → snapshot layer | cache-keyed on the lockfile |
 | `RUN bun run build` | build step → snapshot layer | cache-keyed on the source tree |
 | multi-stage `COPY --from=build` | the final **release snapshot** | |
@@ -102,8 +102,10 @@ need, not for a number.
 
 `lib/mjolnir/deploy/detector.ex` inspects an app directory and emits a `BuildPlan`.
 
-**Current scope is deliberately narrow: SvelteKit with `adapter-node`.** Detection requires both
-`package.json` and `svelte.config.js`; anything else returns `{:error, :unsupported_app}`.
+A `mjolnir.toml` manifest is used as written when present (`Mjolnir.Deploy.Manifest`). Without
+one, **inference is deliberately narrow: SvelteKit with `adapter-node`.** It requires
+`package.json` plus either `svelte.config.js` or a `vite.config.ts` that imports
+`@sveltejs/adapter-node`; anything else returns `{:error, :unsupported_app}`.
 Generalising to plain Node, Python, and Procfile apps is a follow-up.
 
 The package manager is detected **from the lockfile, never assumed** — defaulting to npm breaks
@@ -196,7 +198,7 @@ file for the first time and know every key.
 
 `<slug>` is the deploy name, lowercased, with every character outside `[a-z0-9_-]` replaced
 by `_`. `mj deploy --name hypersigil-api` reads `hypersigil-api.json`. Omitting `--name`
-uses the source directory's basename. `--name hypersigil` looks for `hypersigil.json` and
+uses `name` from `mjolnir.toml`, else the source directory's basename. `--name hypersigil` looks for `hypersigil.json` and
 **misses** the Hypersigil tenant file.
 
 Do **not** put secrets at `/var/lib/mjolnir/<app>-secrets.json`. That path is not read.
@@ -254,7 +256,9 @@ redeploy.
 
 **1. Escrow secrets (once), if the app needs any.**
 
-After the app exists in the deploy registry:
+The app must already be in the deploy registry (`mj secrets` answers 404
+`app_not_found` otherwise). For a brand-new app, run step 2 once first, then
+set secrets and redeploy:
 
 ```bash
 # Hidden prompt (preferred — value stays out of argv / history)
@@ -279,8 +283,8 @@ For a host-sidecar tenant, skip setting `DATABASE_URL` by hand —
 mj deploy --name hypersigil-api --domain shop.example
 ```
 
-`--name` is required for the secrets file to match unless the directory *is*
-already named `hypersigil-api`. `--domain` is optional (`X-Domain`). Rust /
+`--name` (or `name = "hypersigil-api"` in `mjolnir.toml`) is required for the
+secrets file to match unless the directory *is* already named `hypersigil-api`. `--domain` is optional (`X-Domain`). Rust /
 non-Node apps pin the maintained image in `mjolnir.toml`:
 
 ```toml

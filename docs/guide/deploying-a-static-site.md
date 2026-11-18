@@ -68,17 +68,17 @@ You need the `mj` CLI, pointed at a Mjolnir server, and an IdentiKey.
 
 ### CLI and login
 
-Same as [Getting Started](getting-started.md#0-one-time-setup):
+Same as [Getting Started](getting-started.md#0-one-time-setup): install `mj`
+from GitHub Releases, or build it from a clone of this repo with
+`./scripts/build-client.sh --install`. Then:
 
 ```bash
-# From a clone of this repo, if you don't have `mj` yet:
-./scripts/build-client.sh --install
-
-mj login --api https://api.vm.worldtree.network
+mj login
 mj status
 ```
 
-`mj login` stores a JWT under `~/.config/mjolnir/`. That token is what
+`mj login` stores a JWT in the OS config directory (`~/.config/mjolnir/` on
+Linux, `~/Library/Application Support/mjolnir/` on macOS). That token is what
 authorizes the *upload*. It is **not** what signs the site.
 
 ### Publishing identity
@@ -105,15 +105,19 @@ enough for a human at a laptop.
 
 CI needs a **sites token** instead — a credential that can only publish,
 bound to one fingerprint (and optionally one site name). An operator mints
-it *on the Mjolnir host*:
+it *on the Mjolnir host*, on the running node. Do not run
+`mix mjolnir.sites.token` there: Mix starts a second OTP app beside the
+running one ([LEARNINGS](../LEARNINGS.md), 2026-09-24).
 
 ```bash
-# on the host, as root, in /opt/mjolnir
-mix mjolnir.sites.token create \
-  --identikey-fp <fp> \
-  --site my-site \
-  --expires-in 90d \
-  --description "ci for my-site"
+# on the host, as root
+set -a; . /etc/mjolnir/env; set +a
+/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir rpc '
+  Mjolnir.Sites.TokenStore.create("<fp>",
+    site_name: "my-site",
+    description: "ci for my-site",
+    expires_at: DateTime.utc_now() |> DateTime.add(90 * 86_400, :second) |> DateTime.truncate(:second))
+  |> IO.inspect()'
 ```
 
 The secret is shown once. In CI:
@@ -122,7 +126,7 @@ The secret is shown once. In CI:
 export MJOLNIR_TOKEN=mjsk_…
 ```
 
-A sites token is checked *before* the localhost bypass, so presenting one
+A sites token is checked *before* the operator socket and JWT paths, so presenting one
 never silently upgrades to full control-plane access.
 
 ---
@@ -233,8 +237,8 @@ mismatch. There is no "just use the keypair, derive the fp" shortcut on
 
 ### Mix / Justfile (only from this repo)
 
-If you are sitting in a Mjolnir checkout and talking to a host over the
-Justfile's SSH tunnel, the Mix wrappers exist:
+If you are sitting in a Mjolnir checkout with a dev node on
+`http://localhost:4000`, the Mix wrappers exist:
 
 ```bash
 mix mjolnir.publish ./dist --site my-site
@@ -247,9 +251,10 @@ just sites-publish ./dist <fp> my-site <sequence>
 basename, defaults `--base-url` to `http://localhost:<api_port>`. It still
 defaults `--sequence` to `1`.
 
-Those commands are **not** the path from another project. They need Mix,
-the Mjolnir app, and usually an SSH tunnel so curl looks like localhost.
-From the site's own directory, use `mj`.
+Those commands are **not** the path from another project, or to a production
+host. They need Mix and the Mjolnir app, they send no credentials, and
+`just sites-publish` passes no keypair. A production release ignores the
+localhost bypass. From the site's own directory, use `mj`.
 
 ---
 
@@ -375,7 +380,7 @@ sites token bound to that fingerprint (and site).
 |---|---|
 | `--sequence` omitted on publish 2+ | 409 `sequence_regression`. Pass a higher number. |
 | File > 64 MiB | Publish aborts for that file. |
-| Client-side router, no prerender | 404 on every deep link. Prerender, or use `mj deploy`. |
+| Client-side router, no prerender | Deep links 404 unless `mjolnir.toml` has `[site] fallback = "index.html"`. |
 | Serve URL printed after publish | Authenticated API path, not the public site. |
 | `mj cert issue` on a Sites domain | HTTP-01 for a live alias. `409 host_routed_elsewhere` when the name is already local or Iroh. |
 | Keypair left at `./identikey.json` | Easy to commit. Always `--out ~/.config/mjolnir/identikey.json`. |
@@ -383,13 +388,16 @@ sites token bound to that fingerprint (and site).
 | Publishing `src/` instead of `dist/` | It will happily upload your TypeScript. Publish the build output. |
 | Symlink in the output dir | Elixir publisher skips; Rust `mj` follows *file* symlinks. Don't. |
 
-Inspect without the public domain (needs auth, or localhost on the host):
+Inspect without the public domain (needs a token, or the operator socket on the host):
 
 ```bash
 mj --help    # no sites-head subcommand yet
-# authenticated GET, or from the host:
-curl -sS "$MJOLNIR_API/api/sites/$FP/my-site/head"
-curl -sS "$MJOLNIR_API/api/sites/$FP/my-site/files/index.html"
+# with a bearer token:
+curl -sS -H "Authorization: Bearer $MJOLNIR_TOKEN" "$MJOLNIR_API/api/sites/$FP/my-site/head"
+curl -sS -H "Authorization: Bearer $MJOLNIR_TOKEN" "$MJOLNIR_API/api/sites/$FP/my-site/files/index.html"
+# or from a checkout of this repo, through the operator socket:
+just sites-head $FP my-site
+just sites-get $FP my-site index.html
 ```
 
 ---
@@ -462,8 +470,8 @@ once, then remember it in `~/.config/mjolnir/sites/<name>.json` or a
 ### 7. Mix/Justfile as a trap
 
 `just sites-publish` looks like the happy path if you find it first. It
-runs Mix against localhost-via-SSH, defaults sequence to 1, and only
-works from this checkout. The guide index should point at `mj`, not Mix.
+runs Mix on this machine against `http://localhost:4000`, passes no keypair,
+defaults sequence to 1, and only works from this checkout. The guide index should point at `mj`, not Mix.
 
 ---
 
@@ -497,5 +505,5 @@ and [§3](#3-put-it-on-a-domain) is the workaround until that lands.
 - [Getting Started](getting-started.md) — `mj` install and `mj login`.
 - Design: [`docs/plans/initiatives/identikey-sites.md`](../plans/initiatives/identikey-sites.md)
 - CLI: `mj sites --help`, `mj domain --help`, `mj cert --help`
-- Operator: `mix mjolnir.sites.token`, `mix mjolnir.sites.materialize`
+- Operator: sites tokens via `mjolnir rpc` on the running node (see [Confirm the server will accept you](#confirm-the-server-will-accept-you)), `mix mjolnir.sites.materialize`
 - ADR [0001](../decisions/0001-edge-strategy.md) — Sites as the static origin; CDN in front later if geo hurts.
