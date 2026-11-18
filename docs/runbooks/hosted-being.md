@@ -90,17 +90,19 @@ ticket URL (and later CORS) survive. The flag already exists on
 `VM.spawn` and `POST /api/vms` — do not reimplement it.
 
 ```
-# CLI (same flag as docs/security/iroh-connectivity-guide.md)
-mj spawn --snapshot hosted-<xid> --memory 2048 --preserve-iroh-key
-
 # API
 POST /api/vms
 {"snapshot":"hosted-<xid>","memory_mb":2048,"preserve_iroh_key":true}
+
+# CLI: `mj spawn` has no --preserve-iroh-key flag. `mj spawn --target <name>`
+# sends preserve_iroh_key from [targets.<name>] in mjolnir.toml.
 ```
 
 A **shared** bootstrap snapshot (grok+bun+git for cloning, not a
-friend) MUST NOT preserve Iroh identity. Omit the flag; default is
-`false`. Two VMs must not share a node id.
+friend) MUST NOT preserve Iroh identity. Omit the field in the API
+body; the default there is `false`. A `[targets.<name>]` table that
+names a `snapshot` defaults to `true`, so set `preserve_iroh_key = false`
+in it. Two VMs must not share a node id.
 
 Respawn is a new device (new `vm_id`, new SSH key). Vite is a
 process — re-run the bootstrap (idempotent) or start

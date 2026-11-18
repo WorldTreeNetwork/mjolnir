@@ -114,8 +114,8 @@ more conservative than the configured file allowance. Over-budget backups fail
 instead of rebooting or filling the operator disk.
 Root snapshots are retained; there is no automatic snapshot deletion/retention job.
 
-The remote journal and exclusive lease live under
-`/var/lib/mjolnir/ops/maintenance/<run-id>/`. A host operation lock covers the full
+The remote journal lives under `/var/lib/mjolnir/ops/maintenance/<run-id>/`;
+the exclusive lease is `/var/lib/mjolnir/ops/maintenance/active.json`. A host operation lock covers the full
 mutating request, including same-run clients. Stop intent is written before each
 stop and completion only after it is proven inactive. Service activation timestamps
 detect reactivation even when a timer/socket starts and stops a writer again.

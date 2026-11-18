@@ -4,8 +4,8 @@
 > things below are no longer accurate:
 > - The **"CH vm.create Returns 400 / VMs cannot spawn"** issue further down is **RESOLVED**.
 >   VMs are fully functional end-to-end (spawn, exec, connect, snapshot, restore) on Cloud
->   Hypervisor v50 + virtio-fs + BTRFS subvolumes.
-> - Test counts shown here (101, 186) are stale — the suite is now ~613 unit tests.
+>   Hypervisor v54 + virtio-fs + BTRFS subvolumes.
+> - Test counts shown here (101, 186) are stale — the suite is now ~1,900 tests.
 > - Storage is **BTRFS subvolumes shared via virtio-fs**, not ext4 block images; clones use
 >   `btrfs subvolume snapshot` (not `cp --reflink` of `.ext4` files).
 >
