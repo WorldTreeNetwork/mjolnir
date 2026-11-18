@@ -49,7 +49,8 @@ sudo install -m 755 mj /usr/local/bin/mj
 (`/opt/homebrew/bin` on Apple Silicon) to `brew`.
 
 `scripts/package-cli-release.sh` builds that archive from a `mjolnir` binary.
-`scripts/publish-cli-release.sh` uploads it to Forgejo.
+A notarized macOS build uploads it to the public GitHub Release above.
+`scripts/publish-cli-release.sh` uploads the same dist to the private Forgejo mirror.
 
 ### Spawn a VM in three commands
 

@@ -98,9 +98,14 @@ build-client:
     ./scripts/build-client.sh
 
 # tar.gz whose member is an executable named mj. On macOS this Developer ID
-# signs and notarizes (profile mjolnir) before writing dist/.
+# signs and notarizes (profile mjolnir) before writing dist/, then uploads
+# that archive to the public GitHub Release. MJOLNIR_CLI_GITHUB=0 skips the upload.
 package-client binary:
     ./scripts/package-cli-release.sh {{binary}}
+
+# Upload an existing dist/ to the public GitHub Release.
+publish-client-github dist:
+    ./scripts/publish-cli-github.sh {{dist}}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Deploy
