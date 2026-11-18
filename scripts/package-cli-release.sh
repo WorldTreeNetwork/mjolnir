@@ -22,6 +22,11 @@
 #   MJOLNIR_NOTARY_PROFILE=mjolnir  notarytool keychain profile.
 #   MJOLNIR_NOTARY_REQUIRED=1       default for developer-id. Set 0 to emit an
 #                                   unnotarized archive anyway.
+#
+# GitHub: a notarized macOS archive is uploaded to the public release
+# WorldTreeNetwork/mjolnir, tag cli-<commit-date>-<shortsha>.
+#   MJOLNIR_CLI_GITHUB=0            do not upload.
+#   MJOLNIR_CLI_GITHUB=1            upload even when the archive is not notarized.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -236,5 +241,11 @@ with open(sys.argv[1], "w") as fh:
     json.dump(out, fh, indent=2)
     fh.write("\n")
 PY
+
+# Skip-sign packages (the contract test, Linux CI) do not publish.
+# A notarized macOS archive does. MJOLNIR_CLI_GITHUB=1 forces it.
+if [[ "${MJOLNIR_CLI_GITHUB:-}" == "1" ]] || { [[ "$notarized" == true ]] && [[ "${MJOLNIR_CLI_GITHUB:-}" != "0" ]]; }; then
+  "$ROOT/scripts/publish-cli-github.sh" "$DIST" >&2
+fi
 
 echo "$ARCHIVE"

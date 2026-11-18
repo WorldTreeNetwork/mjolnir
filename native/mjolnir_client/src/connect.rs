@@ -1555,10 +1555,21 @@ pub fn cmd_ssh(
 
 // --- Intent-level connection verbs (transport auto-selected) ---
 
-/// True if `target` looks like a VM UUID (vs an Iroh ticket). Mirrors the
-/// heuristic in `mjolnir_api::api::resolve_vm_id` (36 chars, contains '-').
+/// Base58 alphabet of a VM id (Bitcoin's: no `0`, `O`, `I`, `l`). Same as
+/// `Mjolnir.VmId` on the server.
+const VM_ID_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/// True if `target` is a VM id rather than an Iroh ticket.
+///
+/// A VM id is 16 bytes: base58 text of at most 22 characters, or the legacy
+/// dashed UUID spelling. A ticket is 52 z-base32 characters, 64 hex
+/// characters, or iroh JSON, so nothing this short is a ticket.
 pub fn is_vm_id(target: &str) -> bool {
-    target.len() == 36 && target.contains('-')
+    let legacy_uuid = target.len() == 36 && target.contains('-');
+    let base58 = !target.is_empty()
+        && target.len() <= 22
+        && target.bytes().all(|b| VM_ID_ALPHABET.contains(&b));
+    legacy_uuid || base58
 }
 
 /// Resolve a connection target (VM id OR ticket) to an Iroh ticket. If it's a
@@ -1648,6 +1659,22 @@ pub async fn cmd_proxy_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_vm_id_takes_base58_and_legacy_uuid_ids_but_not_tickets() {
+        // What the server issues: 16 bytes as base58, at most 22 characters. Read as
+        // a ticket, `mj connect <id>` went to Iroh and failed with "Invalid ticket".
+        assert!(is_vm_id("7Zk3mQ9xVbR2nLpW5tYc8H"));
+        // Legacy dashed UUID spelling of the same 16 bytes.
+        assert!(is_vm_id("3f2b8c1e-9d4a-4c6b-8f0e-1a2b3c4d5e6f"));
+        // Tickets: 52-char z-base32, 64-char hex, iroh JSON.
+        assert!(!is_vm_id(
+            "ybndrfg8ejkmcpqxot1uwisza345h769ybndrfg8ejkmcpqxot1u"
+        ));
+        assert!(!is_vm_id(&"ab".repeat(32)));
+        assert!(!is_vm_id(r#"{"id":"abc"}"#));
+        assert!(!is_vm_id(""));
+    }
 
     #[test]
     fn percent_encode_query_leaves_valid_session_names_untouched() {
