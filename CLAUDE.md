@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Mjolnir is a distributed computational fabric for spawning checkpointable Linux microVMs. It uses Elixir/OTP for orchestration, BTRFS copy-on-write reflinks for instant filesystem cloning, and vsock for host-guest communication.
 
-Copyright: World Tree Network Foundation. Host (Elixir, guest agent, gateway) is AGPL-3.0-or-later; `native/mjolnir_client` + `mjolnir_api` + `mjolnir_protocol` are MIT. See NOTICE and `docs/philosophy/licensing-and-components.md`. GitHub transfer to WorldTreeNetwork is pending (`Identikey/mjolnir` still resolves).
+Copyright: World Tree Network Foundation. Host (Elixir, guest agent, gateway) is AGPL-3.0-or-later; `native/mjolnir_client` + `mjolnir_api` + `mjolnir_protocol` are MIT. See NOTICE and `docs/philosophy/licensing-and-components.md`. GitHub: `WorldTreeNetwork/mjolnir` (transferred; `Identikey/mjolnir` redirects).
 
 **Default hypervisor: Cloud Hypervisor v54.0** with virtio-fs + BTRFS subvolumes. Firecracker was removed — it lacked virtio-fs support, which is required for the current storage architecture.
 
@@ -20,7 +20,7 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 
 - Server: `ssh root@45.76.77.97`
 - Dev laptop: `ssh dorje@10.43.1.243` (Framework5070, Arch). Mjolnir compiles and tests go here, including guest-agent and vsock builds. mise has Elixir 1.20.4 and OTP 27.3.4.19. Checkout `~/work/IdentiKey/mjolnir`. `/opt/mjolnir` is this machine's own install; its VMs are not mission critical and that install may be updated. Production deploys stay on the server above.
-- Deploy via Justfile (preferred): `just deploy`, `just deploy-full`, `just deploy-rootfs`
+- Deploy via Justfile (preferred): `just deploy`, `just deploy-boot`, `just deploy-rootfs`
 - Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
 - `cargo check` fails on macOS for guest agent (tokio-vsock is Linux-only) — this is expected
@@ -28,7 +28,7 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 
 ## Local Control Plane (Justfile)
 
-The Justfile is the primary interface for operating Mjolnir from your Mac. All commands are run locally — VM operations are tunneled through SSH to the server's localhost API.
+The Justfile is the primary interface for operating a Mjolnir server from your Mac. All commands are run locally; server recipes SSH to the host. VM operations are not in the Justfile — they are in the `mj` binary, which talks to the public API.
 
 ### Setup
 
@@ -87,7 +87,7 @@ Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still build
 `mj login` on a Mac (and on Linux with `DISPLAY` or `WAYLAND_DISPLAY`, and not over SSH) is loopback authorization code + PKCE. `mj login --device`, SSH (`SSH_CONNECTION` or `SSH_TTY`), and a non-macOS session with no display print a device code and do not open a browser. The device request is `client_id` and `scope=openid` only. The OP registration for `mjolnir-cli` has to allow the device grant or that path returns `unauthorized_client`. Offline checks stay the last-known JWKS. A configured `:audience` requires `aud`. `mjolnir-term` stays the browser code flow. Two `mj` processes share the lock beside `token.json` when they refresh.
 
 ```bash
-mj spawn                               # Spawn a VM (--snapshot <name>, --memory <mb>, --connect)
+mj spawn                               # Spawn a VM (--snapshot <name> | --base <image>, --memory <mb>, --connect)
 mj list [--dormant]                    # List running VMs (--dormant also shows parked)
 mj info <id>                           # Detailed status
 mj exec <id> "uname -a"                # Run a command
@@ -133,7 +133,7 @@ These are the raw mix/cargo commands (the Justfile wraps most of these):
 ```bash
 mix deps.get          # Fetch dependencies
 mix compile           # Build the project
-mix test              # Run unit tests (~320 tests, 0 failures as of 2026-05-13)
+mix test              # Run unit tests (no infrastructure needed)
 mix test --include integration   # Run with real VMs (needs KVM + root on server)
 mix test test/mjolnir_test.exs           # Run a single test file
 mix test test/mjolnir_test.exs:5         # Run a specific test by line number
@@ -150,15 +150,14 @@ cd native/mjolnir_guest_agent && cargo build --release    # Build guest agent
 
 The guest agent binary is `mjolnir-agent` and must be cross-compiled for the VM's target architecture (x86_64-unknown-linux-musl for static linking).
 
-**Important: Rust builds do not happen on macOS.** The guest agent depends on `tokio-vsock`, which is Linux-only — `cargo check` and `cargo build` both fail on macOS. Compile and test on the Framework laptop (`ssh dorje@10.43.1.243`). Production deploys still go to the server (`ssh root@45.76.77.97`):
+**Important: the guest agent does not build on macOS.** It depends on `tokio-vsock`, which is Linux-only — `cargo check` and `cargo build` both fail on macOS. (The `mj` client does build on a Mac: `just build-client`.) Compile and test on the Framework laptop (`ssh dorje@10.43.1.243`). Production deploys still go to the server (`ssh root@45.76.77.97`):
 
 ```bash
-just build-boot-agent           # Cross-compile boot agent on server via SSH
-just build-initramfs            # Build initramfs cpio archive on server (depends on build-boot-agent)
-just deploy-boot                # Copy boot artifacts to /var/lib/mjolnir/boot/
+just deploy-boot                # Deploy, then cross-compile the boot agent, build the initramfs, copy it to /var/lib/mjolnir/boot/
+just check-agent                # Type-check both guest-agent binaries on the server, each with its own features
 ```
 
-The full guest agent is built as part of `just deploy-full` (which runs `cargo build` on the server via `scripts/deploy.sh --agent`).
+The full guest agent is built as part of `just deploy` (which runs `scripts/deploy.sh --agent`).
 
 ### Host sidecars
 
@@ -194,7 +193,7 @@ Config key: `hypervisor: Mjolnir.Hypervisor.CloudHypervisor` in `config/config.e
 Mjolnir.Supervisor (one_for_one)
 ├── Mjolnir.Cleanup          — Sweeps orphan hypervisor processes, stale TAPs, sockets on startup
 ├── Mjolnir.EventBus          — Pub/sub for VM lifecycle events (:vm_started, :vm_stopped, :vm_dormant)
-├── Mjolnir.VMRegistry         — Registry mapping vm_id (UUID) → GenServer PID
+├── Mjolnir.VMRegistry         — Registry mapping vm_id (22-char base58, `Mjolnir.VmId`) → GenServer PID
 ├── Mjolnir.DormantRegistry    — ETS table for dormant VM metadata (snapshot name, original config)
 ├── Mjolnir.VMSupervisor       — DynamicSupervisor spawning VM GenServers on demand
 └── Bandit HTTP Server         — Serves Mjolnir.API.Router on port 4000
@@ -204,11 +203,11 @@ Mjolnir.Supervisor (one_for_one)
 
 - **`Mjolnir.VM`** — GenServer managing a single VM's lifecycle (spawn → boot → running → stop/dormant). Each VM is a `:transient` process under the DynamicSupervisor (exits `:normal` on boot failure to prevent restart loops). Public API: `spawn/1`, `exec/3`, `status/1`, `stop/1`, `list/0`, `snapshot/2`, `deliver_message/3`, `handle_done/1`. Boot sequence: clone rootfs → inject guest agent → create TAP → start hypervisor binary → configure via API → boot → wait for guest agent ping → configure guest network → configure identity/SSH/Iroh.
 
-- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `btrfs subvolume snapshot` for instant CoW cloning of base subvolumes (shared into the guest via virtio-fs; no ext4 image). Storage layout: `@base/` (template subvolumes), `@vms/<uuid>/` (per-VM rootfs subvolume), `@snapshots/<name>/` (named snapshot subvolumes).
+- **`Mjolnir.BTRFS`** — Filesystem operations. Uses `btrfs subvolume snapshot` for instant CoW cloning of base subvolumes (shared into the guest via virtio-fs; no ext4 image). Storage layout: `@base/` (template subvolumes), `@vms/<vm_id>/` (per-VM rootfs subvolume), `@snapshots/<name>/` (named snapshot subvolumes).
 
 - **`Mjolnir.CloudHypervisor.Client`** — HTTP client for CH's REST API over Unix socket via `Req`. Endpoints: `vm.create`, `vm.boot`, `vm.pause`, `vm.resume`, `vm.shutdown`, `vm.delete`, `vm.info`.
 
-- **`Mjolnir.CloudHypervisor.Config`** — TypedStruct that builds the CH `vm.create` payload. Key fields: `kernel_path`, `boot_args` (includes `root=myfs rootfstype=virtiofs rw`), `vsock_cid` (unique per VM from MD5 of UUID), `mem_size_mib` (converted to bytes for CH API), `virtiofsd_socket` (vhost-user socket path).
+- **`Mjolnir.CloudHypervisor.Config`** — TypedStruct that builds the CH `vm.create` payload. Key fields: `kernel_path`, `boot_args` (includes `root=myfs rootfstype=virtiofs rw`), `vsock_cid` (unique per VM from MD5 of the VM id), `mem_size_mib` (converted to bytes for CH API), `virtiofsd_socket` (vhost-user socket path).
 
 - **`Mjolnir.Cleanup`** — Runs at startup. Finds orphan hypervisor processes via `ps`, kills them. Cleans stale sockets, TAP devices in DOWN state (`mj-*`), and VM directories without running GenServers.
 
@@ -259,7 +258,7 @@ Server kernel path: `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH).
 
 ### Data Flow
 
-1. `VM.spawn/1` → UUID generated → CID generated (MD5 hash of UUID, range [3, 0xFFFFFFFF)) → GenServer started under DynamicSupervisor
+1. `VM.spawn/1` → VM id generated (16 random bytes as base58 text, `Mjolnir.VmId`) → CID generated (MD5 hash of the id, range [3, 0xFFFFFFFF)) → GenServer started under DynamicSupervisor
 2. `handle_continue(:boot)` → BTRFS reflink clone → inject guest agent binary → create TAP → Port.open hypervisor binary → wait for API socket → configure VM → boot instance → poll vsock for guest agent → configure guest network/identity/Iroh
 3. `VM.exec/3` → persistent `Vsock.Connection` → length-prefixed JSON over UDS → match response by UUID → return stdout or error
 4. `VM.stop/1` → GenServer.stop → `terminate/2` → cleanup (kill hypervisor, delete TAP, remove sockets/rootfs)
@@ -301,16 +300,16 @@ Multi-VirtioFS support (`lib/mjolnir/virtiofs.ex`) allows mounting additional ho
 
 #### Mjolnir's own CI
 
-`.forgejo/workflows/build-client.yml` builds the `mj` client inside a Mjolnir VM. GitHub is canonical. A host timer (`github-forgejo-mirror.timer`, every 5 min) fetches `github.com/identikey/mjolnir` and pushes into Forgejo so Actions run — you do **not** need a second `git push forgejo`.
+`.forgejo/workflows/build-client.yml` builds the `mj` client inside a Mjolnir VM. GitHub is canonical. A host timer (`github-forgejo-mirror.timer`, every 5 min) fetches GitHub (`scripts/mirror-github-to-forgejo.sh`; its default remote is still the pre-transfer `identikey/mjolnir` path, which GitHub redirects) and pushes into Forgejo so Actions run — you do **not** need a second `git push forgejo`.
 
 ```bash
-git push origin main    # github.com/identikey/mjolnir — timer mirrors to mimir; CI runs there
+git push origin main    # github.com/WorldTreeNetwork/mjolnir — timer mirrors to mimir; CI runs there
 # git push forgejo main  # only if you cannot wait ~5 min: just mirror-github
 ```
 
 Native Forgejo pull-mirror cannot convert an existing repo (v15 docs). The timer is a fetch + `git push --mirror` over localhost HTTP so receive-pack (and Actions) fire. Secrets: `/etc/mjolnir/github-forgejo-mirror.env` (Forgejo token) and `/etc/mjolnir/github-mjolnir-mirror` (GitHub deploy key).
 
-It publishes the binary as artifact `mj-x86_64-linux` (Forgejo stores these under `data/actions_artifacts/`; the run page links them).
+It publishes the binary as artifact `mj-x86_64-unknown-linux-gnu` (Forgejo stores these under `data/actions_artifacts/`; the run page links them).
 
 Things that will cost you a run:
 
@@ -318,7 +317,7 @@ Things that will cost you a run:
 2. **Use `forgejo/upload-artifact`, never `actions/upload-artifact`.** Upstream v4 bundles `@actions/artifact` v2, which refuses any host that isn't github.com and fails with `GHESNotSupportedError` before making a request. It's a client-side check, so nothing on our side can fix it.
 3. **Iterate on a cheap workflow, not this one.** Nothing caches between VMs (mjolnir-5xn), so every `build-client` run is a ~10-minute cold cargo build. When debugging CI mechanics rather than the build, use a throwaway workflow that skips cargo — roughly one minute per iteration.
 
-To spawn a CI VM by hand, note that `@base/` and `@snapshots/` are separate namespaces and `mj` has no `--base` flag (mjolnir-97c), so `mj spawn --snapshot ci-ubuntu-24.04` fails with `:snapshot_not_found`. Go through the API:
+To spawn a CI VM by hand, note that `@base/` and `@snapshots/` are separate namespaces, so `mj spawn --snapshot ci-ubuntu-24.04` fails with `:snapshot_not_found`. `mj spawn --base ci-ubuntu-24.04 --memory 4096` sends `base_image` instead. The same request on the host:
 
 ```bash
 ssh root@45.76.77.97 "curl -s -X POST localhost:4000/api/vms \
@@ -340,7 +339,7 @@ Universal syslog-over-vsock transport for VM log output. The guest agent (`src/s
 
 See `docs/plans/test-harness-spec.md` for the full specification.
 
-- **Unit tests** (`mix test`): ~613 tests, async, no infrastructure needed, run on macOS
+- **Unit tests** (`mix test`): async, no infrastructure needed, run on macOS
 - **Integration tests** (`mix test --include integration`): Need KVM + root on server
 - **Postgres tests** (`mix test --include postgres`): Need `postgres` + `initdb` + `pg_isready` on PATH. Each test brings up its own ephemeral instance under `/tmp`.
 - **E2E tests** (`mix test --include e2e`): Future — full API lifecycle

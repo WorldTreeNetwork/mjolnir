@@ -48,7 +48,7 @@ Find the VM's ID:
 
 ```bash
 mj list
-# a1b2c3d4-...   running   512 MB
+# The ID column is the VM's ID, e.g. 7Zk3mQ9xVbR2nLpW5tYc8H
 ```
 
 ---
@@ -58,11 +58,13 @@ mj list
 Freeze its current state under a name you'll remember:
 
 ```bash
-mj snapshot a1b2c3d4-... node-env
+mj snapshot create 7Zk3mQ9xVbR2nLpW5tYc8H node-env
 ```
 
 ```
-Created snapshot 'node-env'
+Snapshot 'node-env' created successfully
+  Size: 412 MB
+  Source VM: 7Zk3mQ9xVbR2nLpW5tYc8H
 ```
 
 That's it. `node-env` is now a saved state. Behind the scenes Mjolnir quiesced the filesystem
@@ -71,7 +73,7 @@ for a consistent capture (flush the guest, pause it, fsync the host, take a
 half-written files. The capture itself is a ~1ms copy-on-write metadata operation regardless of
 how big the filesystem is.
 
-> **`--compact`:** add it (`mj snapshot <id> <name> --compact`) to reclaim blocks that were
+> **`--compact`:** add it (`mj snapshot create <id> <name> --compact`) to reclaim blocks that were
 > freed inside the guest before snapshotting, producing a tighter snapshot. Skip it for speed.
 
 ---
@@ -79,12 +81,12 @@ how big the filesystem is.
 ## 3. List your snapshots
 
 ```bash
-mj snapshots
+mj snapshot list
 ```
 
 ```
-NAME        SOURCE VM        CREATED               SIZE
-node-env    a1b2c3d4-...     2026-06-22T22:10:00Z  412 MB
+NAME       KIND         SOURCE VM                CREATED AT             SIZE
+node-env   filesystem   7Zk3mQ9xVbR2nLpW5tYc8H   2026-06-22T22:10:00Z   412 MB
 ```
 
 The size shown is the snapshot's referenced data; because of copy-on-write block sharing, the
@@ -138,16 +140,16 @@ Snapshots make experimentation safe:
 
 ```bash
 # 1. You have a working VM. Snapshot it as a safety net.
-mj snapshot a1b2c3d4-... before-upgrade
+mj snapshot create 7Zk3mQ9xVbR2nLpW5tYc8H before-upgrade
 
 # 2. Try something risky in the VM (a major upgrade, a config rewrite)...
-mj exec a1b2c3d4-... "apt-get -y full-upgrade && reboot-into-the-unknown"
+mj exec 7Zk3mQ9xVbR2nLpW5tYc8H "apt-get -y full-upgrade && reboot-into-the-unknown"
 
 # 3a. It worked → snapshot the new good state.
-mj snapshot a1b2c3d4-... after-upgrade
+mj snapshot create 7Zk3mQ9xVbR2nLpW5tYc8H after-upgrade
 
 # 3b. It broke → throw the VM away and spawn a clean one from the safety net.
-mj kill a1b2c3d4-...
+mj kill 7Zk3mQ9xVbR2nLpW5tYc8H
 mj spawn --snapshot before-upgrade --connect
 ```
 
@@ -185,9 +187,9 @@ VMs already hold their own references to the shared blocks; the data they need w
 
 | Goal | Command |
 |---|---|
-| Snapshot a running VM | `mj snapshot <vm_id> <name>` |
-| Snapshot + reclaim freed space | `mj snapshot <vm_id> <name> --compact` |
-| List snapshots | `mj snapshots` |
+| Snapshot a running VM | `mj snapshot create <vm_id> <name>` |
+| Snapshot + reclaim freed space | `mj snapshot create <vm_id> <name> --compact` |
+| List snapshots | `mj snapshot list` |
 | Spawn a VM from a snapshot | `mj spawn --snapshot <name>` |
 | Spawn from a snapshot + connect | `mj spawn --snapshot <name> --connect` |
 | Delete a snapshot | `mj snapshot rm <name>` |

@@ -24,15 +24,9 @@ Stewarded by the **World Tree Network Foundation**. The host (orchestrator, gues
 
 ## Use it
 
-The `mj` CLI (also installed as `mjolnir`) talks to a Mjolnir server's HTTP API. It handles auth, VM lifecycle, and interactive shells.
+The `mj` CLI talks to a Mjolnir server's HTTP API. It handles auth, VM lifecycle, and interactive shells. A source build also installs it under the long name `mjolnir`; the release archive ships `mj` only.
 
 ### Install
-
-```bash
-# From the repo (needs Rust). Builds target/release/mjolnir and installs
-# both `mjolnir` and the short `mj` alias to /usr/local/bin (or ~/.local/bin).
-./scripts/build-client.sh --install
-```
 
 Public downloads are [GitHub Releases](https://github.com/WorldTreeNetwork/mjolnir/releases).
 Each asset is a tar.gz, not the raw binary. The archive member is already
@@ -42,22 +36,40 @@ a browser download.
 
 ```bash
 tar xzf mj-<target>.tar.gz
+shasum -a 256 -c SHA256SUMS      # optional: checks the archive and the extracted mj
 sudo install -m 755 mj /usr/local/bin/mj
+mj --version
 ```
 
 `/usr/local/bin` is already on the default `PATH`. Leave Homebrew's prefix
 (`/opt/homebrew/bin` on Apple Silicon) to `brew`.
 
-`scripts/package-cli-release.sh` builds that archive from a `mjolnir` binary.
+Assets are per target (`mj-<target>.tar.gz`). If the release has none for
+your platform, build from the repo:
+
+```bash
+# Needs Rust. Builds target/release/mjolnir and installs both `mjolnir`
+# and the short `mj` alias to /usr/local/bin (or ~/.local/bin).
+./scripts/build-client.sh --install
+```
+
+`scripts/package-cli-release.sh` builds the release archive from a `mjolnir` binary.
 `scripts/publish-cli-release.sh` uploads it to Forgejo.
 
 ### Spawn a VM in three commands
 
 ```bash
-mj login --api https://mjolnir.example.com   # authenticate, saves API + token
-mj spawn                                      # returns vm_id + an Iroh ticket
-mj connect <vm_id>                            # drop into an interactive PTY
+mj login              # opens a browser; sign in with a passkey
+mj spawn              # prints the VM id and an Iroh ticket
+mj connect <vm_id>    # drop into an interactive PTY
 ```
+
+With no flags, `mj login` signs in at `https://auth.identikey.me` and `mj`
+talks to `https://api.vm.worldtree.network`. No IdentiKey yet? The sign-in
+page has **Create an account**: it makes an identity and saves a passkey, with
+no username or email. For another server, `mj login --api https://mjolnir.example.com`
+saves that URL (so does `mj config set api <url>`; `MJOLNIR_API` overrides it
+for one command).
 
 `mj login` remembers this computer in the OS config directory (shown by
 `mj status`). Commands renew expired API tokens automatically; simultaneous
@@ -103,7 +115,7 @@ Walkthrough: **[Deploying a Web App](docs/guide/deploying-an-app.md)**. Sidecars
 (`DATABASE_URL` / `REDIS_URL` on `10.200.0.1`) are provisioned separately, then
 the same file: [Host sidecars](docs/guide/host-sidecars.md).
 
-Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-serve` for Claude Code integration, and `forge` for host config). The `--api`/`--token` flags (or `MJOLNIR_TOKEN` / `MJOLNIR_PROFILE` env vars) override saved config per-invocation.
+Run `mj --help` for the full surface (config profiles, ticket conversion, `mcp-serve` for Claude Code integration, and `forge` for host config). The `--api`/`--token` flags (or the `MJOLNIR_API` / `MJOLNIR_TOKEN` / `MJOLNIR_PROFILE` env vars) override saved config per-invocation.
 
 ### Host sidecars (from inside a VM)
 
@@ -171,12 +183,12 @@ The server is a Linux host with KVM. The bootstrap script installs every depende
 | Memory / Disk | 4 GB / 20 GB free | `free -h` · `df -h /var/lib` |
 | OS / Kernel | Ubuntu 22.04+ / 5.10+ | `uname -r` |
 
-Cloud Hypervisor 50+, Erlang 26+, Elixir 1.15+, and Rust are installed by the bootstrap script. If you're inside a VM, you need **nested virtualization** enabled by your provider.
+Cloud Hypervisor 54, Erlang/OTP 27+, Elixir 1.20+, and Rust are installed by the bootstrap script. If you're inside a VM, you need **nested virtualization** enabled by your provider.
 
 ### Bootstrap
 
 ```bash
-git clone https://github.com/Identikey/mjolnir.git   # → WorldTreeNetwork/mjolnir after org transfer
+git clone https://github.com/WorldTreeNetwork/mjolnir.git
 cd mjolnir
 
 # Dev: keeps code in your workspace for live editing, loopback storage
@@ -227,7 +239,7 @@ Dev mode uses isolated paths (`@vms-dev`, `/tmp/mjolnir-dev`) so it won't clobbe
 Mjolnir is Elixir/OTP for orchestration over a Rust guest agent inside each VM.
 
 - **`Mjolnir.VM`** — a GenServer per VM (spawn → boot → running → snapshot/stop). Boot = BTRFS reflink clone → inject guest agent → create TAP → launch Cloud Hypervisor → configure via its Unix-socket API → wait for the guest agent over vsock → configure network/identity/Iroh.
-- **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `btrfs subvolume snapshot`. Layout: `@base/` templates, `@vms/<uuid>/`, `@snapshots/<name>/`.
+- **`Mjolnir.BTRFS`** — instant CoW cloning of base images via `btrfs subvolume snapshot`. Layout: `@base/` templates, `@vms/<vm_id>/`, `@snapshots/<name>/`.
 - **Guest agent** (`native/mjolnir_guest_agent/`, Rust) — runs inside the VM on vsock, handles `exec`, networking, identity, and Iroh-backed PTY/SSH.
 - **HTTP API** — Bandit on port `4000`, JWT/OIDC-authenticated. This is what `mj` and the `just` control plane talk to. Guests see it as `api_url` on `10.200.0.1`.
 - **Host sidecars** — processes on the reserved overlay IP (`10.200.0.1`): blob door `:7222`, tenant Postgres `:5432`, Redis `:6379`. Catalog: [Host sidecars](docs/guide/host-sidecars.md).
@@ -261,6 +273,8 @@ sudo usermod -aG kvm $USER && newgrp kvm
 ```bash
 grep -q "hypervisor" /proc/cpuinfo && echo "in a VM — enable nested virtualization"
 ```
+
+**`mj` prints `401 Unauthorized — {"error":"invalid_token"}`** — there is no saved login for that server. Run `mj login`; `mj status` shows the API in use and whether a session is saved.
 
 **`just` commands fail** — check `MJOLNIR_HOST` is set (`.env`). To confirm the server is reachable and healthy, run `mj doctor`.
 

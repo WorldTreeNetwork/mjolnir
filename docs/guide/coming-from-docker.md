@@ -32,7 +32,7 @@ machine, clone it while it's running, and hand someone a peer-to-peer connection
 | `docker run alpine` | `mj spawn` | Mjolnir boots a real microVM (own kernel, KVM-isolated) in well under a second, not a namespaced process. |
 | Image (`alpine:3.20`) | Base subvolume (`@base/ubuntu-24.04`) | A real BTRFS filesystem tree, not a stack of read-only tar layers. |
 | `docker exec -it … sh` | `mj exec` / `mj connect` | `connect` gives you a true PTY over WebSocket **or** Iroh QUIC (P2P, NAT-traversing). |
-| `docker commit` | `mj snapshot <vm> <name>` | Snapshots a **running** machine's full disk state, not just a stopped container's writable layer. |
+| `docker commit` | `mj snapshot create <vm> <name>` | Snapshots a **running** machine's full disk state, not just a stopped container's writable layer. |
 | `docker run my-commit` | `mj spawn --snapshot <name>` | Restores from a snapshot via an instant CoW clone. A snapshot *is* a spawnable base. |
 | Image layer cache | BTRFS subvolume snapshots | CoW at the *filesystem* level, applied to live machine state — see below. |
 | `docker rm -f` | `mj kill <vm>` | Stops the microVM and deletes its CoW subvolume. |
@@ -78,7 +78,7 @@ layout is three directories of them:
 ├── @base/
 │   └── ubuntu-24.04/        ← a base subvolume (the "image")
 ├── @vms/
-│   └── <uuid>/              ← a per-VM clone (the running rootfs)
+│   └── <vm_id>/             ← a per-VM clone (the running rootfs)
 └── @snapshots/
     ├── my-node-env/         ← a named snapshot (a frozen, spawnable rootfs)
     └── my-node-env.json     ← its metadata sidecar
@@ -87,7 +87,7 @@ layout is three directories of them:
 Spawning a VM is one BTRFS operation:
 
 ```
-btrfs subvolume snapshot  @base/ubuntu-24.04  @vms/<uuid>
+btrfs subvolume snapshot  @base/ubuntu-24.04  @vms/<vm_id>
 ```
 
 This is the line in `lib/mjolnir/btrfs.ex` that makes Mjolnir feel like magic. It is a
@@ -230,7 +230,7 @@ mj exec "$ticket" "apt-get update && apt-get install -y nodejs npm"
 mj exec "$ticket" "npm install -g pnpm"
 
 # 3. Freeze the result as a reusable, spawnable base
-mj snapshot "$ticket" node-env
+mj snapshot create "$ticket" node-env
 
 # 4. Fan out: ten independent dev boxes, instantly, sharing one rootfs on disk
 for i in $(seq 1 10); do
@@ -254,7 +254,7 @@ not OCI images. You provision a base and snapshot it (see the worked example). O
 isn't a feature today.
 
 **Do I lose my data when a VM stops?** `mj kill` deletes the VM's CoW subvolume. To keep state,
-`mj snapshot` first — that's the entire point of the snapshot primitive.
+`mj snapshot create` first — that's the entire point of the snapshot primitive.
 
 **Why BTRFS specifically?** Native, first-class copy-on-write at the filesystem level, plus
 subvolume snapshots and `virtio-fs` direct sharing into the guest. It's the substrate that
