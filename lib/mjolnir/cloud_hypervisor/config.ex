@@ -41,6 +41,9 @@ defmodule Mjolnir.CloudHypervisor.Config do
     field(:initramfs_path, String.t(), default: nil)
     # Preserve iroh key from snapshot (default: false, generates unique key)
     field(:preserve_iroh_key, boolean(), default: false)
+    # `:unikernel` omits virtio-fs, vsock, and the Linux command line.
+    field(:guest_kind, atom(), default: nil)
+    field(:serial_log, String.t(), default: nil)
   end
 
   @doc """
@@ -54,6 +57,25 @@ defmodule Mjolnir.CloudHypervisor.Config do
   - net (array of network interface configs, optional)
   - vsock (cid, socket path)
   """
+  def vm_create_payload(%__MODULE__{guest_kind: :unikernel} = config, _vsock_path) do
+    serial_log =
+      config.serial_log ||
+        Path.join(Path.dirname(config.kernel_path), "#{config.vm_id}_serial.log")
+
+    payload = %{
+      "payload" => %{"kernel" => config.kernel_path, "cmdline" => config.boot_args},
+      "cpus" => %{"boot_vcpus" => 1, "max_vcpus" => 1},
+      "memory" => %{"size" => 512 * 1024 * 1024, "shared" => false},
+      "serial" => %{"mode" => "File", "file" => serial_log},
+      "console" => %{"mode" => "Off"}
+    }
+
+    case network_config(config) do
+      nil -> payload
+      net -> Map.put(payload, "net", net)
+    end
+  end
+
   def vm_create_payload(%__MODULE__{} = config, vsock_path) do
     serial_log = Path.join(Path.dirname(vsock_path), "#{config.vm_id}_serial.log")
 

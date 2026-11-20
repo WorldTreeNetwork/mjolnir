@@ -1,0 +1,4 @@
+quic.zig is the Reflect QUIC stack from WorldTreeNetwork/homoiconic
+commit 793b583824a5de384bcb36cc4d111348d5a9f5f0 (unikernel/quic.zig).
+host.zig is the Mjolnir host client written against that stack.
+The homoiconic tree is not modified.

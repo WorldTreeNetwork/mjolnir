@@ -35,6 +35,18 @@ defmodule Mjolnir.Hypervisor.CloudHypervisor do
   end
 
   @impl true
+  def configure_vm(socket_path, %{guest_kind: :unikernel} = config) do
+    known_keys = Config.__struct__() |> Map.keys() |> MapSet.new()
+    filtered = Map.filter(config, fn {k, _v} -> MapSet.member?(known_keys, k) end)
+    ch_config = struct!(Config, filtered)
+    payload = Config.vm_create_payload(ch_config, nil)
+
+    case Client.create_vm(socket_path, payload) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def configure_vm(socket_path, config) do
     # Use initramfs if configured (two-phase boot: initramfs → virtiofs rootfs)
     # Boot args must omit root=/rootfstype= when initramfs handles mounting (TC6)

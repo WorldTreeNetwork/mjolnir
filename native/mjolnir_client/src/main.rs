@@ -89,6 +89,15 @@ enum Command {
         /// With --target, print the start script and do not spawn
         #[arg(long)]
         dry_run: bool,
+        /// Guest kind. `unikernel` boots an ELF with no rootfs and no agent.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Host path of the unikernel ELF. Required with --kind unikernel.
+        #[arg(long)]
+        kernel: Option<String>,
+        /// SHA-256 hex of the guest certificate. Required with --kind unikernel.
+        #[arg(long)]
+        peer_pin: Option<String>,
     },
     /// List running VMs
     List {
@@ -142,6 +151,9 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Owner for an operator-socket kill. Canonical base58 XID.
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// Retire a stranded VM to state=failed so it stops auto-resuming
     Retire {
@@ -218,8 +230,11 @@ enum Command {
     Message {
         /// VM ID or ticket
         id: String,
-        /// JSON payload, e.g. '{"key":"val"}'
+        /// JSON payload, or a program file when --budget is set.
         payload: String,
+        /// Step budget. Selects the unikernel program-file form of this command.
+        #[arg(long)]
+        budget: Option<u64>,
         /// Producer message id. Same id retried is a host duplicate, not a second turn.
         #[arg(long = "id")]
         message_id: Option<String>,
@@ -229,6 +244,9 @@ enum Command {
         /// Bearer token for API auth
         #[arg(long, env = "MJOLNIR_TOKEN")]
         token: Option<String>,
+        /// Owner for an operator-socket message. Canonical base58 XID.
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// Diagnose VM/host health; --fix to repair
     Doctor {
@@ -937,6 +955,9 @@ async fn main() {
             target,
             path,
             dry_run,
+            kind,
+            kernel,
+            peer_pin,
         } => {
             api::cmd_spawn(
                 &profile,
@@ -950,6 +971,9 @@ async fn main() {
                 target.as_deref(),
                 &path,
                 dry_run,
+                kind.as_deref(),
+                kernel.as_deref(),
+                peer_pin.as_deref(),
             )
             .await
         }
@@ -971,12 +995,13 @@ async fn main() {
             all,
             api,
             token,
+            owner,
         } => {
             if all {
                 api::cmd_kill_all(&profile, &api, &token).await
             } else {
                 match id {
-                    Some(id) => api::cmd_kill(&profile, &api, &token, &id).await,
+                    Some(id) => api::cmd_kill(&profile, &api, &token, &owner, &id).await,
                     None => Err(anyhow::anyhow!("provide a VM id or --all")),
                 }
             }
@@ -997,17 +1022,21 @@ async fn main() {
         Command::Message {
             id,
             payload,
+            budget,
             message_id,
             api,
             token,
+            owner,
         } => {
             api::cmd_message(
                 &profile,
                 &api,
                 &token,
+                &owner,
                 &id,
                 &payload,
                 message_id.as_deref(),
+                budget,
                 json,
             )
             .await

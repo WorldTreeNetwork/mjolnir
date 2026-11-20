@@ -428,6 +428,9 @@ pub struct SpawnOptions {
     /// Canonical base58 XID sent as `X-Owner-Id`. The server stores it only
     /// when the caller is the operator principal. A signed-in `sub` ignores it.
     pub owner_id: Option<String>,
+    pub kind: Option<String>,
+    pub kernel: Option<String>,
+    pub peer_pin: Option<String>,
 }
 
 /// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
@@ -457,6 +460,15 @@ pub async fn spawn_vm(
     }
     if let Some(base_image) = &opts.base_image {
         body["base_image"] = serde_json::Value::String(base_image.clone());
+    }
+    if let Some(kind) = &opts.kind {
+        body["kind"] = serde_json::Value::String(kind.clone());
+    }
+    if let Some(kernel) = &opts.kernel {
+        body["kernel"] = serde_json::Value::String(kernel.clone());
+    }
+    if let Some(pin) = &opts.peer_pin {
+        body["peer_pin"] = serde_json::Value::String(pin.clone());
     }
     if let Some(preserve) = opts.preserve_iroh_key {
         body["preserve_iroh_key"] = serde_json::Value::Bool(preserve);

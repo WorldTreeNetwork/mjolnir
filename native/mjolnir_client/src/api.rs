@@ -35,6 +35,9 @@ pub async fn cmd_spawn(
     target: Option<&str>,
     manifest_path: &str,
     dry_run: bool,
+    kind: Option<&str>,
+    kernel: Option<&str>,
+    peer_pin: Option<&str>,
 ) -> Result<()> {
     if let Some(name) = target {
         return cmd_spawn_target(
@@ -77,12 +80,19 @@ pub async fn cmd_spawn(
         eprintln!("Spawning from base image: {}", img);
     }
 
+    if kind == Some("unikernel") && connect {
+        anyhow::bail!("--connect is not available for a unikernel guest");
+    }
+
     let opts = SpawnOptions {
         memory_mb: *memory_mb,
         snapshot: snapshot.clone(),
         base_image: base_image.clone(),
         ssh_public_key,
         owner_id: owner.clone(),
+        kind: kind.map(str::to_string),
+        kernel: kernel.map(str::to_string),
+        peer_pin: peer_pin.map(str::to_string),
         ..SpawnOptions::default()
     };
 
@@ -106,7 +116,9 @@ pub async fn cmd_spawn(
 
     // If shell not ready yet, await it. The operator socket has no bearer
     // token, so the wait has to use the same socket as the spawn.
-    let ticket = if resp.shell_ready == Some(true) {
+    let ticket = if kind == Some("unikernel") {
+        None
+    } else if resp.shell_ready == Some(true) {
         resp.ticket.clone()
     } else if let Some(sock) = operator_socket() {
         eprintln!("Waiting for shell...");
@@ -568,8 +580,24 @@ pub async fn cmd_kill(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
+    owner: &Option<String>,
     id_or_ticket: &str,
 ) -> Result<()> {
+    if let Some(sock) = operator_socket() {
+        let owner_id = owner.as_deref().context(
+            "operator kill requires --owner (canonical base58 XID). The operator principal is not an account",
+        )?;
+        let _ = curl_operator(
+            &sock,
+            "DELETE",
+            &format!("/api/vms/{id_or_ticket}"),
+            owner_id,
+            None,
+        )
+        .await?;
+        eprintln!("Killed {}", id_or_ticket);
+        return Ok(());
+    }
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -1103,6 +1131,7 @@ async fn cmd_spawn_target(
         git_signing: Some(dev.git_sign),
         metadata: Some(metadata),
         owner_id: owner.clone(),
+        ..SpawnOptions::default()
     };
 
     eprintln!("Spawning target {name}...");
@@ -1165,6 +1194,15 @@ fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
     }
     if let Some(base_image) = &opts.base_image {
         body["base_image"] = serde_json::json!(base_image);
+    }
+    if let Some(kind) = &opts.kind {
+        body["kind"] = serde_json::json!(kind);
+    }
+    if let Some(kernel) = &opts.kernel {
+        body["kernel"] = serde_json::json!(kernel);
+    }
+    if let Some(pin) = &opts.peer_pin {
+        body["peer_pin"] = serde_json::json!(pin);
     }
     if let Some(preserve) = opts.preserve_iroh_key {
         body["preserve_iroh_key"] = serde_json::json!(preserve);
@@ -1450,15 +1488,170 @@ pub async fn cmd_doctor_host(
 /// `mj message [--id <producer-id>] <id> <json>` — deliver a JSON payload
 /// into a VM; wakes a dormant VM if it is parked. A producer `--id` makes
 /// retries duplicate-safe (host 200 `duplicate`).
-pub async fn cmd_message(
+async fn cmd_unikernel_message(
     profile: &Profile,
     api_flag: &Option<String>,
     token: &Option<String>,
     id_or_ticket: &str,
-    payload: &str,
+    program_path: &str,
     producer_id: Option<&str>,
+    budget: u64,
     json: bool,
 ) -> Result<()> {
+    let bytes = std::fs::read(program_path)
+        .with_context(|| format!("read program {}", program_path))?;
+    let client = api_client(token).await;
+    let api = crate::config::resolve_api(api_flag, profile);
+    let base = api.trim_end_matches('/');
+    let id = resolve_vm_id(&client, base, id_or_ticket).await?;
+    let mut req_body = serde_json::json!({
+        "program_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
+        "budget": budget,
+    });
+    if let Some(pid) = producer_id {
+        req_body["id"] = serde_json::Value::String(pid.to_string());
+    }
+    let body = send_text(
+        client
+            .post(format!("{}/api/vms/{}/messages", base, &id))
+            .json(&req_body),
+        "message",
+    )
+    .await?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).context("message response")?;
+    if parsed.get("error").is_some() && parsed.get("transport_status").and_then(|v| v.as_i64()) != Some(0)
+        && parsed.get("ok").and_then(|v| v.as_bool()) != Some(true)
+    {
+        anyhow::bail!("{}", parsed["error"].as_str().unwrap_or("unikernel message failed"));
+    }
+    let reply = parsed
+        .get("reply_b64")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply)
+        .context("reply_b64")?;
+    if json {
+        println!("{}", body);
+    } else {
+        std::io::Write::write_all(&mut std::io::stdout(), &raw)?;
+    }
+    Ok(())
+}
+
+async fn cmd_unikernel_message_operator(
+    sock: &str,
+    owner: &Option<String>,
+    id: &str,
+    program_path: &str,
+    producer_id: Option<&str>,
+    budget: u64,
+    json: bool,
+) -> Result<()> {
+    let owner_id = owner.as_deref().context(
+        "operator message requires --owner (canonical base58 XID). The operator principal is not an account",
+    )?;
+    let bytes = std::fs::read(program_path)
+        .with_context(|| format!("read program {}", program_path))?;
+    let mut req_body = serde_json::json!({
+        "program_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
+        "budget": budget,
+    });
+    if let Some(pid) = producer_id {
+        req_body["id"] = serde_json::Value::String(pid.to_string());
+    }
+    let body = curl_operator(
+        sock,
+        "POST",
+        &format!("/api/vms/{id}/messages"),
+        owner_id,
+        Some(&req_body),
+    )
+    .await?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).context("message response")?;
+    if parsed.get("error").is_some()
+        && parsed.get("transport_status").and_then(|v| v.as_i64()) != Some(0)
+        && parsed.get("ok").and_then(|v| v.as_bool()) != Some(true)
+    {
+        anyhow::bail!(
+            "{}",
+            parsed["error"].as_str().unwrap_or("unikernel message failed")
+        );
+    }
+    let reply = parsed
+        .get("reply_b64")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, reply)
+        .context("reply_b64")?;
+    if json {
+        println!("{}", body);
+    } else {
+        std::io::Write::write_all(&mut std::io::stdout(), &raw)?;
+    }
+    Ok(())
+}
+
+pub async fn cmd_message(
+    profile: &Profile,
+    api_flag: &Option<String>,
+    token: &Option<String>,
+    owner: &Option<String>,
+    id_or_ticket: &str,
+    payload: &str,
+    producer_id: Option<&str>,
+    budget: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    if let Some(budget) = budget {
+        if let Some(sock) = operator_socket() {
+            return cmd_unikernel_message_operator(
+                &sock,
+                owner,
+                id_or_ticket,
+                payload,
+                producer_id,
+                budget,
+                json,
+            )
+            .await;
+        }
+        return cmd_unikernel_message(
+            profile,
+            api_flag,
+            token,
+            id_or_ticket,
+            payload,
+            producer_id,
+            budget,
+            json,
+        )
+        .await;
+    }
+    if let Some(sock) = operator_socket() {
+        let owner_id = owner.as_deref().context(
+            "operator message requires --owner (canonical base58 XID). The operator principal is not an account",
+        )?;
+        let payload_value: serde_json::Value =
+            serde_json::from_str(payload).context("payload must be valid JSON")?;
+        let mut req_body = serde_json::json!({ "payload": payload_value });
+        if let Some(pid) = producer_id {
+            req_body["id"] = serde_json::Value::String(pid.to_string());
+        }
+        let body = curl_operator(
+            &sock,
+            "POST",
+            &format!("/api/vms/{id_or_ticket}/messages"),
+            owner_id,
+            Some(&req_body),
+        )
+        .await?;
+        if json {
+            println!("{}", body);
+        } else {
+            eprintln!("Accepted message for {}", id_or_ticket);
+        }
+        return Ok(());
+    }
     let payload_value: serde_json::Value =
         serde_json::from_str(payload).context("payload must be valid JSON")?;
 
@@ -1607,6 +1800,9 @@ mod tests {
             None,
             ".",
             false,
+            None,
+            None,
+            None,
         )
         .await;
         assert!(result.is_err());

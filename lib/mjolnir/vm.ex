@@ -103,6 +103,11 @@ defmodule Mjolnir.VM do
     # creator has to declare it. Required by Buzz invariant I5 (intentional
     # termination is terminal); see Mjolnir.Reconcile's moduledoc.
     restart_policy: :always,
+    # One QUIC exchange at a time. A second message is refused, not queued.
+    unikernel_busy: false,
+    unikernel_busy_ref: nil,
+    # A refused pin sticks for this boot. A new handshake would not be accepted.
+    peer_refused: false,
     # secrets_mode: :managed unlock outcome for the CURRENT boot (mjolnir-3v2).
     # `nil` when unlock is not applicable (non-:managed) or it succeeded/was
     # skipped. On failure: `%{reason: inspect(term), at: DateTime.t()}`.
@@ -247,7 +252,8 @@ defmodule Mjolnir.VM do
   """
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
-    with {:ok, opts} <- resolve_spawn_network(opts),
+    with {:ok, opts} <- Mjolnir.Unikernel.prepare_spawn(opts),
+         {:ok, opts} <- resolve_spawn_network(opts),
          :ok <- reject_memory_snapshot_spawn(opts),
          :ok <- reject_live_iroh_identity(opts) do
       do_spawn(Map.put(opts, :id, Mjolnir.VmId.generate()))
@@ -309,6 +315,7 @@ defmodule Mjolnir.VM do
     cond do
       is_integer(opts[:await_boot_timeout]) -> opts[:await_boot_timeout]
       opts[:await_boot_timeout] == :infinity -> :infinity
+      opts[:kind] == :unikernel -> Mjolnir.Unikernel.boot_deadline_ms()
       is_binary(opts[:thaw]) -> max(180_000, @managed_await_boot_timeout)
       opts[:secrets_mode] == :managed -> @managed_await_boot_timeout
       true -> @default_await_boot_timeout
@@ -326,6 +333,12 @@ defmodule Mjolnir.VM do
   """
   @spec exec(vm_id(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def exec(vm_id, command, opts \\ []) do
+    with :ok <- reject_unikernel(vm_id) do
+      do_exec(vm_id, command, opts)
+    end
+  end
+
+  defp do_exec(vm_id, command, opts) do
     timeout = Keyword.get(opts, :timeout, @default_exec_timeout)
     GenServer.call(via_tuple(vm_id), {:exec, command, timeout}, outer_call_timeout(timeout))
   end
@@ -452,6 +465,12 @@ defmodule Mjolnir.VM do
   """
   @spec snapshot(vm_id(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def snapshot(vm_id, name, opts \\ []) do
+    with :ok <- reject_unikernel(vm_id) do
+      do_snapshot_public(vm_id, name, opts)
+    end
+  end
+
+  defp do_snapshot_public(vm_id, name, opts) do
     GenServer.call(via_tuple(vm_id), {:snapshot, name, opts}, 60_000)
   end
 
@@ -721,6 +740,9 @@ defmodule Mjolnir.VM do
         # No live GenServer: a crashed/retired record. Clear the failure counter
         # and flip intent back to :running so the next Reconcile pass re-resumes.
         case Mjolnir.StateStore.get(vm_id) do
+          {:ok, %{spawn_config: %{"kind" => "unikernel"}}} ->
+            {:error, :unikernel_restart_refused}
+
           {:ok, record} ->
             runtime =
               (record.runtime || %{})
@@ -1015,6 +1037,48 @@ defmodule Mjolnir.VM do
     end
   end
 
+  @doc """
+  Send one program to a unikernel guest. The BEAM opens QUIC.
+  """
+  def unikernel_message(vm_id, program, budget \\ nil, correlation \\ nil) do
+    with {:ok, budget} <- Mjolnir.Unikernel.normalize_budget(budget),
+         :ok <- Mjolnir.Unikernel.check_program(program),
+         {:ok, job} <-
+           GenServer.call(
+             via_tuple(vm_id),
+             {:unikernel_begin,
+              %{
+                program: program,
+                budget: budget,
+                correlation_id: Mjolnir.Unikernel.correlation_id(correlation)
+              }}
+           ) do
+      result = Mjolnir.Unikernel.Exchange.run(job)
+      _ = GenServer.call(via_tuple(vm_id), {:unikernel_finish, result})
+      result
+    end
+  end
+
+  defp reject_unikernel(vm_id) do
+    kind =
+      case registered(vm_id) do
+        [{pid, _}] ->
+          try do
+            GenServer.call(pid, :guest_kind)
+          catch
+            :exit, _ -> :linux
+          end
+
+        [] ->
+          case Mjolnir.StateStore.get(vm_id) do
+            {:ok, %{spawn_config: %{"kind" => "unikernel"}}} -> :unikernel
+            _ -> :linux
+          end
+      end
+
+    if kind == :unikernel, do: {:error, :unikernel_unsupported}, else: :ok
+  end
+
   @doc false
   def restore_for_mail(vm_id), do: restore_dormant_vm(vm_id)
 
@@ -1025,6 +1089,12 @@ defmodule Mjolnir.VM do
   """
   @spec handle_done(vm_id()) :: :ok | {:error, term()}
   def handle_done(vm_id) do
+    with :ok <- reject_unikernel(vm_id) do
+      do_handle_done_public(vm_id)
+    end
+  end
+
+  defp do_handle_done_public(vm_id) do
     case registered(vm_id) do
       [{pid, _}] ->
         GenServer.call(pid, :handle_done, 60_000)
@@ -1406,7 +1476,11 @@ defmodule Mjolnir.VM do
       # The string form is accepted too: the dormant-restore path round-trips
       # its config through JSON, so a policy that only matched the atom would be
       # silently downgraded to :always on the way back.
-      restart_policy: normalize_restart_policy(opts[:restart_policy]),
+      restart_policy:
+        if(opts[:kind] == :unikernel,
+          do: :never,
+          else: normalize_restart_policy(opts[:restart_policy])
+        ),
       thaw_name: opts[:thaw],
       thaw_vsock_only: opts[:thaw_vsock_only] || false,
       kernel_vmgenid:
@@ -1524,6 +1598,54 @@ defmodule Mjolnir.VM do
 
   def handle_call(:status, _from, state) do
     {:reply, state.state, state}
+  end
+
+  def handle_call({:unikernel_begin, req}, {pid, _}, state) do
+    cond do
+      Map.get(state.config, :guest_kind) != :unikernel ->
+        {:reply, {:error, :not_unikernel}, state}
+
+      state.peer_refused ->
+        {:reply, {:error, :peer_key_refused}, state}
+
+      state.unikernel_busy ->
+        {:reply, {:error, :unikernel_busy}, state}
+
+      true ->
+        ref = Process.monitor(pid)
+
+        job = %{
+          guest_ip: state.net_config.guest_ip,
+          quic_port: state.config.quic_port,
+          peer_pin: state.config.peer_pin,
+          budget: req.budget,
+          program: req.program,
+          correlation_id: req.correlation_id
+        }
+
+        {:reply, {:ok, job}, %{state | unikernel_busy: true, unikernel_busy_ref: ref}}
+    end
+  end
+
+  def handle_call({:unikernel_finish, result}, _from, state) do
+    if is_reference(state.unikernel_busy_ref),
+      do: Process.demonitor(state.unikernel_busy_ref, [:flush])
+
+    refused =
+      match?({{:error, :peer_key_refused}, _}, {result, nil}) or
+        result == {:error, :peer_key_refused}
+
+    {:reply, :ok,
+     %{
+       state
+       | unikernel_busy: false,
+         unikernel_busy_ref: nil,
+         peer_refused: state.peer_refused or refused
+     }}
+  end
+
+  def handle_call(:guest_kind, _from, state) do
+    {:reply, Map.get(state.config, :guest_kind) || :linux, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -1885,6 +2007,10 @@ defmodule Mjolnir.VM do
   end
 
   @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{unikernel_busy_ref: ref} = state) do
+    {:noreply, %{state | unikernel_busy: false, unikernel_busy_ref: nil}}
+  end
+
   def handle_info({:EXIT, pid, reason}, %{hypervisor_pid: pid} = state) do
     Logger.warning("Hypervisor process exited: #{inspect(reason)}")
     {:stop, {:hypervisor_exit, reason}, %{state | state: :stopped}}
@@ -2236,6 +2362,21 @@ defmodule Mjolnir.VM do
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
 
+      if Map.get(state.config, :guest_kind) == :unikernel and match?({:hypervisor_exit, _}, reason) do
+        _ =
+          Mjolnir.StateStore.put(
+            Mjolnir.StateStore.Record.new(state.id, :stopped,
+              spawn_config: %{
+                "kind" => "unikernel",
+                "kernel" => state.config.kernel_path,
+                "peer_pin" => state.config.peer_pin,
+                "restart_policy" => "never"
+              },
+              runtime: %{"reason" => "guest_exit"}
+            )
+          )
+      end
+
       case Mjolnir.DormantRegistry.lookup(state.id) do
         {:ok, _} ->
           Mjolnir.Mailbox.kick(state.id)
@@ -2316,9 +2457,17 @@ defmodule Mjolnir.VM do
   defp normalize_restart_policy(_), do: :always
 
   defp build_config(opts) do
+    kind = opts[:kind] || :linux
+
     %{
       vm_id: opts.id,
-      kernel_path: Application.get_env(:mjolnir, :ch_kernel_path),
+      guest_kind: kind,
+      kernel_path:
+        if(kind == :unikernel,
+          do: opts[:kernel],
+          else: Application.get_env(:mjolnir, :ch_kernel_path)
+        ),
+      peer_pin: opts[:peer_pin],
       # Set during boot
       rootfs_path: "",
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
@@ -2334,6 +2483,87 @@ defmodule Mjolnir.VM do
       # :extra_mounts passed to spawn/1 was silently dropped (gge.1.9).
       extra_mounts: opts[:extra_mounts] || []
     }
+  end
+
+  defp do_boot(%{config: %{guest_kind: :unikernel}} = state), do: do_boot_unikernel(state)
+
+  defp do_boot_unikernel(state) do
+    socket_dir = Application.get_env(:mjolnir, :socket_dir)
+    hypervisor = state.hypervisor
+    socket_path = Path.join(socket_dir, "#{state.id}.sock")
+    vsock_path = hypervisor.vsock_path(socket_dir, state.id)
+    serial_path = Path.join(socket_dir, "#{state.id}_serial.log")
+    {udp, quic} = Mjolnir.Unikernel.ports(state.id)
+    Process.put(:boot_partial, %{})
+    _ = File.rm(socket_path)
+    _ = File.rm(serial_path)
+
+    with :ok <- File.mkdir_p(socket_dir),
+         {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
+         _ = boot_partial_put(:net_config, net_config),
+         {:ok, hv_port} <-
+           start_hypervisor(hypervisor, state.id, socket_path, serial_path, []),
+         _ = boot_partial_put(:hv_port, hv_port),
+         :ok <- wait_for_socket(socket_path),
+         boot_args = Mjolnir.Unikernel.cmdline(net_config.guest_ip, udp, quic),
+         config =
+           Map.merge(state.config, %{
+             network_interface: net_config,
+             boot_args: boot_args,
+             serial_log: serial_path,
+             vcpu_count: 1,
+             mem_size_mib: 512,
+             guest_kind: :unikernel
+           }),
+         :ok <- configure_vm(hypervisor, socket_path, config),
+         :ok <- hypervisor.start_instance(socket_path),
+         :ok <- wait_for_reflect(serial_path, quic) do
+      {:ok,
+       %{
+         state
+         | socket_path: socket_path,
+           vsock_path: vsock_path,
+           serial_path: serial_path,
+           net_config: net_config,
+           hypervisor_port: hv_port,
+           config:
+             Map.merge(state.config, %{
+               quic_port: quic,
+               udp_port: udp,
+               boot_args: boot_args,
+               serial_log: serial_path
+             })
+       }}
+    else
+      error ->
+        handle_boot_failure(state, error, socket_path, vsock_path, serial_path)
+        error
+    end
+  end
+
+  defp wait_for_reflect(serial_path, quic_port) do
+    deadline = System.monotonic_time(:millisecond) + Mjolnir.Unikernel.boot_deadline_ms()
+
+    Stream.repeatedly(fn ->
+      log =
+        case File.read(serial_path) do
+          {:ok, text} -> text
+          _ -> ""
+        end
+
+      cond do
+        Mjolnir.Unikernel.ready_line?(log, quic_port) ->
+          :ok
+
+        System.monotonic_time(:millisecond) > deadline ->
+          {:error, :boot_timeout}
+
+        true ->
+          Process.sleep(50)
+          :wait
+      end
+    end)
+    |> Enum.find(&(&1 != :wait))
   end
 
   defp do_boot(state) do
@@ -3971,8 +4201,22 @@ defmodule Mjolnir.VM do
       # rehydrated. It has to be on the FIRST record written, not added later:
       # a crash between boot and a second write would leave a :never VM
       # looking restartable, which is exactly the I5 violation this prevents.
-      "restart_policy" => Atom.to_string(state.restart_policy)
+      "restart_policy" => Atom.to_string(state.restart_policy),
+      "kind" => Atom.to_string(Map.get(state.config, :guest_kind) || :linux)
     }
+
+    spawn_config =
+      if Map.get(state.config, :guest_kind) == :unikernel do
+        Map.merge(spawn_config, %{
+          "kernel" => state.config.kernel_path,
+          "peer_pin" => state.config.peer_pin,
+          "quic_port" => Map.get(state.config, :quic_port),
+          "reflect_port" => Map.get(state.config, :udp_port),
+          "guest_ip" => if(state.net_config, do: state.net_config.guest_ip)
+        })
+      else
+        spawn_config
+      end
 
     spawn_config =
       case encode_extra_mounts(Map.get(state.config, :extra_mounts, [])) do

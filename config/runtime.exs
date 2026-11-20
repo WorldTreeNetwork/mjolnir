@@ -5,6 +5,20 @@ if btrfs_root = System.get_env("MJOLNIR_BTRFS_ROOT") do
   config :mjolnir, btrfs_root: btrfs_root
 end
 
+if prefixes = System.get_env("MJOLNIR_UNIKERNEL_KERNEL_PREFIXES") do
+  list =
+    prefixes
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+
+  config :mjolnir, unikernel_kernel_prefixes: list
+end
+
+if bin = System.get_env("MJOLNIR_CLOUD_HYPERVISOR_BIN") do
+  config :mjolnir, cloud_hypervisor_bin: bin
+end
+
 if socket_dir = System.get_env("MJOLNIR_SOCKET_DIR") do
   config :mjolnir, socket_dir: socket_dir
 end

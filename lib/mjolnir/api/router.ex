@@ -271,6 +271,32 @@ defmodule Mjolnir.API.Router do
         end
 
       opts =
+        case conn.body_params["kind"] do
+          nil ->
+            opts
+
+          kind when kind in ["linux", "unikernel"] ->
+            Keyword.put(opts, :kind, String.to_atom(kind))
+
+          _ ->
+            Keyword.put(opts, :_validation_error, "kind must be linux or unikernel")
+        end
+
+      opts =
+        case conn.body_params["kernel"] do
+          nil -> opts
+          kernel when is_binary(kernel) -> Keyword.put(opts, :kernel, kernel)
+          _ -> Keyword.put(opts, :_validation_error, "kernel must be a path")
+        end
+
+      opts =
+        case conn.body_params["peer_pin"] do
+          nil -> opts
+          pin when is_binary(pin) -> Keyword.put(opts, :peer_pin, pin)
+          _ -> Keyword.put(opts, :_validation_error, "peer_pin must be a hex string")
+        end
+
+      opts =
         if conn.body_params["ssh_public_key"],
           do: Keyword.put(opts, :ssh_public_key, conn.body_params["ssh_public_key"]),
           else: opts
@@ -962,6 +988,9 @@ defmodule Mjolnir.API.Router do
             {:error, :not_found} ->
               json(conn, 404, %{error: "not_found"})
 
+            {:error, :unikernel_unsupported} ->
+              json(conn, 409, %{error: "unikernel_unsupported"})
+
             {:error, reason} ->
               Logger.error("VM exec failed for #{id}: #{inspect(reason)}")
               json(conn, 500, %{error: "exec_failed"})
@@ -1194,48 +1223,52 @@ defmodule Mjolnir.API.Router do
 
     unless conn.halted do
       send = fn ->
-        payload = conn.body_params["payload"] || %{}
-        sender = message_sender(conn)
-
-        authorized =
-          cond do
-            Mjolnir.API.Auth.capability?(conn) ->
-              biscuit_right(conn, id, "message") == :ok
-
-            sender == conn.assigns[:user_id] ->
-              true
-
-            true ->
-              user = %{user_id: conn.assigns[:user_id]}
-
-              case Mjolnir.VM.get(sender) do
-                {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
-                {:error, _} -> false
-              end
-          end
-
-        if authorized do
-          message_id = conn.body_params["id"]
-
-          case Mjolnir.VM.deliver_message(id, sender, payload, id: message_id) do
-            {:ok, %{message_id: mid, status: status}} ->
-              json(conn, 200, %{ok: true, message_id: mid, status: status})
-
-            {:error, :not_found} ->
-              json(conn, 404, %{error: "not_found"})
-
-            {:error, :admission_denied} ->
-              json(conn, 403, %{error: "admission_denied"})
-
-            {:error, :invalid_message_id} ->
-              json(conn, 400, %{error: "invalid_message_id"})
-
-            {:error, reason} ->
-              Logger.error("Message delivery failed for #{id}: #{inspect(reason)}")
-              json(conn, 500, %{error: "message_delivery_failed"})
-          end
+        if unikernel_guest?(id) do
+          unikernel_message_reply(conn, id)
         else
-          json(conn, 404, %{error: "not_found"})
+          payload = conn.body_params["payload"] || %{}
+          sender = message_sender(conn)
+
+          authorized =
+            cond do
+              Mjolnir.API.Auth.capability?(conn) ->
+                biscuit_right(conn, id, "message") == :ok
+
+              sender == conn.assigns[:user_id] ->
+                true
+
+              true ->
+                user = %{user_id: conn.assigns[:user_id]}
+
+                case Mjolnir.VM.get(sender) do
+                  {:ok, from_vm} -> Mjolnir.Policy.VM.authorize(:message, user, from_vm) == :ok
+                  {:error, _} -> false
+                end
+            end
+
+          if authorized do
+            message_id = conn.body_params["id"]
+
+            case Mjolnir.VM.deliver_message(id, sender, payload, id: message_id) do
+              {:ok, %{message_id: mid, status: status}} ->
+                json(conn, 200, %{ok: true, message_id: mid, status: status})
+
+              {:error, :not_found} ->
+                json(conn, 404, %{error: "not_found"})
+
+              {:error, :admission_denied} ->
+                json(conn, 403, %{error: "admission_denied"})
+
+              {:error, :invalid_message_id} ->
+                json(conn, 400, %{error: "invalid_message_id"})
+
+              {:error, reason} ->
+                Logger.error("Message delivery failed for #{id}: #{inspect(reason)}")
+                json(conn, 500, %{error: "message_delivery_failed"})
+            end
+          else
+            json(conn, 404, %{error: "not_found"})
+          end
         end
       end
 
@@ -2073,6 +2106,59 @@ defmodule Mjolnir.API.Router do
 
   # A vsock ping miss used to collapse into a bare spawn_failed, which
   # looks like a host crash. Name the agent (mjolnir-igi9).
+  defp unikernel_guest?(id) do
+    case Mjolnir.StateStore.get(id) do
+      {:ok, %{spawn_config: %{"kind" => "unikernel"}}} -> true
+      _ -> false
+    end
+  end
+
+  defp unikernel_message_reply(conn, id) do
+    program =
+      case conn.body_params["program_b64"] do
+        bin when is_binary(bin) -> Base.decode64(bin)
+        _ -> :error
+      end
+
+    budget = conn.body_params["budget"]
+    correlation = conn.body_params["id"]
+
+    case program do
+      {:ok, bytes} ->
+        case Mjolnir.VM.unikernel_message(id, bytes, budget, correlation) do
+          {:ok, 0, payload} ->
+            json(conn, 200, %{ok: true, transport_status: 0, reply_b64: Base.encode64(payload)})
+
+          {:ok, 2, _} ->
+            json(conn, 200, %{
+              ok: true,
+              error: "reply_too_large",
+              transport_status: 2,
+              reply_b64: ""
+            })
+
+          {:ok, 3, _} ->
+            json(conn, 200, %{
+              ok: true,
+              error: "invalid_budget",
+              transport_status: 3,
+              reply_b64: ""
+            })
+
+          {:error, reason} when is_atom(reason) ->
+            status = if reason == :unikernel_busy, do: 409, else: 400
+            status = if reason == :unikernel_timeout, do: 504, else: status
+            json(conn, status, %{ok: false, error: Atom.to_string(reason)})
+
+          {:error, reason} ->
+            json(conn, 400, %{ok: false, error: inspect(reason)})
+        end
+
+      _ ->
+        json(conn, 400, %{ok: false, error: "program_b64"})
+    end
+  end
+
   defp spawn_failure(conn, :boot_timeout) do
     json(conn, 500, %{
       error: "spawn_failed",
@@ -2083,6 +2169,17 @@ defmodule Mjolnir.API.Router do
 
   defp spawn_failure(conn, {:timeout, {GenServer, :call, [_, :await_boot | _]}}) do
     spawn_failure(conn, :boot_timeout)
+  end
+
+  defp spawn_failure(conn, reason)
+       when reason in [
+              :kernel_not_allowed,
+              :unikernel_memory,
+              :peer_pin_required,
+              :kernel_required,
+              :unikernel_unsupported
+            ] do
+    json(conn, 400, %{error: Atom.to_string(reason)})
   end
 
   defp spawn_failure(conn, _reason) do

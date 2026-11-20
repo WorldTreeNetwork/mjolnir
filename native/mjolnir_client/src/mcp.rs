@@ -42,6 +42,12 @@ pub struct SpawnVmParams {
     pub snapshot: Option<String>,
     #[schemars(description = "Enable Iroh P2P networking.")]
     pub enable_iroh: Option<bool>,
+    #[schemars(description = "Guest kind: linux (default) or unikernel.")]
+    pub kind: Option<String>,
+    #[schemars(description = "Host path of a unikernel ELF.")]
+    pub kernel: Option<String>,
+    #[schemars(description = "SHA-256 hex of the unikernel certificate.")]
+    pub peer_pin: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -313,6 +319,15 @@ impl MjolnirMcpService {
         }
         if let Some(v) = p.enable_iroh {
             body.insert("enable_iroh".into(), serde_json::Value::Bool(v));
+        }
+        if let Some(v) = p.kind {
+            body.insert("kind".into(), serde_json::Value::String(v));
+        }
+        if let Some(v) = p.kernel {
+            body.insert("kernel".into(), serde_json::Value::String(v));
+        }
+        if let Some(v) = p.peer_pin {
+            body.insert("peer_pin".into(), serde_json::Value::String(v));
         }
         self.api_post("/api/vms", &serde_json::Value::Object(body))
             .await
