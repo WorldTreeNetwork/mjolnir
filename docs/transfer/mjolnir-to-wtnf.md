@@ -1,13 +1,13 @@
 # Transfer: Mjolnir → World Tree Network Foundation
 
 Moving this project out of **Identikey Inc.** and into the **World Tree
-Network Foundation** (WTNF). Intended home:
+Network Foundation** (WTNF). Home:
 **`github.com/WorldTreeNetwork/mjolnir`**. Licensing contact:
 **duke@worldtree.io**.
 
-Until the GitHub transfer completes, the working clone URL remains
-`github.com/Identikey/mjolnir` (this remote still resolves). Do not
-publish a WorldTreeNetwork clone URL that 404s.
+The GitHub transfer is done. The clone URL is
+`github.com/WorldTreeNetwork/mjolnir`; `github.com/Identikey/mjolnir`
+redirects to it.
 
 License split (AGPL host, MIT CLI) is documented in
 [NOTICE](../../NOTICE) and
@@ -25,8 +25,7 @@ Playbook borrowed from
 - [x] `CONTRIBUTING.md` inbound = outbound
 - [x] SPDX on crate manifests and crate roots
 - [x] README / hardware / mini-hoster docs
-- [ ] GitHub repo transfer Identikey → WorldTreeNetwork (repo does not
-      exist under WorldTreeNetwork yet)
+- [x] GitHub repo transfer Identikey → WorldTreeNetwork
 - [ ] `git remote set-url origin git@github.com:WorldTreeNetwork/mjolnir.git`
 - [x] CLA + commercial-exception stub (`CLA.md`, `COMMERCIAL-LICENSE.md`).
       Hardware sales of unmodified AGPL still do not require buying the

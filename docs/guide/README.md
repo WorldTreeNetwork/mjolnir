@@ -4,7 +4,7 @@ User-facing documentation for people *using* Mjolnir — spawning, connecting to
 snapshotting microVMs — as opposed to the architecture and design docs in the rest of `docs/`.
 
 If you're brand new, start with the [README](../../README.md): it covers installing the `mj`
-CLI, pointing it at a server, and spawning your first VM.
+CLI, signing in, and spawning your first VM.
 
 ## Pages
 
@@ -24,7 +24,7 @@ Read in order if you're new:
    no VM: `mj sites publish` from the project's own directory, then a custom-domain
    alias. Not `mj deploy`.
 6. **[Host sidecars](host-sidecars.md)** — universal host services every VM can reach
-   (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres. How guests find
+   (`10.200.0.1`): blob store, orchestrator API, opt-in Postgres and Redis. How guests find
    locators in `/etc/mjolnir/vm.json`.
 7. **[Run a node](run-a-node.md)** — mini-hoster path: plug in a mini-PC, bootstrap,
    become an Iroh-addressed compute node. Raspberry Pi is a goal, not today.

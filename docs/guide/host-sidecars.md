@@ -46,7 +46,7 @@ rule for that port is missing.
 | Sidecar | Address | Who gets it | Locator |
 |---|---|---|---|
 | **Blob door** (content-addressed object store) | `http://10.200.0.1:7222` | Every VM | `blob_door_url` in `vm.json` |
-| **Orchestrator API** | `http://10.200.0.1:4000` | Every VM (auth required except host loopback) | `api_url` in `vm.json` |
+| **Orchestrator API** | `http://10.200.0.1:4000` | Every VM (auth required; only the host's operator socket is exempt) | `api_url` in `vm.json` |
 | **Postgres** (declared tenant DBs) | `10.200.0.1:5432` (scram) | App VMs with a provisioned tenant | `DATABASE_URL` in deploy secrets — **not** in `vm.json` |
 | **Redis** (sessions / cache / queues) | `10.200.0.1:6379` (AUTH) | App VMs with a provisioned secret | `REDIS_URL` in deploy secrets — **not** in `vm.json` |
 | **AIE compute** (NPU jobs by overlay RPC)¹ | `http://10.200.0.1:7422` | VMs holding an execute right on a signed offer | `aie_url` in `vm.json`; omitted when off |
@@ -134,8 +134,8 @@ ADR: [`0007`](../decisions/0007-host-sidecar-redis.md).
 ## Orchestrator API
 
 `api_url` is how in-guest helpers (snapshot trigger, etc.) call back
-to Mjolnir. Guests are not on `127.0.0.1`, so they do not get the
-localhost auth bypass — they need a token like any other API client.
+to Mjolnir. There is no address-based auth bypass on TCP, so a guest
+needs a token like any other API client.
 
 ---
 

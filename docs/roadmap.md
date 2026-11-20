@@ -3,7 +3,7 @@
 
 > **How to read this.** This roadmap was originally written as a forward-looking,
 > Firecracker-era plan. It has been rewritten to reflect reality: Mjolnir now runs on **Cloud
-> Hypervisor v50 with virtio-fs + BTRFS subvolumes** (no ext4 images, no Firecracker), and much
+> Hypervisor v54 with virtio-fs + BTRFS subvolumes** (no ext4 images, no Firecracker), and much
 > of the original Phase 1–3 plan has shipped. Sections are now organized as **Shipped**,
 > **In progress**, and **Planned** rather than as a fictional weekly timeline. For the current
 > architecture see [`../CLAUDE.md`](../CLAUDE.md) and [`architecture.md`](architecture.md); for a
@@ -62,7 +62,7 @@ direction.
 These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
 
 ### VM lifecycle
-- Spawn microVMs on **Cloud Hypervisor v50** with a PVH kernel, booting in well under a second.
+- Spawn microVMs on **Cloud Hypervisor v54** with a PVH kernel, booting in well under a second.
 - `spawn` → `exec` → `connect` → `snapshot` → `stop`/`kill`, all via `Mjolnir.VM` (a GenServer
   per VM under a DynamicSupervisor) and the HTTP API.
 - Rust **guest agent** over vsock: `exec`, `ping`, network/identity/Iroh configuration, PTY
@@ -110,15 +110,18 @@ These work end-to-end today. Drive them from the `mj` CLI or the HTTP API.
   rebuildable from the filesystem source of truth (signed envelopes + content-addressed blobs).
 
 ### Tooling
-- The `mj`/`mjolnir` CLI (spawn, exec, connect, iroh, snapshot, forge, mcp-serve), the `just`
-  control plane, and a ~613-test suite (`mix test`) with integration/postgres/e2e tags.
+- The `mj`/`mjolnir` CLI (spawn, exec, connect, snapshot, freeze/thaw, deploy, sites, forge,
+  mcp-serve), the `just` control plane, and a ~1,900-test suite (`mix test`) with
+  integration/postgres/e2e tags.
 
 ---
 
 ## In progress / near-term
 
 - **Memory + CPU snapshots** (true orthogonal persistence): pause/resume of full VM state via
-  Cloud Hypervisor's native snapshot API. Today's checkpoints are filesystem-only. See
+  Cloud Hypervisor's native snapshot API. `mj freeze` / `mj thaw` already park a VM with its
+  memory and resume it under the same id (`Mjolnir.MemorySnapshot`); freeze stops the source
+  VM, and `mj snapshot create` stays filesystem-only. See
   [orthogonal-persistence.md](orthogonal-persistence.md).
 - **Content-addressed checkpoint distribution**: store snapshots as Iroh collections
   (BLAKE3-verified, deduplicated) so they can move between hosts. Groundwork exists in the
@@ -154,7 +157,7 @@ The multi-node and ecosystem layers are not built yet — Mjolnir is currently s
 
 | Component | Technology | Rationale |
 |-----------|------------|-----------|
-| **Virtualization** | Cloud Hypervisor v50 | virtio-fs, BTRFS subvolumes, PVH boot. (Firecracker was removed — no virtio-fs.) |
+| **Virtualization** | Cloud Hypervisor v54 | virtio-fs, BTRFS subvolumes, PVH boot. (Firecracker was removed — no virtio-fs.) |
 | **Guest OS** | Ubuntu 24.04 (default base) | apt-native; Arch base also buildable. |
 | **Filesystem** | BTRFS subvolumes | Instant CoW clones via `btrfs subvolume snapshot`; `send/receive` for future migration; compression. |
 | **Guest↔host control** | vsock + Rust guest agent | Low-latency, no network dependency for control plane. |
@@ -188,16 +191,16 @@ The multi-node and ecosystem layers are not built yet — Mjolnir is currently s
 The fastest path is the user [Guide](guide/getting-started.md). In brief:
 
 ```bash
-# Install the CLI (needs Rust), then point it at a server
-./scripts/build-client.sh --install
-mj login --api https://mjolnir.example.com
+# Install the CLI: mj-<target>.tar.gz from GitHub Releases
+# (or ./scripts/build-client.sh --install, needs Rust), then sign in
+mj login          # default server; --api <url> for your own
 
 # Spawn a VM and drop into a shell
 mj spawn --connect
 
 # Run a command, snapshot, and spin a fresh VM from the saved state
 mj exec <vm_id> "uname -a"
-mj snapshot <vm_id> my-env
+mj snapshot create <vm_id> my-env
 mj spawn --snapshot my-env
 ```
 
@@ -210,7 +213,7 @@ To stand up your own server (Linux + KVM required), see
 
 | Question | Decision |
 |----------|----------|
-| Hypervisor | **Cloud Hypervisor v50** (virtio-fs + BTRFS subvolumes). Firecracker removed — no virtio-fs. |
+| Hypervisor | **Cloud Hypervisor v54** (virtio-fs + BTRFS subvolumes). Firecracker removed — no virtio-fs. |
 | Storage model | BTRFS subvolumes shared via virtio-fs; CoW clones via `btrfs subvolume snapshot`. No ext4 images. |
 | Guest agent | Custom Rust daemon over vsock (JSON control on channel 0, binary PTY/syslog on others). |
 | Connectivity | Iroh QUIC for masterless, NAT-traversing P2P access; per-VM Ed25519 identity. |

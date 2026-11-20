@@ -13,25 +13,37 @@ it up. No prior Mjolnir knowledge assumed — just a working `mj` CLI pointed at
 
 ## 0. One-time setup
 
-You need the `mj` CLI installed and pointed at a Mjolnir server. If you haven't installed it:
+You need the `mj` CLI installed and signed in. If you haven't installed it, download the
+archive for your platform from
+[GitHub Releases](https://github.com/WorldTreeNetwork/mjolnir/releases):
 
 ```bash
-# From the repo (needs Rust). Installs `mjolnir` and the short `mj` alias.
-./scripts/build-client.sh --install
+tar xzf mj-<target>.tar.gz
+sudo install -m 755 mj /usr/local/bin/mj
 ```
 
-Then authenticate. This saves your server URL and token to `~/.config/mjolnir/`, so you only do
-it once:
+No archive for your platform? Build from the repo (needs Rust):
 
 ```bash
-mj login --api https://mjolnir.example.com
+./scripts/build-client.sh --install    # installs `mjolnir` and the short `mj` alias
 ```
+
+Then sign in. A browser opens on the IdentiKey sign-in page: approve with your passkey, or
+choose **Create an account** there if you don't have one (a passkey, no username or email).
+The token is saved in your OS config directory, so you only do this once:
+
+```bash
+mj login
+```
+
+With no flags, `mj` uses the default server, `https://api.vm.worldtree.network`. To use
+another one, name it once: `mj login --api https://mjolnir.example.com`.
 
 Check it worked:
 
 ```bash
 mj status
-# Shows your current API endpoint and that you're authenticated.
+# Shows your API endpoint, where the config and token live, and `Status: active`.
 ```
 
 > Don't have a server? [Run a node](run-a-node.md) (mini-PC, AGPL host) or the README's
@@ -56,14 +68,19 @@ You'll see a few status lines while the VM boots, then your prompt changes — y
 **inside the VM**:
 
 ```
+Using SSH key: /home/you/.ssh/id_ed25519.pub
 Spawning VM...
-Waiting for shell...
-💾 Persist interval: 5000ms
-Connected. PTY session active.
-root@mjolnir:~#
+VM:           7Zk3mQ9xVbR2nLpW5tYc8H
+<ticket>
+💾 Persist interval: 250ms
+Connecting to VM...
+Connected. Opening shell...
+root@mjolnir-vm:~#
 ```
 
-That `root@mjolnir:~#` prompt is a real root shell inside a fresh Linux machine.
+That `root@mjolnir-vm:~#` prompt is a real root shell inside a fresh Linux machine. The `VM:`
+line is the VM's ID; the line after it is its Iroh ticket. If you have a public key at
+`~/.ssh/id_ed25519.pub` or `~/.ssh/id_rsa.pub`, `mj spawn` sends it so the VM accepts that key.
 
 ---
 
@@ -106,11 +123,11 @@ mj list
 ```
 
 ```
-VM ID                                  STATUS    MEMORY
-a1b2c3d4-...-...                        running   512 MB
+NAME   STATE     IP             SHELL   ID                       TICKET
+-      running   10.192.0.12    ready   7Zk3mQ9xVbR2nLpW5tYc8H   <ticket>
 ```
 
-There it is, still running. Note that VM ID — you'll use it to reconnect.
+There it is, still running. Note the `ID` column — you'll use it to reconnect.
 
 ---
 
@@ -119,7 +136,7 @@ There it is, still running. Note that VM ID — you'll use it to reconnect.
 Connect again using the VM ID from `mj list`:
 
 ```bash
-mj connect a1b2c3d4-...-...
+mj connect 7Zk3mQ9xVbR2nLpW5tYc8H
 ```
 
 You're back in the same machine. Run `cowsay moo` — `cowsay` is still installed, because the VM
@@ -140,7 +157,7 @@ training job) and your connection drops, the foreground process can be interrupt
 work you want to *detach from and come back to*, start a named session:
 
 ```bash
-mj connect a1b2c3d4-...-... --session work
+mj connect 7Zk3mQ9xVbR2nLpW5tYc8H --session work
 ```
 
 This runs `tmux` inside the VM under the name `work`. Now you can:
@@ -148,7 +165,7 @@ This runs `tmux` inside the VM under the name `work`. Now you can:
 - **Detach** any time with `Ctrl-B` then `D` — your processes keep running inside the VM.
 - **Reattach** later by reconnecting with the *same* session name:
   ```bash
-  mj connect a1b2c3d4-...-... --session work
+  mj connect 7Zk3mQ9xVbR2nLpW5tYc8H --session work
   ```
   …and you're right back where you left off, mid-build, output and all.
 
@@ -162,8 +179,8 @@ Sometimes you don't want a terminal — you just want to run a command and get t
 That's `mj exec`:
 
 ```bash
-mj exec a1b2c3d4-...-... "ls -la /"
-mj exec a1b2c3d4-...-... "python3 --version"
+mj exec 7Zk3mQ9xVbR2nLpW5tYc8H "ls -la /"
+mj exec 7Zk3mQ9xVbR2nLpW5tYc8H "python3 --version"
 ```
 
 `exec` accepts a VM ID *or* an Iroh ticket. It's perfect for scripting against a VM.
@@ -175,7 +192,7 @@ mj exec a1b2c3d4-...-... "python3 --version"
 When you're done with a VM, destroy it:
 
 ```bash
-mj kill a1b2c3d4-...-...
+mj kill 7Zk3mQ9xVbR2nLpW5tYc8H
 ```
 
 This stops the microVM and deletes its copy-on-write filesystem. **Anything you didn't snapshot
@@ -191,7 +208,7 @@ is gone.** That's by design — VMs are cheap and disposable.
 
 | Goal | Command |
 |---|---|
-| Authenticate (once) | `mj login --api <url>` |
+| Authenticate (once) | `mj login` |
 | Spawn + connect immediately | `mj spawn --connect` |
 | Spawn (prints an Iroh ticket) | `mj spawn` |
 | List your VMs | `mj list` |
@@ -200,7 +217,7 @@ is gone.** That's by design — VMs are cheap and disposable.
 | Durable, reattachable shell | `mj connect <vm_id> --session <name>` |
 | Interactive shell (P2P) | `mj connect <ticket>` |
 | Run a one-off command | `mj exec <vm_id> "<cmd>"` |
-| Snapshot a running VM | `mj snapshot <vm_id> <name>` |
+| Snapshot a running VM | `mj snapshot create <vm_id> <name>` |
 | Spawn from a snapshot | `mj spawn --snapshot <name>` |
 | Destroy a VM | `mj kill <vm_id>` |
 | Deploy a web app (service VM) | `mj deploy . --name <app>` — [guide](deploying-an-app.md) |

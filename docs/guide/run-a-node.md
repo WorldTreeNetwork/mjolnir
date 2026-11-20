@@ -28,7 +28,7 @@ Full rationale: [hardware-requirements.md](../hardware-requirements.md).
 KVM and BTRFS are not optional for microVMs.
 
 ```bash
-git clone https://github.com/Identikey/mjolnir.git   # WorldTreeNetwork after transfer
+git clone https://github.com/WorldTreeNetwork/mjolnir.git
 cd mjolnir
 sudo BTRFS_DEVICE=/dev/nvme0n1pN ./scripts/bootstrap-host-ubuntu.sh
 # or: sudo USE_LOOPBACK=1 ./scripts/bootstrap-host-ubuntu.sh
