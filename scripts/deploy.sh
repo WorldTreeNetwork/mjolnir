@@ -13,6 +13,7 @@ BUILD_AGENT=false
 BUILD_ROOTFS=false
 BUILD_GATEWAY=false
 BUILD_RUNNER=false
+BUILD_RELAY=false
 AGENT_IROH=true
 FULL_DEPLOY=false
 APP_ONLY=false
@@ -23,6 +24,7 @@ for arg in "$@"; do
         --rootfs) BUILD_ROOTFS=true ;;
         --gateway) BUILD_GATEWAY=true ;;
         --runner) BUILD_RUNNER=true ;;
+        --relay) BUILD_RELAY=true ;;
         --full) FULL_DEPLOY=true ;;
         --app-only) APP_ONLY=true ;;
         -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
@@ -30,16 +32,16 @@ for arg in "$@"; do
     esac
 done
 HOST="${HOST:-${MJOLNIR_HOST:-}}"
-[[ -n "$HOST" ]] || { echo "Usage: $0 user@host [--app-only | --gateway [--full]] [--agent] [--rootfs] [--runner]" >&2; exit 1; }
+[[ -n "$HOST" ]] || { echo "Usage: $0 user@host [--app-only | --gateway [--full]] [--agent] [--rootfs] [--runner] [--relay]" >&2; exit 1; }
 [[ "$HOST" == *@* ]] || HOST="root@$HOST"
-if $APP_ONLY && { $BUILD_AGENT || $BUILD_ROOTFS || $BUILD_GATEWAY || $BUILD_RUNNER; }; then
+if $APP_ONLY && { $BUILD_AGENT || $BUILD_ROOTFS || $BUILD_GATEWAY || $BUILD_RUNNER || $BUILD_RELAY; }; then
     echo '--app-only cannot be combined with sidecar/guest build options' >&2; exit 1
 fi
 BUILD_ELIXIR=true
-if $BUILD_GATEWAY && ! $FULL_DEPLOY; then
+if { $BUILD_GATEWAY || $BUILD_RELAY; } && ! $FULL_DEPLOY; then
     BUILD_ELIXIR=false
     if $BUILD_AGENT || $BUILD_ROOTFS || $BUILD_RUNNER; then
-        echo 'Use --full when combining --gateway with other build options' >&2; exit 1
+        echo 'Use --full when combining --gateway or --relay with other build options' >&2; exit 1
     fi
 fi
 
@@ -99,6 +101,11 @@ if $BUILD_ELIXIR; then
 fi
 if $BUILD_GATEWAY; then
     remote "install -m755 '$REMOTE_CODE/native/target/release/mjolnir-gateway' /usr/local/bin/mjolnir-gateway; cp '$REMOTE_CODE/systemd/mjolnir-gateway.service' /etc/systemd/system/; systemctl daemon-reload; systemctl restart mjolnir-gateway; systemctl is-active --quiet mjolnir-gateway"
+fi
+if $BUILD_RELAY; then
+    # Only this flag installs, starts, stops, or removes the relay and its rule.
+    native_build relay
+    remote "bash '$REMOTE_CODE/scripts/relay-deploy-remote.sh'"
 fi
 if $BUILD_RUNNER; then
     remote 'set -e; if test ! -d /opt/forgejo-runner-build/.git; then git clone -b mjolnir http://10.255.255.1:3000/identikey/forgejo-runner.git /opt/forgejo-runner-build; else git -C /opt/forgejo-runner-build fetch origin; git -C /opt/forgejo-runner-build checkout mjolnir; git -C /opt/forgejo-runner-build reset --hard origin/mjolnir; fi; cd /opt/forgejo-runner-build; go build -o /usr/local/bin/forgejo-runner-mjolnir .; systemctl restart forgejo-runner; systemctl is-active --quiet forgejo-runner'

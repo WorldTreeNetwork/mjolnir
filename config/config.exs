@@ -248,6 +248,15 @@ config :mjolnir,
   published_ports_max_per_vm: 4,
   published_ports_sync_ms: 15_000
 
+# Edge relay (`mjolnir-relay`). Off until MJOLNIR_RELAY_ENABLED=true and
+# MJOLNIR_RELAY_HOST is a certificate name. deploy.sh --relay is the only
+# operation that installs or removes the unit and its UDP 443 rule.
+config :mjolnir,
+  relay_enabled: false,
+  relay_host: nil,
+  relay_drain_seconds: 30,
+  relay_token_max_ttl: 3600
+
 # Syslog ingest. Guests stream RFC 3164 on vsock channel 2. Host apps
 # (mjolnir-log) send UDP when udp_port is set; unset = no bind.
 # Loopback for host processes; bind 10.200.0.1 so guests can send to

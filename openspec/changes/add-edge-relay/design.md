@@ -39,17 +39,16 @@ The relay terminates QUIC. Whoever runs the host can read the media of every cal
 
 ## Unverified hypotheses
 
-- **relay-deps.** A crate on `iroh 1.4` + `aws-lc-rs` builds in `native/` beside the gateway on `iroh 1.0` + `ring`. Confidence: medium. Verification: `cargo build -p mjolnir-relay` on the Framework laptop, then `cargo build -p mjolnir-gateway` and its tests. If it fails: the relay becomes its own cargo workspace under `native/mjolnir_relay`.
-- **relay-no-http.** `moq_relay::Relay` runs with `web.http.listen` unset and still serves WebTransport. Confidence: medium. Verification: start it that way, connect with the stock viewer. If it fails: bind the HTTP listener to loopback.
-- **relay-admission.** Our loop over `Admissions` sees the token a browser sends (`?jwt=` or SETUP) and can refuse before any subscribe. Confidence: medium. Verification: a tokenless browser session against the built relay gets a refusal and no catalog. If it fails: use `auth.url` against a loopback endpoint of our own.
-- **relay-cert-reload.** A renewed certificate is served without restart. Confidence: low. Verification: swap the pair, open a new session, read the served certificate. If it fails: the copy step restarts the unit, which drains first, and the ADR says a renewal ends calls roughly every 60 days.
-- **cert-subject.** The gateway's issuer can hold a subject that is neither an app domain nor a site alias. Confidence: medium. Verification: read `site-certs` and `acme.rs`; issue against a staging directory. If it fails: this change adds a MODIFIED `site-certs` requirement and needs fresh advise.
-- **viewer-https.** iroh-live's stock viewer, given an `https://` relay URL, connects without fetching `/certificate.sha256`. Confidence: medium. Verification: read the moq web client at the pinned revision; try it.
-
-- **relay-expiry-close.** A WebTransport session is closed when its grant's expiry passes, as the docs say an Iroh session is. Confidence: medium. Verification: a ten-second token against the built relay. If it fails: our loop holds a timer per session and closes it.
-- **relay-key-loader.** moq-auth's key types let us load a JWK set ourselves, reject symmetric and private keys, and swap the set used by both the browser loop and the Iroh policy. Confidence: medium. Verification: write the loader and the three key scenarios. If it fails: the relay restarts (draining) on a key change and the five-second bound becomes the drain bound.
-- **relay-announce-scope.** Announcements to a session are filtered by its subscribe patterns. Confidence: medium. Verification: the announcements scenario. If it fails: one cluster origin per tenant.
-- **relay-drain-both.** Admission can be stopped on WebTransport and on Iroh while existing sessions continue. Confidence: medium. Verification: the stop scenario.
+- **relay-deps.** A crate on iroh 1.4 + aws-lc-rs builds beside the gateway on iroh 1.0 + ring. The throwaway workspace linked both and its tests ran. The relay is its own cargo package at `native/mjolnir_relay` so the gateway lock stays on ring. — go
+- **relay-no-http.** `moq_relay::Relay` with `web.http.listen` unset accepted a WebTransport session. — go
+- **relay-admission.** The admissions loop sees a browser JWT on `request.query` (`jwt=`), not on `request.token`, and refuses a session with neither. — go
+- **relay-cert-reload.** A file swap was not shown to change the certificate a new session sees. The copy step restarts the unit after drain. A renewal ends calls roughly every 60 days. — go
+- **cert-subject.** `issue_http01` takes any non-wildcard name and a private state directory and does not consult the app or site registries. `POST /api/certs/issue` still 404s a name that is neither. No public staging issue was run; the laptop has no public name. — go
+- **viewer-https.** At moq `4a6f522`, `connect.ts` fetches `/certificate.sha256` only when `url.protocol === "http:"`. — go
+- **relay-expiry-close.** A ten-second grant left the open phase inside the fifteen-second wait. — go
+- **relay-key-loader.** `Key::public()` round-trips, a symmetric JWK cannot become a verify set, and the decider holds `Arc<Mutex<KeySet>>`. — go
+- **relay-announce-scope.** A subscriber rooted at `t/a` saw `cam`; a subscriber rooted at `t/b` saw none of those names. — go
+- **relay-drain-both.** Closing the admissions flag and calling `drain()` refused a new WebTransport session while the held one stayed connected. Iroh policy runs at accept, so the same flag refuses a new Iroh session. A live Iroh dial was not run. — go
 
 ## Where it is accepted
 

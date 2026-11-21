@@ -1,0 +1,29 @@
+[package]
+name = "mjolnir-relay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+bs58 = "0.5"
+hex = "0.4"
+iroh = { version = "1.4.1", default-features = false, features = ["tls-aws-lc-rs"] }
+iroh-live-relay = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
+kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-ext-access = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
+moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-parser = "0.16"
+
+[dev-dependencies]
+rcgen = "0.13"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+url = "2"

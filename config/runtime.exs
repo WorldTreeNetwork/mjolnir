@@ -37,6 +37,14 @@ if interface = System.get_env("MJOLNIR_PUBLISHED_PORT_INTERFACE") do
   if interface != "", do: config(:mjolnir, published_port_interface: interface)
 end
 
+if System.get_env("MJOLNIR_RELAY_ENABLED") == "true" do
+  config :mjolnir, relay_enabled: true
+end
+
+if host = System.get_env("MJOLNIR_RELAY_HOST") do
+  if host != "", do: config(:mjolnir, relay_host: host)
+end
+
 if bin = System.get_env("MJOLNIR_CLOUD_HYPERVISOR_BIN") do
   config :mjolnir, cloud_hypervisor_bin: bin
 end

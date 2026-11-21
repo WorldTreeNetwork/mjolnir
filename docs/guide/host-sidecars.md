@@ -20,6 +20,12 @@ you had to compose next to the VM. Spawn a VM, read the locator,
 talk HTTP or Postgres. Credentials for B2 and the BEAM's Unix-socket
 catalog never enter the guest.
 
+The edge relay is not one of those guest locators. It listens on the
+host's public UDP 443 for browsers and Iroh clients. It stays off
+until `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST` is set,
+and only `deploy.sh --relay` installs it. See
+[`docs/runbooks/edge-relay.md`](../runbooks/edge-relay.md).
+
 ## How a guest finds them
 
 On every boot the host injects `/etc/mjolnir/vm.json`:
