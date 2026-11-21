@@ -1,0 +1,110 @@
+{
+ "schema_version": "1.0",
+ "id": "pkt-advise-add-edge-relay-astra-1",
+ "node_id": "add-edge-relay",
+ "capability": "edge-relay",
+ "change_id": "add-edge-relay",
+ "requester": {
+  "id": "agt-conductor",
+  "kind": "group",
+  "harness": "claude",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "agt-conductor"
+  }
+ },
+ "assignee": {
+  "id": "astra-arch-review",
+  "kind": "model",
+  "harness": "codex",
+  "interface": "gpt-6-astra",
+  "effort": "high",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "astra-arch-review"
+  }
+ },
+ "goal": "ADVISE add-edge-relay (first pass). Architecture rigor. Author family is fable (Claude). You are Astra (gpt-6-astra), the other-family gating reader. High blast: a new public UDP listener on the production host, authorisation, and a pre-1.0 protocol dependency.\n\nWHY (from proposal.md): A browser cannot speak Iroh. It reaches a Media-over-QUIC relay only by WebTransport, which needs a UDP port it can address and a certificate it trusts. A call with more than a handful of people also needs each sender to upload once and a relay to fan out. Mjolnir has neither today. A spike on 2026-11-20 ran iroh-live-relay (github.com/n0-computer/iroh-live at 747b1bd) in a guest behind a published UDP port and a browser played a broadcast, but only with a self-signed certificate, a host-side TCP forward and a page loaded from localhost. The change adds a host service, mjolnir-relay, beside the gateway: WebTransport on UDP 443 at one configured name with a certificate from the gateway's issuer, an Iroh endpoint for native clients, a token required for every session, no ticket pulls, off by default.\n\nORDER YOU MUST FOLLOW (blind pass):\n1. Read openspec/changes/add-edge-relay/proposal.md, the living specs openspec/specs/site-certs/spec.md and openspec/specs/edge-auth/spec.md, and the anchored code. Do NOT open design.md or tasks.md yet.\n2. Write a 10-line independent take: what you would pin, what you would refuse, and one tradeoff. These are concerns the author must have answered, not a competing design.\n3. Then open openspec/changes/add-edge-relay/design.md, openspec/changes/add-edge-relay/specs/edge-relay/spec.md and openspec/changes/add-edge-relay/tasks.md and compare against your take. Steelman it. Skip the section 'Unverified hypotheses' when judging completeness: a later spike stage resolves those before any build.\n4. Write openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md. Its first lines must be exactly one of:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\nfollowed by\n> **READER:** astra-arch-review\n> **SPAWN:** <your spawn dir>\nThen your blind take and notes in the body. Do not write accept-with-nits. On send-back, add one unchecked box per owed item to openspec/changes/add-edge-relay/tasks.md.\n\nJudge in particular: whether deny-by-default is actually stated as testable requirements; whether the certificate and private-key handling (gateway user issues, root copies to the relay user) is sound against the living site-certs spec; whether fixing only the t/<owner id>/ prefix here and deferring the rest to add-relay-room-auth leaves a gap in which the service could ship open; whether 'the host can read media' is handled honestly; and whether anything in the spec cannot be tested.",
+ "anchors": [
+  {
+   "symbol": "native/mjolnir_gateway/src/tls.rs",
+   "invariant": "gateway is TCP only; certificates hot-swap on SIGHUP"
+  },
+  {
+   "symbol": "native/mjolnir_gateway/src/acme.rs",
+   "invariant": "HTTP-01 issuer; no wildcards"
+  },
+  {
+   "symbol": "systemd/mjolnir-gateway.service",
+   "invariant": "gateway runs as User=mjolnir with CAP_NET_BIND_SERVICE; the controller is root"
+  },
+  {
+   "symbol": "scripts/deploy.sh",
+   "invariant": "--gateway alone never restarts the controller; each flag owns its unit"
+  },
+  {
+   "symbol": "lib/mjolnir/deploy/owner.ex",
+   "invariant": "owner id is a canonical base58 32-byte id"
+  },
+  {
+   "symbol": "openspec/changes/add-published-udp-ports/proposal.md",
+   "invariant": "published UDP ports are the per-guest primitive and are not changed here"
+  }
+ ],
+ "acceptance": {
+  "kind": "command",
+  "command": "test -f openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md"
+ },
+ "out_of_scope": [
+  {
+   "item": "Minting room tokens and the path layout under t/<owner id>/",
+   "tracked_as": "mjolnir-rurh.3 add-relay-room-auth"
+  },
+  {
+   "item": "Per-tenant limits and byte accounting",
+   "tracked_as": "mjolnir-rurh.4"
+  },
+  {
+   "item": "Browser call client",
+   "tracked_as": "mjolnir-rurh.5"
+  },
+  {
+   "item": "Advertising the relay to guests",
+   "tracked_as": "mjolnir-rurh.6"
+  },
+  {
+   "item": "Self-hosted Iroh relay",
+   "tracked_as": "mjolnir-rurh.8"
+  },
+  {
+   "item": "End-to-end media encryption",
+   "tracked_as": "untracked; named in design.md"
+  }
+ ],
+ "constraints": {
+  "permission": "write",
+  "paths": [
+   "openspec/changes/add-edge-relay/reviews",
+   "openspec/changes/add-edge-relay/tasks.md"
+  ],
+  "do_not": [
+   "fold",
+   "act",
+   "implement",
+   "flip banner",
+   "deploy",
+   "edit design.md or the spec"
+  ]
+ },
+ "inherited": [
+  "Change committed at 18fb9e4 on main.",
+  "Author family fable. vary-reader reason: high-blast-author-skipped.",
+  "Campaign authority on bead mjolnir-rurh covers preparing contracts, not running or deploying.",
+  "The upstream iroh-live source is not in this repo. Facts about it in the change come from reading 747b1bd and moq 4a6f522; treat them as the author's claims."
+ ],
+ "load_class": "intention-critical",
+ "rigor": "architecture",
+ "density": "explicit",
+ "surface": "packet-only",
+ "role": "reader"
+}
