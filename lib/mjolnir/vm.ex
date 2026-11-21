@@ -158,7 +158,7 @@ defmodule Mjolnir.VM do
     late_boot_deadline_ms: nil
   ]
 
-  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy)
+  @config_key_allowlist ~w(vcpus memory_mb enable_iroh ssh_public_key owner_id snapshot preserve_iroh_key secrets_mode extra_mounts restart_policy published_ports)
 
   # await_boot blocks the caller until do_boot completes. Non-managed boots are
   # comfortably under 30s. A :managed secrets boot ALSO creates/opens a LUKS
@@ -200,6 +200,7 @@ defmodule Mjolnir.VM do
           optional(:enable_iroh) => boolean(),
           optional(:owner_id) => String.t() | nil,
           optional(:extra_mounts) => list(extra_mount()),
+          optional(:published_ports) => list(map()),
           optional(:secrets_mode) => :none | :ephemeral | :persistent | :managed,
           optional(:identity) => Mjolnir.Identity.t(),
           optional(:git_signing) => boolean(),
@@ -230,6 +231,10 @@ defmodule Mjolnir.VM do
     `[%{tag: "src", shared_dir: "/host/dir", opts: []}]`. Each starts an extra
     virtiofsd. The guest-side mount is the caller's responsibility on a plain
     base image: `mount -t virtiofs <tag> <path>`.
+  - `:published_ports` - UDP ports of the host that go to this guest, as
+    `[%{host_port: 20001, guest_port: 4433}]`. Kernel DNAT, no proxy. Refused
+    before a process starts unless `:published_port_range` allows the host
+    port. See `Mjolnir.PublishedPorts`.
   - `:await_boot_timeout` - How long `spawn/1` waits for boot to complete
     (default: 30s; auto-raised to #{@managed_await_boot_timeout}ms for
     `secrets_mode: :managed`, whose LUKS setup runs during boot).
@@ -255,8 +260,21 @@ defmodule Mjolnir.VM do
     with {:ok, opts} <- Mjolnir.Unikernel.prepare_spawn(opts),
          {:ok, opts} <- resolve_spawn_network(opts),
          :ok <- reject_memory_snapshot_spawn(opts),
-         :ok <- reject_live_iroh_identity(opts) do
+         :ok <- reject_live_iroh_identity(opts),
+         {:ok, opts} <- admit_published_ports(opts) do
       do_spawn(Map.put(opts, :id, Mjolnir.VmId.generate()))
+    end
+  end
+
+  # Range, reserved ports, host sockets and other VMs are all checked here,
+  # before a VM process exists. init/1 then claims the ports atomically.
+  defp admit_published_ports(opts) do
+    alias Mjolnir.PublishedPorts
+
+    with {:ok, ports} <- PublishedPorts.parse(opts[:published_ports]),
+         {:ok, _} <- PublishedPorts.resolve(ports, opts[:kind] || :linux, "admission"),
+         :ok <- PublishedPorts.check(ports) do
+      {:ok, Map.put(opts, :published_ports, ports)}
     end
   end
 
@@ -547,7 +565,8 @@ defmodule Mjolnir.VM do
       enable_iroh: cfg_get(cfg, :enable_iroh),
       ssh_public_key: cfg_get(cfg, :ssh_public_key),
       secrets_mode: normalize_secrets_mode(cfg_get(cfg, :secrets_mode)),
-      restart_policy: normalize_restart_policy(cfg_get(cfg, :restart_policy))
+      restart_policy: normalize_restart_policy(cfg_get(cfg, :restart_policy)),
+      published_ports: Mjolnir.PublishedPorts.decode(cfg_get(cfg, :published_ports))
     }
   end
 
@@ -1301,6 +1320,8 @@ defmodule Mjolnir.VM do
       # dead :never record. Attach does not boot either.
       restart_policy: normalize_restart_policy(Map.get(cfg, "restart_policy")),
       extra_mounts: decode_extra_mounts(Map.get(cfg, "extra_mounts")),
+      # Absent on records written before published ports existed.
+      published_ports: Mjolnir.PublishedPorts.decode(Map.get(cfg, "published_ports")),
       metadata: record.metadata || %{}
     }
   end
@@ -1388,6 +1409,7 @@ defmodule Mjolnir.VM do
     opts = Map.update!(opts, :id, &Mjolnir.VmId.storage_id/1)
 
     with {:ok, opts} <- resolve_spawn_network(opts),
+         {:ok, opts} <- claim_published_ports(opts),
          :ok <- store_identity(opts),
          :ok <- store_git_signing(opts) do
       init_state(opts)
@@ -1397,7 +1419,38 @@ defmodule Mjolnir.VM do
 
         # Keep the existing opaque-store failure behavior. Class refusal must
         # propagate to callers before any guest is started.
-        {:stop, if(reason == :proxy_guest_iroh_forbidden, do: reason, else: :normal)}
+        {:stop, init_stop_reason(reason)}
+    end
+  end
+
+  defp init_stop_reason(:proxy_guest_iroh_forbidden), do: :proxy_guest_iroh_forbidden
+  defp init_stop_reason({:host_port_published, _, _} = reason), do: reason
+  defp init_stop_reason({:invalid_published_port, _} = reason), do: reason
+  defp init_stop_reason(:quic_guest_port_requires_unikernel = reason), do: reason
+  defp init_stop_reason(_), do: :normal
+
+  # The claim is a Registry key owned by this process, so it is released when
+  # the VM ends. A stored VM that comes back to find its port taken boots
+  # without it; refusing would strand a guest over a port.
+  defp claim_published_ports(opts) do
+    alias Mjolnir.PublishedPorts
+    kind = opts[:kind] || :linux
+
+    with {:ok, ports} <- PublishedPorts.parse(opts[:published_ports]),
+         {:ok, ports} <- PublishedPorts.resolve(ports, kind, opts.id),
+         :ok <- PublishedPorts.claim(opts.id, ports) do
+      {:ok, Map.put(opts, :published_ports, ports)}
+    else
+      {:error, reason} when is_map_key(opts, :resume) or is_map_key(opts, :attach) ->
+        Logger.error(
+          "VM #{opts.id}: published ports dropped on resume (#{inspect(reason)}); " <>
+            "the guest boots without them"
+        )
+
+        {:ok, Map.put(opts, :published_ports, [])}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1491,6 +1544,10 @@ defmodule Mjolnir.VM do
         ),
       boot_budget_ms: opts[:boot_budget_ms]
     }
+
+    # Runs after the boot continue. It re-checks the rules against the public
+    # address, and installs them on attach and thaw, which do not run do_boot.
+    if state.config.published_ports != [], do: send(self(), :published_ports_sync)
 
     continue =
       cond do
@@ -2257,6 +2314,33 @@ defmodule Mjolnir.VM do
     {:noreply, %{state | lan_files_rules: rules}}
   end
 
+  def handle_info(:published_ports_sync, state) do
+    ports = Map.get(state.config || %{}, :published_ports, [])
+
+    # No TAP yet means boot is still writing them.
+    if ports != [] and is_map(state.net_config) do
+      owned = Process.get(:published_port_rules, [])
+      desired = Mjolnir.PublishedPorts.desired(state.id, ports, state.net_config)
+
+      rules =
+        case Mjolnir.PublishedPorts.sync(owned, desired) do
+          {:ok, rules} ->
+            rules
+
+          {:error, reason, rules} ->
+            Logger.warning("VM #{state.id}: published ports sync failed: #{inspect(reason)}")
+            rules
+        end
+
+      Process.put(:published_port_rules, rules)
+    end
+
+    if ports != [],
+      do: Process.send_after(self(), :published_ports_sync, published_ports_sync_ms())
+
+    {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Logger.debug("VM #{state.id} received: #{inspect(msg)}")
     {:noreply, state}
@@ -2287,9 +2371,17 @@ defmodule Mjolnir.VM do
 
     if state.hypervisor == Mjolnir.Hypervisor.CloudHypervisor and
          Mjolnir.VmmScope.detach?(reason) do
+      # The guest keeps running, so its published ports stay. The next BEAM
+      # adopts the VM and re-checks them.
       Mjolnir.VmmScope.detach(state.hypervisor_port)
       :ok
     else
+      # By tag, so a rule written with an older public address goes too.
+      if Map.get(state.config || %{}, :published_ports, []) != [] do
+        _ = Mjolnir.PublishedPorts.remove(state.id)
+        Process.delete(:published_port_rules)
+      end
+
       terminate_owned(reason, state)
     end
   end
@@ -2362,7 +2454,8 @@ defmodule Mjolnir.VM do
     unless preserve do
       _ = Mjolnir.StateStore.delete(state.id)
 
-      if Map.get(state.config, :guest_kind) == :unikernel and match?({:hypervisor_exit, _}, reason) do
+      if Map.get(state.config, :guest_kind) == :unikernel and
+           match?({:hypervisor_exit, _}, reason) do
         _ =
           Mjolnir.StateStore.put(
             Mjolnir.StateStore.Record.new(state.id, :stopped,
@@ -2481,7 +2574,9 @@ defmodule Mjolnir.VM do
       # Map.get(state.config, :extra_mounts, []) to start the extra virtiofsd
       # shares. Before this it was never copied from spawn opts, so any
       # :extra_mounts passed to spawn/1 was silently dropped (gge.1.9).
-      extra_mounts: opts[:extra_mounts] || []
+      extra_mounts: opts[:extra_mounts] || [],
+      # Parsed, resolved and claimed in init/1 before this is built.
+      published_ports: opts[:published_ports] || []
     }
   end
 
@@ -2501,6 +2596,7 @@ defmodule Mjolnir.VM do
     with :ok <- File.mkdir_p(socket_dir),
          {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
          _ = boot_partial_put(:net_config, net_config),
+         :ok <- publish_ports(state, net_config),
          {:ok, hv_port} <-
            start_hypervisor(hypervisor, state.id, socket_path, serial_path, []),
          _ = boot_partial_put(:hv_port, hv_port),
@@ -2597,6 +2693,7 @@ defmodule Mjolnir.VM do
            _ = boot_partial_put(:extra_virtiofsd_ports, extra_virtiofsd_ports),
            {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
            _ = boot_partial_put(:net_config, net_config),
+           :ok <- publish_ports(state, net_config),
            # Both fresh boot and resume refresh the unit with this TAP's address.
            :ok <-
              Mjolnir.LanFiles.install(
@@ -2901,6 +2998,44 @@ defmodule Mjolnir.VM do
     end
   end
 
+  # Published UDP ports go in as soon as the TAP and guest address exist.
+  # The rules this process wrote live in its dictionary, like :boot_partial,
+  # because do_boot has no state to return them in until the guest answers.
+  defp publish_ports(state, net_config) do
+    case Map.get(state.config, :published_ports, []) do
+      [] ->
+        :ok
+
+      ports ->
+        case Mjolnir.PublishedPorts.install(state.id, ports, net_config) do
+          {:ok, rules} ->
+            Process.put(:published_port_rules, rules)
+            Logger.info("VM #{state.id}: published UDP #{inspect(ports)}")
+            :ok
+
+          {:error, reason} when state.resume_mode ->
+            # :published_ports_sync keeps trying; a resume is not failed for this.
+            Logger.error("VM #{state.id}: publishing ports failed: #{inspect(reason)}")
+            :ok
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp unpublish_ports do
+    case Process.delete(:published_port_rules) do
+      [_ | _] = rules -> Mjolnir.PublishedPorts.sync(rules, [])
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp published_ports_sync_ms,
+    do: Application.get_env(:mjolnir, :published_ports_sync_ms, 15_000)
+
   defp boot_partial_put(key, value) do
     partial = Process.get(:boot_partial, %{})
     Process.put(:boot_partial, Map.put(partial, key, value))
@@ -2945,6 +3080,9 @@ defmodule Mjolnir.VM do
         _ -> :ok
       end
     end
+
+    # Unpublish before the TAP goes.
+    unpublish_ports()
 
     # Delete TAP if created
     if partial[:net_config] do
@@ -4224,6 +4362,13 @@ defmodule Mjolnir.VM do
         mounts -> Map.put(spawn_config, "extra_mounts", mounts)
       end
 
+    # Only when set, so records of VMs without published ports are unchanged.
+    spawn_config =
+      case Mjolnir.PublishedPorts.encode(Map.get(state.config, :published_ports, [])) do
+        [] -> spawn_config
+        ports -> Map.put(spawn_config, "published_ports", ports)
+      end
+
     spawn_config =
       case cid_or_nil(state.config) do
         cid when is_integer(cid) -> Map.put(spawn_config, "vsock_cid", cid)
@@ -4302,7 +4447,8 @@ defmodule Mjolnir.VM do
       ssh_public_key: state.ssh_public_key,
       owner_id: state.owner_id,
       secrets_mode: state.secrets_mode,
-      restart_policy: state.restart_policy
+      restart_policy: state.restart_policy,
+      published_ports: Mjolnir.PublishedPorts.encode(Map.get(state.config, :published_ports, []))
     }
   end
 

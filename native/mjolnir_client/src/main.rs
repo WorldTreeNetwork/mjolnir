@@ -98,6 +98,11 @@ enum Command {
         /// SHA-256 hex of the guest certificate. Required with --kind unikernel.
         #[arg(long)]
         peer_pin: Option<String>,
+        /// Publish a host UDP port to the guest (kernel DNAT), repeatable:
+        /// HOST, HOST:GUEST, or HOST:quic for a unikernel's QUIC port. The
+        /// host must allow the port (`published_port_range`).
+        #[arg(long = "publish-udp", value_name = "HOST[:GUEST]")]
+        publish_udp: Vec<mjolnir_api::api::PublishUdp>,
     },
     /// List running VMs
     List {
@@ -958,6 +963,7 @@ async fn main() {
             kind,
             kernel,
             peer_pin,
+            publish_udp,
         } => {
             api::cmd_spawn(
                 &profile,
@@ -974,6 +980,7 @@ async fn main() {
                 kind.as_deref(),
                 kernel.as_deref(),
                 peer_pin.as_deref(),
+                &publish_udp,
             )
             .await
         }

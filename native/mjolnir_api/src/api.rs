@@ -77,6 +77,89 @@ pub struct VmInfo {
     /// not measurable (no live rootfs, or btrfs du unavailable).
     #[serde(default)]
     pub rootfs_bytes: Option<u64>,
+    /// UDP ports of the host that go to this guest. Empty for a VM with
+    /// none, and for a host that predates the field.
+    #[serde(default)]
+    pub published_ports: Vec<PublishedPort>,
+}
+
+/// One published UDP port as `GET /api/vms/:id` reports it.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct PublishedPort {
+    #[serde(default = "udp")]
+    pub protocol: String,
+    pub host_port: u16,
+    pub guest_port: u16,
+    /// The host address the rule matches now. `None` when the public
+    /// interface has no IPv4 address.
+    #[serde(default)]
+    pub host_ip: Option<String>,
+}
+
+fn udp() -> String {
+    "udp".to_string()
+}
+
+/// Guest side of a `--publish-udp` request.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GuestPort {
+    Number(u16),
+    /// The Reflect unikernel's QUIC port. The host derives it from the VM
+    /// id, so the caller cannot name it before the spawn.
+    Quic,
+}
+
+/// A UDP port to publish at spawn: `HOST`, `HOST:GUEST` or `HOST:quic`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PublishUdp {
+    pub host_port: u16,
+    pub guest_port: GuestPort,
+}
+
+impl std::str::FromStr for PublishUdp {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let port = |text: &str| {
+            match text.parse::<u16>() {
+            Ok(0) | Err(_) => Err(format!(
+                "`{s}`: expected HOST[:GUEST] with ports in 1..65535 (GUEST may be `quic` for a unikernel)"
+            )),
+            Ok(n) => Ok(n),
+        }
+        };
+        match s.split_once(':') {
+            None => {
+                let host_port = port(s)?;
+                Ok(Self {
+                    host_port,
+                    guest_port: GuestPort::Number(host_port),
+                })
+            }
+            Some((host, "quic")) => Ok(Self {
+                host_port: port(host)?,
+                guest_port: GuestPort::Quic,
+            }),
+            Some((host, guest)) => Ok(Self {
+                host_port: port(host)?,
+                guest_port: GuestPort::Number(port(guest)?),
+            }),
+        }
+    }
+}
+
+/// The `published_ports` value of a spawn body.
+pub fn published_ports_json(ports: &[PublishUdp]) -> serde_json::Value {
+    ports
+        .iter()
+        .map(|p| {
+            let guest = match p.guest_port {
+                GuestPort::Number(n) => serde_json::json!(n),
+                GuestPort::Quic => serde_json::json!("quic"),
+            };
+            serde_json::json!({"protocol": "udp", "host_port": p.host_port, "guest_port": guest})
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -431,6 +514,8 @@ pub struct SpawnOptions {
     pub kind: Option<String>,
     pub kernel: Option<String>,
     pub peer_pin: Option<String>,
+    /// UDP ports of the host to DNAT to the guest. Empty sends no field.
+    pub published_ports: Vec<PublishUdp>,
 }
 
 /// Spawn a VM (`POST /api/vms`) and return the typed response. The returned
@@ -469,6 +554,9 @@ pub async fn spawn_vm(
     }
     if let Some(pin) = &opts.peer_pin {
         body["peer_pin"] = serde_json::Value::String(pin.clone());
+    }
+    if !opts.published_ports.is_empty() {
+        body["published_ports"] = published_ports_json(&opts.published_ports);
     }
     if let Some(preserve) = opts.preserve_iroh_key {
         body["preserve_iroh_key"] = serde_json::Value::Bool(preserve);
@@ -542,5 +630,39 @@ mod resolve_tests {
     fn unknown_identifier_is_none() {
         let vms = [vm("BRej1C6DQ22SqJ4cCWv19g", Some("zr4k"))];
         assert_eq!(find_vm_id(&vms, "nope"), None);
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+
+    #[test]
+    fn parses_host_and_guest_ports() {
+        let p: PublishUdp = "20001:4433".parse().unwrap();
+        assert_eq!(p.host_port, 20001);
+        assert_eq!(p.guest_port, GuestPort::Number(4433));
+        let p: PublishUdp = "20001".parse().unwrap();
+        assert_eq!(p.guest_port, GuestPort::Number(20001));
+        let p: PublishUdp = "20001:quic".parse().unwrap();
+        assert_eq!(p.guest_port, GuestPort::Quic);
+    }
+
+    #[test]
+    fn refuses_what_is_not_a_port() {
+        for bad in [
+            "", "0", "0:1", "1:0", "70000", "a:b", "1:2:3", "quic:1", "-1",
+        ] {
+            assert!(bad.parse::<PublishUdp>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn quic_is_sent_by_name() {
+        let ports = ["20001:quic".parse().unwrap()];
+        assert_eq!(
+            published_ports_json(&ports),
+            serde_json::json!([{"protocol": "udp", "host_port": 20001, "guest_port": "quic"}])
+        );
     }
 }

@@ -23,6 +23,7 @@ defmodule Mjolnir.API.Views do
       restart_policy: vm.restart_policy || :always,
       web_url: web_url(vm),
       config: render_config(vm.config),
+      published_ports: render_published_ports(vm.config),
       boot_time: vm.boot_time,
       rootfs_bytes: rootfs_bytes(vm),
       persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250),
@@ -199,6 +200,22 @@ defmodule Mjolnir.API.Views do
   end
 
   defp web_url(_), do: nil
+
+  # `host_ip` is the address the rule matches now, or nil when the public
+  # interface has none.
+  defp render_published_ports(%{published_ports: [_ | _] = ports}) do
+    host_ip =
+      case Mjolnir.PublishedPorts.public() do
+        {:ok, {_interface, address}} -> address
+        _ -> nil
+      end
+
+    ports
+    |> Mjolnir.PublishedPorts.encode()
+    |> Enum.map(&Map.put(&1, "host_ip", host_ip))
+  end
+
+  defp render_published_ports(_), do: []
 
   defp render_config(nil), do: nil
 

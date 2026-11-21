@@ -15,6 +15,28 @@ if prefixes = System.get_env("MJOLNIR_UNIKERNEL_KERNEL_PREFIXES") do
   config :mjolnir, unikernel_kernel_prefixes: list
 end
 
+# Published UDP ports. "20000-20099" or one port. A value that does not
+# parse leaves the feature disabled; it never widens the range.
+if range = System.get_env("MJOLNIR_PUBLISHED_PORT_RANGE") do
+  parsed =
+    case range |> String.split("-", trim: true) |> Enum.map(&Integer.parse(String.trim(&1))) do
+      [{port, ""}] when port in 1..65535 ->
+        {port, port}
+
+      [{first, ""}, {last, ""}] when first in 1..65535 and last >= first and last <= 65535 ->
+        {first, last}
+
+      _ ->
+        nil
+    end
+
+  config :mjolnir, published_port_range: parsed
+end
+
+if interface = System.get_env("MJOLNIR_PUBLISHED_PORT_INTERFACE") do
+  if interface != "", do: config(:mjolnir, published_port_interface: interface)
+end
+
 if bin = System.get_env("MJOLNIR_CLOUD_HYPERVISOR_BIN") do
   config :mjolnir, cloud_hypervisor_bin: bin
 end

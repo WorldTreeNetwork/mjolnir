@@ -219,11 +219,68 @@ is gone.** That's by design — VMs are cheap and disposable.
 | Run a one-off command | `mj exec <vm_id> "<cmd>"` |
 | Snapshot a running VM | `mj snapshot create <vm_id> <name>` |
 | Spawn from a snapshot | `mj spawn --snapshot <name>` |
+| Spawn with a public UDP port | `mj spawn --publish-udp 20001:4433` — [details](#publishing-a-udp-port) |
 | Destroy a VM | `mj kill <vm_id>` |
 | Deploy a web app (service VM) | `mj deploy . --name <app>` — [guide](deploying-an-app.md) |
 | Merge host-escrowed env (then redeploy) | `mj secrets set <app> KEY` |
 
 Run `mj --help` for the complete surface.
+
+## Publishing a UDP port
+
+A guest has a private address. To let the internet reach a UDP service in it
+(a QUIC server, a game server, a Media-over-QUIC relay), publish a port when
+you spawn:
+
+```bash
+mj spawn --publish-udp 20001:4433     # host UDP 20001 -> guest UDP 4433
+mj spawn --publish-udp 20001          # same port on both sides
+mj spawn --publish-udp 20001 --publish-udp 20002:9000
+```
+
+The host forwards in the kernel (DNAT). There is no proxy in the path. QUIC
+puts every connection on one UDP port, so one published port serves a whole
+QUIC service. `mj info <vm_id>` shows what is published and at which host
+address:
+
+```
+Published Ports
+───────────────────────────────────────────────────────
+udp 203.0.113.7:20001 -> 10.200.41.9:4433
+```
+
+In the guest, listen on the guest port on all addresses or on the guest IP.
+From another machine: `echo hi | nc -u -w1 203.0.113.7 20001`.
+
+The ports stay with the VM. They come back after a restart of the VM or of
+the host service, and they are released by `mj kill`. They cannot be changed
+on a running VM; spawn again (from a snapshot, if you need the disk).
+
+What the server refuses, before it starts anything:
+
+| Response | Meaning |
+|---|---|
+| `403 published_ports_disabled` | This host has not enabled publishing. |
+| `403 host_port_not_permitted` | The host port is outside the host's range (the response gives the range). |
+| `403 host_port_reserved` | The host keeps that number for itself. |
+| `409 host_port_published` | Another VM holds it, running or stopped. |
+| `409 host_port_bound_by_host` | A process on the host is using that UDP port. |
+
+Limits: UDP only, IPv4 only, at most four ports per VM. The published address
+is not reachable from inside a guest on the same host. If the host sits
+behind a provider firewall, that firewall must also allow the port.
+
+**Host operators:** publishing is off until you set a range in
+`/etc/mjolnir/env` and restart the service:
+
+```
+MJOLNIR_PUBLISHED_PORT_RANGE=20000-20099
+# MJOLNIR_PUBLISHED_PORT_INTERFACE=enp1s0   # default: the default-route interface
+```
+
+Once set, anyone who may spawn on the host may publish inside the range.
+Keep it below 32768, where the kernel picks ports for the host's own outgoing
+sockets. To see the rules: `iptables -t nat -S PREROUTING | grep publish:`.
 
 `mj spawn` is a throwaway shell. It does **not** read the deploy-secrets file.
 A store or API that needs `DATABASE_URL` / Stripe / SES is a different spawn:

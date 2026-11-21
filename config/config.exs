@@ -218,6 +218,36 @@ config :mjolnir,
 config :mjolnir,
   allowed_mount_prefixes: []
 
+# Published UDP ports (`published_ports` on spawn). Kernel DNAT from the
+# public interface to a guest. nil range = disabled, like extra_mounts.
+# Keep a range below the ephemeral ports (32768+). MJOLNIR_PUBLISHED_PORT_RANGE
+# ("20000-20099") and MJOLNIR_PUBLISHED_PORT_INTERFACE override at runtime.
+config :mjolnir,
+  published_port_range: nil,
+  # nil = the interface of the IPv4 default route.
+  published_port_interface: nil,
+  # Refused inside any range: DNS, DHCP, NTP, HTTPS/QUIC on the gateway,
+  # IPsec, mDNS, WireGuard, and the sidecar numbers (API, Postgres, Redis,
+  # blob door, AIE). A port a host socket has bound for UDP is refused as well.
+  published_port_reserved: [
+    53,
+    67,
+    68,
+    123,
+    443,
+    500,
+    4000,
+    4500,
+    5353,
+    5432,
+    6379,
+    7222,
+    7422,
+    51820
+  ],
+  published_ports_max_per_vm: 4,
+  published_ports_sync_ms: 15_000
+
 # Syslog ingest. Guests stream RFC 3164 on vsock channel 2. Host apps
 # (mjolnir-log) send UDP when udp_port is set; unset = no bind.
 # Loopback for host processes; bind 10.200.0.1 so guests can send to

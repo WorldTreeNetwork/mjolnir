@@ -410,6 +410,9 @@ defmodule Mjolnir.Reconcile do
 
     updated = %{record | intent: :stopped, runtime: runtime}
 
+    # No process will run again for this record without an owner's action.
+    _ = Mjolnir.PublishedPorts.release(record)
+
     Logger.info(
       "Reconcile: VM #{uuid} has restart_policy=never — not resuming. " <>
         "Intent set to :stopped, rootfs preserved at #{path}." <>
@@ -474,6 +477,8 @@ defmodule Mjolnir.Reconcile do
 
     case disposition do
       :retire ->
+        _ = Mjolnir.PublishedPorts.release(record)
+
         Logger.error(
           prefix <>
             "#{why}. Retired after #{updated.runtime["resume_failures"]} failed attempt(s) — " <>

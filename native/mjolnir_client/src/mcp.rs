@@ -48,6 +48,18 @@ pub struct SpawnVmParams {
     pub kernel: Option<String>,
     #[schemars(description = "SHA-256 hex of the unikernel certificate.")]
     pub peer_pin: Option<String>,
+    #[schemars(
+        description = "UDP ports of the host to publish to the guest by kernel DNAT, e.g. [{\"host_port\": 20001, \"guest_port\": 4433}]. guest_port defaults to host_port. The host must allow the port (published_port_range)."
+    )]
+    pub published_ports: Option<Vec<PublishedPortParam>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PublishedPortParam {
+    #[schemars(description = "UDP port on the host's public interface (1-65535).")]
+    pub host_port: u16,
+    #[schemars(description = "UDP port in the guest. Default: host_port.")]
+    pub guest_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -328,6 +340,19 @@ impl MjolnirMcpService {
         }
         if let Some(v) = p.peer_pin {
             body.insert("peer_pin".into(), serde_json::Value::String(v));
+        }
+        if let Some(ports) = p.published_ports.filter(|ports| !ports.is_empty()) {
+            let ports: Vec<serde_json::Value> = ports
+                .iter()
+                .map(|port| {
+                    serde_json::json!({
+                        "protocol": "udp",
+                        "host_port": port.host_port,
+                        "guest_port": port.guest_port.unwrap_or(port.host_port),
+                    })
+                })
+                .collect();
+            body.insert("published_ports".into(), serde_json::Value::Array(ports));
         }
         self.api_post("/api/vms", &serde_json::Value::Object(body))
             .await

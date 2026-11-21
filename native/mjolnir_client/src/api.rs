@@ -38,7 +38,11 @@ pub async fn cmd_spawn(
     kind: Option<&str>,
     kernel: Option<&str>,
     peer_pin: Option<&str>,
+    publish_udp: &[PublishUdp],
 ) -> Result<()> {
+    if target.is_some() && !publish_udp.is_empty() {
+        anyhow::bail!("--publish-udp is not available with --target");
+    }
     if let Some(name) = target {
         return cmd_spawn_target(
             profile,
@@ -93,6 +97,7 @@ pub async fn cmd_spawn(
         kind: kind.map(str::to_string),
         kernel: kernel.map(str::to_string),
         peer_pin: peer_pin.map(str::to_string),
+        published_ports: publish_udp.to_vec(),
         ..SpawnOptions::default()
     };
 
@@ -113,6 +118,14 @@ pub async fn cmd_spawn(
     // Emitted on stderr so stdout keeps carrying only the ticket, unchanged,
     // for anything scripting off `mj spawn` output.
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+    for p in publish_udp {
+        match p.guest_port {
+            GuestPort::Number(guest) => {
+                eprintln!("Published:    udp {} -> guest {}", p.host_port, guest)
+            }
+            GuestPort::Quic => eprintln!("Published:    udp {} -> guest quic", p.host_port),
+        }
+    }
 
     // If shell not ready yet, await it. The operator socket has no bearer
     // token, so the wait has to use the same socket as the spawn.
@@ -401,8 +414,16 @@ pub async fn cmd_info(
         }
     );
 
-    if let Some(ip) = resp.guest_ip {
+    if let Some(ref ip) = resp.guest_ip {
         println!("Guest IP:     {}", ip);
+    }
+
+    if !resp.published_ports.is_empty() {
+        println!("\nPublished Ports");
+        println!("───────────────────────────────────────────────────────");
+        for line in published_port_lines(&resp.published_ports, resp.guest_ip.as_deref()) {
+            println!("{}", line);
+        }
     }
 
     if let Some(ref ticket) = resp.ticket {
@@ -1181,6 +1202,23 @@ async fn cmd_spawn_target(
     .await
 }
 
+/// `udp 192.0.2.7:20001 -> 10.200.3.4:4433`, one line per published port.
+fn published_port_lines(ports: &[PublishedPort], guest_ip: Option<&str>) -> Vec<String> {
+    ports
+        .iter()
+        .map(|p| {
+            format!(
+                "{} {}:{} -> {}:{}",
+                p.protocol,
+                p.host_ip.as_deref().unwrap_or("<no public address>"),
+                p.host_port,
+                guest_ip.unwrap_or("guest"),
+                p.guest_port
+            )
+        })
+        .collect()
+}
+
 fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
     let mut body = serde_json::json!({});
     if let Some(key) = &opts.ssh_public_key {
@@ -1203,6 +1241,9 @@ fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
     }
     if let Some(pin) = &opts.peer_pin {
         body["peer_pin"] = serde_json::json!(pin);
+    }
+    if !opts.published_ports.is_empty() {
+        body["published_ports"] = published_ports_json(&opts.published_ports);
     }
     if let Some(preserve) = opts.preserve_iroh_key {
         body["preserve_iroh_key"] = serde_json::json!(preserve);
@@ -1803,6 +1844,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
         )
         .await;
         assert!(result.is_err());
@@ -1810,6 +1852,44 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn publish_udp_reaches_the_operator_spawn_body() {
+        let opts = super::SpawnOptions {
+            published_ports: vec!["20001:4433".parse().unwrap(), "20002".parse().unwrap()],
+            ..Default::default()
+        };
+        assert_eq!(
+            super::spawn_body(&opts)["published_ports"],
+            serde_json::json!([
+                {"protocol": "udp", "host_port": 20001, "guest_port": 4433},
+                {"protocol": "udp", "host_port": 20002, "guest_port": 20002}
+            ])
+        );
+        // Unset: the field is absent, so an older host sees the body it always saw.
+        let plain = super::spawn_body(&super::SpawnOptions::default());
+        assert!(plain.get("published_ports").is_none());
+    }
+
+    #[test]
+    fn info_lists_published_ports() {
+        let info: super::VmInfo = serde_json::from_str(
+            r#"{"id":"a","state":"running","guest_ip":"10.200.3.4",
+                "published_ports":[{"protocol":"udp","host_port":20001,"guest_port":4433,"host_ip":"192.0.2.7"},
+                                   {"host_port":20002,"guest_port":20002,"host_ip":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            super::published_port_lines(&info.published_ports, info.guest_ip.as_deref()),
+            vec![
+                "udp 192.0.2.7:20001 -> 10.200.3.4:4433",
+                "udp <no public address>:20002 -> 10.200.3.4:20002"
+            ]
+        );
+        // A host that predates the field.
+        let old: super::VmInfo = serde_json::from_str(r#"{"id":"a","state":"running"}"#).unwrap();
+        assert!(old.published_ports.is_empty());
     }
 
     fn sample_vm_info(config: Option<VmConfig>, boot_time: Option<i64>) -> VmInfo {
@@ -1824,6 +1904,7 @@ mod tests {
             config,
             boot_time,
             rootfs_bytes: None,
+            published_ports: Vec::new(),
         }
     }
 

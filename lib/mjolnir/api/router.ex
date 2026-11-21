@@ -427,6 +427,32 @@ defmodule Mjolnir.API.Router do
             Keyword.put(opts, :_validation_error, "extra_mounts must be an array")
         end
 
+      # Shape only. Range, reserved ports and conflicts are decided in
+      # Mjolnir.VM.spawn/1 by Mjolnir.PublishedPorts.check/2. Like
+      # extra_mounts, the operator's config is the permission; any caller
+      # with vms:spawn may publish inside it.
+      opts =
+        case Mjolnir.PublishedPorts.parse(conn.body_params["published_ports"]) do
+          {:ok, []} ->
+            opts
+
+          {:ok, ports} ->
+            Keyword.put(opts, :published_ports, ports)
+
+          {:error, {:too_many_published_ports, max}} ->
+            Keyword.put(opts, :_validation_error, "published_ports allows at most #{max} entries")
+
+          {:error, {:duplicate_host_port, port}} ->
+            Keyword.put(opts, :_validation_error, "published_ports repeats host_port #{port}")
+
+          {:error, _} ->
+            Keyword.put(
+              opts,
+              :_validation_error,
+              "published_ports must be an array of {host_port, guest_port} with ports in 1..65535 (protocol udp)"
+            )
+        end
+
       # Buzz agent identity (nsec + relay). Stored in SecretStore, never on the
       # VM record. Independent of secrets_mode — this is not LUKS material.
       opts =
@@ -2180,6 +2206,49 @@ defmodule Mjolnir.API.Router do
               :unikernel_unsupported
             ] do
     json(conn, 400, %{error: Atom.to_string(reason)})
+  end
+
+  defp spawn_failure(conn, :published_ports_disabled) do
+    json(conn, 403, %{
+      error: "published_ports_disabled",
+      message: "this host has no published_port_range configured"
+    })
+  end
+
+  defp spawn_failure(conn, {:host_port_not_permitted, port, first, last}) do
+    json(conn, 403, %{
+      error: "host_port_not_permitted",
+      host_port: port,
+      permitted_range: [first, last]
+    })
+  end
+
+  defp spawn_failure(conn, {:host_port_reserved, port}) do
+    json(conn, 403, %{error: "host_port_reserved", host_port: port})
+  end
+
+  # The holder's id is not returned; it may belong to another account.
+  defp spawn_failure(conn, {:host_port_published, port, _vm_id}) do
+    json(conn, 409, %{error: "host_port_published", host_port: port})
+  end
+
+  defp spawn_failure(conn, {:host_port_bound_by_host, port}) do
+    json(conn, 409, %{error: "host_port_bound_by_host", host_port: port})
+  end
+
+  defp spawn_failure(conn, :quic_guest_port_requires_unikernel) do
+    json(conn, 400, %{error: "quic_guest_port_requires_unikernel"})
+  end
+
+  defp spawn_failure(conn, :published_port_interface_unavailable) do
+    json(conn, 503, %{
+      error: "published_port_interface_unavailable",
+      message: "the public interface has no IPv4 address"
+    })
+  end
+
+  defp spawn_failure(conn, {:published_port_rules_failed, _reason}) do
+    json(conn, 500, %{error: "spawn_failed", reason: "published_port_rules_failed"})
   end
 
   defp spawn_failure(conn, _reason) do

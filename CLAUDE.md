@@ -88,6 +88,7 @@ Every other invocation (no flags, `--agent`, `--rootfs`, `--runner`) still build
 
 ```bash
 mj spawn                               # Spawn a VM (--snapshot <name> | --base <image>, --memory <mb>, --connect)
+mj spawn --publish-udp 20001:4433      # Host UDP 20001 -> guest UDP 4433 (kernel DNAT; repeatable; HOST alone = same port)
 mj list [--dormant]                    # List running VMs (--dormant also shows parked)
 mj info <id>                           # Detailed status
 mj exec <id> "uname -a"                # Run a command
@@ -246,13 +247,25 @@ Sandbox mode: when `:forge_systemd_units_dir` is set to anything other than `/et
 
 Runs inside the VM, listens on vsock port 5000 (VMADDR_CID_ANY). Handles: `exec`, `ping`, `configure_network`, `configure_identity`, `configure_iroh`, `get_iroh_status`. PTY support for interactive sessions via Iroh QUIC. Agent SDK on `127.0.0.1:5001` (`GET /messages`, `GET /recv`, `POST /ack`, `POST /done`). Default consume loop peeks the inbox, fsyncs the producer id to `/var/lib/mjolnir/mail-seen`, writes `/var/lib/mjolnir/mail/<id>.json`, optional `/var/lib/agent/on-mail`, then application-ACKs. Disable with `MJOLNIR_MAIL_CONSUME=0`. Needs `just deploy --agent`.
 
+### Published UDP ports (`lib/mjolnir/published_ports.ex`)
+
+`published_ports: [{host_port, guest_port}]` on spawn (`mj spawn --publish-udp HOST[:GUEST]`, MCP `spawn_vm`). A datagram on the public interface at UDP `host_port` is DNATed to `guest_ip:guest_port`; replies return through conntrack. iptables only, no proxy. Works for `linux` and `unikernel` guests (`HOST:quic` is the unikernel's QUIC port). Spec: `openspec/changes/add-published-udp-ports/`.
+
+- **Off by default.** The operator sets `MJOLNIR_PUBLISHED_PORT_RANGE=20000-20099` (`:published_port_range`) in `/etc/mjolnir/env`. Then any caller with `vms:spawn` may publish inside the range, the same model as `extra_mounts` / `:allowed_mount_prefixes`. Keep the range below 32768 (ephemeral ports).
+- **Refused before a process starts:** outside the range (403), in `:published_port_reserved` (403; DNS, DHCP, NTP, 443, IPsec, mDNS, WireGuard, and the sidecar numbers 4000/5432/6379/7222/7422), bound by a host UDP socket per `/proc/net/udp` (409), or held by another VM (409). A VM holds its ports while it has a StateStore record, a dormant entry, or a live process. At most `:published_ports_max_per_vm` (4).
+- **Public side:** `:published_port_interface` (`MJOLNIR_PUBLISHED_PORT_INTERFACE`), else the interface of the IPv4 default route, and that interface's IPv4 address. The VM re-checks every `:published_ports_sync_ms` (15s) and rewrites the rules if the address moved.
+- **Rules:** per port, one nat `PREROUTING` DNAT and two conntrack-scoped `FORWARD` accepts, built by the pure `Mjolnir.Network.published_port_rules/6`. Each has the comment `<tap_prefix>publish:<vm_id>`. Find them with `iptables -t nat -S PREROUTING | grep publish:`.
+- **Lifetime:** written right after the TAP in `do_boot`, stored in `spawn_config["published_ports"]`, written again on resume, adopt, dormant restore and thaw. Removed by tag on stop, kill and failed boot. Kept across a detach (hot cutover). `Mjolnir.Cleanup` removes rules of ids with no `:running` record.
+- **Not covered:** TCP, IPv6, hairpin from a guest or from the host itself, a cloud firewall in front of the host.
+- `mj info <id>` lists them (`published_ports` in `--json`). Test from another machine: `echo hi | nc -u -w1 <host> 20001`.
+
 ### Configuration
 
 Config cascades: `config/config.exs` → `config/{dev,test,prod}.exs` → `config/runtime.exs` (env vars).
 
 Key settings: `hypervisor`, `btrfs_root`, `kernel_path`, `ch_kernel_path`, `cloud_hypervisor_bin`, `socket_dir`, `default_vcpus`, `default_memory_mb`, `default_base_image`, `guest_agent_bin`.
 
-Runtime env overrides: `MJOLNIR_BTRFS_ROOT`, `MJOLNIR_SOCKET_DIR`, `MJOLNIR_AUTH_ISSUER`, `MJOLNIR_API_PORT`.
+Runtime env overrides: `MJOLNIR_BTRFS_ROOT`, `MJOLNIR_SOCKET_DIR`, `MJOLNIR_AUTH_ISSUER`, `MJOLNIR_API_PORT`, `MJOLNIR_PUBLISHED_PORT_RANGE`, `MJOLNIR_PUBLISHED_PORT_INTERFACE`.
 
 Server kernel path: `/var/lib/mjolnir/vmlinux-ch` (Cloud Hypervisor PVH).
 

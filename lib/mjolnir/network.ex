@@ -473,16 +473,34 @@ defmodule Mjolnir.Network do
   end
 
   defp external_iface do
-    case System.cmd("ip", ["route", "show", "default"], stderr_to_stdout: true) do
-      {out, 0} ->
-        # "default via 45.76.76.1 dev enp1s0 proto static" → enp1s0
-        case Regex.run(~r/\bdev\s+(\S+)/, out) do
-          [_, dev] -> dev
-          _ -> "eth0"
-        end
+    case default_route_iface() do
+      {:ok, dev} -> dev
+      _ -> "eth0"
+    end
+  end
 
-      _ ->
-        "eth0"
+  @doc """
+  Interface of the IPv4 default route, the host's egress and public side.
+
+  Published ports use this when `:published_port_interface` is unset. No
+  default route is an error here, not a guessed name.
+  """
+  @spec default_route_iface() :: {:ok, String.t()} | {:error, :no_default_route}
+  def default_route_iface do
+    case System.cmd("ip", ["route", "show", "default"], stderr_to_stdout: true) do
+      {out, 0} -> parse_default_route(out)
+      _ -> {:error, :no_default_route}
+    end
+  rescue
+    _ -> {:error, :no_default_route}
+  end
+
+  @doc false
+  def parse_default_route(out) when is_binary(out) do
+    # "default via 45.76.76.1 dev enp1s0 proto static" → enp1s0
+    case Regex.run(~r/\bdev\s+(\S+)/, out) do
+      [_, dev] -> {:ok, dev}
+      _ -> {:error, :no_default_route}
     end
   end
 
@@ -580,6 +598,71 @@ defmodule Mjolnir.Network do
        ["-i", interface, "-d", address <> "/32", "-p", "tcp", "--dport", port] ++
          tag ++ ["-j", "DNAT", "--to-destination", guest <> ":" <> target_port]}
     ]
+  end
+
+  @doc """
+  Pure IPv4 rules that publish UDP `host_port`s of one VM (kernel DNAT).
+
+  `ports` is a list of `%{host_port: h, guest_port: g}`. A datagram that
+  arrives on `interface` for `address:h` goes to `guest:g`. The two FORWARD
+  accepts are scoped to that flow with conntrack, so nothing else reaches
+  the guest. Every rule carries `tag` as its comment; teardown and Cleanup
+  find rules by it.
+
+  Order is permission before DNAT. Remove in reverse.
+  """
+  @spec published_port_rules(String.t(), String.t(), String.t(), String.t(), String.t(), [map()]) ::
+          [{String.t(), String.t(), [String.t()]}]
+  def published_port_rules(tag, interface, address, tap, guest, ports) do
+    valid_ip = fn value ->
+      is_binary(value) and
+        match?(
+          {:ok, {a, _, _, _}} when a != 0 and a != 127,
+          :inet.parse_ipv4_address(String.to_charlist(value))
+        )
+    end
+
+    valid_port = fn port -> is_integer(port) and port in 1..65535 end
+
+    unless valid_ip.(address) and valid_ip.(guest) and
+             is_binary(tag) and tag != "" and not String.contains?(tag, [" ", "\"", "'"]) and
+             is_binary(interface) and interface != "" and is_binary(tap) and tap != "" and
+             is_list(ports) and
+             Enum.all?(ports, fn port ->
+               is_map(port) and valid_port.(port[:host_port]) and valid_port.(port[:guest_port])
+             end) do
+      raise ArgumentError,
+            "published ports require IPv4 addresses, interfaces, a tag and ports in 1..65535"
+    end
+
+    comment = ["-m", "comment", "--comment", tag]
+
+    accepts =
+      Enum.flat_map(ports, fn %{host_port: host_port, guest_port: guest_port} ->
+        port = Integer.to_string(host_port)
+        target_port = Integer.to_string(guest_port)
+        original = ["--ctorigdst", address, "--ctorigdstport", port]
+
+        [
+          {"filter", "FORWARD",
+           ["-i", interface, "-o", tap, "-p", "udp", "-d", guest, "--dport", target_port] ++
+             ["-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "--ctdir", "ORIGINAL"] ++
+             original ++ comment ++ ["-j", "ACCEPT"]},
+          {"filter", "FORWARD",
+           ["-i", tap, "-o", interface, "-p", "udp", "-s", guest, "--sport", target_port] ++
+             ["-m", "conntrack", "--ctstate", "ESTABLISHED", "--ctdir", "REPLY"] ++
+             original ++ comment ++ ["-j", "ACCEPT"]}
+        ]
+      end)
+
+    dnats =
+      Enum.map(ports, fn %{host_port: host_port, guest_port: guest_port} ->
+        {"nat", "PREROUTING",
+         ["-i", interface, "-d", address <> "/32", "-p", "udp", "--dport", "#{host_port}"] ++
+           comment ++ ["-j", "DNAT", "--to-destination", "#{guest}:#{guest_port}"]}
+      end)
+
+    accepts ++ dnats
   end
 
   defp create_tap_device(tap_name) do

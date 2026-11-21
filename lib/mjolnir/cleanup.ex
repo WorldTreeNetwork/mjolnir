@@ -3,7 +3,8 @@ defmodule Mjolnir.Cleanup do
   Startup sweep. Does not kill a process because its command line contains
   the socket directory. Socket unlink of an attached or unclassified scope
   waits for reattach. Disks with a state record and this instance's DOWN
-  TAPs are still handled here.
+  TAPs are still handled here. Published-port rules of VMs with no
+  `:running` record are removed.
   """
 
   require Logger
@@ -14,9 +15,20 @@ defmodule Mjolnir.Cleanup do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
     clean_stale_vms(btrfs_root)
     clean_orphan_taps()
+    clean_published_ports()
     reap_trash()
 
     :ok
+  end
+
+  # Published-port rules whose VM has no :running record. A VM that is
+  # still alive in its scope keeps its record, so its rules stay and the
+  # adopting process re-checks them.
+  defp clean_published_ports do
+    _ = Mjolnir.PublishedPorts.sweep()
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp reap_trash do

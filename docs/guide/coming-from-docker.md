@@ -38,6 +38,7 @@ machine, clone it while it's running, and hand someone a peer-to-peer connection
 | `docker rm -f` | `mj kill <vm>` | Stops the microVM and deletes its CoW subvolume. |
 | Dockerfile | `Deploy.Detector` / `mjolnir.toml` | Zero-config for SvelteKit; other apps ship a manifest. Each step is a cached snapshot layer. See [Deploying a Web App](deploying-an-app.md). |
 | `docker run -e SECRET=…` | `mj secrets set <app> KEY` then `mj deploy` | Host-escrowed JSON, injected at **service-VM spawn**, never in the snapshot. `mj spawn` is a throwaway shell and does not read that file. |
+| `docker run -p 20001:4433/udp` | `mj spawn --publish-udp 20001:4433` | Kernel DNAT to the guest, no userland proxy. UDP only, and the host operator sets the allowed range. See [Publishing a UDP port](getting-started.md#publishing-a-udp-port). HTTP goes through the gateway URL instead. |
 | `docker ps` | `mj list` | — |
 | Docker registry / `push` | Iroh content-addressed transfer (emerging) | Cross-host movement is by content-addressed sync, not a central registry. See `docs/archive/storage-architecture.md` §3. |
 | Container = ephemeral, stateless by convention | VM = checkpointable, stateful by design | State is a feature, not something you engineer around with volumes. |

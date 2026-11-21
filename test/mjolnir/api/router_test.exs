@@ -813,6 +813,50 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  describe "POST /api/vms published_ports" do
+    defp spawn_publishing(ports) do
+      conn(:post, "/api/vms", Jason.encode!(%{published_ports: ports}))
+      |> Map.put(:remote_ip, {127, 0, 0, 1})
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-owner-id", @deploy_owner)
+      |> Router.call(@opts)
+    end
+
+    test "400 for a malformed entry" do
+      for ports <- [[%{host_port: 0}], [%{host_port: 20_001, protocol: "tcp"}], "20001"] do
+        conn = spawn_publishing(ports)
+        assert conn.status == 400
+        assert Jason.decode!(conn.resp_body)["error"] =~ "published_ports"
+      end
+    end
+
+    test "403 while the host has no published_port_range, and no VM is created" do
+      before = Registry.count(Mjolnir.VMRegistry)
+      conn = spawn_publishing([%{host_port: 20_001, guest_port: 4433}])
+
+      assert conn.status == 403
+      assert Jason.decode!(conn.resp_body)["error"] == "published_ports_disabled"
+      assert Registry.count(Mjolnir.VMRegistry) == before
+    end
+
+    test "403 outside the configured range and for a reserved port" do
+      Application.put_env(:mjolnir, :published_port_range, {4000, 20_099})
+      on_exit(fn -> Application.put_env(:mjolnir, :published_port_range, nil) end)
+
+      conn = spawn_publishing([%{host_port: 443}])
+      assert conn.status == 403
+
+      assert %{"error" => "host_port_not_permitted", "permitted_range" => [4000, 20_099]} =
+               Jason.decode!(conn.resp_body)
+
+      conn = spawn_publishing([%{host_port: 7222}])
+      assert conn.status == 403
+
+      assert %{"error" => "host_port_reserved", "host_port" => 7222} =
+               Jason.decode!(conn.resp_body)
+    end
+  end
+
   describe "POST /api/deploy" do
     test "400 owner_required before the body is considered" do
       conn =
