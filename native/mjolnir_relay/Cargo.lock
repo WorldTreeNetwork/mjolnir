@@ -3852,6 +3852,7 @@ name = "mjolnir-relay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bs58",
  "hex",
  "iroh",
@@ -3863,6 +3864,7 @@ dependencies = [
  "moq-relay",
  "moq-tokio",
  "rcgen 0.13.2",
+ "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",

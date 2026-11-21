@@ -10,8 +10,12 @@ The production hostname and the switch that turns it on are Duke's.
    a name that is not an app domain. `POST /api/certs/issue` does not.
 2. Put the public verify JWKs at `/etc/mjolnir/relay-keys.json`, mode
    `0644`, root-owned. Public keys only. EdDSA or ES256.
-3. In `/etc/mjolnir/env` set `MJOLNIR_RELAY_ENABLED=true` and
-   `MJOLNIR_RELAY_HOST` to that name.
+3. In `/etc/mjolnir/relay.env` (root-owned, mode `0640`, not the
+   controller's `/etc/mjolnir/env`) set `MJOLNIR_RELAY_ENABLED=true`,
+   `MJOLNIR_RELAY_HOST`, and `MJOLNIR_RELAY_ACME_EMAIL`.
+   Issue with `scripts/relay-issue.sh <host> <email>`. That is not
+   `POST /api/certs/issue`. The daily cert timer calls
+   `scripts/relay-renew.sh`, which no-ops when the relay file has no host.
 4. `./scripts/deploy.sh <host> --relay`
 
 The firewall rule is added only after the unit is active. Its comment

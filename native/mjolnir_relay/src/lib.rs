@@ -136,10 +136,15 @@ pub fn grant_from(claims: &Claims) -> Result<Grant, Refuse> {
     Ok(grant)
 }
 
-/// A path that is only a ticket name, not a tenant broadcast.
-pub fn looks_like_ticket(path: &str) -> bool {
-    let raw = path.split('?').next().unwrap_or("").trim_matches('/');
-    !raw.is_empty() && !raw.contains('/') && !raw.starts_with("t")
+/// The request path with the query removed and slashes trimmed.
+pub fn request_path(path: &str) -> &str {
+    path.split('?').next().unwrap_or("").trim_matches('/')
+}
+
+/// True when every segment is a tenant path `t/<canonical owner>/...`.
+pub fn tenant_path(path: &str) -> bool {
+    let raw = request_path(path);
+    !raw.is_empty() && root_allowed(raw)
 }
 
 pub fn assess(
@@ -148,7 +153,9 @@ pub fn assess(
     keys: &KeySet,
     max_ttl: Duration,
 ) -> Result<Grant, Refuse> {
-    if looks_like_ticket(path) {
+    let raw = request_path(path);
+    // Tickets are not tenant paths. Pulls are off, and any other path is refused too.
+    if !raw.is_empty() && !tenant_path(raw) {
         return Err(Refuse::Ticket);
     }
     let Some(token) = token.filter(|text| !text.is_empty()) else {
@@ -159,87 +166,37 @@ pub fn assess(
     }
     let claims = keys.verify(token).map_err(|_| Refuse::BadToken)?;
     profile(&claims, max_ttl, kio::clock::wall())?;
+    if !raw.is_empty() && !path_in_root(raw, &claims.root) {
+        return Err(Refuse::Profile("path outside the grant"));
+    }
     grant_from(&claims)
+}
+
+fn path_in_root(path: &str, root: &str) -> bool {
+    path == root || path.starts_with(&format!("{root}/"))
 }
 
 fn token_alg_disallowed(token: &str) -> bool {
     let Some(header) = token.split('.').next() else {
         return true;
     };
-    let Ok(bytes) = base64_url(header) else {
+    let Ok(bytes) = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        header,
+    ) else {
         return true;
     };
-    let Ok(value) = serde_json_alg(&bytes) else {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return true;
     };
-    !matches!(value.as_str(), "EdDSA" | "ES256")
-}
-
-fn base64_url(text: &str) -> Result<Vec<u8>, ()> {
-    let mut s = text.replace('-', "+").replace('_', "/");
-    while s.len() % 4 != 0 {
-        s.push('=');
-    }
-    // Avoid an extra crate: JWT headers are short JSON.
-    fn val(c: u8) -> Result<u8, ()> {
-        match c {
-            b'A'..=b'Z' => Ok(c - b'A'),
-            b'a'..=b'z' => Ok(c - b'a' + 26),
-            b'0'..=b'9' => Ok(c - b'0' + 52),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            _ => Err(()),
-        }
-    }
-    let bytes = s.as_bytes();
-    let mut out = Vec::new();
-    for chunk in bytes.chunks(4) {
-        if chunk.len() < 4 {
-            return Err(());
-        }
-        if chunk[2] == b'=' {
-            let n = (u32::from(val(chunk[0])?) << 18) | (u32::from(val(chunk[1])?) << 12);
-            out.push((n >> 16) as u8);
-        } else if chunk[3] == b'=' {
-            let n = (u32::from(val(chunk[0])?) << 18)
-                | (u32::from(val(chunk[1])?) << 12)
-                | (u32::from(val(chunk[2])?) << 6);
-            out.push((n >> 16) as u8);
-            out.push((n >> 8) as u8);
-        } else {
-            let n = (u32::from(val(chunk[0])?) << 18)
-                | (u32::from(val(chunk[1])?) << 12)
-                | (u32::from(val(chunk[2])?) << 6)
-                | u32::from(val(chunk[3])?);
-            out.push((n >> 16) as u8);
-            out.push((n >> 8) as u8);
-            out.push(n as u8);
-        }
-    }
-    Ok(out)
-}
-
-fn serde_json_alg(bytes: &[u8]) -> Result<String, ()> {
-    let text = std::str::from_utf8(bytes).map_err(|_| ())?;
-    let key = "\"alg\"";
-    let Some(at) = text.find(key) else {
-        return Err(());
-    };
-    let rest = &text[at + key.len()..];
-    let Some(start) = rest.find('"') else {
-        return Err(());
-    };
-    let rest = &rest[start + 1..];
-    let Some(end) = rest.find('"') else {
-        return Err(());
-    };
-    Ok(rest[..end].to_owned())
+    !matches!(value.get("alg").and_then(|alg| alg.as_str()), Some("EdDSA" | "ES256"))
 }
 
 /// Leaf must name `host` and still be inside its validity window.
 pub fn cert_usable(cert_pem: &str, host: &str, now: SystemTime) -> anyhow::Result<()> {
-    let der = pem_body(cert_pem)?;
-    let (_, cert) = X509Certificate::from_der(&der)
+    let (_, der) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+        .map_err(|err| anyhow::anyhow!("cert pem: {err}"))?;
+    let (_, cert) = X509Certificate::from_der(&der.contents)
         .map_err(|err| anyhow::anyhow!("cert der: {err}"))?;
     let names = cert.subject_alternative_name().ok().flatten();
     let named = names
@@ -261,23 +218,25 @@ pub fn cert_usable(cert_pem: &str, host: &str, now: SystemTime) -> anyhow::Resul
     Ok(())
 }
 
-fn pem_body(pem_text: &str) -> anyhow::Result<Vec<u8>> {
-    let body: String = pem_text
-        .lines()
-        .filter(|line| !line.starts_with("-----"))
-        .collect::<Vec<_>>()
-        .join("");
-    std_b64(&body).map_err(|_| anyhow::anyhow!("cert pem is not base64"))
-}
-
-fn std_b64(text: &str) -> Result<Vec<u8>, ()> {
-    base64_url(text.trim().trim_end_matches('='))
+/// Root-owned and not writable by group or other. The relay user must not
+/// be able to replace the file.
+pub fn key_file_trusted(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)?;
+    if meta.uid() != 0 {
+        anyhow::bail!("key file is not owned by root");
+    }
+    if meta.mode() & 0o022 != 0 {
+        anyhow::bail!("key file is writable by group or other");
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
 pub struct TokenPolicy {
     pub keys: Arc<Mutex<KeySet>>,
-    pub open: Arc<AtomicBool>,
+    pub draining: Arc<AtomicBool>,
+    pub keys_ok: Arc<AtomicBool>,
     pub max_ttl: Duration,
 }
 
@@ -295,11 +254,15 @@ where
         let token = request.token().map(str::to_owned);
         let path = request.path().to_owned();
         let keys = self.keys.lock().expect("keys").clone();
-        let open = self.open.load(Ordering::SeqCst);
+        let draining = self.draining.load(Ordering::SeqCst);
+        let keys_ok = self.keys_ok.load(Ordering::SeqCst);
         let max_ttl = self.max_ttl;
         async move {
-            if !open {
+            if draining {
                 return Err(Rejection::new("draining"));
+            }
+            if !keys_ok {
+                return Err(Rejection::new("keys unavailable"));
             }
             match assess(token.as_deref(), &path, &keys, max_ttl) {
                 Ok(grant) => Ok(ext_grant(&grant).into()),
@@ -397,7 +360,7 @@ mod tests {
             &claims("t/not-an-owner/a", now, now + Duration::from_secs(60)),
         );
         assert!(matches!(
-            assess(Some(&bad), "t/not-an-owner/a", &set, DEFAULT_MAX_TTL),
+            assess(Some(&bad), "", &set, DEFAULT_MAX_TTL),
             Err(Refuse::Profile(_))
         ));
         let expired = sign(
@@ -405,5 +368,37 @@ mod tests {
             &claims(&root, now - Duration::from_secs(30), now - Duration::from_secs(5)),
         );
         assert!(assess(Some(&expired), &root, &set, DEFAULT_MAX_TTL).is_err());
+        let no_exp = Claims::default()
+            .with_root(&root)
+            .with_publish(["**".parse().unwrap()])
+            .with_subscribe(["**".parse().unwrap()])
+            .with_issued(now);
+        assert!(assess(Some(&sign(&key, &no_exp)), &root, &set, DEFAULT_MAX_TTL).is_err());
+        let no_iat = Claims::default()
+            .with_root(&root)
+            .with_publish(["**".parse().unwrap()])
+            .with_subscribe(["**".parse().unwrap()])
+            .with_expires(now + Duration::from_secs(60));
+        assert!(assess(Some(&sign(&key, &no_iat)), &root, &set, DEFAULT_MAX_TTL).is_err());
+        let long = sign(
+            &key,
+            &claims(&root, now, now + Duration::from_secs(7200)),
+        );
+        assert!(matches!(
+            assess(Some(&long), &root, &set, Duration::from_secs(3600)),
+            Err(Refuse::Profile(_))
+        ));
+        let outside = format!("{root}x/nope");
+        assert!(assess(Some(&token), &outside, &set, DEFAULT_MAX_TTL).is_err());
+    }
+
+    #[test]
+    fn group_writable_key_file_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        std::fs::write(&path, "{}").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(key_file_trusted(&path).is_err());
     }
 }

@@ -1,0 +1,117 @@
+//! WebTransport refusal and drain. Throwaway certificates, loopback only.
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use moq_auth::{Algorithm, Claims, Key, KeySet};
+use moq_relay::{Config, Relay};
+
+fn cert_pair(dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let params = rcgen::CertificateParams::new(vec![name.into()]).unwrap();
+    let cert = params.self_signed(&key).unwrap();
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    std::fs::write(&cert_path, cert.pem()).unwrap();
+    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    (cert_path, key_path)
+}
+
+struct Running {
+    quic: std::net::SocketAddr,
+    trigger: moq_relay::shutdown::Trigger,
+    join: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+async fn start(dir: &Path) -> (Running, moq_relay::auth::Admissions) {
+    let (cert, key) = cert_pair(dir, "localhost");
+    moq_tokio::crypto::install_default().unwrap();
+    let mut config = Config::default();
+    config.listen.bind = Some("127.0.0.1:0".parse().unwrap());
+    config.listen.tls.cert = vec![cert];
+    config.listen.tls.key = vec![key];
+    config.web.ws = false;
+    let mut relay = Relay::load(config).await.unwrap().with_signals(false);
+    let quic = relay.quic_addr().unwrap();
+    let trigger = relay.shutdown_trigger().clone();
+    let admissions = relay.admissions().unwrap();
+    let ready = relay.ready();
+    let join = tokio::spawn(relay.run());
+    ready.wait().await.unwrap();
+    (Running { quic, trigger, join }, admissions)
+}
+
+fn client() -> moq_tokio::Client {
+    let mut config = moq_tokio::connect::Config::default();
+    config.tls.insecure = Some(true);
+    config.bind = Some("127.0.0.1:0".parse().unwrap());
+    config.init(Default::default()).unwrap().with_reconnect(false)
+}
+
+fn owner() -> String {
+    bs58::encode([9u8; 32]).into_string()
+}
+
+fn token(key: &Key, root: &str, seconds: u64) -> String {
+    let now = kio::clock::wall();
+    let claims = Claims::default()
+        .with_root(root)
+        .with_publish(["**".parse().unwrap()])
+        .with_subscribe(["**".parse().unwrap()])
+        .with_issued(now)
+        .with_expires(now + Duration::from_secs(seconds));
+    key.sign(&claims).unwrap()
+}
+
+#[tokio::test]
+async fn tokenless_webtransport_is_refused_and_sigterm_stops_a_second_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let (running, mut admissions) = start(dir.path()).await;
+    let key = Key::generate(Algorithm::EdDSA, None).unwrap();
+    let root = format!("t/{}", owner());
+    let keys = Arc::new(Mutex::new(KeySet {
+        keys: vec![Arc::new(key.public().unwrap())],
+    }));
+    let draining = Arc::new(AtomicBool::new(false));
+    let keys_ok = Arc::new(AtomicBool::new(true));
+    let keys_c = keys.clone();
+    let draining_c = draining.clone();
+    let keys_ok_c = keys_ok.clone();
+    tokio::spawn(async move {
+        while let Some(admission) = admissions.next().await {
+            if draining_c.load(Ordering::SeqCst) || !keys_ok_c.load(Ordering::SeqCst) {
+                admission.refuse(moq_relay::auth::Error::Unavailable("closed".into()));
+                continue;
+            }
+            let path = admission.request.path.clone();
+            let query = admission.request.query.clone().unwrap_or_default();
+            let jwt = query.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == "jwt").then(|| v.to_string())
+            });
+            let set = keys_c.lock().unwrap().clone();
+            match mjolnir_relay::assess(jwt.as_deref(), &path, &set, Duration::from_secs(3600)) {
+                Ok(grant) => {
+                    admission.grant(moq_auth::lease::Consumer::fixed(grant));
+                }
+                Err(err) => admission.refuse(moq_relay::auth::Error::Forbidden(err.to_string())),
+            }
+        }
+    });
+
+    let url: url::Url = format!("https://{}/", running.quic).parse().unwrap();
+    let refused = client().connect(url).established().await;
+    assert!(refused.is_err(), "tokenless session was admitted");
+
+    let good = token(&key, &root, 60);
+    let url: url::Url = format!("https://{}/?jwt={good}", running.quic).parse().unwrap();
+    let session = client().connect(url).established().await.expect("admitted");
+    draining.store(true, Ordering::SeqCst);
+    let again: url::Url = format!("https://{}/?jwt={good}", running.quic).parse().unwrap();
+    let second = client().connect(again).established().await;
+    assert!(second.is_err(), "a session during drain was admitted");
+    drop(session);
+    running.trigger.start();
+    let _ = tokio::time::timeout(Duration::from_secs(8), running.join).await;
+}

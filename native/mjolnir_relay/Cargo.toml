@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 bs58 = "0.5"
 hex = "0.4"
 iroh = { version = "1.4.1", default-features = false, features = ["tls-aws-lc-rs"] }
@@ -16,6 +17,7 @@ moq-ext-access = { git = "https://github.com/n0-computer/iroh-live", rev = "747b
 moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"

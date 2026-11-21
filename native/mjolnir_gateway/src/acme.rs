@@ -104,7 +104,15 @@ fn unix_to_system_time(secs: u64) -> SystemTime {
 /// Atomically write bytes to `path` via a sibling `.tmp` file + rename.
 fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<(), AcmeError> {
     let tmp_path = path.with_extension("tmp");
-    let mut f = fs::File::create(&tmp_path)?;
+    // 0600 from the first byte. A later chmod would leave a window.
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(&tmp_path)?;
     f.write_all(data)?;
     f.sync_all()?;
     fs::rename(&tmp_path, path)?;

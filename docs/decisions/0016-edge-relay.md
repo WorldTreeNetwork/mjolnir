@@ -20,7 +20,13 @@
 
 D1–D9 in `design.md` stand. One decision changed during the spike:
 
-**DECISION 2026-11-21:** a renewal restarts `mjolnir-relay` after drain — a file swap was not shown to change the certificate a new session sees — replaces "a renewed certificate is served without restart".
+**DECISION 2026-11-21:** a renewal restarts `mjolnir-relay` after drain — the first spike's HTTP fingerprint fetch did not reach a listener — replaces "a renewed certificate is served without restart".
+
+A later QUIC handshake on the laptop showed `CN=first`, then the files were swapped, then `CN=second`, without a restart. The restart in the copy step is unchanged until Duke picks. See the decisions list in the build report.
+
+**DECISION 2026-11-21:** the relay unit reads `/etc/mjolnir/relay.env` only — the controller file holds secrets the relay must not see — replaces `EnvironmentFile=/etc/mjolnir/env`.
+
+**DECISION 2026-11-21:** a path is refused unless it is under `t/<canonical owner id>/` — a ticket is not that path, and pulls stay off — replaces treating any single segment that does not start with `t` as a ticket.
 
 The relay package is its own Cargo project under `native/mjolnir_relay`. The gateway keeps `iroh 1.0` and `ring`. A throwaway workspace already linked `iroh 1.4` (`tls-aws-lc-rs`) beside `iroh 1.0`.
 

@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=/etc/mjolnir/env
 ExecStart=/opt/mjolnir/_build/prod/rel/mjolnir/bin/mjolnir rpc Mjolnir.API.Certs.renew_due!()
+# Relay name only. No-ops when /etc/mjolnir/relay.env has no host.
+# Does not read the controller secret file.
+ExecStart=/opt/mjolnir/scripts/relay-renew.sh
 Nice=10
 NoNewPrivileges=true
 # The BEAM calls systemd-run --uid=mjolnir for the HTTP-01 dance. This unit

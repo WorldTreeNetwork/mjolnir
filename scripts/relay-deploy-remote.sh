@@ -4,7 +4,10 @@
 # UDP 443 rule tagged mjolnir-relay. Otherwise stop and remove both.
 set -euo pipefail
 STAGED="$(cd "$(dirname "$0")/.." && pwd)"
-ENV_FILE=/etc/mjolnir/env
+# The controller file holds secrets. The relay unit never sees it.
+# Enablement is read here, as root, and only MJOLNIR_RELAY_* is written
+# into /etc/mjolnir/relay.env for the unit.
+ENV_FILE=/etc/mjolnir/relay.env
 enabled=false
 host_name=""
 if [[ -f "$ENV_FILE" ]]; then
@@ -39,6 +42,11 @@ fi
 
 id mjolnir-relay >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/mjolnir-relay-state --shell /usr/sbin/nologin mjolnir-relay
 install -d -o root -g mjolnir-relay -m 0750 /var/lib/mjolnir-relay /var/lib/mjolnir-relay/tls
+install -d -o root -g root -m 0755 /etc/mjolnir
+if [[ -f /etc/mjolnir/relay-keys.json ]]; then
+    chown root:root /etc/mjolnir/relay-keys.json
+    chmod 0644 /etc/mjolnir/relay-keys.json
+fi
 install -d -o mjolnir-relay -g mjolnir-relay -m 0750 /var/lib/mjolnir-relay-state
 install -m 0755 "$STAGED/native/mjolnir_relay/target/release/mjolnir-relay" /usr/local/bin/mjolnir-relay
 install -m 0644 "$STAGED/systemd/mjolnir-relay.service" /etc/systemd/system/mjolnir-relay.service

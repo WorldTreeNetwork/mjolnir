@@ -11,7 +11,6 @@ RELAY_GROUP="${5:-mjolnir-relay}"
 
 refuse() { echo "relay-copy-cert: $*" >&2; exit 1; }
 
-[[ "$(id -u)" == 0 ]] || refuse "must run as root"
 [[ -f "$SRC_CERT" && -f "$SRC_KEY" ]] || refuse "source pair missing"
 
 # Every component from / to the tls directory is root-owned, not a symlink,
@@ -32,18 +31,23 @@ check_component() {
 
 path="$DEST_ROOT"
 while [[ "$path" != "/" ]]; do
-    [[ -e "$path" ]] || break
-    check_component "$path"
+    if [[ -e "$path" || -L "$path" ]]; then
+        check_component "$path"
+    fi
     path="$(dirname "$path")"
 done
 
 openssl x509 -in "$SRC_CERT" -noout -checkend 0 >/dev/null 2>&1 || refuse "certificate is expired"
-openssl x509 -in "$SRC_CERT" -noout -ext subjectAltName | grep -q "DNS:${HOST_NAME}" || refuse "certificate does not name ${HOST_NAME}"
+# Whole name. A suffix such as relay.example.net.evil.org does not match.
+openssl x509 -in "$SRC_CERT" -noout -checkhost "$HOST_NAME" >/dev/null 2>&1 || refuse "certificate does not name ${HOST_NAME}"
+[[ "$(id -u)" == 0 ]] || refuse "must run as root"
+
 cert_pub="$(openssl x509 -in "$SRC_CERT" -noout -pubkey)"
 key_pub="$(openssl pkey -in "$SRC_KEY" -pubout 2>/dev/null || true)"
 [[ -n "$key_pub" && "$cert_pub" == "$key_pub" ]] || refuse "key does not match the leaf"
 
-install -d -o root -g root -m 0755 /var/lib/mjolnir-relay
+# Same owner and mode as relay-deploy-remote.sh. The relay user cannot write this tree.
+install -d -o root -g "$RELAY_GROUP" -m 0750 "$(dirname "$DEST_ROOT")"
 if [[ -d "$DEST_ROOT" ]]; then
     check_component "$DEST_ROOT"
 else

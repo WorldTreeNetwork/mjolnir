@@ -7,12 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use moq_auth::{Algorithm, Grant, KeySet};
+use moq_auth::{Grant, KeySet};
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
-use mjolnir_relay::{
-    TokenPolicy, algorithm_allowed, assess, cert_usable, file_sha256, load_verify_keys,
-};
+use mjolnir_relay::{TokenPolicy, assess, cert_usable, file_sha256, key_file_trusted, load_verify_keys};
+use tokio::signal::unix::{SignalKind, signal};
 struct Settings {
     host: String,
     bind: String,
@@ -77,14 +76,10 @@ fn check_cert(settings: &Settings) -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber_lite();
     let settings = settings()?;
+    key_file_trusted(&settings.keys)?;
     let keys = load_verify_keys(&settings.keys).map_err(|err| {
         anyhow::anyhow!("{}: {err}", settings.keys.display())
     })?;
-    for algorithm in [Algorithm::EdDSA] {
-        if !algorithm_allowed(algorithm) {
-            anyhow::bail!("loader rejected EdDSA");
-        }
-    }
     check_cert(&settings)?;
     write_active(&settings.active, &file_sha256(&settings.keys)?);
 
@@ -103,23 +98,41 @@ async fn main() -> anyhow::Result<()> {
         .admissions()
         .ok_or_else(|| anyhow::anyhow!("relay built its own auth and left no admissions"))?;
     let keys = Arc::new(Mutex::new(keys));
-    let open = Arc::new(AtomicBool::new(true));
-    spawn_decider(admissions, keys.clone(), open.clone(), settings.max_ttl);
-    spawn_key_watch(settings.keys.clone(), settings.active.clone(), keys.clone(), open.clone());
+    let draining = Arc::new(AtomicBool::new(false));
+    let keys_ok = Arc::new(AtomicBool::new(true));
+    spawn_decider(
+        admissions,
+        keys.clone(),
+        draining.clone(),
+        keys_ok.clone(),
+        settings.max_ttl,
+    );
+    spawn_key_watch(
+        settings.keys.clone(),
+        settings.active.clone(),
+        keys.clone(),
+        keys_ok.clone(),
+    );
     spawn_cert_watch(settings.cert.clone(), settings.host.clone());
 
     let policy = TokenPolicy {
         keys: keys.clone(),
-        open: open.clone(),
+        draining: draining.clone(),
+        keys_ok: keys_ok.clone(),
         max_ttl: settings.max_ttl,
     };
     let iroh_router = mount_iroh(&relay, policy, &settings.state_dir).await?;
 
     let drain = settings.drain;
-    let open_signal = open.clone();
+    let draining_signal = draining.clone();
     tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        drain_then_stop(open_signal, net_admission, trigger, drain).await;
+        let mut term = signal(SignalKind::terminate()).expect("sigterm");
+        let mut interrupt = signal(SignalKind::interrupt()).expect("sigint");
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+        drain_then_stop(draining_signal, net_admission, trigger, drain).await;
     });
 
     relay.run().await?;
@@ -158,12 +171,12 @@ async fn mount_iroh(
 }
 
 async fn drain_then_stop(
-    open: Arc<AtomicBool>,
+    draining: Arc<AtomicBool>,
     admission: moq_net::server::Admission,
     trigger: Trigger,
     drain: Duration,
 ) {
-    open.store(false, Ordering::SeqCst);
+    draining.store(true, Ordering::SeqCst);
     admission.drain();
     tokio::time::sleep(drain).await;
     trigger.start();
@@ -172,13 +185,18 @@ async fn drain_then_stop(
 fn spawn_decider(
     mut admissions: moq_relay::auth::Admissions,
     keys: Arc<Mutex<KeySet>>,
-    open: Arc<AtomicBool>,
+    draining: Arc<AtomicBool>,
+    keys_ok: Arc<AtomicBool>,
     max_ttl: Duration,
 ) {
     tokio::spawn(async move {
         while let Some(admission) = admissions.next().await {
-            if !open.load(Ordering::SeqCst) {
+            if draining.load(Ordering::SeqCst) {
                 admission.refuse(moq_relay::auth::Error::Unavailable("draining".into()));
+                continue;
+            }
+            if !keys_ok.load(Ordering::SeqCst) {
+                admission.refuse(moq_relay::auth::Error::Unavailable("keys unavailable".into()));
                 continue;
             }
             let path = admission.request.path.clone();
@@ -220,7 +238,12 @@ fn jwt_query(query: &str) -> Option<String> {
     })
 }
 
-fn spawn_key_watch(path: PathBuf, active: PathBuf, keys: Arc<Mutex<KeySet>>, open: Arc<AtomicBool>) {
+fn spawn_key_watch(
+    path: PathBuf,
+    active: PathBuf,
+    keys: Arc<Mutex<KeySet>>,
+    keys_ok: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
         let mut last = std::fs::metadata(&path).ok().and_then(|meta| meta.modified().ok());
         loop {
@@ -230,17 +253,19 @@ fn spawn_key_watch(path: PathBuf, active: PathBuf, keys: Arc<Mutex<KeySet>>, ope
                 continue;
             }
             last = modified;
-            match load_verify_keys(&path).and_then(|set| {
+            // A bad file refuses new sessions. It does not clear a drain,
+            // and a later good file does not reopen a drain.
+            match key_file_trusted(&path).and_then(|_| load_verify_keys(&path)).and_then(|set| {
                 let hash = file_sha256(&path)?;
                 Ok((set, hash))
             }) {
                 Ok((set, hash)) => {
                     *keys.lock().expect("keys") = set;
-                    open.store(true, Ordering::SeqCst);
+                    keys_ok.store(true, Ordering::SeqCst);
                     write_active(&active, &hash);
                 }
                 Err(_) => {
-                    open.store(false, Ordering::SeqCst);
+                    keys_ok.store(false, Ordering::SeqCst);
                     write_active(&active, "invalid");
                 }
             }
