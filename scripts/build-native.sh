@@ -13,6 +13,14 @@ case "$KIND" in
     blob) cd native; exec mise exec -- cargo build -p mjolnir-blob-door --release --locked ;;
     aie) cd native; exec mise exec -- cargo build -p mjolnir-aie-sidecar --release --locked ;;
     gateway) cd native/mjolnir_gateway; exec mise exec -- cargo build --release --locked ;;
-    relay) cd native/mjolnir_relay; exec mise exec -- cargo build --release --locked ;;
+    relay)
+        # Keep the object cache across release directories. Each deploy stages a
+        # fresh tree, and a cold aws-lc build is several minutes.
+        export CARGO_TARGET_DIR=/var/tmp/mjolnir-relay-cargo
+        cd native/mjolnir_relay
+        mise exec -- cargo build --release --locked
+        mkdir -p "$ROOT/native/mjolnir_relay/target/release"
+        cp -f "$CARGO_TARGET_DIR/release/mjolnir-relay" "$ROOT/native/mjolnir_relay/target/release/mjolnir-relay"
+        ;;
     *) echo "Unknown native build: $KIND" >&2; exit 1 ;;
 esac

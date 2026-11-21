@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Root copies one relay certificate pair into a new generation, then renames current.
-# A usable running unit is restarted afterwards so the new pair is what new sessions see.
-# Renewal drains and ends calls. See docs/decisions/0016-edge-relay.md.
+# The running unit is not restarted. See docs/decisions/0016-edge-relay.md.
 set -euo pipefail
 SRC_CERT="${1:?source cert.pem}"
 SRC_KEY="${2:?source key.pem}"
@@ -66,8 +65,11 @@ staged="$DEST_ROOT/current.next"
 ln -sfn "$(basename "$gen")" "$staged"
 # One rename. On failure current is untouched because we only move the staged link.
 mv -fT "$staged" "$current"
+# Stable names in this directory. The relay opens these, and moq watches this
+# directory, so the rename of `current` above is the reload event.
+ln -sfn "current/cert.pem" "$DEST_ROOT/cert.pem"
+ln -sfn "current/key.pem" "$DEST_ROOT/key.pem"
 
-if systemctl is-active --quiet mjolnir-relay; then
-    systemctl restart mjolnir-relay
-fi
+# The running process serves the new generation to sessions opened after this
+# rename. It is not restarted. A session opened before the rename stays up.
 echo "relay-copy-cert: current -> $(basename "$gen")"

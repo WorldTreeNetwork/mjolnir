@@ -11,7 +11,7 @@
 2. It composes `moq_relay::Config`. It does not call `iroh_live_relay::run`.
 3. One WebTransport listener, UDP 443, no TCP page. Pins: iroh-live `747b1bd`, moq `4a6f52248`.
 4. `:relay_host` is only a certificate subject. Root copies the pair into `/var/lib/mjolnir-relay/tls/` by generation and rename. The relay never generates a certificate.
-5. A renewal restarts the unit after drain. Calls end roughly every 60 days. A file swap was not shown to change the certificate a new session sees.
+5. A renewal does not restart the unit. The process opens `tls/cert.pem` and `tls/key.pem`, which point at `current/`. Renaming `current` is the reload. A session opened before the rename stays up.
 6. Deny by default. moq-auth JWTs, EdDSA or ES256, expiry required, root `t/<owner id>`. No ticket pulls.
 7. `deploy.sh --relay` is the only operation that installs, starts, stops, or removes the unit and its one UDP 443 rule tagged `mjolnir-relay`.
 8. `:relay_enabled` is false until Duke turns it on and names `:relay_host`. The host can read relayed media. End-to-end encryption is a later node.
@@ -20,9 +20,7 @@
 
 D1–D9 in `design.md` stand. One decision changed during the spike:
 
-**DECISION 2026-11-21:** a renewal restarts `mjolnir-relay` after drain — the first spike's HTTP fingerprint fetch did not reach a listener — replaces "a renewed certificate is served without restart".
-
-A later QUIC handshake on the laptop showed `CN=first`, then the files were swapped, then `CN=second`, without a restart. The restart in the copy step is unchanged until Duke picks. See the decisions list in the build report.
+**DECISION 2026-11-21:** a renewal does not restart `mjolnir-relay` — a QUIC handshake showed the new certificate after the files changed, with the previous session still up — replaces the restart-on-renewal decision.
 
 **DECISION 2026-11-21:** the relay unit reads `/etc/mjolnir/relay.env` only — the controller file holds secrets the relay must not see — replaces `EnvironmentFile=/etc/mjolnir/env`.
 

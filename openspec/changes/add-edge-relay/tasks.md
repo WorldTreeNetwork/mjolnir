@@ -4,10 +4,10 @@
 - [x] Spike stage: resolve every line under "Unverified hypotheses" in `design.md`, on the Framework laptop; amend this change if one fails
 - [x] `docs/decisions/0016-edge-relay.md` from D1–D9 and the spike results
 - [x] Crate `native/mjolnir_relay`: own `moq_relay::Config`, certificate from files, own admission loop, `IrohSessions` with a deny-by-default policy, pulls off
-- [ ] Refusal tests: no token, wrong tenant, expired, removed key, path outside `t/<owner>/`, ticket path
-- [ ] `systemd/mjolnir-relay.service` with its own user; drain on stop
+- [x] Refusal tests: no token, wrong tenant, expired, removed key, path outside `t/<owner>/`, ticket path
+- [x] `systemd/mjolnir-relay.service` with its own user; drain on stop
 - [x] `deploy.sh --relay` and `build-native.sh relay`; no other flag restarts the unit
-- [ ] Certificate subject for `:relay_host` and the root-owned copy step at issue and renewal
+- [x] Certificate subject for `:relay_host` and the root-owned copy step at issue and renewal
 - [x] Config keys `:relay_enabled`, `:relay_host`; firewall opening for UDP 443 when enabled
 - [x] Docs: `docs/guide/host-sidecars.md`, a runbook, `CLAUDE.md`
 - [ ] ASK: Duke enables the relay on prod and picks `:relay_host`

@@ -26,8 +26,11 @@ struct Settings {
 
 fn settings() -> anyhow::Result<Settings> {
     let host = std::env::var("MJOLNIR_RELAY_HOST")?;
+    // `tls/cert.pem` and `tls/key.pem` are symlinks to `current/`. moq watches
+    // that directory, so renaming `current` is the reload. Watching
+    // `current/cert.pem` follows the generation directory and misses the rename.
     let tls = std::env::var("MJOLNIR_RELAY_TLS_DIR")
-        .unwrap_or_else(|_| "/var/lib/mjolnir-relay/tls/current".into());
+        .unwrap_or_else(|_| "/var/lib/mjolnir-relay/tls".into());
     Ok(Settings {
         host,
         bind: std::env::var("MJOLNIR_RELAY_BIND").unwrap_or_else(|_| "0.0.0.0:443".into()),
@@ -163,6 +166,7 @@ async fn mount_iroh(
         .secret_key(secret)
         .bind()
         .await?;
+    println!("iroh endpoint: {}", endpoint.id());
     let router = iroh_live_relay::IrohSessions::new(relay.cluster().clone(), None)
         .with_policy(policy)
         .mount(iroh::protocol::Router::builder(endpoint))

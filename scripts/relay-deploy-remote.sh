@@ -56,6 +56,10 @@ if ! systemctl restart mjolnir-relay; then
     remove_rule
     exit 1
 fi
+# Restart=on-failure can report active for the moment before a bad
+# certificate or a taken port exits the process. The rule waits until
+# the process is still up.
+sleep 1
 if ! systemctl is-active --quiet mjolnir-relay; then
     remove_rule
     exit 1

@@ -28,8 +28,10 @@ sudo scripts/relay-copy-cert.sh /path/cert.pem /path/key.pem "$MJOLNIR_RELAY_HOS
 ```
 
 The copy checks the path, the name, the dates, and that the key matches
-the leaf, then renames `current`. If the unit is active, the script
-restarts it. A renewal ends calls. That is about every 60 days.
+the leaf, then renames `current` and points `cert.pem` and `key.pem` in
+that directory at `current/`. The process opens those two links. A
+running relay serves the new pair to sessions opened after that rename.
+It is not restarted.
 
 ## Disable
 

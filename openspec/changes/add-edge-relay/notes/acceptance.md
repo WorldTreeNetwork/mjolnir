@@ -55,10 +55,69 @@ AFTER= 0 s:CN=second
 
 The pair on disk was replaced between the two handshakes. The process was not restarted. A new session saw the new certificate. The earlier curl of `/certificate.sha256` never reached an HTTP listener, so it was not evidence about reload.
 
-## Not run
+## Laptop proofs, 2026-11-21
 
-- A live Iroh dial, and `irl publish` / `irl` play.
-- `POST` issuance, a real ACME order, and `relay-issue.sh` against Let's Encrypt. The laptop has no public name.
-- `deploy.sh --relay` lifecycle: never-enabled, first enable, failed enable, port held, disable, disable twice, another deploy, gateway restart during a call.
-- `systemctl stop` while a session is playing.
-- Root ownership of a key file. The test user cannot create a root-owned file and then stat it as the failure case inside `cargo test`. The group-writable case was run. The SIGTERM run did use a root-owned file and the process started, so that file passed the check.
+Host `dorje@192.168.0.108` through the ssh wrapper. Throwaway name `relay.test` in `/etc/hosts` as `127.0.0.1`. `mjolnir` stayed MainPID `3621414`. There is no running `mjolnir-gateway` unit (`inactive`, MainPID 0), so the pid check is the controller only. No `mj-publish` rules were present, so none were changed.
+
+`deploy.sh root@fw --relay` with no `/etc/mjolnir/relay.env`: exit 0. `mjolnir-relay` inactive, no unit file, no `mjolnir-relay` iptables rule, `/usr/local/bin/mjolnir-relay` absent.
+
+First enable, after `relay.env` set `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST=relay.test`, and `relay-copy-cert.sh` installed generation 1: exit 0. Unit `active`. Exactly one INPUT rule `-A INPUT -p udp -m udp --dport 443 -m comment --comment mjolnir-relay -j ACCEPT`. Controller pid unchanged. Journal: `listening addr=0.0.0.0:443` and `iroh endpoint: a98b9d88a8ab010381624170312c8398db7dda4b13407563eb861b9b5a6c4280`.
+
+No certificate (symlinks moved aside), `deploy.sh --relay`: exit 1. Process log `cert.pem: No such file or directory`. Rule absent. After the restart limit, `is-failed` = `failed`, `Result=start-limit-hit`, `NRestarts=5`.
+
+UDP 443 held by a root `python3` socket, `systemctl reset-failed`, `deploy.sh --relay`: exit 1. Journal: `failed to bind UDP socket` / `Address already in use (os error 98)`. The python pid was still alive. No rule.
+
+Enabled then `MJOLNIR_RELAY_ENABLED=false` and `deploy.sh --relay`: exit 0. `No files found for mjolnir-relay.service`, inactive, rule none, `ss` showed no `mjolnir-relay` sockets (UDP 443 and the Iroh sockets closed). Second `deploy.sh --relay`: exit 0, still inactive, rule none.
+
+Certificate reload, unit not restarted. `openssl s_client -connect 127.0.0.1:443 -servername relay.test -quic -alpn h3`:
+
+```
+BEFORE=subject=CN=relay.test
+HOLD_OUT=held
+relay-copy-cert: current -> gen-20261121T070934Z-3944499
+AFTER=subject=CN=second
+HOLD_STILL=3944402
+moq_tokio::tls: reloading server certificates
+HOLD_END=held
+released
+```
+
+`current` was generation 1 (`CN=relay.test`) and then generation 2 (`CN=second`). The hold process was alive after the rename and later printed `released`.
+
+Stop during a call. `wt-session hold` printed `held`, then `systemctl stop mjolnir-relay`. Journal: `shutdown requested; draining sessions window=8s`, `relay shutting down; draining session`, then `drain ended with every session gone; exiting elapsed=1.988990727s`. A new session one second later: `refused: failed to connect` / `Connection refused`. The unit was `inactive`.
+
+Keys, same pid `3948555`:
+
+```
+active=f4d359cec65f7f2db2d3ff6785de273c07033f9cb934499168733cc0b0f7ea03
+sha=f4d359cec65f7f2db2d3ff6785de273c07033f9cb934499168733cc0b0f7ea03
+old_token_after_key_removed: refused: unauthorized
+active_malformed=invalid
+previously_valid_after_malformed: refused: app code=502
+```
+
+Missing key file at start: `Error: No such file or directory`, status 1. A PEM private key in the key file at start: `key file: invalid number at line 1 column 2`, status 1.
+
+Mismatched pair: `relay-copy-cert: key does not match the leaf`, exit 1, `current` unchanged (`gen-20261121T070934Z-3944499`). Copy into `/tmp`: `group-writable: /tmp`, exit 1. Modes: tls dir `750 root:mjolnir-relay`, key `640 root:mjolnir-relay`. `nobody` could not read the destination or source key. `mjolnir-relay` could read the destination key and could not read the source key (`600 root:root`).
+
+Expired certificate while running: `certificate is no longer usable`, then restarts, then `is-failed=failed`, `Result=start-limit-hit`.
+
+Tokens, client `native/mjolnir_relay/examples/wt-session.rs` (`irl` has no token flag):
+
+```
+no-token: refused: unauthorized
+login-jwt-hs256 (alg HS256): refused: unauthorized
+journal: err=no token ; err=symmetric signature ; err=token refused
+wrong-tenant t/not-an-owner/a: refused: unauthorized
+ticket-path not-a-tenant: refused: unauthorized
+ten-second token: session accepted 07:12:47, lease ended, closing session why=expired 07:12:55
+```
+
+A token signed by a second fixture key that was not installed: `refused: unauthorized`.
+
+## Still not run on this laptop
+
+- `irl publish --relay` and a browser or `hang` viewer. `irl` cannot present a token. The Rust client held a WebTransport session and subscribed (`announce` printed no routes because nothing was publishing). It did not deliver media, so the narrow-grant and announcement-limit scenarios were not observed.
+- An Iroh reader. The unit prints an endpoint id and opens its UDP sockets. No Iroh dial was completed.
+- A real ACME order through `relay-issue.sh`, and the real-name journey. Those stay on production.
+`deploy.sh --gateway` after `MJOLNIR_RELAY_ENABLED=false`, relay already running as pid `3963169`: the gateway build finished and the deploy exited 1 because `/etc/mjolnir/gateway.toml` is absent. It did not reach `systemctl restart mjolnir-gateway`. Afterwards the relay was still `active` pid `3963169`, the controller was still `3621414`, and the `mjolnir-relay` rule was still present. `--app-only` was not used because it bounces the controller and the VMs. The laptop has no `mjolnir-gateway` unit.

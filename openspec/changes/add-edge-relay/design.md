@@ -42,7 +42,7 @@ The relay terminates QUIC. Whoever runs the host can read the media of every cal
 - **relay-deps.** A crate on iroh 1.4 + aws-lc-rs builds beside the gateway on iroh 1.0 + ring. The throwaway workspace linked both and its tests ran. The relay is its own cargo package at `native/mjolnir_relay` so the gateway lock stays on ring. — go
 - **relay-no-http.** `moq_relay::Relay` with `web.http.listen` unset accepted a WebTransport session. — go
 - **relay-admission.** The admissions loop sees a browser JWT on `request.query` (`jwt=`), not on `request.token`, and refuses a session with neither. — go
-- **relay-cert-reload.** `openssl s_client -quic -alpn h3` to a loopback relay showed `CN=first`, then the pair on disk was replaced, and the next handshake showed `CN=second`. The earlier `/certificate.sha256` curl did not reach a listener. The copy step still restarts the unit until Duke chooses. — go
+- **relay-cert-reload.** `openssl s_client -quic -alpn h3` showed `CN=relay.test` while `current` was generation 1, then `relay-copy-cert.sh` renamed `current` to generation 2 and the next handshake showed `CN=second`. The session opened before the rename was still alive. The copy step does not restart the unit. Duke may reverse this. — go
 - **cert-subject.** `issue_http01` takes any non-wildcard name and a private state directory and does not consult the app or site registries. `POST /api/certs/issue` still 404s a name that is neither. No public staging issue was run; the laptop has no public name. — go
 - **viewer-https.** At moq `4a6f522`, `connect.ts` fetches `/certificate.sha256` only when `url.protocol === "http:"`. — go
 - **relay-expiry-close.** A ten-second grant left the open phase inside the fifteen-second wait. — go
