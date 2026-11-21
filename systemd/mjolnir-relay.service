@@ -6,7 +6,11 @@ StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
-Type=exec
+# READY=1 is sent only after the certificate, the keys, and the UDP
+# listener are up. ExecStartPost then opens the firewall rule.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30
 User=mjolnir-relay
 Group=mjolnir-relay
 ExecStart=/usr/local/bin/mjolnir-relay

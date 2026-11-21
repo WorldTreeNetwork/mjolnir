@@ -11,8 +11,10 @@ present() {
 case "${1:-}" in
     add)
         if present; then
+            echo "relay-rule: add already" >&2
             exit 0
         fi
+        echo "relay-rule: add" >&2
         iptables -I INPUT -p udp --dport 443 -m comment --comment "$comment" -j ACCEPT
         ;;
     del)

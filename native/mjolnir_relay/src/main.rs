@@ -125,6 +125,9 @@ async fn main() -> anyhow::Result<()> {
         max_ttl: settings.max_ttl,
     };
     let iroh_router = mount_iroh(&relay, policy, &settings.state_dir).await?;
+    // Cert, keys, and the UDP listener are ready. Type=notify waits for this
+    // before ExecStartPost opens the firewall rule.
+    notify_ready();
 
     let drain = settings.drain;
     let draining_signal = draining.clone();
@@ -301,6 +304,33 @@ fn spawn_cert_watch(cert: PathBuf, host: String) {
         }
     });
 }
+
+/// Tell systemd the process is serving. A start that exits before this
+/// never runs ExecStartPost, so a failed start does not open UDP 443.
+#[cfg(target_os = "linux")]
+fn notify_ready() {
+    let Ok(addr) = std::env::var("NOTIFY_SOCKET") else {
+        return;
+    };
+    std::env::remove_var("NOTIFY_SOCKET");
+    let Ok(sock) = std::os::unix::net::UnixDatagram::unbound() else {
+        return;
+    };
+    let sent = if let Some(name) = addr.strip_prefix('@') {
+        <std::os::unix::net::SocketAddr as std::os::linux::net::SocketAddrExt>::from_abstract_name(name)
+            .ok()
+            .and_then(|dest| sock.connect_addr(&dest).ok())
+            .and_then(|_| sock.send(b"READY=1\n").ok())
+    } else {
+        sock.send_to(b"READY=1\n", &addr).ok()
+    };
+    if sent.is_none() {
+        tracing::error!("sd_notify READY=1 failed");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn notify_ready() {}
 
 fn tracing_subscriber_lite() {
     let _ = tracing_subscriber::fmt()

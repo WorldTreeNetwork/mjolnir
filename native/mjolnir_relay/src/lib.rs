@@ -273,20 +273,45 @@ where
     }
 }
 
+/// Reserved top-level segment. It is not `t/<owner id>`, so no token
+/// subscribe pattern can name it. The client is not told the random child.
+pub const NO_PUBLISH_SEGMENT: &str = "mjolnir-nopublish";
+
+fn no_publish_pattern() -> String {
+    let mut bytes = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| {
+            use std::io::Read;
+            file.read_exact(&mut bytes)
+        })
+        .is_err()
+    {
+        bytes = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos().to_le_bytes())
+            .unwrap_or([0; 16]);
+    }
+    format!("{NO_PUBLISH_SEGMENT}/{}", hex::encode(bytes))
+}
+
 fn ext_grant(grant: &Grant) -> moq_ext_access::Grant {
     let root = grant.root.clone().unwrap_or_default();
     let mut out = moq_ext_access::Grant::nothing();
-    // iroh-live calls origin.scope on the publish set. An empty set is
-    // Unauthorized and the handshake is dropped, so a subscribe-only viewer
-    // never attaches. One pattern that names no broadcast lets the session
-    // up. A publish of a real path does not match it and is refused.
-    let publish = if grant.publish.path.is_empty() {
-        vec![".no-publish".to_string()]
+    // iroh-live calls origin.scope on the publish set. An empty set drops
+    // the handshake. The stand-in is outside every token root and is a new
+    // random path each session, so it cannot carry a broadcast a subscriber
+    // can be told about, and the client cannot aim at it.
+    let publish: Vec<String> = if grant.publish.path.is_empty() {
+        vec![no_publish_pattern()]
     } else {
-        grant.publish.path.iter().map(|pattern| pattern.to_string()).collect()
+        grant.publish
+            .path
+            .iter()
+            .map(|pattern| prefix_pattern(&root, &pattern.to_string()))
+            .collect()
     };
     for pattern in &publish {
-        if let Ok(parsed) = prefix_pattern(&root, pattern).parse() {
+        if let Ok(parsed) = pattern.parse() {
             out.publish.insert(parsed);
         }
     }
@@ -355,6 +380,14 @@ mod tests {
             assess(None, "not-a-tenant", &set, DEFAULT_MAX_TTL),
             Err(Refuse::NoToken)
         ));
+        let empty = moq_auth::Grant::new(Vec::<moq_auth::Pattern>::new(), ["**".parse().unwrap()]);
+        let mut empty = empty;
+        empty.root = Some(root.clone());
+        let first = format!("{:?}", ext_grant(&empty).publish);
+        let second = format!("{:?}", ext_grant(&empty).publish);
+        assert!(first.contains("mjolnir-nopublish/"), "{first}");
+        assert!(!first.contains(&root), "{first}");
+        assert_ne!(first, second);
         assert!(matches!(
             assess(Some(&token), "broadcastticket", &set, DEFAULT_MAX_TTL),
             Err(Refuse::Ticket)

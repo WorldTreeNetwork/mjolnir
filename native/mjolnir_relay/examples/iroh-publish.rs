@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! iroh-publish publish <relay-id> <token> <path> <seconds>
+//! iroh-publish placeholder <relay-id> <token> <seconds>
 //! iroh-publish notoken <relay-id> [path]
 //! ```
 //!
@@ -38,6 +39,42 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("connected");
             let publication = node.publish(path.as_str(), Audience::Granted)?;
+            let track = publication
+                .broadcast()
+                .create_track("bytes", timed())
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let mut sent = 0usize;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+            while tokio::time::Instant::now() < deadline {
+                let mut group = track
+                    .append_group(now())
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let payload = b"mjolnir-relay-frame".to_vec();
+                sent += payload.len();
+                group
+                    .write_frame(now(), payload)
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
+                group.finish().map_err(|err| anyhow::anyhow!("{err}"))?;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            println!("published path={path} bytes={sent}");
+            link.detach().await;
+        }
+        // Publishes the reserved top-level name. The grant's stand-in is a
+        // random child of this name that the client is not given.
+        "placeholder" => {
+            let token = args.next().expect("token");
+            let seconds: u64 = args.next().unwrap_or("4".into()).parse()?;
+            let path = mjolnir_relay::NO_PUBLISH_SEGMENT;
+            let mut config = RelayConfig::iroh(relay).with_consume(false);
+            config = config.with_token(token.parse()?);
+            let link = node.attach_relay(config)?;
+            if !wait_connected(&link, 8).await {
+                println!("refused: relay link not connected");
+                std::process::exit(2);
+            }
+            println!("connected");
+            let publication = node.publish(path, Audience::Granted)?;
             let track = publication
                 .broadcast()
                 .create_track("bytes", timed())
