@@ -3034,6 +3034,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroh-live"
+version = "0.1.0"
+source = "git+https://github.com/n0-computer/iroh-live?rev=747b1bd#747b1bd0567d2f6b019a89633c04e6561ccac460"
+dependencies = [
+ "data-encoding",
+ "derive_more",
+ "iroh",
+ "iroh-live-node",
+ "moq-json",
+ "moq-net",
+ "n0-error",
+ "n0-future",
+ "n0-watcher",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "iroh-live-node"
 version = "0.1.0"
 source = "git+https://github.com/n0-computer/iroh-live?rev=747b1bd#747b1bd0567d2f6b019a89633c04e6561ccac460"
@@ -3856,6 +3875,7 @@ dependencies = [
  "bs58",
  "hex",
  "iroh",
+ "iroh-live",
  "iroh-live-relay",
  "kio",
  "moq-auth",
@@ -3863,6 +3883,7 @@ dependencies = [
  "moq-net",
  "moq-relay",
  "moq-tokio",
+ "moq-transport-iroh",
  "rcgen 0.13.2",
  "serde_json",
  "sha2 0.10.9",

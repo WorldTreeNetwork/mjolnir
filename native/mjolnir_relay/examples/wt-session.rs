@@ -65,6 +65,96 @@ async fn main() -> anyhow::Result<()> {
                 Err(err) => println!("refused: {err}"),
             }
         }
+        "publish" => {
+            let url: url::Url = args.next().expect("url").parse()?;
+            let path = args.next().expect("path");
+            let seconds: u64 = args.next().unwrap_or("8".into()).parse()?;
+            let origin = moq_tokio::origin::spawn();
+            let routed = origin
+                .route(path.as_str(), moq_net::origin::RouteOptions::default())
+                .map_err(|err| anyhow::anyhow!("route: {err}"))?;
+            let track = routed
+                .broadcast()
+                .create_track("bytes", timed())
+                .map_err(|err| anyhow::anyhow!("track: {err}"))?;
+            let writer = tokio::spawn(async move {
+                let mut sent = 0usize;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+                while tokio::time::Instant::now() < deadline {
+                    let mut group = track.append_group(now()).expect("group");
+                    let payload = b"mjolnir-relay-frame".to_vec();
+                    sent += payload.len();
+                    group.write_frame(now(), payload).expect("frame");
+                    group.finish().expect("finish");
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                println!("published path={path} bytes={sent}");
+            });
+            let session = client()
+                .with_publisher(origin.consume())
+                .connect(url)
+                .established()
+                .await?;
+            println!("held");
+            writer.await.ok();
+            drop(session);
+            println!("released");
+        }
+        "read" => {
+            let url: url::Url = args.next().expect("url").parse()?;
+            let path = args.next().expect("path");
+            let seconds: u64 = args.next().unwrap_or("8".into()).parse()?;
+            let origin = moq_tokio::origin::spawn();
+            let table = origin.consume();
+            let mut routes = table.routes();
+            let session = client()
+                .with_subscriber(origin)
+                .connect(url)
+                .established()
+                .await?;
+            println!("held");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+            let mut saw = false;
+            while tokio::time::Instant::now() < deadline {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(left, routes.next()).await {
+                    Ok(Some(event)) => {
+                        println!("route: {event:?}");
+                        if format!("{event:?}").contains(path.as_str()) {
+                            saw = true;
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            if !saw {
+                println!("received path={path} frames=0 bytes=0 no-announcement");
+                drop(session);
+                return Ok(());
+            }
+            let requested = table.request(path.as_str(), None).await?;
+            let track = requested
+                .track("bytes")
+                .map_err(|err| anyhow::anyhow!("track: {err}"))?;
+            let mut reader = track
+                .subscribe(None)
+                .await
+                .map_err(|err| anyhow::anyhow!("subscribe: {err}"))?;
+            let mut bytes = 0usize;
+            let mut frames = 0usize;
+            while tokio::time::Instant::now() < deadline {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let group = tokio::time::timeout(left, reader.recv_group()).await;
+                let Ok(Ok(Some(mut group))) = group else { break };
+                while let Some(frame) = group.read_frame().await? {
+                    bytes += frame.payload.len();
+                    frames += 1;
+                }
+            }
+            println!("received path={path} frames={frames} bytes={bytes}");
+            drop(session);
+        }
         "announce" => {
             let url: url::Url = args.next().expect("url").parse()?;
             let seconds: u64 = args.next().unwrap_or("5".into()).parse()?;
@@ -86,9 +176,17 @@ async fn main() -> anyhow::Result<()> {
             drop(session);
         }
         _ => {
-            eprintln!("usage: wt-session mint|hold|refuse|announce");
+            eprintln!("usage: wt-session mint|hold|refuse|announce|publish|read");
             std::process::exit(2);
         }
     }
     Ok(())
+}
+
+fn timed() -> moq_net::track::Info {
+    moq_net::track::Info::default().with_timescale(moq_net::Timescale::MILLI)
+}
+
+fn now() -> moq_net::Timestamp {
+    moq_net::Timestamp::from(moq_net::time::Instant::now())
 }

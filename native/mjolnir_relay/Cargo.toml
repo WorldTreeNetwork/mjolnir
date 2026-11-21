@@ -19,6 +19,7 @@ moq-ext-access = { git = "https://github.com/n0-computer/iroh-live", rev = "747b
 moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-transport-iroh = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
@@ -27,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x509-parser = "0.16"
 
 [dev-dependencies]
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
 rcgen = "0.13"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

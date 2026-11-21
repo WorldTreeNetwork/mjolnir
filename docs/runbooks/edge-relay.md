@@ -33,6 +33,21 @@ that directory at `current/`. The process opens those two links. A
 running relay serves the new pair to sessions opened after that rename.
 It is not restarted.
 
+## How to run the acceptance
+
+The example clients live in `native/mjolnir_relay/examples/`. They are not installed. On a Linux host, from that crate:
+
+```bash
+cargo build --release --examples
+```
+
+- `dev-key public` prints a public verify set. `dev-key owner <byte>` prints `t/<id>`. `dev-key tokens <seconds> <name> <root> <publish> <subscribe> ...` prints one `SET` line and one `TOKEN` line per token. Patterns are comma-separated. `-` is an empty list. `dev-key private-jwk` and `dev-key oct-jwk` print key files that must not be installed.
+- `iroh-publish publish <relay-id> <token> <absolute-path> <seconds>` attaches with `RelayConfig::iroh` and `with_token`, and writes a `bytes` track. The path is the absolute tenant path, `t/<owner>/...`, because the Iroh grant is rooted there. `iroh-publish notoken <relay-id> [self]` dials with no token. `self` uses the client's own endpoint id as the session path.
+- `iroh-subscribe read <relay-id> <token> <absolute-path> <seconds>` prints frames and bytes. `iroh-subscribe listen` prints announcements.
+- `wt-session publish` and `wt-session read` do the same over WebTransport. The URL carries `?jwt=`. The path is relative to the token root, so an absolute `t/<owner>/a/b` is read as `a/b`. `wt-session refuse` expects the session to be refused.
+
+Install the `SET` line as `/etc/mjolnir/relay-keys.json` before using the tokens. The relay endpoint id is the `iroh endpoint:` line in the journal.
+
 ## Disable
 
 Set `MJOLNIR_RELAY_ENABLED=false` and run `deploy.sh --relay` again.

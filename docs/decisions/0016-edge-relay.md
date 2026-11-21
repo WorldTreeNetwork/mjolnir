@@ -26,6 +26,10 @@ D1–D9 in `design.md` stand. One decision changed during the spike:
 
 **DECISION 2026-11-21:** a path is refused unless it is under `t/<canonical owner id>/` — a ticket is not that path, and pulls stay off — replaces treating any single segment that does not start with `t` as a ticket.
 
+**DECISION 2026-11-21:** the process opens `tls/cert.pem` and `tls/key.pem`, and moq watches that parent directory. Watching `current/cert.pem` follows the generation directory and misses a rename of `current`.
+
+**DECISION 2026-11-21:** the Iroh endpoint uses the N0 preset and advertises the MoQ ALPNs before bind. A Minimal endpoint publishes no relay address, so a client that only has the endpoint id cannot dial it.
+
 The relay package is its own Cargo project under `native/mjolnir_relay`. The gateway keeps `iroh 1.0` and `ring`. A throwaway workspace already linked `iroh 1.4` (`tls-aws-lc-rs`) beside `iroh 1.0`.
 
 Browser tokens arrive as `?jwt=`. The admission loop reads that query and a SETUP token. `request.token` stayed empty for the browser form.

@@ -162,8 +162,17 @@ async fn mount_iroh(
         std::fs::write(&secret_path, secret.to_bytes())?;
         secret
     };
-    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+    // N0 so a client can dial this endpoint id. Minimal publishes no relay
+    // address, and a client that only has the id never reaches the socket.
+    // The MoQ ALPNs have to be on the endpoint before bind; the router accept
+    // alone does not add them to the QUIC handshake.
+    let alpns = moq_transport_iroh::alpns()
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect();
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
         .secret_key(secret)
+        .alpns(alpns)
         .bind()
         .await?;
     println!("iroh endpoint: {}", endpoint.id());

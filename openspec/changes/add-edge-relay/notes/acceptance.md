@@ -115,6 +115,58 @@ ten-second token: session accepted 07:12:47, lease ended, closing session why=ex
 
 A token signed by a second fixture key that was not installed: `refused: unauthorized`.
 
+## Media through the relay, 2026-11-21
+
+Clients: `examples/dev-key.rs`, `examples/iroh-publish.rs`, `examples/iroh-subscribe.rs`, `examples/wt-session.rs`. Owner `t/US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx`. Second tenant `t/YMN9Qj5jPNp7j14VPcML1B6xGgcPWVZUGLFU3Mnyfaf`. Relay endpoint `a98b9d88a8ab010381624170312c8398db7dda4b13407563eb861b9b5a6c4280` after the N0 bind. The Iroh path is the absolute `t/<owner>/a/b`. A WebTransport subscriber rooted at that owner sees `a/b`.
+
+Iroh publisher, wide token, then WebTransport `wt-session read`:
+
+```
+published path=t/US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx/a/b bytes=1900
+received path=a/b frames=41 bytes=779
+```
+
+Same publisher shape, Iroh subscriber:
+
+```
+received path=t/US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx/a/b frames=41 bytes=779
+```
+
+No token, including a session path equal to the client's own endpoint id:
+
+```
+notoken path=/ connected=false status=Reconnecting
+refused
+notoken path=<client endpoint id> connected=false status=Reconnecting
+refused
+```
+
+Journal for the own-id dial: `the policy rejected the iroh client reason="ticket path"`.
+
+Subscribe-only token, trusted key. Iroh `listen` and `publish`: `refused: relay link not connected`. WebTransport `publish`: `Error: unauthorized`. An Iroh session whose token has an empty publish set does not finish the handshake (`Handshake dropped without ok() or close()`). `origin.scope` rejects an empty pattern set, so a subscribe-only Iroh client cannot attach. WebTransport still accepts a subscribe-only token for announce and refuses the publish.
+
+Narrow grant, publish pattern `a/b` and subscribe pattern `a/b`. Iroh publish connected and wrote the absolute path. WebTransport subscriber with `a/**` was told `prefix: Path("a/b")`. Subscriber with `z/**` printed no announcement. A later read of `a/b` on `a/**` saw no frames because the publisher had already released.
+
+Two tenants. Owner 2 published `cam`. Owner 1's `**` subscribe printed nothing. Owner 2's subscribe printed `prefix: Path("cam")` and then the end of that route.
+
+Sibling and `..`, while `a/b` was live. A read of `a/bx` printed `no-announcement` for that path. A read of `../a/b` also printed `no-announcement`. A WebTransport URL whose path is `t/<owner>x` was `refused: unauthorized` (`ticket path`). A URL path of `..` was `admitted`: the client URL parser resolves `..` before the relay sees it, so the request path is empty. That empty path is the session root, not a traversal.
+
+Private JWK at start: `Error: /etc/mjolnir/relay-keys.json: key file holds a private key`. Symmetric JWK at start: `key file is not a public verify set: OCT key cannot be converted to public key`. The unit did not stay active.
+
+Stop during the wide Iroh-to-WebTransport session. `systemctl stop` was issued at 07:55:07 and returned at 07:55:22. The reader got `frames=91 bytes=1729` and the publisher had been connected the whole time. The process then logged `shutdown requested; draining sessions window=15s`, `relay shutting down; draining session`, and `drain ended with every session gone; exiting elapsed=1.415488ms`. The 15 seconds were the wait before MoQ was told to stop, and the reader kept receiving through that wait. The session was closed when shutdown was requested, so MoQ's own drain did not run for another 15 seconds. The earlier two-second elapsed time was that same MoQ line when no session was left to drain.
+
+Certificate generation swap during that same kind of session, same pid `4039793`:
+
+```
+BEFORE=subject=CN=relay.test
+relay-copy-cert: current -> gen-20261121T075548Z-4040021
+AFTER=subject=CN=second
+received path=a/b frames=55 bytes=1045
+moq_tokio::tls: reloading server certificates
+```
+
+Laptop cleanup. `MJOLNIR_RELAY_ENABLED=false` and `deploy.sh root@fw --relay` exited 0. The unit file is gone (`not-found`), the `mjolnir-relay` rule is gone, and `ss` shows no UDP 443 and no `mjolnir-relay` socket. A leftover `failed` state from the private-key restart loop cleared with `systemctl reset-failed`; `is-active` is then `inactive`. Controller pid stayed `3621414`. Left in place: user `mjolnir-relay`, `/var/lib/mjolnir-relay/tls`, `/etc/mjolnir/relay-keys.json`, `/etc/mjolnir/relay.env`, the `relay.test` hosts line, and `/tmp/relay-media`. No relay process and no example client is running.
+
 ## Still not run on this laptop
 
 - `irl publish --relay` and a browser or `hang` viewer. `irl` cannot present a token. The Rust client held a WebTransport session and subscribed (`announce` printed no routes because nothing was publishing). It did not deliver media, so the narrow-grant and announcement-limit scenarios were not observed.
