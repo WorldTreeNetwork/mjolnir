@@ -20,6 +20,8 @@ VMs are fully functional: spawn, exec, kill lifecycle working end-to-end with Cl
 
 - Server: `ssh root@45.76.77.97`
 - Dev laptop: `ssh dorje@10.43.1.243` (Framework5070, Arch). Mjolnir compiles and tests go here, including guest-agent and vsock builds. mise has Elixir 1.20.4 and OTP 27.3.4.19. Checkout `~/work/IdentiKey/mjolnir`. `/opt/mjolnir` is this machine's own install; its VMs are not mission critical and that install may be updated. Production deploys stay on the server above.
+  - Its address depends on the network: `192.168.0.108` on the home LAN (DHCP, check there first), `10.43.1.243` elsewhere, `100.121.90.25` on Tailscale. Root SSH is off, and `scripts/deploy.sh` assumes root, so deploy to it through an `ssh` wrapper on `PATH` that rewrites the host to `dorje@<addr>` and runs the command under `sudo -H bash -c`. Use `--app-only`. `MJOLNIR_PUBLISHED_PORT_RANGE=20000-20099` is set in its `/etc/mjolnir/env`.
+  - Operator calls there: `sudo bash /opt/mjolnir/scripts/operator-curl.sh`. A spawn needs an `x-owner-id` header holding a canonical base58 32-byte id.
 - Deploy via Justfile (preferred): `just deploy`, `just deploy-boot`, `just deploy-rootfs`
 - Deploy via script: `./scripts/deploy.sh root@45.76.77.97` (add `--agent` for guest agent rebuild, `--rootfs` for disk image)
 - Guest agent cross-compile target: `x86_64-unknown-linux-musl`
