@@ -3,23 +3,103 @@
 `mjolnir-relay` serves WebTransport on UDP 443. It is off by default.
 The production hostname and the switch that turns it on are Duke's.
 
+## First enable on a host
+
+Production name: `media-relay.worldtree.network`. The DNS A record is
+DNS-only. This does not cut the controller release over. `/opt/mjolnir`
+is not used.
+
+1. On a build machine, from `native/mjolnir_relay`, create the signing
+   key. The private file stays off the relay host (or anywhere the relay
+   user cannot read). The command writes it mode `0600` and prints only
+   the public set:
+
+```bash
+cd native/mjolnir_relay
+cargo run --release --example dev-key -- generate "$HOME/relay-signing.json"
+```
+
+Save that stdout as `relay-keys.public.json`. Do not install
+`relay-signing.json` as the verify file.
+
+2. On the relay host, as root:
+
+```bash
+install -d -o root -g root -m 0755 /etc/mjolnir
+install -m 0640 -o root -g root /dev/null /etc/mjolnir/relay.env
+install -m 0644 -o root -g root relay-keys.public.json /etc/mjolnir/relay-keys.json
+```
+
+`/etc/mjolnir/relay.env` is exactly:
+
+```
+MJOLNIR_RELAY_ENABLED=false
+MJOLNIR_RELAY_HOST=media-relay.worldtree.network
+MJOLNIR_RELAY_ACME_EMAIL=<the ACME account address>
+MJOLNIR_RELAY_DRAIN_SECONDS=30
+```
+
+Put the real ACME account address in place of `<the ACME account address>`.
+Use that same address in the issue command below. Leave `ENABLED` false
+for this first deploy so the unit does not start before a certificate
+exists.
+
+3. From the repo, install the relay scripts and binary without starting
+   the unit:
+
+```bash
+./scripts/deploy.sh root@45.76.77.97 --relay
+```
+
+4. Issue the certificate. This is not `POST /api/certs/issue`. Port 80
+   on that name must reach this host for the HTTP-01 challenge.
+
+```bash
+ssh root@45.76.77.97 /usr/local/lib/mjolnir-relay/relay-issue.sh \
+  media-relay.worldtree.network '<the ACME account address>'
+```
+
+5. Set `MJOLNIR_RELAY_ENABLED=true` in `/etc/mjolnir/relay.env` and deploy
+   again:
+
+```bash
+./scripts/deploy.sh root@45.76.77.97 --relay
+```
+
+6. Check, on the host:
+
+```bash
+systemctl is-active mjolnir-relay
+systemctl is-enabled mjolnir-relay-renew.timer
+test -s /run/mjolnir-relay/keys.active && echo keys.active
+iptables -S INPUT | grep -- '--comment mjolnir-relay'
+ss -ulpn | grep ':443'
+```
+
+`keys.active` is non-empty when the public set loaded. The iptables
+line appears once: UDP dport 443, comment `mjolnir-relay`, inserted at
+the top of `INPUT` (before ufw's chain, and also when ufw is not
+installed). The unit adds that rule in `ExecStartPost` and removes it
+in `ExecStopPost`, including after a failed start. A reboot starts the
+enabled unit, which puts the rule back.
+
+Renewal is `mjolnir-relay-renew.timer` →
+`/usr/local/lib/mjolnir-relay/relay-renew.sh`. It does not call
+`/opt/mjolnir`. A later token is signed with the private file from
+step 1:
+
+```bash
+cargo run --release --example dev-key -- sign "$HOME/relay-signing.json" \
+  3600 t/<owner> '**' '**'
+```
+
 ## Enable
 
-1. Issue a certificate for the relay name into a directory mode `0700`
-   owned by the issuer, holding no other subject. `issue_http01` accepts
-   a name that is not an app domain. `POST /api/certs/issue` does not.
-2. Put the public verify JWKs at `/etc/mjolnir/relay-keys.json`, mode
-   `0644`, root-owned. Public keys only. EdDSA or ES256.
-3. In `/etc/mjolnir/relay.env` (root-owned, mode `0640`, not the
-   controller's `/etc/mjolnir/env`) set `MJOLNIR_RELAY_ENABLED=true`,
-   `MJOLNIR_RELAY_HOST`, and `MJOLNIR_RELAY_ACME_EMAIL`.
-   Issue with `scripts/relay-issue.sh <host> <email>`. That is not
-   `POST /api/certs/issue`. The daily cert timer calls
-   `scripts/relay-renew.sh`, which no-ops when the relay file has no host.
-4. `./scripts/deploy.sh <host> --relay`
-
-The firewall rule is added only after the unit is active. Its comment
-is `mjolnir-relay`.
+After the first enable, a later `./scripts/deploy.sh <host> --relay`
+with `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST` set reinstalls
+the binary, the unit, and the scripts under `/usr/local/lib/mjolnir-relay/`.
+The unit owns the firewall rule. The renew timer is enabled only after
+the process is still active.
 
 ## Certificate copy
 
@@ -51,5 +131,8 @@ Install the `SET` line as `/etc/mjolnir/relay-keys.json` before using the tokens
 ## Disable
 
 Set `MJOLNIR_RELAY_ENABLED=false` and run `deploy.sh --relay` again.
-The unit and the tagged rule are removed. Another deploy does not
-touch them.
+The relay unit, `mjolnir-relay-renew.timer`,
+`mjolnir-relay-renew.service`, and the tagged rule are removed.
+The scripts under `/usr/local/lib/mjolnir-relay/` stay, so a later
+issue still runs without the controller release. Another deploy does
+not start the unit.

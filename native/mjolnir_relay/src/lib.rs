@@ -154,12 +154,13 @@ pub fn assess(
     max_ttl: Duration,
 ) -> Result<Grant, Refuse> {
     let raw = request_path(path);
+    // A missing token is "no token" even when the path is not a tenant path.
+    let Some(token) = token.filter(|text| !text.is_empty()) else {
+        return Err(Refuse::NoToken);
+    };
     // Tickets are not tenant paths. Pulls are off, and any other path is refused too.
     if !raw.is_empty() && !tenant_path(raw) {
         return Err(Refuse::Ticket);
-    }
-    let Some(token) = token.filter(|text| !text.is_empty()) else {
-        return Err(Refuse::NoToken);
     };
     if token_alg_disallowed(token) {
         return Err(Refuse::Profile("symmetric signature"));
@@ -275,8 +276,17 @@ where
 fn ext_grant(grant: &Grant) -> moq_ext_access::Grant {
     let root = grant.root.clone().unwrap_or_default();
     let mut out = moq_ext_access::Grant::nothing();
-    for pattern in grant.publish.path.iter() {
-        if let Ok(parsed) = prefix_pattern(&root, &pattern.to_string()).parse() {
+    // iroh-live calls origin.scope on the publish set. An empty set is
+    // Unauthorized and the handshake is dropped, so a subscribe-only viewer
+    // never attaches. One pattern that names no broadcast lets the session
+    // up. A publish of a real path does not match it and is refused.
+    let publish = if grant.publish.path.is_empty() {
+        vec![".no-publish".to_string()]
+    } else {
+        grant.publish.path.iter().map(|pattern| pattern.to_string()).collect()
+    };
+    for pattern in &publish {
+        if let Ok(parsed) = prefix_pattern(&root, pattern).parse() {
             out.publish.insert(parsed);
         }
     }
@@ -339,6 +349,10 @@ mod tests {
         assert!(assess(Some(&token), &root, &set, DEFAULT_MAX_TTL).is_ok());
         assert!(matches!(
             assess(None, &root, &set, DEFAULT_MAX_TTL),
+            Err(Refuse::NoToken)
+        ));
+        assert!(matches!(
+            assess(None, "not-a-tenant", &set, DEFAULT_MAX_TTL),
             Err(Refuse::NoToken)
         ));
         assert!(matches!(

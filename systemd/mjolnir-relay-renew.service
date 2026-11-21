@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew the Mjolnir edge relay certificate
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/mjolnir-relay/relay-renew.sh

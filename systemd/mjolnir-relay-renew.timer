@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily renewal check for the Mjolnir edge relay certificate
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
