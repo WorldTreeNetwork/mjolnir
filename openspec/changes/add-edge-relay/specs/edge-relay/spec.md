@@ -1,16 +1,63 @@
 ## ADDED Requirements
 
-### Requirement: The relay is off unless the host enables it
-The system SHALL install and start `mjolnir-relay` only when `:relay_enabled` is true and `:relay_host` is set. Otherwise no process listens on UDP 443.
+### Requirement: Only the relay deploy changes the relay's state
+`deploy.sh --relay` SHALL be the only operation that installs, updates, starts, stops or removes `mjolnir-relay` and its firewall rule. With `:relay_enabled` true and `:relay_host` set it SHALL install and start the unit. With `:relay_enabled` false or `:relay_host` unset it SHALL stop the unit, remove it, and remove the relay's firewall rule. Every other deploy and every restart of `mjolnir` or `mjolnir-gateway` SHALL leave the unit, its sessions and its firewall rule as they were.
 
-#### Scenario: A host that did not enable it
-- GIVEN a host with `:relay_enabled` unset
+#### Scenario: A host that never enabled it
+- GIVEN a host on which `--relay` has never run with the relay enabled
 - WHEN any deploy runs
-- THEN no `mjolnir-relay` unit is installed
-- AND nothing is bound to UDP 443
+- THEN no `mjolnir-relay` unit exists
+- AND no firewall rule tagged `mjolnir-relay` exists
+
+#### Scenario: Enabled, then disabled
+- GIVEN a running relay
+- WHEN `:relay_enabled` is set false and `deploy.sh --relay` runs
+- THEN the unit is stopped and removed
+- AND the process holds neither its UDP 443 socket nor its Iroh endpoint
+- AND the rule tagged `mjolnir-relay` is gone
+- AND rules tagged for published guest ports are unchanged
+
+#### Scenario: Disable twice
+- GIVEN a host where the relay was already removed
+- WHEN `deploy.sh --relay` runs with the relay disabled
+- THEN it exits zero and changes nothing
+
+#### Scenario: Flag cleared, other deploy
+- GIVEN a running relay and `:relay_enabled` since set false
+- WHEN a gateway or controller deploy runs
+- THEN the relay is still running and its sessions are open
+
+#### Scenario: Gateway restart during a call
+- GIVEN a browser playing a broadcast through the relay
+- WHEN `mjolnir-gateway` restarts
+- THEN playback continues
+
+### Requirement: A failed enable opens nothing
+The relay's firewall rule SHALL be one input rule for UDP 443 tagged `mjolnir-relay`, added only after the unit is active. If the unit does not become active, `deploy.sh --relay` SHALL exit non-zero, leave the unit failed, and add no rule. The relay SHALL NOT stop or replace another process that holds UDP 443.
+
+#### Scenario: No certificate at enable
+- GIVEN no usable certificate for `:relay_host`
+- WHEN `deploy.sh --relay` runs with the relay enabled
+- THEN it exits non-zero
+- AND `systemctl is-failed mjolnir-relay` is true
+- AND no rule tagged `mjolnir-relay` exists
+
+#### Scenario: Port already held
+- GIVEN another process bound to UDP 443
+- WHEN the relay starts
+- THEN the relay exits non-zero and that process is still running
+
+### Requirement: Stopping drains for a bounded time
+On SIGTERM the relay SHALL at once refuse new sessions on WebTransport and on Iroh, keep existing sessions for at most `:relay_drain_seconds` (default 30), then close the rest and exit. The unit's stop timeout SHALL be longer than the drain.
+
+#### Scenario: Stop during a call
+- GIVEN one session playing a broadcast
+- WHEN the unit is stopped
+- THEN a new session attempted one second later is refused
+- AND the process has exited within `:relay_drain_seconds` plus ten seconds
 
 ### Requirement: The relay serves a certificate valid for its name
-The relay SHALL serve WebTransport on UDP 443 with a certificate valid for `:relay_host`. It SHALL NOT start with a self-signed, expired or mismatched certificate.
+The relay SHALL serve WebTransport on UDP 443 with a certificate whose chain parses, whose key matches, which names `:relay_host`, and which is inside its validity period. It SHALL NOT generate a certificate. It SHALL NOT start without such a pair. When the certificate it is serving passes `notAfter`, it SHALL exit non-zero.
 
 #### Scenario: A browser connects by name
 - GIVEN the relay running with an issued certificate for `relay.example.net`
@@ -22,39 +69,136 @@ The relay SHALL serve WebTransport on UDP 443 with a certificate valid for `:rel
 - WHEN the unit starts
 - THEN it exits non-zero and names the file it could not use
 
-### Requirement: Every session needs a valid token
-The relay SHALL refuse a browser session or an Iroh session that presents no token, a token it cannot verify, an expired token, or a token whose grant does not cover the requested path. It SHALL grant nothing to a session without a token.
+#### Scenario: Certificate expires while running
+- GIVEN a running relay whose certificate was not renewed
+- WHEN the certificate's `notAfter` passes
+- THEN the unit is failed
+- AND a restart fails for the same reason
 
-#### Scenario: No token
+### Requirement: The relay's key pair is copied by root, whole and private
+A root-owned step SHALL copy only the `:relay_host` certificate and key into `/var/lib/mjolnir-relay/tls/`. That directory SHALL be owned by root, readable by the relay's group, and writable by root only. Each copy SHALL be a new generation directory created with no access for other users before any key byte is written. The step SHALL check that the key matches the leaf, the leaf names `:relay_host` and the pair is in its validity period, and only then point `current` at the new generation by one rename. On any failure it SHALL leave `current` as it was and exit non-zero. It SHALL NOT copy the ACME account key, another subject's key, or any edge-auth key.
+
+#### Scenario: Unrelated service user
+- GIVEN an installed pair
+- WHEN the `mjolnir` user or `nobody` reads `/var/lib/mjolnir-relay/tls/current/key.pem`
+- THEN the read is denied
+
+#### Scenario: Mismatched pair
+- GIVEN a renewed certificate whose key file is from the previous issue
+- WHEN the copy step runs
+- THEN it exits non-zero
+- AND `current` still names the previous generation
+
+#### Scenario: Renewal
+- GIVEN a running relay and a renewed pair
+- WHEN the copy step succeeds
+- THEN a session opened after the step returns is served the new certificate
+
+### Requirement: The relay name adds no site or route
+`:relay_host` SHALL be a certificate subject only. Issuing or renewing it SHALL add no `[[domain]]`, no route and no apex, SHALL NOT be reachable through a public issuance or listing API, and SHALL NOT return PEM through any API.
+
+#### Scenario: Renewal of the relay name
+- GIVEN the relay name due for renewal
+- WHEN renewal runs
+- THEN the gateway's routing configuration is byte-identical before and after
+
+### Requirement: Relay tokens have one profile
+The relay SHALL accept only a moq-auth JWT in the wire format of the pinned moq revision, signed with EdDSA or ES256 by a public key in the relay key file. It SHALL refuse a token that has no expiry, has no issue time, expires more than `:relay_token_max_ttl` (default 3600 seconds) after its issue time, grants neither publish nor subscribe, or whose root is not `t/<owner id>` or a path below it, where `<owner id>` is canonical per `Mjolnir.Deploy.Owner.parse/1`.
+
+#### Scenario: No expiry
+- GIVEN a correctly signed token with no expiry
+- WHEN it is presented
+- THEN the session is refused
+
+#### Scenario: Malformed owner
+- GIVEN a correctly signed token whose root is `t/not-an-owner/a`
+- WHEN it is presented
+- THEN the session is refused
+
+#### Scenario: Symmetric signature
+- GIVEN a token signed with HS256
+- WHEN it is presented
+- THEN the session is refused
+
+### Requirement: Relay keys are used for nothing else
+The relay key file SHALL hold public keys only, and only keys whose private half signs relay tokens. No edge-auth login key, IdentiKey signing key or biscuit root SHALL appear in it. The relay SHALL hold no private signing key. A credential of another profile SHALL be refused.
+
+#### Scenario: Login credential
+- GIVEN a valid IdentiKey access token or edge-auth session credential
+- WHEN it is presented to the relay
+- THEN the session is refused
+
+### Requirement: Every session needs a token, and identity alone grants nothing
+The relay SHALL refuse a WebTransport session or an Iroh session that presents no token, a token it cannot verify, an expired or not-yet-valid token, or a token whose grant does not cover the requested path. An Iroh endpoint id SHALL grant nothing by itself. A refused session SHALL receive no announcement and no catalog.
+
+#### Scenario: No token, either transport
 - GIVEN a broadcast published at `t/<owner>/a/b`
-- WHEN a browser opens a session to that path with no token
-- THEN the session is refused
-- AND it receives no announcement and no catalog
+- WHEN a browser, or an Iroh client, opens a session to that path with no token
+- THEN the session is refused with no announcement and no catalog
 
-#### Scenario: Token for another tenant
-- GIVEN a token that grants subscribe under `t/<owner1>/`
+#### Scenario: Iroh publisher with no token
+- GIVEN an Iroh client with endpoint id E and no token
+- WHEN it publishes at any path, including one that names E
+- THEN the publish is refused
+
+### Requirement: A token's rights bound the whole session
+For the life of a session the relay SHALL allow a publish only at paths the token's publish patterns cover, and a subscribe or announcement only at paths its subscribe patterns cover. Path matching SHALL be by whole segment. A path with an empty, `.` or `..` segment SHALL be refused. At the token's expiry the relay SHALL close the session.
+
+#### Scenario: Subscribe-only token publishes
+- GIVEN a token that grants subscribe under `t/<owner>/a/` and no publish
+- WHEN its holder publishes at `t/<owner>/a/b`
+- THEN the publish is refused
+
+#### Scenario: Another tenant
+- GIVEN a token rooted at `t/<owner1>/`
 - WHEN its holder asks for a path under `t/<owner2>/`
-- THEN the session is refused
+- THEN the request is refused
 
-#### Scenario: Valid token
-- GIVEN a token that grants subscribe under `t/<owner>/a/`
-- WHEN its holder subscribes to `t/<owner>/a/b`
+#### Scenario: Sibling prefix
+- GIVEN a token rooted at `t/<owner>/a`
+- WHEN its holder asks for `t/<owner>/ab/c` or `t/<owner>/a/../x`
+- THEN the request is refused
+
+#### Scenario: Announcements outside the grant
+- GIVEN broadcasts at `t/<owner>/a/b` and `t/<owner>/z/y`, and a token that grants subscribe under `t/<owner>/a/`
+- WHEN its holder asks for announcements
+- THEN it is told of `a/b` and not of `z/y`
+
+#### Scenario: Valid narrow grant
+- GIVEN a token that grants publish at `t/<owner>/a/b` and subscribe under `t/<owner>/a/`
+- WHEN its holder publishes `a/b` and another holder with subscribe under `t/<owner>/a/` subscribes to it
 - THEN media is delivered
 
-### Requirement: A rotated key takes effect without a restart
-The relay SHALL read its verification keys again when the key file changes. A token signed by a key that is no longer in the file SHALL be refused for new sessions.
+#### Scenario: Expiry during a session
+- GIVEN a session admitted with a token that expires in ten seconds
+- WHEN fifteen seconds have passed
+- THEN the session is closed
+
+### Requirement: Key changes are atomic, fail closed and acknowledged
+The relay key file SHALL be owned by root and not writable by the relay's user, and SHALL be replaced by rename. At start, a missing, empty or malformed file, or one holding a symmetric or private key, SHALL make the unit fail. After a rename the relay SHALL, within five seconds, either use exactly the new set for new sessions and write that file's SHA-256 to `/run/mjolnir-relay/keys.active`, or, if the new file is not usable, refuse every new session and write `invalid` there. Existing sessions keep their admission until their token expires.
 
 #### Scenario: Key removed
 - GIVEN a session admitted with a token signed by key K
-- WHEN K is removed from the key file
+- WHEN a file without K is renamed into place and `keys.active` shows its hash
 - THEN a new session with a token signed by K is refused
 - AND the relay process did not restart
 
+#### Scenario: Malformed replacement
+- GIVEN a running relay
+- WHEN a malformed file is renamed into place
+- THEN `keys.active` reads `invalid` within five seconds
+- AND a new session with a token signed by a previously valid key is refused
+
+#### Scenario: Missing at start
+- GIVEN no key file
+- WHEN the unit starts
+- THEN it exits non-zero
+
 ### Requirement: Broadcasts live under a tenant prefix
-The relay SHALL accept a publish only at a path that begins `t/<owner id>/`, where `<owner id>` is a canonical owner id and the token's grant names that same prefix.
+The relay SHALL accept a publish only at a path that begins `t/<owner id>/`.
 
 #### Scenario: Publish outside the prefix
-- GIVEN a token that grants publish under `t/<owner>/`
+- GIVEN any token
 - WHEN its holder publishes at `live/x`
 - THEN the publish is refused
 
@@ -66,11 +210,3 @@ The relay SHALL NOT open an Iroh connection because a session named a ticket or 
 - WHEN a session's path is a broadcast ticket
 - THEN the session is refused
 - AND the relay opened no outbound Iroh connection
-
-### Requirement: Other deploys do not end calls
-A gateway deploy, a controller deploy and a restart of `mjolnir-gateway` or `mjolnir` SHALL leave `mjolnir-relay` running and its sessions open. Stopping the relay SHALL drain sessions before exit.
-
-#### Scenario: Gateway restart during a call
-- GIVEN a browser playing a broadcast through the relay
-- WHEN `mjolnir-gateway` restarts
-- THEN playback continues

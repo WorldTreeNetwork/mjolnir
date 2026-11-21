@@ -19,15 +19,17 @@ Drafted by Fable 5.2 (blast: protocol, authorisation, public listener).
 
 **D3. One listener.** WebTransport over HTTP/3 on UDP 443 at `:relay_host`. The relay serves no web page and binds no TCP port. The viewer page is someone else's to host.
 
-**D4. Certificate from the gateway's issuer.** `:relay_host` is one more HTTP-01 subject. A root-owned step copies the issued pair to `/var/lib/mjolnir-relay/tls/`, readable by the relay's user only, at issue and at each renewal. The relay refuses to start without a pair that is valid for `:relay_host`. It never generates one.
+**D4. Certificate from the gateway's issuer, copied by root.** `:relay_host` is one more HTTP-01 subject and nothing else: no `[[domain]]`, no route, no public issuance or listing. The issuer runs as `mjolnir`; today `acme.rs` writes the chain and key as two separate replaces and tightens the key's mode afterwards. So the relay never reads the gateway's files. A root step copies the one pair into a new generation directory under `/var/lib/mjolnir-relay/tls/`, created private before any key byte lands, checks that the key matches, the name matches and the dates are good, then swaps `current` by one rename. On failure `current` stays. The relay refuses to start without a good pair, never generates one, and exits when the one it serves expires.
 
-**D5. Deny by default.** A browser or Iroh session with no token, a bad token, or a token whose grant does not cover the path it asks for is refused. There is no public path. Tokens are JWTs verified against a JWK set file that the relay reads again when it changes.
+**D5. Deny by default, one token profile.** A browser or Iroh session with no token, a bad token, or a token whose grant does not cover the path is refused. There is no public path and an Iroh endpoint id grants nothing. Tokens are moq-auth JWTs at the pinned revision. That format has `root`, `publish`, `subscribe`, `exp`, `iat`, `nbf` and `jti`, refuses unknown fields and ignores `iss`, so it cannot carry an audience. Purpose is bound by the key instead: the relay key file holds public keys whose private halves sign relay tokens and nothing else, and the relay holds no private key. EdDSA and ES256 only. Our admission adds what moq-auth leaves optional: an expiry, an issue time, a bounded lifetime, and a root under `t/<owner id>`. The session closes at expiry.
+
+**D5a. Keys fail closed.** The key file is root-owned and replaced by rename. A bad file at start stops the unit. A bad file at reload refuses all new sessions. The relay writes the active file's hash, or `invalid`, to `/run/mjolnir-relay/keys.active`, so whoever rotated a key can see that it took. Retaining the old set on a bad reload was rejected: a revocation would then fail silently.
 
 **D6. Tenant-rooted paths.** Every broadcast lives under `t/<owner id>/`. `<owner id>` is the canonical base58 id Mjolnir already uses as `owner_id`. What sits below that prefix is `add-relay-room-auth`'s to define. This change only fixes the prefix, so limits and metering can key on the second path segment.
 
 **D7. No pulls.** The relay never dials an Iroh endpoint because a session named a ticket. Publishers push over a relay link. That removes the one way a client could make the host open connections of the client's choosing.
 
-**D8. Deploy alone.** `deploy.sh --relay` builds, installs and restarts only this unit. No other deploy flag touches it. On SIGTERM it drains.
+**D8. One owner of the relay's state.** `deploy.sh --relay` installs, updates, enables, disables and removes the unit and its one firewall rule (UDP 443 input, tagged `mjolnir-relay`), reading `:relay_enabled` and `:relay_host`. No other deploy touches either, in either direction. The rule is added only after the unit is active. On SIGTERM the relay refuses new sessions on both transports, waits up to `:relay_drain_seconds`, closes the rest and exits.
 
 **D9. Off by default.** `:relay_enabled` false. Then no unit, no listener, no firewall change.
 
@@ -43,6 +45,11 @@ The relay terminates QUIC. Whoever runs the host can read the media of every cal
 - **relay-cert-reload.** A renewed certificate is served without restart. Confidence: low. Verification: swap the pair, open a new session, read the served certificate. If it fails: the copy step restarts the unit, which drains first, and the ADR says a renewal ends calls roughly every 60 days.
 - **cert-subject.** The gateway's issuer can hold a subject that is neither an app domain nor a site alias. Confidence: medium. Verification: read `site-certs` and `acme.rs`; issue against a staging directory. If it fails: this change adds a MODIFIED `site-certs` requirement and needs fresh advise.
 - **viewer-https.** iroh-live's stock viewer, given an `https://` relay URL, connects without fetching `/certificate.sha256`. Confidence: medium. Verification: read the moq web client at the pinned revision; try it.
+
+- **relay-expiry-close.** A WebTransport session is closed when its grant's expiry passes, as the docs say an Iroh session is. Confidence: medium. Verification: a ten-second token against the built relay. If it fails: our loop holds a timer per session and closes it.
+- **relay-key-loader.** moq-auth's key types let us load a JWK set ourselves, reject symmetric and private keys, and swap the set used by both the browser loop and the Iroh policy. Confidence: medium. Verification: write the loader and the three key scenarios. If it fails: the relay restarts (draining) on a key change and the five-second bound becomes the drain bound.
+- **relay-announce-scope.** Announcements to a session are filtered by its subscribe patterns. Confidence: medium. Verification: the announcements scenario. If it fails: one cluster origin per tenant.
+- **relay-drain-both.** Admission can be stopped on WebTransport and on Iroh while existing sessions continue. Confidence: medium. Verification: the stop scenario.
 
 ## Where it is accepted
 
