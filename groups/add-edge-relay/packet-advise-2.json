@@ -1,0 +1,111 @@
+{
+ "schema_version": "1.0",
+ "id": "pkt-advise-add-edge-relay-astra-2",
+ "node_id": "add-edge-relay",
+ "capability": "edge-relay",
+ "change_id": "add-edge-relay",
+ "requester": {
+  "id": "agt-conductor",
+  "kind": "group",
+  "harness": "claude",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "agt-conductor"
+  }
+ },
+ "assignee": {
+  "id": "astra-arch-review",
+  "kind": "model",
+  "harness": "codex",
+  "interface": "gpt-6-astra",
+  "effort": "high",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "astra-arch-review"
+  }
+ },
+ "goal": "ADVISE add-edge-relay (fresh pass after your send-back). Architecture rigor, high blast. Author family is fable (Claude). You are Astra, the same READER that wrote openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md with owed items R1-R4.\n\nThe contract was amended at commit aed8291: openspec/changes/add-edge-relay/specs/edge-relay/spec.md was rewritten and openspec/changes/add-edge-relay/design.md decisions D4, D5, D5a and D8 changed. Read your prior review, then the amended spec and design, and judge the current contract independently; do not rubber-stamp. Skip 'Unverified hypotheses' when judging completeness: a spike stage resolves those before any build.\n\nFor each of R1, R2, R3, R4 say whether the amendment closes it, and check its box in openspec/changes/add-edge-relay/tasks.md only if it does. Look for anything the amendment broke or newly left untestable.\n\nWrite openspec/changes/add-edge-relay/reviews/2026-11-21-advise.md. Its first lines must be exactly one of:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\nfollowed by\n> **READER:** astra-arch-review\n> **SPAWN:** <your spawn dir>\nNotes in the body. Do not write accept-with-nits. On send-back, add one unchecked box per newly owed item to openspec/changes/add-edge-relay/tasks.md.",
+ "anchors": [
+  {
+   "symbol": "native/mjolnir_gateway/src/tls.rs",
+   "invariant": "gateway is TCP only; certificates hot-swap on SIGHUP"
+  },
+  {
+   "symbol": "native/mjolnir_gateway/src/acme.rs",
+   "invariant": "HTTP-01 issuer; no wildcards"
+  },
+  {
+   "symbol": "systemd/mjolnir-gateway.service",
+   "invariant": "gateway runs as User=mjolnir with CAP_NET_BIND_SERVICE; the controller is root"
+  },
+  {
+   "symbol": "scripts/deploy.sh",
+   "invariant": "--gateway alone never restarts the controller; each flag owns its unit"
+  },
+  {
+   "symbol": "lib/mjolnir/deploy/owner.ex",
+   "invariant": "owner id is a canonical base58 32-byte id"
+  },
+  {
+   "symbol": "openspec/changes/add-published-udp-ports/proposal.md",
+   "invariant": "published UDP ports are the per-guest primitive and are not changed here"
+  }
+ ],
+ "acceptance": {
+  "kind": "command",
+  "command": "test -f openspec/changes/add-edge-relay/reviews/2026-11-21-advise.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-21-advise.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-21-advise.md"
+ },
+ "out_of_scope": [
+  {
+   "item": "Minting room tokens and the path layout under t/<owner id>/",
+   "tracked_as": "mjolnir-rurh.3 add-relay-room-auth"
+  },
+  {
+   "item": "Per-tenant limits and byte accounting",
+   "tracked_as": "mjolnir-rurh.4"
+  },
+  {
+   "item": "Browser call client",
+   "tracked_as": "mjolnir-rurh.5"
+  },
+  {
+   "item": "Advertising the relay to guests",
+   "tracked_as": "mjolnir-rurh.6"
+  },
+  {
+   "item": "Self-hosted Iroh relay",
+   "tracked_as": "mjolnir-rurh.8"
+  },
+  {
+   "item": "End-to-end media encryption",
+   "tracked_as": "untracked; named in design.md"
+  }
+ ],
+ "constraints": {
+  "permission": "write",
+  "paths": [
+   "openspec/changes/add-edge-relay/reviews",
+   "openspec/changes/add-edge-relay/tasks.md"
+  ],
+  "do_not": [
+   "fold",
+   "act",
+   "implement",
+   "flip banner",
+   "deploy",
+   "edit design.md or the spec"
+  ]
+ },
+ "inherited": [
+  "Contract at aed8291 on main.",
+  "Prior review 2026-11-20-advise.md: send-back with R1-R4.",
+  "Author family fable. Send-back returns to the same READER.",
+  "Campaign authority on bead mjolnir-rurh covers preparing contracts, not running or deploying.",
+  "moq-auth facts in D5 (claims root/publish/subscribe/exp/iat/nbf/jti, unknown fields refused, iss ignored, segment-aware matching) come from the author reading moq 4a6f522 rs/moq-auth/src/{claims,wire}.rs; that source is not in this repo."
+ ],
+ "load_class": "intention-critical",
+ "rigor": "architecture",
+ "density": "explicit",
+ "surface": "packet-only",
+ "role": "reader"
+}
