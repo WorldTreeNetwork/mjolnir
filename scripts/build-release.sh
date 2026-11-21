@@ -25,4 +25,7 @@ with open('.release-audit.json') as f:
 if not audit.get('runs') or any(run.get('results') for run in audit['runs']):
     raise SystemExit('Release refused: dependency audit findings')
 PY
+# The staged _build is a copy of the active one. --overwrite keeps old lib/<app>-<vsn>
+# directories, and cutover verification checks every directory against the running node.
+rm -rf _build/prod/rel/mjolnir
 mise exec -- mix release mjolnir --overwrite
