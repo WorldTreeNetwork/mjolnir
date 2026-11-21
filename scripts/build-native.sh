@@ -18,7 +18,13 @@ case "$KIND" in
         # fresh tree, and a cold aws-lc build is several minutes.
         export CARGO_TARGET_DIR=/var/tmp/mjolnir-relay-cargo
         cd native/mjolnir_relay
-        mise exec -- cargo build --release --locked
+        # The host's default toolchain can be older than the relay needs, and mise
+        # pins RUSTUP_TOOLCHAIN, which outranks rust-toolchain.toml. Select the
+        # relay's own toolchain here and leave the host default alone.
+        RELAY_RUST="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+        [[ -n "$RELAY_RUST" ]] || { echo 'relay: no channel in rust-toolchain.toml' >&2; exit 1; }
+        rustup toolchain install "$RELAY_RUST" --profile minimal
+        mise exec -- env RUSTUP_TOOLCHAIN="$RELAY_RUST" cargo build --release --locked
         mkdir -p "$ROOT/native/mjolnir_relay/target/release"
         cp -f "$CARGO_TARGET_DIR/release/mjolnir-relay" "$ROOT/native/mjolnir_relay/target/release/mjolnir-relay"
         ;;

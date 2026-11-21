@@ -1,0 +1,5 @@
+# The relay needs a newer compiler than the host default may be (moq-relay requires 1.95).
+# scripts/build-native.sh installs and selects this toolchain for the relay only.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
