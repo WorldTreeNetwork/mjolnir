@@ -1,0 +1,111 @@
+{
+ "schema_version": "1.0",
+ "id": "pkt-advise-add-edge-relay-astra-3",
+ "node_id": "add-edge-relay",
+ "capability": "edge-relay",
+ "change_id": "add-edge-relay",
+ "requester": {
+  "id": "agt-conductor",
+  "kind": "group",
+  "harness": "claude",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "agt-conductor"
+  }
+ },
+ "assignee": {
+  "id": "astra-arch-review",
+  "kind": "model",
+  "harness": "codex",
+  "interface": "gpt-6-astra",
+  "effort": "high",
+  "signing": {
+   "mode": "stand-in",
+   "stand_in_id": "astra-arch-review"
+  }
+ },
+ "goal": "ADVISE add-edge-relay (third pass, after your second send-back). Architecture rigor, high blast. Author family is fable (Claude). You are Astra, the same READER that wrote openspec/changes/add-edge-relay/reviews/2026-11-20-advise.md and openspec/changes/add-edge-relay/reviews/2026-11-21-advise.md.\n\nYour second review left R1 (relay audience binding) and R3 (source custody; destination ancestry) open and added R5 (first-enable scenario contradiction). The contract was amended again; `git log -3 -- openspec/changes/add-edge-relay/` shows the commit. Changed: in openspec/changes/add-edge-relay/specs/edge-relay/spec.md the first requirement's scenarios, a new requirement 'A signing key belongs to one relay', new requirements 'The relay's private key is private where it is issued' and 'The relay cannot redirect the copy', and two more scenarios under the copy requirement; openspec/changes/add-edge-relay/design.md D4 and D5; openspec/changes/add-edge-relay/proposal.md Impact (the gateway issuer now changes for this one subject) and the end-to-end encryption bullet (now tracked as mjolnir-rurh.9; outside this verdict).\n\nJudge the current contract independently; do not rubber-stamp. Skip 'Unverified hypotheses' when judging completeness. For each of R1, R3, R5 say whether it is closed and check its box in openspec/changes/add-edge-relay/tasks.md only if it is. Look for anything the amendment broke.\n\nWrite openspec/changes/add-edge-relay/reviews/2026-11-21-advise-2.md. Its first lines must be exactly one of:\n> **ADVISE:** accept\nor\n> **ADVISE:** send-back\nfollowed by\n> **READER:** astra-arch-review\n> **SPAWN:** <your spawn dir>\nNotes in the body. Do not write accept-with-nits. On send-back, add one unchecked box per newly owed item to openspec/changes/add-edge-relay/tasks.md.",
+ "anchors": [
+  {
+   "symbol": "native/mjolnir_gateway/src/tls.rs",
+   "invariant": "gateway is TCP only; certificates hot-swap on SIGHUP"
+  },
+  {
+   "symbol": "native/mjolnir_gateway/src/acme.rs",
+   "invariant": "HTTP-01 issuer; no wildcards"
+  },
+  {
+   "symbol": "systemd/mjolnir-gateway.service",
+   "invariant": "gateway runs as User=mjolnir with CAP_NET_BIND_SERVICE; the controller is root"
+  },
+  {
+   "symbol": "scripts/deploy.sh",
+   "invariant": "--gateway alone never restarts the controller; each flag owns its unit"
+  },
+  {
+   "symbol": "lib/mjolnir/deploy/owner.ex",
+   "invariant": "owner id is a canonical base58 32-byte id"
+  },
+  {
+   "symbol": "openspec/changes/add-published-udp-ports/proposal.md",
+   "invariant": "published UDP ports are the per-guest primitive and are not changed here"
+  }
+ ],
+ "acceptance": {
+  "kind": "command",
+  "command": "test -f openspec/changes/add-edge-relay/reviews/2026-11-21-advise-2.md && rg -q '\\*\\*ADVISE:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-21-advise-2.md && rg -q '\\*\\*READER:\\*\\*' openspec/changes/add-edge-relay/reviews/2026-11-21-advise-2.md"
+ },
+ "out_of_scope": [
+  {
+   "item": "Minting room tokens and the path layout under t/<owner id>/",
+   "tracked_as": "mjolnir-rurh.3 add-relay-room-auth"
+  },
+  {
+   "item": "Per-tenant limits and byte accounting",
+   "tracked_as": "mjolnir-rurh.4"
+  },
+  {
+   "item": "Browser call client",
+   "tracked_as": "mjolnir-rurh.5"
+  },
+  {
+   "item": "Advertising the relay to guests",
+   "tracked_as": "mjolnir-rurh.6"
+  },
+  {
+   "item": "Self-hosted Iroh relay",
+   "tracked_as": "mjolnir-rurh.8"
+  },
+  {
+   "item": "End-to-end media encryption",
+   "tracked_as": "untracked; named in design.md"
+  }
+ ],
+ "constraints": {
+  "permission": "write",
+  "paths": [
+   "openspec/changes/add-edge-relay/reviews",
+   "openspec/changes/add-edge-relay/tasks.md"
+  ],
+  "do_not": [
+   "fold",
+   "act",
+   "implement",
+   "flip banner",
+   "deploy",
+   "edit design.md or the spec"
+  ]
+ },
+ "inherited": [
+  "Contract at HEAD of main; see git log for the amendment commit.",
+  "Prior reviews: 2026-11-20-advise.md (send-back R1-R4), 2026-11-21-advise.md (send-back; R2, R4 closed; R1, R3 residual; R5 new).",
+  "Author family fable. Send-back returns to the same READER.",
+  "Campaign authority on bead mjolnir-rurh covers preparing contracts, not running or deploying.",
+  "moq-auth facts in D5 (claims root/publish/subscribe/exp/iat/nbf/jti, unknown fields refused, iss ignored, segment-aware matching) come from the author reading moq 4a6f522 rs/moq-auth/src/{claims,wire}.rs; that source is not in this repo."
+ ],
+ "load_class": "intention-critical",
+ "rigor": "architecture",
+ "density": "explicit",
+ "surface": "packet-only",
+ "role": "reader"
+}

@@ -3,11 +3,18 @@
 ### Requirement: Only the relay deploy changes the relay's state
 `deploy.sh --relay` SHALL be the only operation that installs, updates, starts, stops or removes `mjolnir-relay` and its firewall rule. With `:relay_enabled` true and `:relay_host` set it SHALL install and start the unit. With `:relay_enabled` false or `:relay_host` unset it SHALL stop the unit, remove it, and remove the relay's firewall rule. Every other deploy and every restart of `mjolnir` or `mjolnir-gateway` SHALL leave the unit, its sessions and its firewall rule as they were.
 
-#### Scenario: A host that never enabled it
-- GIVEN a host on which `--relay` has never run with the relay enabled
-- WHEN any deploy runs
+#### Scenario: A host with the relay not enabled
+- GIVEN a host where `:relay_enabled` is unset and the relay was never installed
+- WHEN any deploy runs, including `deploy.sh --relay`
 - THEN no `mjolnir-relay` unit exists
 - AND no firewall rule tagged `mjolnir-relay` exists
+
+#### Scenario: First enable
+- GIVEN a host where the relay was never installed, `:relay_enabled` true, `:relay_host` set, and a usable certificate and key file
+- WHEN `deploy.sh --relay` runs
+- THEN `mjolnir-relay` is active
+- AND one rule tagged `mjolnir-relay` exists
+- AND the process ids of `mjolnir` and `mjolnir-gateway` are the same as before
 
 #### Scenario: Enabled, then disabled
 - GIVEN a running relay
@@ -75,6 +82,28 @@ The relay SHALL serve WebTransport on UDP 443 with a certificate whose chain par
 - THEN the unit is failed
 - AND a restart fails for the same reason
 
+### Requirement: The relay's private key is private where it is issued
+The issuer SHALL write the `:relay_host` pair only into a directory of its own that is owned by the issuer's user with no access for group or others, and that holds no other subject. It SHALL create every file there, temporary files included, with no access for group or others from creation. If it cannot establish that directory and those modes it SHALL fail before any key byte is written. Only the issuer's user and root can read the source key.
+
+#### Scenario: Key being staged at the source
+- GIVEN an issuance for `:relay_host` paused after its temporary key file is created
+- WHEN `nobody` and the relay's user try to read that file
+- THEN both reads are denied
+
+#### Scenario: Source directory cannot be made private
+- GIVEN the issuer's relay directory exists with group or other access that the issuer cannot remove
+- WHEN issuance runs
+- THEN it exits non-zero and no key file exists there
+
+### Requirement: The relay cannot redirect the copy
+Every directory from `/` to `/var/lib/mjolnir-relay/tls/` SHALL be owned by root and writable by root only. The relay's own writable state SHALL live outside that tree. The copy step SHALL refuse to run, and SHALL write nothing, if any component of the destination path is a symbolic link, is not owned by root, or is writable by another user.
+
+#### Scenario: Replaced parent
+- GIVEN `/var/lib/mjolnir-relay` replaced by a symbolic link, or made writable by the relay's user
+- WHEN the copy step runs
+- THEN it exits non-zero
+- AND no key byte was written anywhere
+
 ### Requirement: The relay's key pair is copied by root, whole and private
 A root-owned step SHALL copy only the `:relay_host` certificate and key into `/var/lib/mjolnir-relay/tls/`. That directory SHALL be owned by root, readable by the relay's group, and writable by root only. Each copy SHALL be a new generation directory created with no access for other users before any key byte is written. The step SHALL check that the key matches the leaf, the leaf names `:relay_host` and the pair is in its validity period, and only then point `current` at the new generation by one rename. On any failure it SHALL leave `current` as it was and exit non-zero. It SHALL NOT copy the ACME account key, another subject's key, or any edge-auth key.
 
@@ -82,6 +111,16 @@ A root-owned step SHALL copy only the `:relay_host` certificate and key into `/v
 - GIVEN an installed pair
 - WHEN the `mjolnir` user or `nobody` reads `/var/lib/mjolnir-relay/tls/current/key.pem`
 - THEN the read is denied
+
+#### Scenario: Key being staged at the destination
+- GIVEN a copy paused after its generation directory is created and before `current` moves
+- WHEN `nobody` reads the key in that generation directory
+- THEN the read is denied
+
+#### Scenario: Copy fails part way
+- GIVEN a copy that fails after the certificate is written and before the key is
+- WHEN the step exits
+- THEN it exits non-zero and `current` still names the previous generation
 
 #### Scenario: Mismatched pair
 - GIVEN a renewed certificate whose key file is from the previous issue
@@ -122,6 +161,15 @@ The relay SHALL accept only a moq-auth JWT in the wire format of the pinned moq 
 
 ### Requirement: Relay keys are used for nothing else
 The relay key file SHALL hold public keys only, and only keys whose private half signs relay tokens. No edge-auth login key, IdentiKey signing key or biscuit root SHALL appear in it. The relay SHALL hold no private signing key. A credential of another profile SHALL be refused.
+
+### Requirement: A signing key belongs to one relay
+A relay's audience SHALL be its `:relay_host`. A key that signs relay tokens SHALL be trusted by the key file of exactly one `:relay_host`. A token signed for another relay SHALL be refused, on WebTransport and on Iroh.
+
+#### Scenario: Token for another relay
+- GIVEN relay A trusting key Ka, and a token signed by Kb, which only relay B trusts, with an otherwise valid root, grant and expiry
+- WHEN the token is presented to relay A by a browser, and by an Iroh client
+- THEN both sessions are refused
+- AND the same claims signed by Ka are admitted
 
 #### Scenario: Login credential
 - GIVEN a valid IdentiKey access token or edge-auth session credential

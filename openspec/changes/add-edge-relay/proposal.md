@@ -25,7 +25,8 @@ Design and the decisions the ADR will record: [`design.md`](design.md).
 - ADRs: new `docs/decisions/0016-edge-relay.md`.
 - Code: new crate `native/mjolnir_relay`; `systemd/mjolnir-relay.service`; `scripts/deploy.sh` (`--relay`); `scripts/build-native.sh`; config keys for the name and the enable flag.
 - Host: a new system user, UDP 443 opened in the host firewall, one more certificate subject.
-- Not changed: the gateway binary, guest images, published UDP ports.
+- Gateway: `mjolnir-gateway`'s issuer gains a private output directory for the relay subject. Its listeners, routing and other subjects are not changed.
+- Not changed: guest images, published UDP ports.
 
 ## User journey & surfaces
 
@@ -50,5 +51,5 @@ No new UI because this change ships the service and its operator surface only. T
 - Telling guests where the relay is: `mjolnir-rurh.6`.
 - Measured capacity: `mjolnir-rurh.7`.
 - A self-hosted Iroh relay: `mjolnir-rurh.8`.
-- End-to-end media encryption. The relay terminates QUIC, so the host can read media. Not tracked yet; see the decision briefing.
+- End-to-end media encryption: `call-media-e2ee` (`mjolnir-rurh.9`), put in scope by Duke on 2026-11-20. Until it lands the host can read relayed media, because the relay terminates QUIC. The relay needs no change for it and holds no content key.
 - A second region, recording, Safari.
