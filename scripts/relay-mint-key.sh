@@ -139,7 +139,11 @@ confirm_active() {
   local want got i
   want="$(sha256_file "$path")"
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    got="$(tr -d '[:space:]' < "$ACTIVE" 2>/dev/null || true)"
+    if [[ -f "$ACTIVE" ]]; then
+      got="$(tr -d '[:space:]' < "$ACTIVE")"
+    else
+      got=""
+    fi
     if [[ "$got" == "$want" ]]; then
       return 0
     fi

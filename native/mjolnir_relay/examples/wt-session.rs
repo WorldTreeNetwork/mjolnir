@@ -161,6 +161,76 @@ async fn main() -> anyhow::Result<()> {
             println!("received path={path} frames={frames} bytes={bytes}");
             drop(session);
         }
+        "gap" => {
+            let url: url::Url = args.next().expect("url").parse()?;
+            let path = args.next().expect("path");
+            let seconds: u64 = args.next().unwrap_or("12".into()).parse()?;
+            let origin = moq_tokio::origin::spawn();
+            let table = origin.consume();
+            let mut routes = table.routes();
+            let session = client()
+                .with_subscriber(origin)
+                .connect(url)
+                .established()
+                .await?;
+            println!("held");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+            let started = std::time::Instant::now();
+            let mut saw = false;
+            while tokio::time::Instant::now() < deadline {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(left.min(Duration::from_millis(200)), routes.next()).await
+                {
+                    Ok(Some(event)) => {
+                        println!("route: {event:?}");
+                        if format!("{event:?}").contains(path.as_str()) {
+                            saw = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !saw {
+                println!("gap path={path} frames=0 max_gap_ms=0");
+                drop(session);
+                return Ok(());
+            }
+            let requested = table.request(path.as_str(), None).await?;
+            let track = requested
+                .track("bytes")
+                .map_err(|err| anyhow::anyhow!("track: {err}"))?;
+            let mut reader = track
+                .subscribe(None)
+                .await
+                .map_err(|err| anyhow::anyhow!("subscribe: {err}"))?;
+            let mut frames = 0usize;
+            let mut last: Option<std::time::Instant> = None;
+            let mut max_gap = Duration::ZERO;
+            while tokio::time::Instant::now() < deadline {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let group = tokio::time::timeout(left.min(Duration::from_millis(250)), reader.recv_group()).await;
+                let Ok(Ok(Some(mut group))) = group else { continue };
+                while let Some(frame) = group.read_frame().await? {
+                    let now = std::time::Instant::now();
+                    if let Some(prev) = last {
+                        max_gap = max_gap.max(now.saturating_duration_since(prev));
+                    }
+                    last = Some(now);
+                    frames += 1;
+                    println!(
+                        "frame n={frames} t_ms={} bytes={}",
+                        started.elapsed().as_millis(),
+                        frame.payload.len()
+                    );
+                }
+            }
+            println!(
+                "gap path={path} frames={frames} max_gap_ms={}",
+                max_gap.as_millis()
+            );
+            drop(session);
+        }
         "announce" => {
             let url: url::Url = args.next().expect("url").parse()?;
             let seconds: u64 = args.next().unwrap_or("5".into()).parse()?;
