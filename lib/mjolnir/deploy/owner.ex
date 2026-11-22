@@ -120,6 +120,38 @@ defmodule Mjolnir.Deploy.Owner do
   @spec encode(binary()) :: String.t()
   def encode(bytes) when is_binary(bytes), do: Mjolnir.Base58.encode(bytes)
 
+  @mint_hex ~r/\A[0-9a-f]{64}\z/
+
+  @doc """
+  Owner id for a relay mint, from a verified `sub`.
+
+  No trim. Canonical base58 that equals its re-encode, or lowercase
+  64-hex of the same 32 bytes, rewritten to base58. Anything else is
+  `:error`.
+  """
+  @spec mint_owner(term()) :: {:ok, String.t()} | :error
+  def mint_owner(sub) when is_binary(sub) do
+    cond do
+      Regex.match?(@mint_hex, sub) ->
+        case Base.decode16(sub, case: :lower) do
+          {:ok, bytes} when byte_size(bytes) == 32 -> {:ok, encode(bytes)}
+          _ -> :error
+        end
+
+      true ->
+        case Mjolnir.Base58.decode(sub, 32) do
+          {:ok, bytes} ->
+            canonical = encode(bytes)
+            if canonical == sub, do: {:ok, canonical}, else: :error
+
+          :error ->
+            :error
+        end
+    end
+  end
+
+  def mint_owner(_), do: :error
+
   defp decode_stored(text) do
     case decode32(text) do
       {:ok, bytes} -> {:ok, bytes}

@@ -67,7 +67,7 @@ fn token(key: &Key, root: &str, seconds: u64) -> String {
 #[tokio::test]
 async fn tokenless_webtransport_is_refused_and_sigterm_stops_a_second_session() {
     let dir = tempfile::tempdir().unwrap();
-    let (running, mut admissions) = start(dir.path()).await;
+    let (running, admissions) = start(dir.path()).await;
     let key = Key::generate(Algorithm::EdDSA, None).unwrap();
     let root = format!("t/{}", owner());
     let keys = Arc::new(Mutex::new(KeySet {
@@ -75,30 +75,13 @@ async fn tokenless_webtransport_is_refused_and_sigterm_stops_a_second_session() 
     }));
     let draining = Arc::new(AtomicBool::new(false));
     let keys_ok = Arc::new(AtomicBool::new(true));
-    let keys_c = keys.clone();
-    let draining_c = draining.clone();
-    let keys_ok_c = keys_ok.clone();
-    tokio::spawn(async move {
-        while let Some(admission) = admissions.next().await {
-            if draining_c.load(Ordering::SeqCst) || !keys_ok_c.load(Ordering::SeqCst) {
-                admission.refuse(moq_relay::auth::Error::Unavailable("closed".into()));
-                continue;
-            }
-            let path = admission.request.path.clone();
-            let query = admission.request.query.clone().unwrap_or_default();
-            let jwt = query.split('&').find_map(|pair| {
-                let (k, v) = pair.split_once('=')?;
-                (k == "jwt").then(|| v.to_string())
-            });
-            let set = keys_c.lock().unwrap().clone();
-            match mjolnir_relay::assess(jwt.as_deref(), &path, &set, Duration::from_secs(3600)) {
-                Ok(grant) => {
-                    admission.grant(moq_auth::lease::Consumer::fixed(grant));
-                }
-                Err(err) => admission.refuse(moq_relay::auth::Error::Forbidden(err.to_string())),
-            }
-        }
-    });
+    mjolnir_relay::spawn_web_decider(
+        admissions,
+        keys,
+        draining.clone(),
+        keys_ok,
+        Duration::from_secs(3600),
+    );
 
     let url: url::Url = format!("https://{}/", running.quic).parse().unwrap();
     let refused = client().connect(url).established().await;

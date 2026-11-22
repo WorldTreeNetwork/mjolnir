@@ -236,6 +236,44 @@ defmodule Mjolnir.API.Router do
     end
   end
 
+  post "/api/relay/rooms/:room/participants/:participant/token" do
+    conn = require_scope(conn, "relay:join")
+
+    cond do
+      conn.halted ->
+        conn
+
+      conn.assigns[:principal_kind] != :user ->
+        json(conn, 403, %{error: "forbidden"})
+
+      true ->
+        body =
+          case conn.body_params do
+            %{} = params -> params
+            _ -> %{}
+          end
+
+        case Mjolnir.Relay.Mint.issue(
+               %{
+                 kind: :user,
+                 sub: conn.assigns[:user_id],
+                 scopes: get_in(conn.assigns, [:claims, "scope"]) || ""
+               },
+               room,
+               participant,
+               body
+             ) do
+          {:ok, token} ->
+            conn
+            |> put_resp_header("cache-control", "no-store")
+            |> json(200, token)
+
+          {:error, status, reason} ->
+            json(conn, status, %{error: reason})
+        end
+    end
+  end
+
   # Spawn a new VM
   post "/api/vms" do
     conn = require_scope(conn, "vms:spawn")

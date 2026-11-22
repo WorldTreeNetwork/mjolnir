@@ -153,6 +153,54 @@ pub fn tenant_path(path: &str) -> bool {
 
 /// WebTransport admission. `attached` is a second token on a session that
 /// is already open. The decider used to ignore that flag.
+pub fn spawn_web_decider(
+    mut admissions: moq_relay::auth::Admissions,
+    keys: Arc<Mutex<KeySet>>,
+    draining: Arc<AtomicBool>,
+    keys_ok: Arc<AtomicBool>,
+    max_ttl: Duration,
+) {
+    tokio::spawn(async move {
+        while let Some(admission) = admissions.next().await {
+            if draining.load(Ordering::SeqCst) {
+                admission.refuse(moq_relay::auth::Error::Unavailable("draining".into()));
+                continue;
+            }
+            if !keys_ok.load(Ordering::SeqCst) {
+                admission.refuse(moq_relay::auth::Error::Unavailable("keys unavailable".into()));
+                continue;
+            }
+            let path = admission.request.path.clone();
+            let from_setup = admission.request.token.as_ref().and_then(|token| {
+                String::from_utf8(token.value.clone()).ok()
+            });
+            let from_query = admission
+                .request
+                .query
+                .as_deref()
+                .and_then(jwt_query);
+            let token = from_setup.or(from_query);
+            let set = keys.lock().expect("keys").clone();
+            match web_grant(admission.attached(), token.as_deref(), &path, &set, max_ttl) {
+                Ok(grant) => match grant.validate() {
+                    Ok(()) => admission.grant(moq_auth::lease::Consumer::fixed(grant)),
+                    Err(err) => admission.refuse(err.into()),
+                },
+                Err(err) => {
+                    admission.refuse(moq_relay::auth::Error::Forbidden(err.to_string()));
+                }
+            }
+        }
+    });
+}
+
+fn jwt_query(query: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == "jwt").then(|| value.to_string())
+    })
+}
+
 pub fn web_grant(
     attached: bool,
     token: Option<&str>,

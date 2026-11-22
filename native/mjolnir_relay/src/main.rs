@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use moq_auth::{Grant, KeySet};
+use moq_auth::KeySet;
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
 use mjolnir_relay::{
@@ -202,65 +202,13 @@ async fn drain_then_stop(
 }
 
 fn spawn_decider(
-    mut admissions: moq_relay::auth::Admissions,
+    admissions: moq_relay::auth::Admissions,
     keys: Arc<Mutex<KeySet>>,
     draining: Arc<AtomicBool>,
     keys_ok: Arc<AtomicBool>,
     max_ttl: Duration,
 ) {
-    tokio::spawn(async move {
-        while let Some(admission) = admissions.next().await {
-            if draining.load(Ordering::SeqCst) {
-                admission.refuse(moq_relay::auth::Error::Unavailable("draining".into()));
-                continue;
-            }
-            if !keys_ok.load(Ordering::SeqCst) {
-                admission.refuse(moq_relay::auth::Error::Unavailable("keys unavailable".into()));
-                continue;
-            }
-            let path = admission.request.path.clone();
-            let from_setup = admission.request.token.as_ref().and_then(|token| {
-                String::from_utf8(token.value.clone()).ok()
-            });
-            let from_query = admission.request.query.as_deref().and_then(jwt_query);
-            let token = from_setup.or(from_query);
-            let set = keys.lock().expect("keys").clone();
-            match mjolnir_relay::web_grant(
-                admission.attached(),
-                token.as_deref(),
-                &path,
-                &set,
-                max_ttl,
-            ) {
-                Ok(grant) => {
-                    let _ = grant_or_refuse(admission, grant);
-                }
-                Err(err) => {
-                    admission.refuse(moq_relay::auth::Error::Forbidden(err.to_string()));
-                }
-            }
-        }
-    });
-}
-
-fn grant_or_refuse(admission: moq_relay::auth::Admission, grant: Grant) -> Result<(), ()> {
-    match grant.validate() {
-        Ok(()) => {
-            admission.grant(moq_auth::lease::Consumer::fixed(grant));
-            Ok(())
-        }
-        Err(err) => {
-            admission.refuse(err.into());
-            Err(())
-        }
-    }
-}
-
-fn jwt_query(query: &str) -> Option<String> {
-    query.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        (key == "jwt").then(|| value.to_string())
-    })
+    mjolnir_relay::spawn_web_decider(admissions, keys, draining, keys_ok, max_ttl);
 }
 
 fn spawn_key_watch(
