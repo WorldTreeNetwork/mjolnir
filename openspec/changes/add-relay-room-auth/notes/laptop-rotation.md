@@ -20,6 +20,4 @@ The deploy of `d4d5443` built the relay and installed the unit, then the unit fa
 | Emergency | session `held` on the old key | script printed the 15s drain twice, `emergency signer is u_ynO6A6Sj-Izh_tHGiWrA`, exit 0. Journal: shutdown requested, session error, `drain ended with every session gone` in 1.37ms. A later `wt-session refuse` with the old token printed `refused: unauthorized` |
 | Mint route | — | `POST /api/relay/rooms/standup/participants/alice/token` returned 401 with no user token |
 
-A crash was not injected between each rotation step. The unfinished-overlap resume and the malformed rollback are the crash-adjacent cases that ran.
-
-`POST` as a user, both-transport acceptance, the in-band integration test, and H-handoff were not run in this pass.
+This note stops at the rotation table above. Later the same day, a user mint, both-transport acceptance, the in-band client test, and the hole measurement were run and written down in `notes/h-handoff.md` and in `tasks.md`. The crash points and the failed-confirmation restore are covered by `scripts/relay-mint-key-test.sh`.

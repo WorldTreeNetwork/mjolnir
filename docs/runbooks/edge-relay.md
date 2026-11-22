@@ -153,9 +153,11 @@ every call. A missing file, enabled other than `true`, or an unset host
 is 503 and no signature. The response sends `Cache-Control: no-store`.
 
 A removed participant who can mint again is back after the next token.
-The default life is 300 seconds, and the ceiling is the relay env value
-(3600 when the line is absent). A guest who was handed a token keeps it
-until that token's own `exp`. There is no per-participant kick.
+The default life is the ceiling: `MJOLNIR_RELAY_TOKEN_MAX_TTL`, or 3600
+when that line is absent. A guest who was handed a token keeps it until
+that token's own `exp`. There is no per-participant kick. A call longer
+than one token needs the client to resubscribe when a participant
+announces again.
 
 ## Rotation
 
@@ -186,9 +188,22 @@ EdDSA or ES256.
 
 `relay-mint-key.sh emergency` replaces the public set with one new key
 and does not restore the previous set. It deletes `next.jwk` if a
-routine rotation was in flight, restarts the relay, and exits non-zero
-when `keys.active` did not confirm. The new public set stays either way.
-`current.jwk` changes only after confirmation.
+routine rotation was in flight. At the moment the new public set is
+published it removes `current.jwk` and `current.jwk.pub`, so the mint
+returns 503 until a later run writes a signer the relay has confirmed.
+It restarts the relay and exits non-zero when confirmation failed or
+the restart failed. The new public set stays either way.
+
+A failed or interrupted emergency is finished by the same default
+command, which takes the first-install path and reuses `staged.jwk`:
+
+```bash
+RELAY_BIN=/usr/local/bin/mjolnir-relay /opt/mjolnir/scripts/relay-mint-key.sh
+```
+
+Use the staged binary from a refused deploy when the installed binary
+is older than `--check-keys`. Do not pass `rotate` or `finish`. The
+compromised kid is not in the new set.
 
 A restart sends SIGTERM. The process drains for the
 `MJOLNIR_RELAY_DRAIN_SECONDS` it loaded at start (default 30) and then

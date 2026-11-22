@@ -4,7 +4,7 @@ defmodule Mjolnir.Relay.Mint do
   require Logger
 
   @segment ~r/\A[A-Za-z0-9_-]{1,64}\z/
-  @default_ttl 300
+  @default_ttl 3600
 
   def issue(caller, room, participant, body, opts \\ []) do
     with :ok <- principal(caller),
@@ -22,26 +22,33 @@ defmodule Mjolnir.Relay.Mint do
       jti = jti()
       root = "t/#{owner}/#{room}"
       publish = "#{participant}/**"
-      token = sign(jwk, kid, root, publish, now, exp, jti)
 
-      Logger.info(
-        "relay mint sub=#{caller.sub} owner=#{owner} room=#{room} participant=#{participant} jti=#{jti} exp=#{exp}"
-      )
+      case sign(jwk, kid, root, publish, now, exp, jti) do
+        token when is_binary(token) ->
+          Logger.info(
+            "relay mint sub=#{caller.sub} owner=#{owner} room=#{room} participant=#{participant} jti=#{jti} exp=#{exp}"
+          )
 
-      {:ok,
-       %{
-         token: token,
-         expires: exp,
-         root: root,
-         publish: publish,
-         subscribe: "**",
-         relay_host: env.host
-       }}
+          {:ok,
+           %{
+             token: token,
+             expires: exp,
+             root: root,
+             publish: publish,
+             subscribe: "**",
+             relay_host: env.host
+           }}
+
+        _ ->
+          {:error, 503, "relay_unavailable"}
+      end
     end
   end
 
   def principal(%{kind: :user, scopes: scopes}) when is_binary(scopes) do
-    if "relay:join" in String.split(scopes, " ", trim: true), do: :ok, else: {:error, 403, "forbidden"}
+    if "relay:join" in String.split(scopes, " ", trim: true),
+      do: :ok,
+      else: {:error, 403, "forbidden"}
   end
 
   def principal(_), do: {:error, 403, "forbidden"}
@@ -77,7 +84,10 @@ defmodule Mjolnir.Relay.Mint do
   end
 
   defp read_env(opts) do
-    path = Keyword.get(opts, :env_path, "/etc/mjolnir-relay/relay.env")
+    path =
+      Keyword.get(opts, :env_path) ||
+        Application.get_env(:mjolnir, :relay_mint_env_path) ||
+        "/etc/mjolnir-relay/relay.env"
 
     case File.read(path) do
       {:ok, text} ->
@@ -86,32 +96,62 @@ defmodule Mjolnir.Relay.Mint do
           |> String.split("\n", trim: true)
           |> Enum.reduce(%{}, fn line, acc ->
             case String.split(line, "=", parts: 2) do
-              [k, v] -> Map.put(acc, k, v)
+              [k, v] -> Map.put(acc, String.trim(k), unquote_env(v))
               _ -> acc
             end
           end)
 
-        ceiling =
-          case Integer.parse(Map.get(map, "MJOLNIR_RELAY_TOKEN_MAX_TTL", "3600")) do
-            {n, ""} when n > 0 -> n
-            _ -> 3600
-          end
-
-        {:ok,
-         %{
-           enabled: Map.get(map, "MJOLNIR_RELAY_ENABLED"),
-           host: Map.get(map, "MJOLNIR_RELAY_HOST"),
-           ceiling: ceiling
-         }}
+        with {:ok, ceiling} <- ceiling(map) do
+          {:ok,
+           %{
+             enabled: Map.get(map, "MJOLNIR_RELAY_ENABLED"),
+             host: Map.get(map, "MJOLNIR_RELAY_HOST"),
+             ceiling: ceiling
+           }}
+        end
 
       {:error, _} ->
         {:error, 503, "relay_unavailable"}
     end
   end
 
+  defp unquote_env(value) do
+    trimmed = String.trim(to_string(value))
+
+    case trimmed do
+      <<quote::utf8, rest::binary>> when quote in [?", ?'] ->
+        size = byte_size(rest)
+
+        if size > 0 and binary_part(rest, size - 1, 1) == <<quote>> do
+          binary_part(rest, 0, size - 1)
+        else
+          trimmed
+        end
+
+      _ ->
+        trimmed
+    end
+  end
+
+  defp ceiling(map) do
+    case Map.fetch(map, "MJOLNIR_RELAY_TOKEN_MAX_TTL") do
+      :error ->
+        {:ok, 3600}
+
+      {:ok, raw} ->
+        case Integer.parse(raw) do
+          {n, ""} when n > 0 -> {:ok, n}
+          _ -> {:error, 503, "relay_unavailable"}
+        end
+    end
+  end
+
   def key_mode(opts) do
-    path = Keyword.get(opts, :key_path, "/var/lib/mjolnir/relay-mint/current.jwk")
-    expected = Keyword.get(opts, :uid, 0)
+    path = key_path(opts)
+
+    expected =
+      Keyword.get(opts, :uid) ||
+        Application.get_env(:mjolnir, :relay_mint_uid, 0)
 
     with {:ok, file} <- File.stat(path),
          {:ok, dir} <- File.stat(Path.dirname(path)),
@@ -126,16 +166,27 @@ defmodule Mjolnir.Relay.Mint do
   defp no_group_other_write(mode), do: Bitwise.band(mode, 0o022) == 0
   defp private_file(mode), do: Bitwise.band(mode, 0o077) == 0
 
+  defp key_path(opts) do
+    Keyword.get(opts, :key_path) ||
+      Application.get_env(:mjolnir, :relay_mint_key_path) ||
+      "/var/lib/mjolnir/relay-mint/current.jwk"
+  end
+
   defp load_key(opts) do
-    path = Keyword.get(opts, :key_path, "/var/lib/mjolnir/relay-mint/current.jwk")
+    path = key_path(opts)
 
     with {:ok, raw} <- File.read(path),
          {:ok, map} <- Jason.decode(raw),
          true <- map["kty"] == "OKP" and map["crv"] == "Ed25519" and map["alg"] == "EdDSA",
          kid when is_binary(kid) <- map["kid"],
-         true <- Regex.match?(~r/\A[A-Za-z0-9_-]{1,128}\z/, kid) do
-      jwk = JOSE.JWK.from_map(map)
-      {:ok, jwk, kid}
+         true <- Regex.match?(~r/\A[A-Za-z0-9_-]{1,128}\z/, kid),
+         true <- is_binary(map["x"]) and is_binary(map["d"]) do
+      try do
+        jwk = JOSE.JWK.from_map(map)
+        {:ok, jwk, kid}
+      rescue
+        _ -> {:error, 503, "relay_unavailable"}
+      end
     else
       _ -> {:error, 503, "relay_unavailable"}
     end
@@ -151,9 +202,13 @@ defmodule Mjolnir.Relay.Mint do
       "jti" => jti
     }
 
-    {_, jws} = JOSE.JWT.sign(jwk, %{"alg" => "EdDSA", "kid" => kid}, payload)
-    {_, token} = JOSE.JWS.compact(jws)
-    token
+    try do
+      {_, jws} = JOSE.JWT.sign(jwk, %{"alg" => "EdDSA", "kid" => kid}, payload)
+      {_, token} = JOSE.JWS.compact(jws)
+      token
+    rescue
+      _ -> :error
+    end
   end
 
   defp jti do

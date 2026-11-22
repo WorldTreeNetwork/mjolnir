@@ -48,7 +48,7 @@ On WebTransport the session is rooted at the token root, so the client publishes
 The relay already rejects a path outside that grant. A token for room R, once admitted, cannot read a broadcast under room S. The test is that read, not a second dial aimed at S.
 
 **D8. Refresh is reconnecting before expiry. In-band AUTH is refused.**
-Maximum life stays 3600 seconds. The mint's default is 300 seconds (D12). The client mints the next token and opens the next session before `exp`, then drops the old one. For that moment two sessions may hold the same broadcast path. The relay does not pick a winner. A forced gap after expiry is the failure case, not the plan.
+Maximum life stays 3600 seconds. The mint's default is that ceiling (D12). The client mints the next token and opens the next session before `exp`, then drops the old one. For that moment two sessions may hold the same broadcast path. The relay does not pick a winner. A forced gap after expiry is the failure case, not the plan.
 
 WebTransport can present another token on a live session (`moq-net` AUTH, `Admission::attached`). The earlier draft said no such message exists. That was false. The decider now refuses `attached()` (`web_grant` returns `in-band token`). A test first showed the second token admitted, then passed once the refusal was added. This node does not adopt in-band refresh. Iroh's handler admits once per connection and has no in-band AUTH. An Iroh client refreshes the same way: a new session before `exp`. The relay closes either session when its own token expires.
 
@@ -81,12 +81,12 @@ No `/api` route accepts a private key or a public key. Both procedures are `scri
 **D11. One signing key family is still one relay.**
 `add-edge-relay` says a signing key is trusted by exactly one `:relay_host`. Rotation replaces the key on this host's file only. The mint returns `relay_host` from `MJOLNIR_RELAY_HOST`. The token dialect has no audience claim, and the mint must not add a default `aud`. A token presented to a different relay fails as an unknown key.
 
-**D12. Default life is 300 seconds. The caller may ask for less or more, up to the relay ceiling.**
-With no kick, the default is the real bound on a removed participant who can mint again. A guest cannot. For a guest, the `ttl` the owner chose is the length of the call. Alternative: default to the maximum. That leaves a removed participant in the room for up to an hour. The short default makes the owner mint again when the call should continue.
+**D12. Default life is the ceiling, 3600 seconds unless `MJOLNIR_RELAY_TOKEN_MAX_TTL` is lower.**
+A five-minute default ends every call every five minutes: when a participant reconnects, a subscriber that does not resubscribe loses that participant's media. The handoff measurement recorded that hole. Resubscribe-on-announce in the client is a precondition for a call longer than one token, and for returning to a short default. A guest still cannot mint. The token the owner handed them lasts until its own `exp`.
 
 The ceiling is `MJOLNIR_RELAY_TOKEN_MAX_TTL` in `/etc/mjolnir-relay/relay.env`, default 3600 when the line is absent. The mint reads that file at each call. It does not read `MJOLNIR_RELAY_ENABLED`, `MJOLNIR_RELAY_HOST`, or the ceiling from the controller environment or from `config/config.exs`. Those three values have one source, the relay env file, which is `0640` root and readable by the root BEAM. Enabled other than `true`, or host unset, is 503. A `ttl` above the ceiling is 400 before a signature.
 
-`ttl` is a JSON integer in the body, key `ttl`. Omitted means 300, still clamped to the ceiling when the ceiling is lower. `0`, a negative, a value above the ceiling, a string, and a float are 400 before a signature.
+`ttl` is a JSON integer in the body, key `ttl`. Omitted means the ceiling. `0`, a negative, a value above the ceiling, a string, and a float are 400 before a signature.
 
 The response is JSON: `token`, `expires` (unix seconds), `root`, `publish` (one string), `subscribe` (one string), `relay_host`. `Cache-Control: no-store`. No private key. Each token has a `jti` of 22 base64url characters from 128 random bits (ASCII graphic, 1 to 128). The mint logs the caller's `sub`, the owner, the room, the participant label, the `jti`, and `exp`, and not the token. The WebTransport token rides in `?jwt=`. This work does not log that query. Acceptance greps the relay journal for the token string.
 

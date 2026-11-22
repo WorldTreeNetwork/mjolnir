@@ -1,5 +1,6 @@
 defmodule Mjolnir.Relay.MintTest do
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
 
   @moduletag :tmp_dir
 
@@ -38,33 +39,80 @@ defmodule Mjolnir.Relay.MintTest do
     [env_path: ctx.env, key_path: ctx.key, uid: ctx.uid]
   end
 
-  test "mints a 300 second token and ignores the header owner", ctx do
-    assert {:ok, token} =
-             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "standup", "alice", %{}, opts(ctx))
+  test "omitted ttl uses the ceiling and the header owner is not an argument", ctx do
+    assert {:ok, minted} =
+             Mjolnir.Relay.Mint.issue(
+               ctx.caller.("relay:join"),
+               "standup",
+               "alice",
+               %{},
+               opts(ctx)
+             )
 
-    assert token.root == "t/#{ctx.owner}/standup"
-    assert token.publish == "alice/**"
-    assert token.subscribe == "**"
-    assert token.relay_host == "relay.test"
-    assert token.expires - System.system_time(:second) in 299..300
+    assert minted.root == "t/#{ctx.owner}/standup"
+    assert minted.publish == "alice/**"
+    assert minted.subscribe == "**"
+    assert minted.relay_host == "relay.test"
+    assert (minted.expires - System.system_time(:second)) in 3599..3600
+
+    [header_b64, payload_b64, _sig] = String.split(minted.token, ".")
+    header = Jason.decode!(Base.url_decode64!(header_b64, padding: false))
+    claims = Jason.decode!(Base.url_decode64!(payload_b64, padding: false))
+    assert header["alg"] == "EdDSA"
+    assert header["kid"] == "mintKid1"
+
+    assert Map.keys(claims) |> Enum.sort() == [
+             "exp",
+             "iat",
+             "jti",
+             "publish",
+             "root",
+             "subscribe"
+           ]
+
+    assert claims["root"] == minted.root
+    assert claims["publish"] == ["alice/**"]
+    assert claims["subscribe"] == ["**"]
+    assert claims["exp"] == minted.expires
+    assert String.length(claims["jti"]) == 22
+    refute Map.has_key?(claims, "aud")
   end
 
   test "ttl edges are 400", ctx do
     caller = ctx.caller.("relay:join")
 
-    for body <- [%{"ttl" => 0}, %{"ttl" => -1}, %{"ttl" => 3601}, %{"ttl" => "30"}, %{"ttl" => 1.5}] do
-      assert {:error, 400, "bad_ttl"} = Mjolnir.Relay.Mint.issue(caller, "standup", "alice", body, opts(ctx))
+    for body <- [
+          %{"ttl" => 0},
+          %{"ttl" => -1},
+          %{"ttl" => 3601},
+          %{"ttl" => "30"},
+          %{"ttl" => 1.5}
+        ] do
+      assert {:error, 400, "bad_ttl"} =
+               Mjolnir.Relay.Mint.issue(caller, "standup", "alice", body, opts(ctx))
     end
   end
 
   test "other principals and a bad sub are 403", ctx do
     for kind <- [:operator, :sites, :capability, :ceremony] do
       assert {:error, 403, _} =
-               Mjolnir.Relay.Mint.issue(%{kind: kind, sub: ctx.owner, scopes: "relay:join"}, "r", "p", %{}, opts(ctx))
+               Mjolnir.Relay.Mint.issue(
+                 %{kind: kind, sub: ctx.owner, scopes: "relay:join"},
+                 "r",
+                 "p",
+                 %{},
+                 opts(ctx)
+               )
     end
 
     assert {:error, 403, _} =
-             Mjolnir.Relay.Mint.issue(%{kind: :user, sub: "not-an-owner", scopes: "relay:join"}, "r", "p", %{}, opts(ctx))
+             Mjolnir.Relay.Mint.issue(
+               %{kind: :user, sub: "not-an-owner", scopes: "relay:join"},
+               "r",
+               "p",
+               %{},
+               opts(ctx)
+             )
   end
 
   test "bad segments are 400", ctx do
@@ -73,6 +121,9 @@ defmodule Mjolnir.Relay.MintTest do
     for bad <- ["", String.duplicate("a", 65), ".", "..", "a/b", "a\\b", "*", "a\n", "room\n"] do
       assert {:error, 400, "bad_segment"} =
                Mjolnir.Relay.Mint.issue(caller, bad, "alice", %{}, opts(ctx))
+
+      assert {:error, 400, "bad_segment"} =
+               Mjolnir.Relay.Mint.issue(caller, "standup", bad, %{}, opts(ctx))
     end
   end
 
@@ -99,5 +150,114 @@ defmodule Mjolnir.Relay.MintTest do
 
     assert {:error, 503, "relay_unavailable"} =
              Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+  end
+
+  test "a trailing space and one pair of quotes parse, and a bad ceiling is 503", ctx do
+    File.write!(ctx.env, """
+    MJOLNIR_RELAY_ENABLED=true
+    MJOLNIR_RELAY_HOST="relay.test"
+    MJOLNIR_RELAY_TOKEN_MAX_TTL=3600 
+    """)
+
+    assert {:ok, minted} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+
+    assert minted.relay_host == "relay.test"
+    assert (minted.expires - System.system_time(:second)) in 3599..3600
+
+    File.write!(ctx.env, """
+    MJOLNIR_RELAY_ENABLED=true
+    MJOLNIR_RELAY_HOST=relay.test
+    MJOLNIR_RELAY_TOKEN_MAX_TTL=60
+    """)
+
+    assert {:ok, short} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+
+    assert (short.expires - System.system_time(:second)) in 59..60
+
+    assert {:error, 400, "bad_ttl"} =
+             Mjolnir.Relay.Mint.issue(
+               ctx.caller.("relay:join"),
+               "r",
+               "p",
+               %{"ttl" => 61},
+               opts(ctx)
+             )
+
+    File.write!(ctx.env, """
+    MJOLNIR_RELAY_ENABLED=true
+    MJOLNIR_RELAY_HOST=relay.test
+    MJOLNIR_RELAY_TOKEN_MAX_TTL=nope
+    """)
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+  end
+
+  test "a key with d and no x, or with no d, is 503 and is not logged", ctx do
+    raw = Jason.decode!(File.read!(ctx.key))
+
+    File.write!(ctx.key, Jason.encode!(Map.delete(raw, "x")))
+
+    log =
+      capture_log(fn ->
+        assert {:error, 503, "relay_unavailable"} =
+                 Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+      end)
+
+    refute log =~ raw["d"]
+
+    File.write!(ctx.key, Jason.encode!(Map.delete(raw, "d")))
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+  end
+
+  test "missing key, wrong uid, group-writable directory, and no kid are 503", ctx do
+    missing = [env_path: ctx.env, key_path: Path.join(ctx.key, "absent.jwk"), uid: ctx.uid]
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, missing)
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(
+               ctx.caller.("relay:join"),
+               "r",
+               "p",
+               %{},
+               Keyword.put(opts(ctx), :uid, ctx.uid + 1)
+             )
+
+    File.chmod!(Path.dirname(ctx.key), 0o720)
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+
+    File.chmod!(Path.dirname(ctx.key), 0o700)
+    raw = Jason.decode!(File.read!(ctx.key))
+    File.write!(ctx.key, Jason.encode!(Map.delete(raw, "kid")))
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+  end
+
+  test "the log line has no token", ctx do
+    log =
+      capture_log(fn ->
+        assert {:ok, minted} =
+                 Mjolnir.Relay.Mint.issue(
+                   ctx.caller.("relay:join"),
+                   "standup",
+                   "alice",
+                   %{},
+                   opts(ctx)
+                 )
+
+        send(self(), {:token, minted.token})
+      end)
+
+    assert_received {:token, token}
+    refute log =~ token
   end
 end
