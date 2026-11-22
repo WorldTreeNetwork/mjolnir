@@ -34,6 +34,14 @@ fi
 
 cmd="${1:-rotate}"
 
+# Test hook. A real crash is this exit. The next run must recover.
+stop_after() {
+  if [[ "${RELAY_MINT_KEY_FAIL_AFTER:-}" == "$1" ]]; then
+    echo "relay-mint-key: stopped after $1" >&2
+    exit 75
+  fi
+}
+
 drain_seconds() {
   local line
   line="$(grep -E '^MJOLNIR_RELAY_DRAIN_SECONDS=' "$ENV_FILE" 2>/dev/null | tail -1 || true)"
@@ -233,6 +241,7 @@ rotate() {
   fi
   if [[ ! -f "$NEXT" ]]; then
     generate_into "$NEXT" "$(new_kid)"
+    stop_after generate
   fi
   local candidate
   candidate="$(mktemp)"
@@ -246,17 +255,20 @@ rotate() {
   cp -f "$KEYS" "$previous"
   mv -f "$candidate" "$KEYS"
   chmod 0644 "$KEYS"
+  stop_after published
   if ! confirm_active "$KEYS"; then
     mv -f "$previous" "$KEYS"
     echo "relay-mint-key: restored the previous public set; signer unchanged" >&2
     exit 1
   fi
   rm -f "$previous"
+  stop_after confirmed
   local not_before hash kid
   not_before="$(( $(date +%s) + $(ceiling_seconds) + 60 ))"
   hash="$(sha256_file "$KEYS")"
   kid="$(jwk_kid "$NEXT")"
   write_state "$kid" "$not_before" "$hash"
+  stop_after state
   mv -f "$NEXT" "$CURRENT"
   mv -f "${NEXT}.pub" "${CURRENT}.pub"
   chmod 0600 "$CURRENT"
