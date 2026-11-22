@@ -64,11 +64,6 @@ pub fn load_verify_keys(path: &Path) -> anyhow::Result<KeySet> {
     let public = loaded
         .public()
         .map_err(|err| anyhow::anyhow!("key file is not a public verify set: {err}"))?;
-    if public.to_str().ok().as_deref() != Some(raw.trim())
-        && public.to_str().ok().as_deref() != loaded.to_str().ok().as_deref()
-    {
-        // A private key's public form differs. Compare the in-memory sets.
-    }
     let loaded_json = loaded
         .to_str()
         .map_err(|err| anyhow::anyhow!("key file: {err}"))?;
@@ -78,12 +73,16 @@ pub fn load_verify_keys(path: &Path) -> anyhow::Result<KeySet> {
     if loaded_json != public_json {
         anyhow::bail!("key file holds a private key");
     }
+    let mut seen_kids = std::collections::BTreeSet::new();
     for key in &public.keys {
-        if key.kid.is_none() {
+        let Some(kid) = &key.kid else {
             anyhow::bail!("key file holds a key with no kid");
-        }
+        };
         if !algorithm_allowed(key.algorithm) {
             anyhow::bail!("key file holds a disallowed algorithm");
+        }
+        if !seen_kids.insert(format!("{kid:?}")) {
+            anyhow::bail!("key file holds a duplicate kid");
         }
     }
     if public.keys.is_empty() {
@@ -115,6 +114,9 @@ pub fn profile(claims: &Claims, max_ttl: Duration, now: kio::clock::Wall) -> Res
         if now < not_before {
             return Err(Refuse::Profile("not yet valid"));
         }
+    }
+    if issued > now + Duration::from_secs(5) {
+        return Err(Refuse::Profile("issued in the future"));
     }
     if now >= expires {
         return Err(Refuse::Profile("expired"));
@@ -285,6 +287,32 @@ pub fn cert_usable(cert_pem: &str, host: &str, now: SystemTime) -> anyhow::Resul
 /// The key file and its directory are root-owned and not writable by group
 /// or other. A directory owner can replace the file even when the file
 /// itself is not writable.
+/// Remembers the mtime of the last key file that loaded. A failed load does
+/// not update that mtime, so a later chmod of the same inode is tried again.
+#[derive(Default)]
+pub struct KeyWatch {
+    loaded_mtime: Option<std::time::SystemTime>,
+}
+
+impl KeyWatch {
+    pub fn observe(&mut self, path: &Path) -> anyhow::Result<Option<(KeySet, String)>> {
+        let modified = std::fs::metadata(path).ok().and_then(|meta| meta.modified().ok());
+        if self.loaded_mtime.is_some() && modified == self.loaded_mtime {
+            return Ok(None);
+        }
+        match load_verify_keys(path).and_then(|set| {
+            let hash = file_sha256(path)?;
+            Ok((set, hash))
+        }) {
+            Ok(loaded) => {
+                self.loaded_mtime = modified;
+                Ok(Some(loaded))
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
 pub fn key_file_trusted(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::MetadataExt;
     let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).ok_or_else(|| {
@@ -507,8 +535,17 @@ mod tests {
             .with_subscribe(["**".parse().unwrap()])
             .with_expires(now + Duration::from_secs(60));
         assert!(assess(Some(&sign(&key, &no_iat)), &root, &set, DEFAULT_MAX_TTL).is_err());
-        // Today the WebTransport decider does not read Admission::attached.
-        // A second in-band token is assessed like a new session and admitted.
+        let future = sign(
+            &key,
+            &claims(&root, now + Duration::from_secs(3600), now + Duration::from_secs(7200)),
+        );
+        assert!(
+            matches!(
+                assess(Some(&future), &root, &set, DEFAULT_MAX_TTL),
+                Err(Refuse::Profile(_))
+            ),
+            "a future iat was accepted"
+        );
         assert!(
             web_grant(true, Some(&token), &root, &set, DEFAULT_MAX_TTL).is_err(),
             "in-band token was admitted"
@@ -523,6 +560,38 @@ mod tests {
         ));
         let outside = format!("{root}x/nope");
         assert!(assess(Some(&token), &outside, &set, DEFAULT_MAX_TTL).is_err());
+    }
+
+    #[test]
+    fn room_rooted_token_isolates_rooms_and_participants_on_both_deciders() {
+        let owner = owner();
+        let room = format!("t/{owner}/standup");
+        let other = format!("t/{owner}/other");
+        let kid = moq_auth::KeyId::decode("room-kid").unwrap();
+        let key = Key::generate(Algorithm::EdDSA, Some(kid)).unwrap();
+        let now = kio::clock::wall();
+        let claims = Claims::default()
+            .with_root(&room)
+            .with_publish(["alice/**".parse().unwrap()])
+            .with_subscribe(["**".parse().unwrap()])
+            .with_issued(now)
+            .with_expires(now + Duration::from_secs(60));
+        let token = sign(&key, &claims);
+        let set = keyset(&key);
+        // WebTransport calls web_grant. Iroh calls assess and then ext_grant.
+        let grant = assess(Some(&token), &room, &set, DEFAULT_MAX_TTL).expect("own room");
+        assert!(web_grant(false, Some(&token), &room, &set, DEFAULT_MAX_TTL).is_ok());
+        assert!(
+            assess(Some(&token), &other, &set, DEFAULT_MAX_TTL).is_err(),
+            "cross-room read was admitted"
+        );
+        assert!(web_grant(false, Some(&token), &other, &set, DEFAULT_MAX_TTL).is_err());
+        let published = format!("{:?}", ext_grant(&grant).publish);
+        assert!(published.contains("standup/alice"), "{published}");
+        assert!(!published.contains("bob"), "{published}");
+        let subscribed = format!("{:?}", ext_grant(&grant).subscribe);
+        assert!(subscribed.contains(&room), "{subscribed}");
+        assert!(!subscribed.contains("other"), "{subscribed}");
     }
 
     #[test]
@@ -561,6 +630,58 @@ mod tests {
             Ok(_) => panic!("ES384 was accepted"),
             Err(err) => assert!(err.to_string().contains("algorithm"), "{err}"),
         }
+    }
+
+    #[test]
+    fn loader_rejects_a_private_key_an_empty_set_and_a_duplicate_kid() {
+        let dir = tempfile::tempdir().unwrap();
+        let kid = moq_auth::KeyId::decode("same-kid").unwrap();
+        let key = Key::generate(Algorithm::EdDSA, Some(kid)).unwrap();
+        let private_path = dir.path().join("private.json");
+        keyset(&key).to_file(&private_path).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&private_path).unwrap()).unwrap();
+        value["keys"][0]["d"] = serde_json::json!("c2VjcmV0");
+        std::fs::write(&private_path, value.to_string()).unwrap();
+        let err = match load_verify_keys(&private_path) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("private key accepted"),
+        };
+        assert!(err.contains("private"), "{err}");
+
+        let empty = dir.path().join("empty.json");
+        std::fs::write(&empty, r#"{"keys":[]}"#).unwrap();
+        let err = match load_verify_keys(&empty) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("empty set accepted"),
+        };
+        assert!(err.contains("no keys"), "{err}");
+
+        let public = key.public().unwrap();
+        let dup = dir.path().join("dup.json");
+        let one = serde_json::to_value(&public).unwrap();
+        std::fs::write(&dup, serde_json::json!({"keys": [one.clone(), one]}).to_string()).unwrap();
+        let err = match load_verify_keys(&dup) {
+            Err(err) => err.to_string(),
+            Ok(_) => panic!("duplicate kid accepted"),
+        };
+        assert!(err.contains("duplicate kid"), "{err}");
+    }
+
+    #[test]
+    fn a_key_file_that_becomes_readable_is_picked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let kid = moq_auth::KeyId::decode("readable").unwrap();
+        let key = Key::generate(Algorithm::EdDSA, Some(kid)).unwrap();
+        let path = dir.path().join("keys.json");
+        keyset(&key).to_file(&path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut watch = KeyWatch::default();
+        assert!(watch.observe(&path).is_err(), "an unreadable key file loaded");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = watch.observe(&path).expect("readable file");
+        assert!(loaded.is_some(), "the same mtime was latched after the failed load");
     }
 
     #[test]

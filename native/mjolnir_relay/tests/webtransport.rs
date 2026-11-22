@@ -100,7 +100,7 @@ async fn tokenless_webtransport_is_refused_and_sigterm_stops_a_second_session() 
 }
 
 #[tokio::test]
-async fn a_second_in_band_token_is_refused_and_the_session_stays_up() {
+async fn moq_net_at_this_revision_takes_no_in_band_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let (running, admissions) = start(dir.path()).await;
     let key = Key::generate(Algorithm::EdDSA, None).unwrap();

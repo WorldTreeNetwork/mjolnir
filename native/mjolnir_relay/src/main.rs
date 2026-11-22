@@ -11,7 +11,8 @@ use moq_auth::{Algorithm, Key, KeySet};
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
 use mjolnir_relay::{
-    IrohSessions, TokenPolicy, cert_usable, file_sha256, key_file_trusted, load_verify_keys,
+    IrohSessions, KeyWatch, TokenPolicy, cert_usable, file_sha256, key_file_trusted,
+    load_verify_keys,
 };
 use tokio::signal::unix::{SignalKind, signal};
 struct Settings {
@@ -100,6 +101,18 @@ fn cli_only() -> anyhow::Result<bool> {
             let id = moq_auth::KeyId::decode(kid)?;
             let key = Key::generate(Algorithm::EdDSA, Some(id))?;
             write_private_jwk(Path::new(path), &key)?;
+            let public = KeySet {
+                keys: vec![std::sync::Arc::new(key.public()?)],
+            };
+            println!("{}", public.to_str()?);
+            Ok(true)
+        }
+        Some("--public-from-private") => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("--public-from-private needs a path"))?;
+            let raw = std::fs::read_to_string(path)?;
+            let key: moq_auth::Key = serde_json::from_str(&raw)?;
             let public = KeySet {
                 keys: vec![std::sync::Arc::new(key.public()?)],
             };
@@ -268,21 +281,16 @@ fn spawn_key_watch(
     keys_ok: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
-        let mut last = std::fs::metadata(&path).ok().and_then(|meta| meta.modified().ok());
+        let mut watch = KeyWatch::default();
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let modified = std::fs::metadata(&path).ok().and_then(|meta| meta.modified().ok());
-            if modified == last {
-                continue;
-            }
-            last = modified;
             // A bad file refuses new sessions. It does not clear a drain,
-            // and a later good file does not reopen a drain.
-            match key_file_trusted(&path).and_then(|_| load_verify_keys(&path)).and_then(|set| {
-                let hash = file_sha256(&path)?;
-                Ok((set, hash))
-            }) {
-                Ok((set, hash)) => {
+            // and a later good file does not reopen a drain. A failed load
+            // does not latch the mtime, so making the file readable is enough.
+            let loaded = key_file_trusted(&path).and_then(|_| watch.observe(&path));
+            match loaded {
+                Ok(None) => {}
+                Ok(Some((set, hash))) => {
                     *keys.lock().expect("keys") = set;
                     keys_ok.store(true, Ordering::SeqCst);
                     write_active(&active, &hash);
