@@ -88,4 +88,16 @@ defmodule Mjolnir.Relay.MintTest do
     assert {:error, 503, _} =
              Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
   end
+
+  test "a missing env file and an unset host are 503", ctx do
+    missing = [env_path: Path.join(ctx.env, "no-such.env"), key_path: ctx.key, uid: ctx.uid]
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, missing)
+
+    File.write!(ctx.env, "MJOLNIR_RELAY_ENABLED=true\n")
+
+    assert {:error, 503, "relay_unavailable"} =
+             Mjolnir.Relay.Mint.issue(ctx.caller.("relay:join"), "r", "p", %{}, opts(ctx))
+  end
 end
