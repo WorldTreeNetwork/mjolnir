@@ -1,63 +1,110 @@
 ## ADDED Requirements
 
-### Requirement: The controller mints a room token
-The Mjolnir API SHALL mint a moq-auth JWT for one participant in one room. The route SHALL be `POST /api/relay/rooms/:room/participants/:participant/token`. The caller SHALL present scope `relay:join`. The room owner SHALL be the canonical owner in `x-owner-id`. A missing or non-canonical header SHALL be refused with 400 before a signature. A body field `owner_id` SHALL be ignored. A caller without `relay:join`, including a sites service token and the operator socket, SHALL be refused with 403. The signing key SHALL be read from `/var/lib/mjolnir/relay-mint/current.jwk`, mode `0600`, owner root. The API SHALL NOT accept a private key or a public key on any route. The response SHALL be the token, its expiry, its root, its publish pattern, its subscribe pattern, and the configured `:relay_host`. It SHALL NOT contain a private key.
+### Requirement: The controller mints a room token for the caller
+The Mjolnir API SHALL mint a moq-auth JWT for one participant label in one room. The route SHALL be `POST /api/relay/rooms/:room/participants/:participant/token`. The caller SHALL be a user principal (`principal_kind == :user`) and SHALL present scope `relay:join`. The operator socket, a sites service token, and any other principal SHALL be refused with 403 before a signature, including when that principal holds `relay:join`.
+
+The owner SHALL be the caller's verified `sub`, resolved as `Mjolnir.Deploy.Owner.resolve/2` resolves a non-operator, so `x-owner-id` is ignored. A canonical base58 `sub` SHALL be used as-is. A legacy 64-hex `sub` SHALL be re-encoded to canonical base58. Any other `sub` SHALL be refused with 403 before a signature. A body field `owner_id` SHALL be ignored. A user who sends another owner's id in the header SHALL NOT receive a token rooted at that other owner.
+
+The signing key SHALL be read from `/var/lib/mjolnir/relay-mint/current.jwk` on every mint. The file and its directory SHALL be root-owned. The directory SHALL NOT be writable by group or other. The file SHALL NOT be readable or writable by group or other. A failed check SHALL be 503 and SHALL NOT sign. A missing key, `MJOLNIR_RELAY_ENABLED` other than `true`, or an unset relay host SHALL be 503 and SHALL NOT sign.
+
+The token SHALL be EdDSA, SHALL carry the signing key's `kid`, SHALL set integer `iat` and `exp`, SHALL set a unique `jti`, and SHALL NOT set `aud` or any claim outside the moq-auth set `root`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti`, `iss`, `sub`. The default life SHALL be 300 seconds. A caller `ttl` SHALL be honored when it is greater than zero and at most `:relay_token_max_ttl`, and SHALL be refused otherwise. The response SHALL be the token, its expiry, its root, its publish pattern, its subscribe pattern, and the configured `:relay_host`. It SHALL NOT contain a private key. The mint SHALL log the caller's `sub`, the owner, the room, the participant label, the `jti`, and `exp`, and SHALL NOT log the token.
 
 #### Scenario: Authorized mint
-- GIVEN a caller with `relay:join` and a canonical `x-owner-id`
-- WHEN they mint for a room and a participant whose segments match the path rule
-- THEN the response token is signed by the current mint key
-- AND its root is `t/<that owner>/<room>`
-- AND its life from issue to expiry is at most `:relay_token_max_ttl`
+- GIVEN a user with `relay:join` and a canonical `sub`
+- WHEN they mint for a room and a participant whose segments match the path rule, with no `ttl`
+- THEN the response token is signed by the current mint key and carries that key's `kid`
+- AND its root is `t/<that sub>/<room>`
+- AND its life is 300 seconds
+- AND `x-owner-id`, if sent, is not the owner in the root
 
-#### Scenario: Wrong caller
-- GIVEN a caller without `relay:join`
+#### Scenario: Cross-tenant header
+- GIVEN a user whose `sub` is owner A
+- WHEN they mint with `x-owner-id` set to owner B
+- THEN the token root is `t/<A>/<room>`
+- AND no token rooted at B is signed
+
+#### Scenario: Sub is not an owner
+- GIVEN a user whose `sub` is neither canonical base58 nor 64-hex
+- WHEN they mint
+- THEN the response is 403 and no token is signed
+
+#### Scenario: Operator
+- GIVEN the operator principal, which holds every scope
 - WHEN they call the mint
 - THEN the response is 403 and no token is signed
 
-### Requirement: A room path binds publish to one participant
-A room path SHALL be `t/<owner id>/<room>/<participant>/<rest>`. `<room>` and `<participant>` SHALL each be one segment matching `[A-Za-z0-9_-]{1,64}` and SHALL NOT be `mjolnir-nopublish`. The token root SHALL be `t/<owner id>/<room>`. The subscribe pattern SHALL cover that root and every path under it. The publish pattern SHALL cover only `t/<owner id>/<room>/<participant>` and every path under it. The relay SHALL refuse a publish outside that publish pattern on WebTransport and on Iroh. A segment that breaks the rule SHALL be refused before a signature.
+#### Scenario: Relay not configured
+- GIVEN no mint key, or the relay disabled, or the relay host unset
+- WHEN a user with `relay:join` calls the mint
+- THEN the response is 503 and no token is signed
+
+### Requirement: A room path binds publish to one participant label
+A room path SHALL be `t/<owner id>/<room>/<participant>/<rest>`. `<room>` and `<participant>` SHALL each match the whole string `\A[A-Za-z0-9_-]{1,64}\z`. The token root SHALL be `t/<owner id>/<room>`. The publish pattern SHALL be `<participant>/**`. The subscribe pattern SHALL be `**`. Patterns are exact: a name matches only that name, and a subtree is `/**`.
+
+A WebTransport client is rooted at the token root. It publishes `P/track` and the exact name `P`. An Iroh client uses the absolute path `t/<owner>/R/P/track` and `t/<owner>/R/P`. The relay SHALL admit those publishes and SHALL refuse `Q` and `Q/track` in the spelling of that transport. A session admitted for room R SHALL be refused when it reads a broadcast under room S, in every spelling that transport can ask with, and its announcements SHALL list nothing from S. A segment that breaks the rule SHALL be refused with 400 before a signature. The refused segments include the empty segment, 65 characters, `.`, `..`, `%2F`, `%5C`, `*`, `%0A`, and a trailing newline.
 
 #### Scenario: Own track
-- GIVEN a token minted for participant P in room R
-- WHEN a client presents it and publishes `t/<owner>/R/P/track` on WebTransport, and another client does the same on Iroh
-- THEN both publishes are admitted
-- AND a subscribe of room R on each transport receives that track
+- GIVEN a token minted for label P in room R
+- WHEN a WebTransport client publishes `P/track` and `P`, and an Iroh client publishes `t/<owner>/R/P/track` and `t/<owner>/R/P`
+- THEN those publishes are admitted
+- AND a subscribe of room R on each transport receives them
 
 #### Scenario: Another participant
-- GIVEN a token minted for participant P in room R
-- WHEN a client presents it and publishes `t/<owner>/R/Q/track` on WebTransport, and on Iroh
-- THEN both publishes are refused
+- GIVEN a token minted for label P in room R
+- WHEN a WebTransport client publishes `Q/track` and `Q`, and an Iroh client publishes `t/<owner>/R/Q/track` and `t/<owner>/R/Q`
+- THEN those publishes are refused
 
-#### Scenario: Another room
-- GIVEN a token whose root is `t/<owner>/R`
-- WHEN it is presented for a session on `t/<owner>/S` on WebTransport, and on Iroh
-- THEN both sessions are refused
+#### Scenario: Another room, same session
+- GIVEN a session admitted for room R on WebTransport, and one admitted on Iroh
+- WHEN each asks for a broadcast under room S in the spellings that transport can use
+- THEN each request is refused
+- AND neither session's announcements list a broadcast from S
 
 #### Scenario: No token
 - GIVEN a client with no token
 - WHEN it opens a session on a room path on WebTransport, and on Iroh
 - THEN both sessions are refused
 
-### Requirement: Expiry ends the session
-The relay SHALL close a session when its token expires. The mint SHALL NOT issue a token whose life exceeds `:relay_token_max_ttl`. This capability SHALL NOT replace the token on an open session. A client that still wants the room SHALL mint a new token and open a new session.
+### Requirement: Expiry ends the session and the client reconnects first
+The relay SHALL close a session when its token expires, on WebTransport and on Iroh. The mint SHALL NOT issue a token whose life exceeds `:relay_token_max_ttl`. A second token presented on an open WebTransport session SHALL be refused. This capability SHALL NOT replace the grant of an open session. An Iroh session SHALL be admitted once. A client that still wants the room SHALL open a new session with a new token before the current token expires, then drop the old session. Two sessions MAY hold the same path during that handoff.
 
 #### Scenario: Call longer than the token
 - GIVEN an admitted session whose token then reaches `exp`
 - WHEN the relay applies that expiry
 - THEN the session is closed on the transport it used
-- AND a new session with a newly minted token for the same participant is admitted
+- AND a new session with a newly minted token for the same label is admitted
 
-### Requirement: Rotation revokes a signing key after one token life
-An operator rotation, run as root on the controller, SHALL install a new signing key, SHALL publish the new public key and the previous public key together to `/etc/mjolnir-relay/relay-keys.json` by rename, and SHALL sign every new token with the new key only. After `:relay_token_max_ttl` plus 60 seconds the public set SHALL be replaced, by rename, with the new key only, and the previous private key SHALL be deleted. A session already admitted SHALL keep that admission until its token expires, including after the previous public key leaves the file. A new session whose token was signed by a key no longer in the file SHALL be refused. No rotation step SHALL send key material through the gateway user or through an API route.
+#### Scenario: Second token on a live WebTransport session
+- GIVEN an admitted WebTransport session
+- WHEN the client presents another token in band
+- THEN the relay refuses that token
+- AND the session's grant is unchanged
 
-#### Scenario: Overlap
-- GIVEN a token signed by the previous key and a public set that still holds that key
-- WHEN a new session presents it before the overlap ends
+### Requirement: Routine rotation overlaps public keys and switches the signer after
+An operator routine rotation, run as root on the same host as the relay, SHALL give every key a unique `kid`. It SHALL write the next private key beside the current one, SHALL validate the public set of both, and SHALL rename that set into `/etc/mjolnir-relay/relay-keys.json`. It SHALL switch the signer to the next key only after `/run/mjolnir-relay/keys.active` equals that file's SHA-256. If `keys.active` is `invalid` or unchanged for ten seconds, it SHALL restore the previous public set and SHALL leave the signer unchanged. The first install SHALL make the public set exactly the mint key and SHALL remove any earlier key. After `:relay_token_max_ttl` plus 60 seconds it SHALL publish a set of the new key only and SHALL confirm `keys.active` again. A session already admitted SHALL keep that admission until its token expires. A new session whose token was signed by a key still in the set SHALL be admitted. No step SHALL send key material through the gateway user or through an API route. The mint SHALL NOT sign with a key absent from the set the relay has confirmed.
+
+#### Scenario: Both keys during the overlap
+- GIVEN a public set holding the current key and the next key, each with its own `kid`
+- WHEN a new session presents a token signed by either key, and the token carries that key's `kid`
 - THEN the session is admitted
 
-#### Scenario: After the overlap
-- GIVEN the public set holds only the new key
-- WHEN a new session presents a token signed by the previous key
+#### Scenario: No kid against two keys
+- GIVEN a public set of two keys
+- WHEN a token with no `kid` is presented
 - THEN the session is refused
-- AND a session that was admitted under the previous key before this replacement is still open until that token's expiry
+
+#### Scenario: Confirmation fails
+- GIVEN a candidate public set the relay marks `invalid`
+- WHEN rotation publishes it
+- THEN the previous public set is restored
+- AND the signer is still the key that was current before the attempt
+
+### Requirement: Emergency revoke drops every call on the host
+An emergency revoke SHALL publish only a new key, with no overlap, SHALL confirm `keys.active`, SHALL switch the signer to that key, and SHALL restart the relay. Live sessions SHALL end because the process restarts. A new session SHALL require a token signed by the new key. This procedure SHALL be stated as host-wide: every tenant on that relay drops. It SHALL NOT be the routine rotation.
+
+#### Scenario: Stolen mint key
+- GIVEN a routine overlap would leave the old public key in the set
+- WHEN the operator runs the emergency procedure instead
+- THEN the public set does not contain the old key
+- AND the relay process has restarted
+- AND a token signed by the old key is refused

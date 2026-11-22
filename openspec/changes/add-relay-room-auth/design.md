@@ -1,62 +1,92 @@
 # add-relay-room-auth — design
 
-Auth blast. This file is the contract a Fable read reviews before any code. Banner on the proposal stays PENDING.
+Auth blast. Banner on the proposal stays PENDING. This amendment answers the send-back in `reviews/2026-11-22-advise.md`.
 
-The relay already verifies a moq-auth JWT from `/etc/mjolnir-relay/relay-keys.json`, refuses a root that is not `t/<canonical owner>` or below it, and closes a session when the token's `exp` passes (`openspec/changes/add-edge-relay`). This change only decides who signs, which path is a room, and what rotation means.
+The relay verifies a moq-auth JWT from `/etc/mjolnir-relay/relay-keys.json` and refuses a root that is not `t/<canonical owner>` or below it (`openspec/changes/add-edge-relay`). WebTransport closes a session at `exp`. Iroh did not, until `Authorization.expires` was set from the token (`105acf0`). This change does not claim that close was already true on both transports before that fix.
 
 ## Decisions
 
 **D1. The controller API mints. The gateway does not.**
-The mint is a route on the Elixir API, the process that runs as root. It is not the `mjolnir-gateway` process and not a guest. Alternative: a separate mint binary. Rejected because the node says the mint is the Mjolnir API under the existing scope model, and a second process would need its own copy of the private key.
+The mint is a route on the Elixir API, the process that runs as root. It is not the `mjolnir-gateway` process and not a guest. Alternative: a separate mint binary. Rejected because the node says the mint is the Mjolnir API under the existing scope model.
 
-**D2. Scope is `relay:join`, added to the API scope list.**
-`Authz.require_scope/2` is the check. The scope is appended to the full set a verified user JWT receives in `Mjolnir.API.Auth`. A sites service token stays on its publish scope and cannot mint. The operator socket stays scope-empty and cannot mint. Alternative: reuse `vms:spawn`. Rejected because a VM spawn is not a room, and a stolen spawn token should not also sign media grants.
+**D2. Scope is `relay:join`, and the route is user-only.**
+`Authz.require_scope/2` is necessary and not sufficient. A verified user JWT receives the full scope list in `Mjolnir.API.Auth`, and the operator socket is assigned that same list (`auth.ex` gives `@all_scopes` to the operator principal). Appending `relay:join` therefore gives it to the operator too. The route additionally requires `principal_kind == :user`. The operator, a sites token, and a capability or ceremony principal are refused with 403 before a signature. Alternative: add the scope on the user path only and leave it off `@all_scopes`. Rejected because the operator path copies that list in one assignment, and a later edit that appends to the list would silently grant the operator the mint. The kind check stays the refusal even if the scope leaks onto the operator.
 
-**D3. The owner is the spawn header, not the body and not `sub`.**
-The room owner is `x-owner-id`, parsed with `Mjolnir.Deploy.Owner.parse/1`. A missing or non-canonical value is 400. A body `owner_id` is ignored. This matches spawn. `sub` on a user JWT is an identity string and is not required to be a 32-byte owner id, so using it as the path would mint roots the relay already refuses. Alternative: require `sub` itself to be the owner. That excludes every current login whose `sub` is not a canonical owner id. Open only if a later login change makes `sub` that id; this node does not.
+**D3. The owner is the caller's verified `sub`.**
+`Mjolnir.Deploy.Owner.resolve/2` is what spawn uses. For a principal other than `"localhost"` it returns that principal and ignores the header. This route never calls it for the operator, because D2 refuses the operator first. For a user it takes `sub` from the verified claims, ignores `x-owner-id`, and ignores a body `owner_id`.
+
+`sub` must be an owner id the relay will accept. `Owner.parse/1` accepts canonical base58 and rejects 64-hex. A legacy 64-hex `sub` is the same 32 bytes (`owner.ex` documents that, and `claim/2` rewrites it). The mint re-encodes that hex to canonical base58 and uses the base58 form in the root. Anything else is 403 before a signature, not a token rooted at a string the relay would refuse. A user who sends another owner's id in the header still receives a token rooted at their own `sub`, or a 403 when their own `sub` is not an owner id. They never receive the other tenant's root.
+
+The earlier draft said the header matches spawn. That was false. Spawn stamps a signed-in caller as their `sub`.
 
 **D4. Private key on the controller, root-only, not in `/etc/mjolnir`.**
-The signing key lives at `/var/lib/mjolnir/relay-mint/current.jwk` (mode `0600`, owner root:root). The directory is `0700` root:root. The BEAM runs as root and can read it. The gateway user `mjolnir` cannot. The previous key, during overlap, is `previous.jwk` beside it, same mode. The key is not a deploy secret: those files are injected into guest VMs. It is not under `/etc/mjolnir`: that tree is writable by the gateway user. It is not in `relay-keys.json`: that file is a public verify set and the relay refuses a private key there.
+The signing key lives at `/var/lib/mjolnir/relay-mint/current.jwk` (mode `0600`, owner root:root). The directory is `0700` root:root. The next key, before the signer switches, is `next.jwk` beside it, same mode. There is no `previous.jwk`. The mint never signs with a retired key, so keeping its private half has no use. The BEAM runs as root and can read these files. The gateway user `mjolnir` cannot. The key is not a deploy secret and not under `/etc/mjolnir`. It is not in `relay-keys.json`: that file is a public verify set.
 
-**D5. The public half is written by root, by rename, into the file the relay already watches.**
-The mint's installer writes only the public JWK set to `/etc/mjolnir-relay/relay-keys.json` by rename, as root. The relay already reloads that file within five seconds and admits new sessions with the new set. The gateway user is not in the path: it does not own the directory, and no gateway route accepts a key. Alternative: the relay pulls a JWKS from the API. Rejected because that puts the gateway, or any API caller, on the trust path the last change removed.
+Each mint reads `current.jwk` from disk and checks the file and its directory: owner root, no group or other write on the directory, no group or other access on the file. A failure is 503 and no signature. A key cached at boot is not used.
 
-**D6. Rooms are not stored.**
-A room exists when a token is minted for it. There is no room table. Two callers who share an owner and both hold `relay:join` can both mint for the same room. That is the tenant. Callers of a different owner cannot, because the root would not verify against their header. Alternative: an ACL of participant ids. That is a registry, and this node does not have one.
+**D5. The public half is written by root, on this host, into the file the relay already watches.**
+Controller and relay are one host for this node. The mint's installer renames a public-only JWK set into `/etc/mjolnir-relay/relay-keys.json` as root. The relay reloads that file and writes its SHA-256 to `/run/mjolnir-relay/keys.active`, or `invalid`. The gateway user is not in the path. A relay on another machine needs its own root-run copy and the same `keys.active` check. This node does not specify that copy.
 
-**D7. Path.**
+First install replaces the file. The set becomes exactly the mint key. An operator fixture key already in the file is removed, not kept beside the mint key. A token signed by the fixture then fails as an unknown key.
+
+**D6. Rooms are not stored. The minter is trusted for every label in its rooms.**
+A room exists when a token is minted for it. There is no room table. Participant names are labels the minter chooses, not authenticated identities. The owner can mint a second token for a label that is already in use. Two live sessions may publish as `alice`. That is accepted because the only minter for a tenant is that tenant's account. A different account cannot mint here by presenting the other owner's header. The earlier sentence that "the root would not verify against their header" was false: the header is whatever they send. D3 is the control.
+
+**D7. Path and the exact patterns.**
 `t/<owner id>/<room>/<participant>/<rest>`.
 
 - `<owner id>` is the canonical id from D3.
-- `<room>` and `<participant>` are one segment each, matching `[A-Za-z0-9_-]{1,64}`.
-- Neither segment may be `.`, `..`, empty, or `mjolnir-nopublish`.
+- `<room>` and `<participant>` are one segment each. The whole segment matches `\A[A-Za-z0-9_-]{1,64}\z`. An Elixir `^…$` is not the check: it accepts a trailing newline.
 - The token `root` is `t/<owner id>/<room>`.
-- `subscribe` is one pattern that covers that room and everything under it.
-- `publish` is one pattern that covers only `t/<owner id>/<room>/<participant>` and everything under it.
-- `<rest>` is the track the client chooses. The mint does not name tracks.
+- `publish` is `["<participant>/**"]`.
+- `subscribe` is `["**"]`.
 
-The relay already rejects a session path outside the token root. The participant boundary is the publish pattern, not a second check invented beside moq. A token for room B presented to room A fails the existing "path outside the grant" rule.
+`foo` matches only `foo`. `foo/**` matches `foo` and everything under it. `**` matches every path under the root (`moq-pattern`, pinned moq). A bare `<participant>` would grant one broadcast of that exact name and would refuse `<participant>/track`. The earlier hypothesis that a bare segment is a prefix is withdrawn.
 
-**D8. A call outlives a token by reconnecting, not by refresh.**
-Maximum life stays `:relay_token_max_ttl` (3600 seconds), counted from `iat` to `exp`, which the relay already enforces. The pinned session handler admits once, at the handshake, and closes the session when the token expires. There is no mid-session replace-the-token message. This node does not add one. When the session closes, the client mints again and connects again. Media between the close and the new session is gone. Alternative: refresh in place. That is a protocol change in the relay and is not required to meet the acceptance.
+On WebTransport the session is rooted at the token root, so the client publishes `P/track` and subscribes inside the room. On Iroh the relay prefixes the root itself, and the client uses the absolute path `t/<owner>/R/P/track`. Both transports match the same patterns. Dialing a deeper path does not shift them: moq-relay scopes the session to the grant's root.
 
-**D9. Revocation is key rotation. Live sessions are not cut.**
+The relay already rejects a path outside that grant. A token for room R, once admitted, cannot read a broadcast under room S. The test is that read, not a second dial aimed at S.
+
+**D8. Refresh is reconnecting before expiry. In-band AUTH is refused.**
+Maximum life stays 3600 seconds. The mint's default is 300 seconds (D12). The client mints the next token and opens the next session before `exp`, then drops the old one. For that moment two sessions may hold the same broadcast path. The relay does not pick a winner. A forced gap after expiry is the failure case, not the plan.
+
+WebTransport can present another token on a live session (`moq-net` AUTH, `Admission::attached`). The earlier draft said no such message exists. That was false. The decider now refuses `attached()` (`web_grant` returns `in-band token`). A test first showed the second token admitted, then passed once the refusal was added. This node does not adopt in-band refresh. Iroh's handler admits once per connection and has no in-band AUTH. An Iroh client refreshes the same way: a new session before `exp`. The relay closes either session when its own token expires.
+
+Alternative: adopt in-band re-auth on WebTransport so the session survives the first `exp`. Rejected for this node. It is not available on Iroh, the pinned JavaScript client was not shown to present it, and the refusal is already the code.
+
+**D9. Routine rotation revokes nothing early.**
+Every mint key has a unique `kid`. Every minted token carries that `kid`. At the pinned revision a token with no `kid` verifies only when the set holds exactly one key and that key has no `kid`, and a duplicate `kid` makes the set fail to parse. The overlap set holds two keys, so a missing `kid` would refuse every token.
+
 The operator, as root, on the controller host:
 
-1. Generate a new EdDSA keypair. Write the private half to `current.jwk` only after copying the old private half to `previous.jwk` (both `0600` root:root, write via rename).
-2. Write a public JWK set of the new key and the previous key to `/etc/mjolnir-relay/relay-keys.json` via rename.
-3. From that rename, new mints sign with the new key only.
-4. Wait `:relay_token_max_ttl` (3600 seconds) plus 60 seconds of clock skew.
-5. Write a public set of the new key only, via rename. Delete `previous.jwk`.
+1. Generate the next EdDSA key with a new `kid`. Write it to `next.jwk` (`0600` root:root, via rename). Leave `current.jwk` in place. The mint still signs with `current.jwk`.
+2. Build the public set `{current, next}`. Validate it with the relay's own loader (public keys only, EdDSA or ES256, unique `kid`s, file shape the unit accepts). Do not rename yet.
+3. Rename that set into `/etc/mjolnir-relay/relay-keys.json`. Wait until `/run/mjolnir-relay/keys.active` equals that file's SHA-256. If it reads `invalid`, or it does not change within ten seconds, rename the previous set back and exit non-zero. The signer has not changed.
+4. Only then rename `next.jwk` onto `current.jwk`. New mints sign with the new key. Tokens already signed by the old key still verify, because its public half is in the set.
+5. After the longest life the mint will issue (3600 seconds) plus 60 seconds, rename a public set of the new key only, confirm `keys.active` again the same way, and delete nothing that can still sign: the old private half was never kept.
 
-During the wait, a token signed by the previous key still verifies. That is the overlap. After step 5, a new session with the old key is an unknown key and is refused. A session admitted before step 5 keeps that admission until its own `exp`, including across step 5. The relay already specifies that. Rotation does not abort it. A single participant cannot be kicked without waiting out their token. That kick list is out of scope (proposal).
+Routine rotation is key hygiene. It shortens no token and removes no participant. A token signed by the old key keeps working until its own `exp`, and its holder may reconnect until then. A session already admitted stays up until that `exp`, including after step 5.
 
-**D10. Rotation is a root script, not an API route.**
-`scripts/relay-mint-key.sh` on the controller host performs D9. No `/api` route accepts a private key or a public key. Alternative: `mj relay keys rotate` over the API. Rejected here because any route the gateway user can reach, or any bearer that can call the API, would be a path onto the verify set.
+The mint is never observed signing with a key that is absent from the set `keys.active` has confirmed.
 
-**D11. One signing key is still one relay.**
-`add-edge-relay` already says a signing key is trusted by exactly one `:relay_host`. Rotation replaces that key. It does not copy the new public half into a second host's file. The mint returns `relay_host` from `MJOLNIR_RELAY_HOST` so the client knows which host the token is for. The token dialect still has no audience claim. A token presented to a different relay fails as an unknown key.
+**D10. Emergency revoke is a different procedure, and it is host-wide.**
+Replace the public set at once with one new key. Do not publish the old public key. Confirm `keys.active`, then switch `current.jwk` to that new key. Restart `mjolnir-relay` so live sessions end. Every call of every tenant on the host drops. New sessions need a token signed by the new key. A compromised mint key uses this procedure. Routine overlap would keep the stolen key trusted until the old tokens expire.
+
+No `/api` route accepts a private key or a public key. Both procedures are `scripts/relay-mint-key.sh` as root.
+
+**D11. One signing key family is still one relay.**
+`add-edge-relay` says a signing key is trusted by exactly one `:relay_host`. Rotation replaces the key on this host's file only. The mint returns `relay_host` from `MJOLNIR_RELAY_HOST`. The token dialect has no audience claim, and the mint must not add a default `aud`. A token presented to a different relay fails as an unknown key.
+
+**D12. Default life is 300 seconds. The caller may ask for less or more, up to 3600.**
+With no kick, the default is the real bound on a removed participant. Alternative: default to the maximum, 3600 seconds. That is one line simpler and leaves a removed participant in the room for up to an hour, reconnecting the whole time. The short default makes the owner mint again, or hand a new bearer to a guest, when the call should continue. The client is expected to reconnect before `exp`, so 300 seconds is a mint interval, not a media gap. The relay's `MJOLNIR_RELAY_TOKEN_MAX_TTL` and the mint's ceiling are the same number. If the mint's ceiling were larger, every token would be refused. The mint reads the relay's ceiling and will not issue above it.
+
+The response is the token, its expiry, its root, its publish pattern, its subscribe pattern, and `relay_host`. No private key. Each token has a `jti`. The mint logs the caller's `sub`, the owner, the room, the participant label, the `jti`, and `exp`. It does not log the token. The WebTransport token rides in `?jwt=`. That query is not written to a log by this work.
+
+Claims are only those moq-auth accepts: `root`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti`, `iss`, `sub`. `exp` and `iat` are integers. Algorithm is EdDSA. Header `kid` is the signing key's `kid`. No `aud`.
+
+**D13. Disabled, missing key, and bad key mode are 503.**
+No `current.jwk`, a key file the mode check rejects, `MJOLNIR_RELAY_ENABLED` not `true`, or `MJOLNIR_RELAY_HOST` unset: 503 and no signature. The earlier "Off" case that still returned a token is withdrawn.
 
 ## Unverified hypotheses
 
-- **H1. Room subscribe and participant publish are expressible as one moq grant pattern each.** Claim: the moq revision pinned by `native/mjolnir_relay` treats a grant pattern as a prefix covering that path and its children, so D7 needs no extra relay check. Confidence: medium. The current prover used concrete paths (`a/b`), not a wildcard, and `grant_from/1` passes the claim's path strings through. Verification: before any mint code, a fixture token whose publish pattern is only `<participant>` must be able to publish `<participant>/track` and must be refused for `<other>/track`, on both transports, against the pinned crate. If the pattern is exact-only, the mint uses the wildcard syntax that revision documents, and the spec's "covers" wording stays. Synthesis: the act task that names the pattern strings.
+- **H-mint. An Elixir signer can emit this token.** Claim: a token produced by the mint verifies under `KeySet::verify` at moq rev `4a6f522`, with `kid`, EdDSA, integer `exp` and `iat`, and no `aud`. Confidence: medium. Elixir JWT libraries often set `aud` or string timestamps, and moq-auth refuses an unknown claim. Verification: the cross-language fixture in the tasks, before the route is wired to clients. Kill condition: if the fixture does not verify, the mint does not ship on a different claim shape. Synthesis: that fixture task.
