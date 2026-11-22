@@ -170,7 +170,7 @@ Universal host services on `:host_api_ip` (`10.200.0.1`, `dummy-mjolnir` — not
 - **Postgres** `:5432` — declared tenant DBs only (`DATABASE_URL` in deploy secrets). Runbook: `docs/runbooks/host-postgres-tenants.md`. Extra app keys: `mj secrets set <app> KEY` then redeploy. Guide: `docs/guide/deploying-an-app.md`.
 - **Redis** `:6379` — AUTH, AOF everysec, systemd not OTP (`REDIS_URL` in deploy secrets). Runbook: `docs/runbooks/host-redis.md`. ADR 0007.
 - **API** `:4000` — `api_url`. Guests do not get the localhost auth bypass.
-- **Edge relay** — public UDP 443, not a guest locator. Off unless `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST` is set. Only `deploy.sh --relay` installs or removes `mjolnir-relay` and the firewall rule tagged `mjolnir-relay`. Runbook: `docs/runbooks/edge-relay.md`. Do not enable it on `45.76.77.97` until Duke names the host.
+- **Edge relay** — public UDP 443, not a guest locator. Off unless `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST` is set. Only `deploy.sh --relay` installs or removes `mjolnir-relay` and the firewall rule tagged `mjolnir-relay`. Runbook: `docs/runbooks/edge-relay.md`. Do not enable it on `45.76.77.97` until Duke names the host. Room mint: `POST /api/relay/rooms/:room/participants/:participant/token` (user + `relay:join`). Private key `/var/lib/mjolnir/relay-mint/current.jwk` (`0600` root). Public set `/etc/mjolnir-relay/relay-keys.json`. The mint reads `/etc/mjolnir-relay/relay.env` on each call. Rotation: `scripts/relay-mint-key.sh`.
 
 ### Host Setup (Linux only, requires root)
 
