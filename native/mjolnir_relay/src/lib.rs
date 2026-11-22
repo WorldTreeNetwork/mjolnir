@@ -482,6 +482,19 @@ mod tests {
     }
 
     #[test]
+    fn elixir_eddsa_token_verifies() {
+        let raw = include_str!("../tests/fixtures/elixir-eddsa.json");
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let token = value["token"].as_str().unwrap();
+        let public = serde_json::json!({"keys": [value["public"]]}).to_string();
+        let set: KeySet = public.parse().expect("public jwk");
+        let claims = set.verify(token).expect("verify");
+        assert_eq!(claims.root, "t/room");
+        assert!(claims.expires.is_some());
+        assert!(claims.issued.is_some());
+    }
+
+    #[test]
     fn group_writable_key_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("keys.json");
