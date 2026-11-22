@@ -9,8 +9,14 @@ use moq_auth::{Algorithm, Claims, Key, KeySet};
 
 fn client() -> moq_tokio::Client {
     let mut config = moq_tokio::connect::Config::default();
-    config.tls.insecure = Some(true);
-    config.bind = Some("127.0.0.1:0".parse().unwrap());
+    // WT_VERIFY=1 checks the server certificate against the public roots and
+    // binds every interface, for a run against a relay's real name.
+    if std::env::var("WT_VERIFY").as_deref() == Ok("1") {
+        config.bind = Some("0.0.0.0:0".parse().unwrap());
+    } else {
+        config.tls.insecure = Some(true);
+        config.bind = Some("127.0.0.1:0".parse().unwrap());
+    }
     config.init(Default::default()).expect("client").with_reconnect(false)
 }
 

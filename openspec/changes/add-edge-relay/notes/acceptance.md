@@ -173,3 +173,25 @@ Laptop cleanup. `MJOLNIR_RELAY_ENABLED=false` and `deploy.sh root@fw --relay` ex
 - An Iroh reader. The unit prints an endpoint id and opens its UDP sockets. No Iroh dial was completed.
 - A real ACME order through `relay-issue.sh`, and the real-name journey. Those stay on production.
 `deploy.sh --gateway` after `MJOLNIR_RELAY_ENABLED=false`, relay already running as pid `3963169`: the gateway build finished and the deploy exited 1 because `/etc/mjolnir/gateway.toml` is absent. It did not reach `systemctl restart mjolnir-gateway`. Afterwards the relay was still `active` pid `3963169`, the controller was still `3621414`, and the `mjolnir-relay` rule was still present. `--app-only` was not used because it bounces the controller and the VMs. The laptop has no `mjolnir-gateway` unit.
+
+## Production, real name (2026-11-22)
+
+Host `45.76.77.97`, name `media-relay.worldtree.network`, commit `3dd4df9`. Certificate from `relay-issue.sh` over HTTP-01, `not_after` 2027-02-20. Relay endpoint `b7d78d9972a0c9532613a770b0bb8e25bde740e6d1f9f2ee7fc58bdf19c1eb3f`. Clients ran on a Mac behind a home NAT. `wt-session` ran with `WT_VERIFY=1`, which checks the certificate against the public roots.
+
+First enable on a clean host. The disabled deploy installed the scripts only. `relay-issue.sh` issued, then its copy failed: `install: invalid group 'mjolnir-relay'`. Fixed in `3dd4df9`: the disabled deploy creates the user, and the enabled deploy copies an issued pair before the unit starts. The enabled deploy then moved `relay.env` and `relay-keys.json` from `/etc/mjolnir` to `/etc/mjolnir-relay` (root:root `0755`) and started the unit. That host has no Node; the build needs none since `iroh-live-relay` was dropped.
+
+Runbook checks: unit `active`, `mjolnir-relay-renew.timer` `enabled`, `keys.active` non-empty, one `INPUT` rule `udp --dport 443 --comment mjolnir-relay`, `0.0.0.0:443` held by `mjolnir-relay`. Controller pid 1160 before and after.
+
+```
+no token, WebTransport:            refused: unauthorized
+Iroh publisher -> WebTransport:    received path=call/a frames=40 bytes=760
+Iroh publisher -> Iroh subscriber: received path=t/4vJ9…LKi/call/a frames=30 bytes=570
+subscribe-only token publishing:   Error: unauthorized
+other tenant, path ../<owner>/call/a: frames=0 bytes=0 no-announcement
+```
+
+Gateway restart during a call. Publisher on Iroh for 40 s, WebTransport reader for 25 s, `systemctl restart mjolnir-gateway` 8 s in. Gateway pid 1227 -> 416551. Relay pid 415416 both sides. Reader: `received path=call/g frames=120 bytes=2280`. Publisher: `bytes=3762`. The API answered on HTTPS after the restart.
+
+Not proven here: a real browser reading through this name (no page exists until `browser-call-client`), the laptop rerun of the suite at `3dd4df9` (laptop unreachable; the suite passed on macOS), and renewal by the timer against the real issuer.
+
+`iroh-subscribe read` does not stop at its seconds when its path is never announced. The other-tenant check above used `wt-session` for that reason.
