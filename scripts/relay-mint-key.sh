@@ -83,8 +83,9 @@ jwk_kid() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("kid") or "")' "$1"
 }
 
-# Write a public key set from one or two private JWK files. Refuse a bad
-# algorithm, a missing or illegal kid, or two keys that share a kid.
+# Write a public key set from the `.pub` files `--write-mint-key` printed.
+# Each of those is already a one-key public set. Refuse a bad algorithm, a
+# missing or illegal kid, or two keys that share a kid.
 write_public_set() {
   local out="$1"
   shift
@@ -96,20 +97,24 @@ allowed = {"EdDSA", "ES256"}
 seen = set()
 keys = []
 for path in paths:
-    raw = json.load(open(path))
-    alg = raw.get("alg")
-    kid = raw.get("kid")
-    if alg not in allowed:
-        sys.exit(f"relay-mint-key: disallowed algorithm {alg!r} in {path}")
-    if not isinstance(kid, str) or not kid_re.match(kid):
-        sys.exit(f"relay-mint-key: kid refused in {path}")
-    if kid in seen:
-        sys.exit(f"relay-mint-key: duplicate kid {kid}")
-    seen.add(kid)
-    public = {k: v for k, v in raw.items() if k != "d"}
-    keys.append(public)
+    doc = json.load(open(path + ".pub"))
+    members = doc["keys"] if isinstance(doc, dict) and "keys" in doc else [doc]
+    for raw in members:
+        if "d" in raw or "k" in raw:
+            sys.exit(f"relay-mint-key: public sidecar still holds private material")
+        alg = raw.get("alg")
+        kid = raw.get("kid")
+        if alg not in allowed:
+            sys.exit(f"relay-mint-key: disallowed algorithm {alg!r}")
+        if not isinstance(kid, str) or not kid_re.match(kid):
+            sys.exit("relay-mint-key: kid refused before publish")
+        if kid in seen:
+            sys.exit(f"relay-mint-key: duplicate kid {kid}")
+        seen.add(kid)
+        keys.append(raw)
+if not keys:
+    sys.exit("relay-mint-key: empty public set")
 json.dump({"keys": keys}, open(out, "w"))
-print("ok", file=sys.stderr)
 PY
 }
 
@@ -149,8 +154,9 @@ generate_into() {
     echo "relay-mint-key: kid refused before publish: $kid" >&2
     return 1
   fi
-  "$BIN" --write-mint-key "$dest" "$kid" >/dev/null
+  "$BIN" --write-mint-key "$dest" "$kid" > "${dest}.pub"
   chmod 0600 "$dest"
+  chmod 0644 "${dest}.pub"
 }
 
 publish_checked() {
