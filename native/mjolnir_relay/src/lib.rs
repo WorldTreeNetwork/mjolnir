@@ -78,22 +78,18 @@ pub fn load_verify_keys(path: &Path) -> anyhow::Result<KeySet> {
     if loaded_json != public_json {
         anyhow::bail!("key file holds a private key");
     }
-    for key in public_keys(&public) {
-        match key {
-            Algorithm::EdDSA | Algorithm::ES256 => {}
-            _ => anyhow::bail!("key file holds a disallowed algorithm"),
+    for key in &public.keys {
+        if key.kid.is_none() {
+            anyhow::bail!("key file holds a key with no kid");
+        }
+        if !algorithm_allowed(key.algorithm) {
+            anyhow::bail!("key file holds a disallowed algorithm");
         }
     }
+    if public.keys.is_empty() {
+        anyhow::bail!("key file holds no keys");
+    }
     Ok(public)
-}
-
-fn public_keys(set: &KeySet) -> Vec<Algorithm> {
-    // Re-parse through Debug is wrong. Walk by verifying the set can sign nothing
-    // and reading algorithms from a JSON round trip is unnecessary: `public()`
-    // already rejected symmetric keys. Algorithms are checked when a token is
-    // verified, against the header, in `profile`.
-    let _ = set;
-    Vec::new()
 }
 
 pub fn file_sha256(path: &Path) -> anyhow::Result<String> {
@@ -540,6 +536,31 @@ mod tests {
         assert_eq!(claims.root, "t/room");
         assert!(claims.expires.is_some());
         assert!(claims.issued.is_some());
+    }
+
+    #[test]
+    fn loader_rejects_a_key_with_no_kid() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = Key::generate(Algorithm::EdDSA, None).unwrap();
+        let path = dir.path().join("keys.json");
+        keyset(&key).to_file(&path).unwrap();
+        match load_verify_keys(&path) {
+            Ok(_) => panic!("a key with no kid was accepted"),
+            Err(err) => assert!(err.to_string().contains("kid"), "{err}"),
+        }
+    }
+
+    #[test]
+    fn loader_rejects_a_disallowed_algorithm() {
+        let dir = tempfile::tempdir().unwrap();
+        let kid = moq_auth::KeyId::decode("wide-key").unwrap();
+        let key = Key::generate(Algorithm::ES384, Some(kid)).unwrap();
+        let path = dir.path().join("keys.json");
+        keyset(&key).to_file(&path).unwrap();
+        match load_verify_keys(&path) {
+            Ok(_) => panic!("ES384 was accepted"),
+            Err(err) => assert!(err.to_string().contains("algorithm"), "{err}"),
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use moq_auth::KeySet;
+use moq_auth::{Algorithm, Key, KeySet};
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
 use mjolnir_relay::{
@@ -78,8 +78,58 @@ fn check_cert(settings: &Settings) -> anyhow::Result<()> {
     cert_usable(&pem, &settings.host, SystemTime::now())
 }
 
+/// `mjolnir-relay --check-keys <path>` validates a candidate set and exits.
+/// `mjolnir-relay --write-mint-key <path> <kid>` writes one EdDSA private JWK.
+fn cli_only() -> anyhow::Result<bool> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--check-keys") => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("--check-keys needs a path"))?;
+            load_verify_keys(Path::new(path))?;
+            Ok(true)
+        }
+        Some("--write-mint-key") => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("--write-mint-key needs a path"))?;
+            let kid = args
+                .get(2)
+                .ok_or_else(|| anyhow::anyhow!("--write-mint-key needs a kid"))?;
+            let id = moq_auth::KeyId::decode(kid)?;
+            let key = Key::generate(Algorithm::EdDSA, Some(id))?;
+            write_private_jwk(Path::new(path), &key)?;
+            let public = KeySet {
+                keys: vec![std::sync::Arc::new(key.public()?)],
+            };
+            println!("{}", public.to_str()?);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn write_private_jwk(path: &Path, key: &Key) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let json = serde_json::to_string(key)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(json.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if cli_only()? {
+        return Ok(());
+    }
     tracing_subscriber_lite();
     let settings = settings()?;
     key_file_trusted(&settings.keys)?;
