@@ -562,7 +562,7 @@ defmodule Mjolnir.VM do
       base_image: cfg_get(cfg, :base_image),
       vcpus: cfg_get(cfg, :vcpus),
       memory_mb: cfg_get(cfg, :memory_mb),
-      enable_iroh: cfg_get(cfg, :enable_iroh),
+      enable_iroh: coerce_bool(cfg_get(cfg, :enable_iroh)),
       ssh_public_key: cfg_get(cfg, :ssh_public_key),
       secrets_mode: normalize_secrets_mode(cfg_get(cfg, :secrets_mode)),
       restart_policy: normalize_restart_policy(cfg_get(cfg, :restart_policy)),
@@ -570,9 +570,22 @@ defmodule Mjolnir.VM do
     }
   end
 
+  # `false` is a stored value. `||` would treat it as missing.
   defp cfg_get(cfg, key) when is_atom(key) do
-    Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+    cond do
+      Map.has_key?(cfg, key) -> Map.get(cfg, key)
+      Map.has_key?(cfg, Atom.to_string(key)) -> Map.get(cfg, Atom.to_string(key))
+      true -> nil
+    end
   end
+
+  # Freeze used to persist atoms with Atom.to_string/1, so booleans landed
+  # as "true" / "false". Those strings crash `and` in Thaw.Publish.
+  defp coerce_bool(true), do: true
+  defp coerce_bool(false), do: false
+  defp coerce_bool("true"), do: true
+  defp coerce_bool("false"), do: false
+  defp coerce_bool(other), do: other
 
   defp normalize_secrets_mode(mode) when mode in [:none, :ephemeral, :persistent, :managed],
     do: mode
@@ -3154,6 +3167,7 @@ defmodule Mjolnir.VM do
     end)
   end
 
+  defp jsonable_restore_value(v) when is_boolean(v), do: v
   defp jsonable_restore_value(v) when is_atom(v), do: Atom.to_string(v)
   defp jsonable_restore_value(v), do: v
 

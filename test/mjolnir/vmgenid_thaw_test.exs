@@ -138,6 +138,33 @@ defmodule Mjolnir.VmgenidThawTest do
     assert first != second
   end
 
+  test "thaw spawn keeps iroh off for a boolean or a legacy string false", %{root: root} do
+    for stored <- [false, "false"] do
+      name = "iroh-#{System.unique_integer([:positive])}"
+      File.mkdir_p!(Path.join([root, "@snapshots", name]))
+      File.mkdir_p!(MemorySnapshot.memory_dir(name))
+      File.write!(Path.join(MemorySnapshot.memory_dir(name), "state.json"), "{}")
+
+      File.write!(
+        Path.join([root, "@snapshots", "#{name}.json"]),
+        Jason.encode!(%{
+          name: name,
+          source_vm_id: "iroh-off-#{System.unique_integer([:positive])}",
+          restore_config: %{
+            enable_iroh: stored,
+            secrets_mode: "none",
+            restart_policy: "never"
+          }
+        })
+      )
+
+      assert {:ok, opts} = VM.thaw(name, spawn_fun: fn opts -> {:ok, opts} end)
+      assert opts.enable_iroh == false
+      assert opts.secrets_mode == :none
+      assert opts.restart_policy == :never
+    end
+  end
+
   test "asking for PTY on a second guest cannot mint a ticket" do
     state = %VM{id: "second", thaw_vsock_only: true, enable_iroh: true}
 
