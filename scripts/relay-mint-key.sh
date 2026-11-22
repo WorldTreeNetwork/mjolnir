@@ -205,7 +205,9 @@ first_install() {
     exit 1
   fi
   mv -f "$STAGED" "$CURRENT"
+  mv -f "${STAGED}.pub" "${CURRENT}.pub"
   chmod 0600 "$CURRENT"
+  chmod 0644 "${CURRENT}.pub"
   echo "relay-mint-key: first install confirmed $(jwk_kid "$CURRENT")"
 }
 
@@ -216,7 +218,9 @@ rotate() {
     have="$(jwk_kid "$CURRENT")"
     if [[ "$have" != "$want" && -f "$NEXT" ]]; then
       mv -f "$NEXT" "$CURRENT"
+      mv -f "${NEXT}.pub" "${CURRENT}.pub"
       chmod 0600 "$CURRENT"
+      chmod 0644 "${CURRENT}.pub"
       echo "relay-mint-key: finished the signer rename for $want; run finish after the overlap"
       exit 0
     fi
@@ -254,7 +258,9 @@ rotate() {
   kid="$(jwk_kid "$NEXT")"
   write_state "$kid" "$not_before" "$hash"
   mv -f "$NEXT" "$CURRENT"
+  mv -f "${NEXT}.pub" "${CURRENT}.pub"
   chmod 0600 "$CURRENT"
+  chmod 0644 "${CURRENT}.pub"
   echo "relay-mint-key: signer is $kid; run finish after $not_before"
 }
 
@@ -314,7 +320,9 @@ emergency() {
   if confirm_active "$KEYS"; then
     confirmed=1
     mv -f "$STAGED" "$CURRENT"
+    mv -f "${STAGED}.pub" "${CURRENT}.pub"
     chmod 0600 "$CURRENT"
+    chmod 0644 "${CURRENT}.pub"
   else
     echo "relay-mint-key: confirmation failed; new public set left in place; current.jwk unchanged" >&2
   fi
