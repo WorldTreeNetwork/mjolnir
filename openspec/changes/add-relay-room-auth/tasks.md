@@ -2,17 +2,22 @@
 
 Every refusal test is written first and seen to fail for the stated reason before the code that makes it pass.
 
-- [ ] M1: Owner is the caller's verified `sub` via `Owner.resolve/2` (header ignored). Canonical base58, or a legacy 64-hex `sub` re-encoded to base58. Anything else is 403 before a signature. Failing-first test: a user who sends another owner's id in `x-owner-id` is rooted at their own `sub`, never the other tenant.
-- [ ] M3: Unique `kid` on every key and in every token. Rotation publishes `{current, next}`, confirms `keys.active`, then switches the signer, and restores the previous set if confirmation fails. First install replaces the fixture key. Tests: a two-key set admits a token from each key; a token with no `kid` against a two-key set is refused; during a scripted rotation the signer is never a key absent from the confirmed set.
-- [ ] M4: Default mint TTL is 300 seconds. Caller `ttl` is honored up to the relay maximum and refused above it. Routine rotation and emergency revoke are the two procedures in the design.
-- [ ] S1: Mint emits publish `["<participant>/**"]` and subscribe `["**"]` under root `t/<owner>/<room>`.
-- [ ] S4: Documented in the proposal. No code for delegated invites.
-- [ ] S5: Route requires `principal_kind == :user` in addition to `relay:join`. Operator is 403. Failing-first.
-- [ ] S6: Mode-check and read `current.jwk` on every mint. 503 when the key is missing, the mode is wrong, the relay is disabled, or the host is unset. No signature in those cases.
-- [ ] S7: Cross-language fixture. A token signed by the Elixir mint verifies under `KeySet::verify` at the pinned revision. `kid`, EdDSA, integer `exp` and `iat`, `jti`, no `aud`. Mint log line has `sub`, owner, room, participant, `jti`, `exp`, and not the token. This is H-mint.
-- [ ] S8 refusals, each failing-first, on both transports where a session is involved: cross-participant publish of `Q` and of `Q/track`; exact `P` admitted; cross-room read from a session admitted for R (every spelling that transport uses, and its announcements list nothing from S); segment rule below.
-- [ ] Segment rule, whole-string match: empty, 65 characters, `.`, `..`, `%2F`, `%5C`, `*`, `%0A`, and a trailing newline. Each is 400 before a signature.
-- [ ] Iroh expiry and the in-band refusal already landed in `105acf0`. Do not reopen them except to keep the relay suite green.
-- [ ] Fresh advise after these amendments.
+- [x] Fresh advise after the `9e664a1` amendments. Second pass `reviews/2026-11-22-advise-2.md` accepted, with C1–C9 written into this change before implementation.
+- [ ] C4 / M1: Public owner function, no trim, lowercase `\A[0-9a-f]{64}\z`. Failing-first: another owner's header does not change the root. Hex and base58 of the same bytes match. Uppercase hex, hex plus newline, padded base58, a 31-byte id, and a non-canonical base58 spelling are each 403.
+- [ ] C5 / S5: User principal plus `relay:join`. Operator, sites, capability, and ceremony are each 403. Failing-first.
+- [ ] C5: Body `ttl` is a JSON integer. `0`, negative, above the ceiling, a string, and a float are 400 before a signature. Response keys `token`, `expires`, `root`, `publish`, `subscribe`, `relay_host`. `Cache-Control: no-store`.
+- [ ] C2 / S6: Each mint reads `/etc/mjolnir-relay/relay.env` for enabled, host, and `MJOLNIR_RELAY_TOKEN_MAX_TTL`. 503 for missing key, bad mode, env missing, enabled not `true`, host unset. Mode check takes an injectable uid and path.
+- [ ] M4: Default TTL 300 seconds, clamped to the ceiling from that file.
+- [ ] S1: Publish `<participant>/**`, subscribe `**`, root `t/<owner>/<room>`.
+- [ ] S7 / H-mint: Cross-language fixture before the route serves clients. `jti` is 22 base64url characters. Log line has no token.
+- [ ] C6 / H-handoff: Both-transport test that a subscriber still receives across make-before-break. Record the result. Do not promise a seamless call. Resubscribe stays on `call-client`.
+- [ ] C7: `spawn_decider` lives in the library. WebTransport tests call it. Integration test: an in-band second token leaves the session up and the grant unchanged.
+- [ ] S8: Failing-first, on the shipped decider, both transports: cross-participant `Q` and `Q/track`, exact `P` admitted, cross-room read from a session admitted for R, announcements list nothing from S.
+- [ ] Segment rule, whole-string: empty, 65 characters, `.`, `..`, `%2F`, `%5C`, `*`, `%0A`, trailing newline. Each is 400 before a signature.
+- [ ] C3: `mjolnir-relay --check-keys`. Script checks algorithm and `kid` `\A[A-Za-z0-9_-]{1,128}\z` itself. `flock`. `rotation.json` owns step 5. First install confirms the public set before `current.jwk` exists. Relay down: non-zero, no `current.jwk`.
+- [ ] C3 / M3: Two-key set admits each key. No `kid` against two keys is refused. Scripted rotation never signs with a key absent from the confirmed set. These run as root on the laptop.
+- [ ] C1: Emergency revoke never restores the old set. Deletes `next.jwk` if present. Failed confirmation still restarts and exits non-zero. Test for the stolen-key path.
+- [ ] C8: One-host acceptance, no browser: mint through the API, then `wt-session`, `iroh-publish`, and `iroh-subscribe`. Grep the relay journal for the token string.
+- [ ] C9: Mint rate limit recorded on `mjolnir-rurh.4`.
 
 Out of scope stays in the proposal. Those lines are not tasks.

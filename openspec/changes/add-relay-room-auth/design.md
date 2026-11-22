@@ -70,23 +70,53 @@ Routine rotation is key hygiene. It shortens no token and removes no participant
 The mint is never observed signing with a key that is absent from the set `keys.active` has confirmed.
 
 **D10. Emergency revoke is a different procedure, and it is host-wide.**
-Replace the public set at once with one new key. Do not publish the old public key. Confirm `keys.active`, then switch `current.jwk` to that new key. Restart `mjolnir-relay` so live sessions end. Every call of every tenant on the host drops. New sessions need a token signed by the new key. A compromised mint key uses this procedure. Routine overlap would keep the stolen key trusted until the old tokens expire.
+Replace the public set at once with one new key. Do not publish the old public key. Delete `next.jwk` if a routine rotation was in flight, so that rotation cannot rename it onto `current.jwk` afterwards. Wait for `keys.active`. On `invalid`, or if it does not change within ten seconds, leave the new set in place. Do not restore the previous set. That restore is the routine path only. An emergency restore would put the stolen key back while the relay is slow or down. Still restart the relay. Exit non-zero when confirmation failed, and zero when it succeeded. Then switch `current.jwk` to the new key only if confirmation succeeded. If it failed, the new public key is what the relay will load when it is up, and the operator finishes the signer by re-running the script. The script must not sign with a missing private key.
 
-No `/api` route accepts a private key or a public key. Both procedures are `scripts/relay-mint-key.sh` as root.
+A restart sends SIGTERM. The process drains for the `MJOLNIR_RELAY_DRAIN_SECONDS` it loaded at start (default 30) and then stops (`drain_then_stop`). This node does not add a control to shorten that drain. A live session on a stolen-key token survives the drain. New sessions are refused once the new set is loaded, which is the one-second key poll, or at the restart if the process is already down.
+
+The mint key is host-wide. Whoever holds `current.jwk` can sign a root under any tenant.
+
+No `/api` route accepts a private key or a public key. Both procedures are `scripts/relay-mint-key.sh` as root. One `flock` covers routine rotation, emergency revoke, and first install.
 
 **D11. One signing key family is still one relay.**
 `add-edge-relay` says a signing key is trusted by exactly one `:relay_host`. Rotation replaces the key on this host's file only. The mint returns `relay_host` from `MJOLNIR_RELAY_HOST`. The token dialect has no audience claim, and the mint must not add a default `aud`. A token presented to a different relay fails as an unknown key.
 
-**D12. Default life is 300 seconds. The caller may ask for less or more, up to 3600.**
-With no kick, the default is the real bound on a removed participant. Alternative: default to the maximum, 3600 seconds. That is one line simpler and leaves a removed participant in the room for up to an hour, reconnecting the whole time. The short default makes the owner mint again, or hand a new bearer to a guest, when the call should continue. The client is expected to reconnect before `exp`, so 300 seconds is a mint interval, not a media gap. The relay's `MJOLNIR_RELAY_TOKEN_MAX_TTL` and the mint's ceiling are the same number. If the mint's ceiling were larger, every token would be refused. The mint reads the relay's ceiling and will not issue above it.
+**D12. Default life is 300 seconds. The caller may ask for less or more, up to the relay ceiling.**
+With no kick, the default is the real bound on a removed participant who can mint again. A guest cannot. For a guest, the `ttl` the owner chose is the length of the call. Alternative: default to the maximum. That leaves a removed participant in the room for up to an hour. The short default makes the owner mint again when the call should continue.
+
+The ceiling is `MJOLNIR_RELAY_TOKEN_MAX_TTL` in `/etc/mjolnir-relay/relay.env`, default 3600 when the line is absent. The mint reads that file at each call. It does not read `MJOLNIR_RELAY_ENABLED`, `MJOLNIR_RELAY_HOST`, or the ceiling from the controller environment or from `config/config.exs`. Those three values have one source, the relay env file, which is `0640` root and readable by the root BEAM. Enabled other than `true`, or host unset, is 503. A `ttl` above the ceiling is 400 before a signature.
+
+`ttl` is a JSON integer in the body, key `ttl`. Omitted means 300, still clamped to the ceiling when the ceiling is lower. `0`, a negative, a value above the ceiling, a string, and a float are 400 before a signature.
+
+The response is JSON: `token`, `expires` (unix seconds), `root`, `publish` (one string), `subscribe` (one string), `relay_host`. `Cache-Control: no-store`. No private key. Each token has a `jti` of 22 base64url characters from 128 random bits (ASCII graphic, 1 to 128). The mint logs the caller's `sub`, the owner, the room, the participant label, the `jti`, and `exp`, and not the token. The WebTransport token rides in `?jwt=`. This work does not log that query. Acceptance greps the relay journal for the token string.
+
+Claims are only those moq-auth accepts: `root`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti`, `iss`, `sub`. `exp` and `iat` are integers. Algorithm is EdDSA. Header `kid` is the signing key's `kid`. No `aud`.
+
+Opening the next session before `exp` is `call-client`'s obligation. This node does not promise a seamless call. Two sessions holding one publish path is hypothesis H-handoff.
 
 The response is the token, its expiry, its root, its publish pattern, its subscribe pattern, and `relay_host`. No private key. Each token has a `jti`. The mint logs the caller's `sub`, the owner, the room, the participant label, the `jti`, and `exp`. It does not log the token. The WebTransport token rides in `?jwt=`. That query is not written to a log by this work.
 
 Claims are only those moq-auth accepts: `root`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti`, `iss`, `sub`. `exp` and `iat` are integers. Algorithm is EdDSA. Header `kid` is the signing key's `kid`. No `aud`.
 
 **D13. Disabled, missing key, and bad key mode are 503.**
-No `current.jwk`, a key file the mode check rejects, `MJOLNIR_RELAY_ENABLED` not `true`, or `MJOLNIR_RELAY_HOST` unset: 503 and no signature. The earlier "Off" case that still returned a token is withdrawn.
+No `current.jwk`, a key file the mode check rejects, relay env missing, `MJOLNIR_RELAY_ENABLED` other than `true`, or `MJOLNIR_RELAY_HOST` unset, all read from `/etc/mjolnir-relay/relay.env`: 503 and no signature. The earlier "Off" case that still returned a token is withdrawn. The mode check takes an injectable uid and path so `mix test` can run it without root. The relay's own check still requires uid 0. Rotation tests that call the relay loader run as root on the laptop.
+
+**D14. Rotation state, lock, and the validator.**
+`scripts/relay-mint-key.sh` takes `flock` on `/var/lib/mjolnir/relay-mint/rotation.lock` for routine rotation, emergency revoke, and first install.
+
+Step 5 of routine rotation is a second invocation, `relay-mint-key.sh finish`, not a sleep inside the first process. The first invocation writes `/var/lib/mjolnir/relay-mint/rotation.json` (mode `0600` root) with the new `kid`, the unix time step 5 may run (`now + ceiling + 60`), and the hash of the two-key set. `finish` refuses to drop the old public key before that time. A reboot does not lose the file. A second routine rotation while that file names an unfinished overlap exits non-zero and keeps the oldest public key in the set.
+
+First install, when `current.jwk` is absent: build the public set of the new key only, validate it, rename it into `relay-keys.json`, confirm `keys.active`, and only then write `current.jwk`. If the relay is not running, `keys.active` does not change. The script exits non-zero, leaves the new public set in place, and does not write `current.jwk`. The operator starts the relay and runs the script again.
+
+The validator is `mjolnir-relay --check-keys <path>`. It loads the file with `load_verify_keys`, and it also rejects a key whose algorithm is not EdDSA or ES256 and a key with no `kid` or a duplicate `kid`. The loader's algorithm loop is empty today, so the script checks algorithm and `kid` itself before it calls `--check-keys`. `kid` matches `\A[A-Za-z0-9_-]{1,128}\z` (`moq-auth` `key_id.rs`). The script draws 128 random bits and encodes them base64url, which fits that alphabet. A `kid` with `:` is refused before the set is published.
+
+**D15. The owner rule, byte for byte.**
+No trim. The `sub` must equal its canonical re-encode. Legacy hex is `\A[0-9a-f]{64}\z` (lowercase, whole string). Uppercase hex, hex plus a newline, padded base58, a 31-byte id, and a non-canonical base58 spelling are 403. A hex `sub` and the base58 of the same 32 bytes are one owner. `Owner.parse/1` trims and is not this check. `claim/2` only compares. A new public function does the decode. `decode_legacy_hex` stays private.
+
+**D16. The WebTransport decider that ships is the one tests call.**
+`spawn_decider` moves into the library. `tests/webtransport.rs` uses it. The in-band refusal has an integration test: the session stays up and its grant does not change. S8 runs against that decider.
 
 ## Unverified hypotheses
 
-- **H-mint. An Elixir signer can emit this token.** Claim: a token produced by the mint verifies under `KeySet::verify` at moq rev `4a6f522`, with `kid`, EdDSA, integer `exp` and `iat`, and no `aud`. Confidence: medium. Elixir JWT libraries often set `aud` or string timestamps, and moq-auth refuses an unknown claim. Verification: the cross-language fixture in the tasks, before the route is wired to clients. Kill condition: if the fixture does not verify, the mint does not ship on a different claim shape. Synthesis: that fixture task.
+- **H-mint. An Elixir signer can emit this token.** Claim: a token produced by the mint verifies under `KeySet::verify` at moq rev `4a6f522`, with `kid`, EdDSA, integer `exp` and `iat`, and no `aud`. Confidence: medium. Verification: the cross-language fixture, before the route is wired to clients. Kill condition: if the fixture does not verify, the mint does not ship on a different claim shape.
+- **H-handoff. A subscriber keeps receiving across a publisher's make-before-break.** Claim: on WebTransport and on Iroh, a subscriber of one path still receives media when the publisher opens a second session on that path before dropping the first. moq-net tells subscribers `Restart` when a second publisher appears, so the handoff is visible. Confidence: low. This node does not promise a seamless call. Verification: one test per transport. Kill condition: if either transport stops delivering and does not resume without a new subscribe, the notes say so and `call-client` must resubscribe. The mint still ships.

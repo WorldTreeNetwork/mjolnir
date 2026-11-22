@@ -1,10 +1,10 @@
 # add-relay-room-auth
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 ## Why
 
-The edge relay admits a moq-auth JWT whose root is `t/<owner id>` or below it. Nothing yet says which caller may mint that token, which path is one participant in one room, or what happens when that participant is removed. `mjolnir-rurh.3` is that contract. No code in this change.
+The edge relay admits a moq-auth JWT whose root is `t/<owner id>` or below it. Nothing yet says which caller may mint that token, which path is one participant in one room, or what happens when that participant is removed. `mjolnir-rurh.3` is that contract. The Iroh close at `exp` already landed in `105acf0`. The mint, the rotation script, and the room tests are this change.
 
 A removed participant keeps a working token until it expires. They stay connected for that time and may reconnect any number of times inside it. There is no per-participant, per-room, or per-tenant revocation in this node. Routine key rotation does not shorten a token. The only early cut is the emergency procedure below, and it drops every call on the host.
 
@@ -23,7 +23,7 @@ A removed participant keeps a working token until it expires. They stay connecte
 
 ## User journey & surfaces
 
-No new UI because the browser client is `mjolnir-rurh.5` (`call-client`). The minter that exists today is a signed-in user (`mj` or `curl` with that user's bearer). A guest who has a link and no Mjolnir login does not call this route. The room's owner mints a token for a participant label and hands that bearer to the guest. It is good until it expires. There is no kick. A delegated invite, where a guest holds a capability that mints its own token, is a later change.
+No new UI because the browser client is `mjolnir-rurh.5` (`call-client`). The minter that exists today is a signed-in user (`mj` or `curl` with that user's bearer). A guest who has a link and no Mjolnir login does not call this route. The room's owner mints a token for a participant label and hands that bearer to the guest. The guest cannot mint again. Unless the owner set a longer `ttl`, 300 seconds is the length of that guest's call, and 3600 seconds is the hard end. There is no kick. Opening the next session before `exp` is an obligation of `call-client` (`mjolnir-rurh.5`). This node does not promise a seamless handoff. A delegated invite, where a guest holds a capability that mints its own token, is a later change.
 
 A second Mjolnir user cannot join another user's room by logging in. Their `sub` is a different owner, so the mint roots the token at their own tenant.
 
@@ -31,7 +31,7 @@ Working: the owner asks for a token for a room and a label, receives a JWT, and 
 
 ## Out of scope
 
-- Per-room rate limits and metering: `add-relay-limits-metering` (`mjolnir-rurh.4`). That node owns a mint rate limit. This one does not.
+- Per-room rate limits, metering, and a limit on how often the mint may be called: `add-relay-limits-metering` (`mjolnir-rurh.4`). That bead owns the mint rate limit. This node does not.
 - Media end-to-end encryption: `call-media-e2ee` (`mjolnir-rurh.9`). The relay still terminates QUIC and can read payloads.
 - The browser client: `call-client` (`mjolnir-rurh.5`). Path spelling on the wire is this contract's. Attributing a track by the first segment as received, and look-alike labels (`alice`, `Alice`, `a1ice`), are that client's.
 - Guest advertisement of the relay: `mjolnir-rurh.6`.
