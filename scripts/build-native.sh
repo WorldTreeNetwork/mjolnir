@@ -24,7 +24,24 @@ case "$KIND" in
         RELAY_RUST="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
         [[ -n "$RELAY_RUST" ]] || { echo 'relay: no channel in rust-toolchain.toml' >&2; exit 1; }
         rustup toolchain install "$RELAY_RUST" --profile minimal
-        mise exec -- env RUSTUP_TOOLCHAIN="$RELAY_RUST" cargo build --release --locked
+        # iroh-live-relay's build script runs `npm install` and `npm run build`
+        # for a web client this relay never serves (it has no HTTP listener).
+        # Hand it a stand-in that writes an empty bundle, so the host needs no
+        # Node and no package is fetched or run as root. Goes away with the
+        # dependency (mjolnir-rurh.2 follow-up).
+        NPM_STUB="$(mktemp -d)"
+        trap 'rm -rf "$NPM_STUB"' EXIT
+        cat > "$NPM_STUB/npm" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in for npm during the relay build. Runs in the crate's web/ directory.
+set -euo pipefail
+if [[ "${1:-}" == run && "${2:-}" == build ]]; then
+    mkdir -p dist
+    printf '<!doctype html><title>not served</title>\n' > dist/index.html
+fi
+STUB
+        chmod 0755 "$NPM_STUB/npm"
+        mise exec -- env PATH="$NPM_STUB:$PATH" RUSTUP_TOOLCHAIN="$RELAY_RUST" cargo build --release --locked
         mkdir -p "$ROOT/native/mjolnir_relay/target/release"
         cp -f "$CARGO_TARGET_DIR/release/mjolnir-relay" "$ROOT/native/mjolnir_relay/target/release/mjolnir-relay"
         ;;
