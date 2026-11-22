@@ -96,7 +96,20 @@ issued_key="/var/lib/mjolnir/relay-acme/${host_name}/privkey.pem"
 if [[ -f "$issued" && -f "$issued_key" ]]; then
     "$LIB/relay-copy-cert.sh" "$issued" "$issued_key" "$host_name"
 fi
-install -m 0755 "$STAGED/native/mjolnir_relay/target/release/mjolnir-relay" /usr/local/bin/mjolnir-relay
+# The staged binary must accept the key file that is already installed.
+# Replacing /usr/local/bin/mjolnir-relay first would take a live relay down
+# on the next restart, and a restart is the next step.
+staged_bin="$STAGED/native/mjolnir_relay/target/release/mjolnir-relay"
+if [[ -f "$CONF/relay-keys.json" ]]; then
+    if ! "$staged_bin" --check-keys "$CONF/relay-keys.json"; then
+        echo "relay-deploy: staged binary refused $CONF/relay-keys.json" >&2
+        echo "relay-deploy: left the running relay and /usr/local/bin/mjolnir-relay alone" >&2
+        echo "relay-deploy: run: RELAY_BIN=$staged_bin $STAGED/scripts/relay-mint-key.sh" >&2
+        echo "relay-deploy: then deploy again" >&2
+        exit 1
+    fi
+fi
+install -m 0755 "$staged_bin" /usr/local/bin/mjolnir-relay
 install -m 0644 "$STAGED/systemd/mjolnir-relay.service" /etc/systemd/system/mjolnir-relay.service
 install -m 0644 "$STAGED/systemd/mjolnir-relay-renew.service" /etc/systemd/system/mjolnir-relay-renew.service
 install -m 0644 "$STAGED/systemd/mjolnir-relay-renew.timer" /etc/systemd/system/mjolnir-relay-renew.timer
