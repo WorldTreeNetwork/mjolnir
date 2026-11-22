@@ -98,3 +98,48 @@ async fn tokenless_webtransport_is_refused_and_sigterm_stops_a_second_session() 
     running.trigger.start();
     let _ = tokio::time::timeout(Duration::from_secs(8), running.join).await;
 }
+
+#[tokio::test]
+async fn a_second_in_band_token_is_refused_and_the_session_stays_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let (running, admissions) = start(dir.path()).await;
+    let key = Key::generate(Algorithm::EdDSA, None).unwrap();
+    let root = format!("t/{}", owner());
+    let keys = Arc::new(Mutex::new(KeySet {
+        keys: vec![Arc::new(key.public().unwrap())],
+    }));
+    mjolnir_relay::spawn_web_decider(
+        admissions,
+        keys,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(true)),
+        Duration::from_secs(3600),
+    );
+    let good = token(&key, &root, 60);
+    let url: url::Url = format!("https://{}/?jwt={good}", running.quic).parse().unwrap();
+    let session = client().connect(url).established().await.expect("admitted");
+    // moq-net 4a6f522 `Credential::poll_answered` returns `Error::Unsupported`
+    // ("a peer that takes no tokens in band"). moq-relay admissions carry the
+    // setup token and the `jwt` query only, so this present never becomes an
+    // `attached` admission and `web_grant`'s "in-band token" line does not run.
+    // The unit test in lib.rs covers that line. Here the live session must
+    // still accept another present after the refusal.
+    let extra = token(&key, &root, 30);
+    let cred = session.auth().add(extra.into_bytes()).expect("present");
+    let verdict = tokio::time::timeout(Duration::from_secs(5), cred.closed())
+        .await
+        .expect("the in-band token got no verdict");
+    assert_eq!(verdict.to_string(), "unsupported", "{verdict}");
+    let again = session.auth().add(extra_still(&key, &root)).expect("session up");
+    let again_verdict = tokio::time::timeout(Duration::from_secs(5), again.closed())
+        .await
+        .expect("session closed on the second present");
+    assert_eq!(again_verdict.to_string(), "unsupported");
+    drop(session);
+    running.trigger.start();
+    let _ = tokio::time::timeout(Duration::from_secs(8), running.join).await;
+}
+
+fn extra_still(key: &Key, root: &str) -> Vec<u8> {
+    token(key, root, 30).into_bytes()
+}
