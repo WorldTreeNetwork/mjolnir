@@ -138,6 +138,66 @@ cargo build --release --examples
 
 Install the `SET` line as `/etc/mjolnir-relay/relay-keys.json` before using the tokens. The relay endpoint id is the `iroh endpoint:` line in the journal.
 
+## Room tokens
+
+The controller mints a room token at
+
+`POST /api/relay/rooms/:room/participants/:participant/token`
+
+The caller is a user principal with `relay:join`. The owner is that
+caller's `sub`. The private key is `/var/lib/mjolnir/relay-mint/current.jwk`
+(mode `0600`, root). The public set the relay loads is
+`/etc/mjolnir-relay/relay-keys.json`. The mint reads enabled, host, and
+`MJOLNIR_RELAY_TOKEN_MAX_TTL` from `/etc/mjolnir-relay/relay.env` on
+every call. A missing file, enabled other than `true`, or an unset host
+is 503 and no signature. The response sends `Cache-Control: no-store`.
+
+A removed participant who can mint again is back after the next token.
+The default life is 300 seconds, and the ceiling is the relay env value
+(3600 when the line is absent). A guest who was handed a token keeps it
+until that token's own `exp`. There is no per-participant kick.
+
+## Rotation
+
+`scripts/relay-mint-key.sh` as root. One lock,
+`/var/lib/mjolnir/relay-mint/rotation.lock`.
+
+- `relay-mint-key.sh` starts a routine rotation, or a first install when
+  `current.jwk` is absent. First install publishes the new public key,
+  waits until `/run/mjolnir-relay/keys.active` matches, and only then
+  writes `current.jwk`. If the relay is down the new public set stays
+  and `current.jwk` is not written. Run it again after the relay is up.
+  That publish replaces a fixture key that has no `kid`.
+- The first invocation writes `/var/lib/mjolnir/relay-mint/rotation.json`
+  (mode `0600`) with the new `kid`, the time `finish` may run
+  (`now + ceiling + 60`), and the hash of the two-key set. It switches
+  `current.jwk` to the new key only after `keys.active` confirms that
+  set. A second routine rotation while the overlap is unfinished exits
+  non-zero and leaves the oldest public key in the set.
+- `relay-mint-key.sh finish` drops the old public key. It refuses to do
+  that before the time in `rotation.json`.
+
+`mjolnir-relay --check-keys <path>` validates a candidate with the
+relay's loader before the file is renamed into place. The loader
+rejects a private key, a key with no `kid`, and an algorithm other than
+EdDSA or ES256.
+
+## Emergency revoke
+
+`relay-mint-key.sh emergency` replaces the public set with one new key
+and does not restore the previous set. It deletes `next.jwk` if a
+routine rotation was in flight, restarts the relay, and exits non-zero
+when `keys.active` did not confirm. The new public set stays either way.
+`current.jwk` changes only after confirmation.
+
+A restart sends SIGTERM. The process drains for the
+`MJOLNIR_RELAY_DRAIN_SECONDS` it loaded at start (default 30) and then
+stops. The script prints that window. It does not shorten the drain. A
+live session signed by the removed key stays up for that window. New
+sessions fail at the one-second key poll, or at the restart if the
+process was already down. The mint key is host-wide: it can sign a root
+under any tenant.
+
 ## Disable
 
 Set `MJOLNIR_RELAY_ENABLED=false` and run `deploy.sh --relay` again.

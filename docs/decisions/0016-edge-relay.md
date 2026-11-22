@@ -32,6 +32,8 @@ D1–D9 in `design.md` stand. One decision changed during the spike:
 
 **DECISION 2026-11-21:** the Iroh session handler lives in `native/mjolnir_relay` (`iroh_sessions.rs`, from iroh-live `747b1bd`, MIT OR Apache-2.0). Pull code is not included. The relay does not depend on the `iroh-live-relay` crate, whose build fetches a web client.
 
+**DECISION 2026-11-22:** room tokens are minted by the controller for a user principal, from `/var/lib/mjolnir/relay-mint/current.jwk`. The relay verifies `/etc/mjolnir-relay/relay-keys.json`. Rotation and emergency revoke are `scripts/relay-mint-key.sh`. Emergency revoke never puts the old public key back. A live session on a removed key lasts the drain loaded at process start (default 30 seconds). There is no control to shorten that drain. A removed participant who can mint again returns on the next token; a guest keeps the token until its own `exp`.
+
 The relay package is its own Cargo project under `native/mjolnir_relay`. The gateway keeps `iroh 1.0` and `ring`. A throwaway workspace already linked `iroh 1.4` (`tls-aws-lc-rs`) beside `iroh 1.0`.
 
 Browser tokens arrive as `?jwt=`. The admission loop reads that query and a SETUP token. `request.token` stayed empty for the browser form.
