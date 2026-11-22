@@ -194,4 +194,12 @@ Gateway restart during a call. Publisher on Iroh for 40 s, WebTransport reader f
 
 Not proven here: a real browser reading through this name (no page exists until `browser-call-client`), the laptop rerun of the suite at `3dd4df9` (laptop unreachable; the suite passed on macOS), and renewal by the timer against the real issuer.
 
+## Iroh expiry (2026-11-22, macOS, not deployed)
+
+Defect on the relay that is live at `3dd4df9`. `TokenPolicy::decide` returned `ext_grant(&grant).into()`, and `From<Grant> for Authorization` in moq-ext-access sets `expires: None`. `expiry()` in `iroh_sessions.rs` then waits forever. The ten-second-token note above is WebTransport only.
+
+`tests/iroh_expiry.rs` (`iroh_session_closes_when_the_token_expires`) failed first: after the session reached `Connected` on a ten-second token, it was still `Connected` when the fifteen-second wait ended. The fix sets `Authorization.expires` from the token's `exp`. The same test then passed in 9.8 seconds. Full crate suite on this Mac: 3 lib tests, `iroh_expiry`, `webtransport`.
+
+In-band WebTransport, review S3. `web_grant(true, …)` admitted the second token. The assertion failed with `in-band token was admitted`. The decider now returns `in-band token` and the test passes. A refresh that uses that path is a contract question, not this fix.
+
 `iroh-subscribe read` does not stop at its seconds when its path is never announced. The other-tenant check above used `wt-session` for that reason.

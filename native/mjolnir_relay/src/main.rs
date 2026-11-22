@@ -11,7 +11,7 @@ use moq_auth::{Grant, KeySet};
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
 use mjolnir_relay::{
-    IrohSessions, TokenPolicy, assess, cert_usable, file_sha256, key_file_trusted, load_verify_keys,
+    IrohSessions, TokenPolicy, cert_usable, file_sha256, key_file_trusted, load_verify_keys,
 };
 use tokio::signal::unix::{SignalKind, signal};
 struct Settings {
@@ -225,7 +225,13 @@ fn spawn_decider(
             let from_query = admission.request.query.as_deref().and_then(jwt_query);
             let token = from_setup.or(from_query);
             let set = keys.lock().expect("keys").clone();
-            match assess(token.as_deref(), &path, &set, max_ttl) {
+            match mjolnir_relay::web_grant(
+                admission.attached(),
+                token.as_deref(),
+                &path,
+                &set,
+                max_ttl,
+            ) {
                 Ok(grant) => {
                     let _ = grant_or_refuse(admission, grant);
                 }

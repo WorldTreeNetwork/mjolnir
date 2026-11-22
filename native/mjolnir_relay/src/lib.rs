@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod iroh_sessions;
 
 use moq_auth::{Algorithm, Claims, Grant, KeySet};
-use moq_ext_access::policy::{Decision, PeerRequest, Policy, Rejection};
+use moq_ext_access::policy::{Authorization, Decision, PeerRequest, Policy, Rejection};
 use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
 
@@ -151,6 +151,21 @@ pub fn tenant_path(path: &str) -> bool {
     !raw.is_empty() && root_allowed(raw)
 }
 
+/// WebTransport admission. `attached` is a second token on a session that
+/// is already open. The decider used to ignore that flag.
+pub fn web_grant(
+    attached: bool,
+    token: Option<&str>,
+    path: &str,
+    keys: &KeySet,
+    max_ttl: Duration,
+) -> Result<Grant, Refuse> {
+    if attached {
+        return Err(Refuse::Profile("in-band token"));
+    }
+    assess(token, path, keys, max_ttl)
+}
+
 pub fn assess(
     token: Option<&str>,
     path: &str,
@@ -281,7 +296,12 @@ where
                 return Err(Rejection::new("keys unavailable"));
             }
             match assess(token.as_deref(), &path, &keys, max_ttl) {
-                Ok(grant) => Ok(ext_grant(&grant).into()),
+                Ok(grant) => {
+                    let expires = grant.expires.map(SystemTime::from);
+                    let mut authorization: Authorization = ext_grant(&grant).into();
+                    authorization.expires = expires;
+                    Ok(authorization)
+                }
                 Err(err) => Err(Rejection::new(err.to_string())),
             }
         }
@@ -443,6 +463,12 @@ mod tests {
             .with_subscribe(["**".parse().unwrap()])
             .with_expires(now + Duration::from_secs(60));
         assert!(assess(Some(&sign(&key, &no_iat)), &root, &set, DEFAULT_MAX_TTL).is_err());
+        // Today the WebTransport decider does not read Admission::attached.
+        // A second in-band token is assessed like a new session and admitted.
+        assert!(
+            web_grant(true, Some(&token), &root, &set, DEFAULT_MAX_TTL).is_err(),
+            "in-band token was admitted"
+        );
         let long = sign(
             &key,
             &claims(&root, now, now + Duration::from_secs(7200)),
