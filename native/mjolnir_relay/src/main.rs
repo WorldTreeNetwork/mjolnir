@@ -10,7 +10,9 @@ use std::time::{Duration, SystemTime};
 use moq_auth::{Grant, KeySet};
 use moq_relay::shutdown::Trigger;
 use moq_relay::{Config, Relay};
-use mjolnir_relay::{TokenPolicy, assess, cert_usable, file_sha256, key_file_trusted, load_verify_keys};
+use mjolnir_relay::{
+    IrohSessions, TokenPolicy, assess, cert_usable, file_sha256, key_file_trusted, load_verify_keys,
+};
 use tokio::signal::unix::{SignalKind, signal};
 struct Settings {
     host: String,
@@ -37,7 +39,8 @@ fn settings() -> anyhow::Result<Settings> {
         cert: PathBuf::from(&tls).join("cert.pem"),
         key: PathBuf::from(&tls).join("key.pem"),
         keys: PathBuf::from(
-            std::env::var("MJOLNIR_RELAY_KEYS").unwrap_or_else(|_| "/etc/mjolnir/relay-keys.json".into()),
+            std::env::var("MJOLNIR_RELAY_KEYS")
+                .unwrap_or_else(|_| "/etc/mjolnir-relay/relay-keys.json".into()),
         ),
         active: PathBuf::from(
             std::env::var("MJOLNIR_RELAY_KEYS_ACTIVE")
@@ -179,7 +182,7 @@ async fn mount_iroh(
         .bind()
         .await?;
     println!("iroh endpoint: {}", endpoint.id());
-    let router = iroh_live_relay::IrohSessions::new(relay.cluster().clone(), None)
+    let router = IrohSessions::new(relay.cluster().clone())
         .with_policy(policy)
         .mount(iroh::protocol::Router::builder(endpoint))
         .spawn();

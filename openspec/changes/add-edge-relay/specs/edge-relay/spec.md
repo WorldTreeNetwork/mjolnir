@@ -223,7 +223,7 @@ For the life of a session the relay SHALL allow a publish only at paths the toke
 - THEN the session is closed
 
 ### Requirement: Key changes are atomic, fail closed and acknowledged
-The relay key file SHALL be owned by root and not writable by the relay's user, and SHALL be replaced by rename. At start, a missing, empty or malformed file, or one holding a symmetric or private key, SHALL make the unit fail. After a rename the relay SHALL, within five seconds, either use exactly the new set for new sessions and write that file's SHA-256 to `/run/mjolnir-relay/keys.active`, or, if the new file is not usable, refuse every new session and write `invalid` there. Existing sessions keep their admission until their token expires.
+The relay key file SHALL be `/etc/mjolnir-relay/relay-keys.json` and the relay environment file SHALL be `/etc/mjolnir-relay/relay.env`. That directory SHALL be owned by root and SHALL NOT be writable by group or other. The key file SHALL be owned by root and not writable by the relay's user, and SHALL be replaced by rename. At start, a missing, empty or malformed file, a file whose directory is writable by anyone but root, or one holding a symmetric or private key, SHALL make the unit fail. After a rename the relay SHALL, within five seconds, either use exactly the new set for new sessions and write that file's SHA-256 to `/run/mjolnir-relay/keys.active`, or, if the new file is not usable, refuse every new session and write `invalid` there. Existing sessions keep their admission until their token expires.
 
 #### Scenario: Key removed
 - GIVEN a session admitted with a token signed by key K

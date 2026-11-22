@@ -8,12 +8,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod iroh_sessions;
+
 use moq_auth::{Algorithm, Claims, Grant, KeySet};
 use moq_ext_access::policy::{Decision, PeerRequest, Policy, Rejection};
 use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
 
 pub const DEFAULT_MAX_TTL: Duration = Duration::from_secs(3600);
+
+pub use iroh_sessions::IrohSessions;
 
 #[derive(Debug)]
 pub enum Refuse {
@@ -219,16 +223,27 @@ pub fn cert_usable(cert_pem: &str, host: &str, now: SystemTime) -> anyhow::Resul
     Ok(())
 }
 
-/// Root-owned and not writable by group or other. The relay user must not
-/// be able to replace the file.
+/// The key file and its directory are root-owned and not writable by group
+/// or other. A directory owner can replace the file even when the file
+/// itself is not writable.
 pub fn key_file_trusted(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path)?;
-    if meta.uid() != 0 {
-        anyhow::bail!("key file is not owned by root");
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).ok_or_else(|| {
+        anyhow::anyhow!("key file has no directory")
+    })?;
+    let dir_meta = std::fs::metadata(dir)?;
+    if dir_meta.mode() & 0o022 != 0 {
+        anyhow::bail!("key directory is writable by group or other");
     }
+    if dir_meta.uid() != 0 {
+        anyhow::bail!("key directory is not owned by root");
+    }
+    let meta = std::fs::metadata(path)?;
     if meta.mode() & 0o022 != 0 {
         anyhow::bail!("key file is writable by group or other");
+    }
+    if meta.uid() != 0 {
+        anyhow::bail!("key file is not owned by root");
     }
     Ok(())
 }
@@ -380,8 +395,9 @@ mod tests {
             assess(None, "not-a-tenant", &set, DEFAULT_MAX_TTL),
             Err(Refuse::NoToken)
         ));
-        let empty = moq_auth::Grant::new(Vec::<moq_auth::Pattern>::new(), ["**".parse().unwrap()]);
-        let mut empty = empty;
+        let all: moq_auth::Pattern = "**".parse().unwrap();
+        let mut empty = moq_auth::Grant::new(all.clone(), all);
+        empty.publish = Default::default();
         empty.root = Some(root.clone());
         let first = format!("{:?}", ext_grant(&empty).publish);
         let second = format!("{:?}", ext_grant(&empty).publish);
@@ -446,6 +462,25 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
-        assert!(key_file_trusted(&path).is_err());
+        let err = key_file_trusted(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("writable") || err.contains("not owned by root"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn key_directory_writable_by_others_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        std::fs::write(&path, "{}").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let err = key_file_trusted(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("key directory is writable by group or other"),
+            "{err}"
+        );
     }
 }

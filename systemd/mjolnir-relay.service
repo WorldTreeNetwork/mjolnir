@@ -19,7 +19,7 @@ ExecStart=/usr/local/bin/mjolnir-relay
 # the rule.
 ExecStartPost=+/usr/local/lib/mjolnir-relay/relay-rule.sh add
 ExecStopPost=+/usr/local/lib/mjolnir-relay/relay-rule.sh del
-EnvironmentFile=/etc/mjolnir/relay.env
+EnvironmentFile=/etc/mjolnir-relay/relay.env
 RuntimeDirectory=mjolnir-relay
 StateDirectory=mjolnir-relay-state
 NoNewPrivileges=true

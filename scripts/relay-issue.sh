@@ -26,10 +26,19 @@ owner="$(stat -c '%u' "$DIR")"
     exit 1
 }
 
-# umask 077 so temporary files are private from creation.
-systemd-run --quiet --wait --pipe --uid=mjolnir --gid=mjolnir \
-    --property=UMask=0077 \
-    "$GATEWAY" cert issue --domain "$HOST_NAME" --email "$EMAIL" --out "$DIR"
-
+# A rerun after a failed copy must not place another ACME order when
+# the pair still has more than 30 days left. Inside that window,
+# including an expired pair, this places a new order. relay-renew.sh
+# calls this only after its own 30-day check has failed.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+renew_window=$((30 * 24 * 3600))
+if [[ -f "$DIR/fullchain.pem" && -f "$DIR/privkey.pem" ]] \
+    && openssl x509 -in "$DIR/fullchain.pem" -noout -checkhost "$HOST_NAME" >/dev/null 2>&1 \
+    && openssl x509 -in "$DIR/fullchain.pem" -noout -checkend "$renew_window" >/dev/null 2>&1; then
+    echo "relay-issue: certificate for ${HOST_NAME} is outside the renewal window; copying without a new order"
+else
+    systemd-run --quiet --wait --pipe --uid=mjolnir --gid=mjolnir \
+        --property=UMask=0077 \
+        "$GATEWAY" cert issue --domain "$HOST_NAME" --email "$EMAIL" --out "$DIR"
+fi
 exec "$ROOT/relay-copy-cert.sh" "$DIR/fullchain.pem" "$DIR/privkey.pem" "$HOST_NAME"

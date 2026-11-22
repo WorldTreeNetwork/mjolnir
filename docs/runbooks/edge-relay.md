@@ -25,12 +25,14 @@ Save that stdout as `relay-keys.public.json`. Do not install
 2. On the relay host, as root:
 
 ```bash
-install -d -o root -g root -m 0755 /etc/mjolnir
-install -m 0640 -o root -g root /dev/null /etc/mjolnir/relay.env
-install -m 0644 -o root -g root relay-keys.public.json /etc/mjolnir/relay-keys.json
+install -d -o root -g root -m 0755 /etc/mjolnir-relay
+install -m 0640 -o root -g root /dev/null /etc/mjolnir-relay/relay.env
+install -m 0644 -o root -g root relay-keys.public.json /etc/mjolnir-relay/relay-keys.json
 ```
 
-`/etc/mjolnir/relay.env` is exactly:
+`/etc/mjolnir-relay` is root:root mode `0755`. The gateway user must not
+own it and must not be able to write it. A directory owner can replace
+the key file. `/etc/mjolnir-relay/relay.env` is exactly:
 
 ```
 MJOLNIR_RELAY_ENABLED=false
@@ -44,8 +46,10 @@ Use that same address in the issue command below. Leave `ENABLED` false
 for this first deploy so the unit does not start before a certificate
 exists.
 
-3. From the repo, install the relay scripts and binary without starting
-   the unit:
+3. From the repo, install the relay scripts without starting the unit.
+   This also creates the system user `mjolnir-relay` and
+   `/var/lib/mjolnir-relay/tls`, which the certificate copy needs.
+   No unit is installed while `ENABLED` is false:
 
 ```bash
 ./scripts/deploy.sh root@45.76.77.97 --relay
@@ -59,7 +63,13 @@ ssh root@45.76.77.97 /usr/local/lib/mjolnir-relay/relay-issue.sh \
   media-relay.worldtree.network '<the ACME account address>'
 ```
 
-5. Set `MJOLNIR_RELAY_ENABLED=true` in `/etc/mjolnir/relay.env` and deploy
+If that certificate still has more than 30 days left, running the same
+command again copies it and does not place another ACME order. A
+certificate inside that window is issued again. The enabled deploy
+below also copies `/var/lib/mjolnir/relay-acme/<host>/` before it
+starts the unit.
+
+5. Set `MJOLNIR_RELAY_ENABLED=true` in `/etc/mjolnir-relay/relay.env` and deploy
    again:
 
 ```bash
@@ -126,7 +136,7 @@ cargo build --release --examples
 - `iroh-subscribe read <relay-id> <token> <absolute-path> <seconds>` prints frames and bytes. `iroh-subscribe listen` prints announcements.
 - `wt-session publish` and `wt-session read` do the same over WebTransport. The URL carries `?jwt=`. The path is relative to the token root, so an absolute `t/<owner>/a/b` is read as `a/b`. `wt-session refuse` expects the session to be refused.
 
-Install the `SET` line as `/etc/mjolnir/relay-keys.json` before using the tokens. The relay endpoint id is the `iroh endpoint:` line in the journal.
+Install the `SET` line as `/etc/mjolnir-relay/relay-keys.json` before using the tokens. The relay endpoint id is the `iroh endpoint:` line in the journal.
 
 ## Disable
 

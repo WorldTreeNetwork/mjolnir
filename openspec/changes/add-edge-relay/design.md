@@ -6,7 +6,7 @@ Drafted by Fable 5.2 (blast: protocol, authorisation, public listener).
 
 - The gateway (`native/mjolnir_gateway`) is TCP only: HTTP/1 on 80 and 443, rustls on `ring`, `iroh = "1.0"`. It issues certificates by HTTP-01 and hot-swaps them on SIGHUP (`tls.rs`).
 - Nothing on a Mjolnir host listens on UDP 443.
-- `iroh-live-relay` at `747b1bd` is a library and a binary. Its `run` sets `listen.tls.generate = ["localhost"]` and takes no certificate. It exports `admit`, `IrohSessions`, `pull::Pulls`, `relay_policy` and `KeyFile` "for a binary that embeds the relay with a moq-relay of its own".
+- The Iroh session handler is `native/mjolnir_relay/src/iroh_sessions.rs`, adapted from `iroh-live-relay` `747b1bd` (MIT OR Apache-2.0) with every pull path removed. The relay crate does not depend on `iroh-live-relay`.
 - `moq_tokio`'s server TLS takes `cert` and `key` path lists.
 - The exported `admit` gives a browser with no token subscribe rights everywhere. `IrohSessions::with_policy` replaces the rule for Iroh clients.
 - iroh-live pins `iroh 1.4.1` on `aws-lc-rs` and moq by git revision. It is not on crates.io and says to expect API changes.
@@ -15,7 +15,7 @@ Drafted by Fable 5.2 (blast: protocol, authorisation, public listener).
 
 **D1. Own process.** `mjolnir-relay` is a host service with its own unit and its own user. Not in the gateway: a gateway deploy must not end calls, and a draft-protocol parser should not share a process with every site's TLS. Not in a guest: the service needs the host's name, certificate and UDP 443, and a tenant guest must not hold that key.
 
-**D2. Compose, do not call `run`.** The crate builds its own `moq_relay::Config` and reuses `IrohSessions`, `KeyFile` and the cluster from iroh-live-relay. It writes its own browser admission loop over `moq_relay`'s `Admissions`. iroh-live is a git dependency at one pinned revision. Moving the pin is a change with its own acceptance run.
+**D2. Compose, do not call `run`.** The crate builds its own `moq_relay::Config` and its own `IrohSessions`. It writes its own browser admission loop over `moq_relay`'s `Admissions`. `moq-transport-iroh` and `moq-ext-access` stay git dependencies at `747b1bd`. Moving that pin is a change with its own acceptance run.
 
 **D3. One listener.** WebTransport over HTTP/3 on UDP 443 at `:relay_host`. The relay serves no web page and binds no TCP port. The viewer page is someone else's to host.
 
