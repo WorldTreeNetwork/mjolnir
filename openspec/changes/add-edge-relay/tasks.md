@@ -10,7 +10,7 @@
 - [x] Certificate subject for `:relay_host` and the root-owned copy step at issue and renewal
 - [x] Config keys `:relay_enabled`, `:relay_host`; firewall opening for UDP 443 when enabled
 - [x] Docs: `docs/guide/host-sidecars.md`, a runbook, `CLAUDE.md`
-- [ ] ASK: Duke enables the relay on prod and picks `:relay_host`
+- [x] ASK: Duke enables the relay on prod and picks `:relay_host` — Duke, 2026-11-21: "yeah, prod is fine. how about media-relay.worldtree.network"
 - [ ] EYES: real-name journey on prod — `irl publish --relay` from behind NAT, a browser on another network plays it, a gateway restart does not interrupt it
 
 - Handoff: `add-relay-room-auth` defines the paths under `t/<owner>/` and the mint.
