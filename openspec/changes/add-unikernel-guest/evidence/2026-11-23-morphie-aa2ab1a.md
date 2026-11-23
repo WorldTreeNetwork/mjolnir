@@ -43,7 +43,7 @@ sudo -n env MIX_HOME=/home/dorje/.mix HEX_HOME=/home/dorje/.hex MIX_ENV=prod \
 
 The runner now prints each `mj` command with its output, and the Cloud
 Hypervisor `vm.info` payload, CPU, memory, disk, fs and vsock fields.
-Full transcript: [`2026-11-23-morphie-aa2ab1a-full.log`](2026-11-23-morphie-aa2ab1a-full.log)
+Full transcript: [`2026-11-23-morphie-aa2ab1a-transcript.txt`](2026-11-23-morphie-aa2ab1a-transcript.txt)
 (also `morphie:/tmp/mj-uk-acceptance-aa2ab1a-b.log`). The run exited 0 with
 33 PASS lines. Afterwards there were no `mju-` interfaces and no `mju-*.scope`
 units.

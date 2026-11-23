@@ -20,4 +20,4 @@
 ## Validation record
 
 - [First morphie run](evidence/2026-11-23-morphie.md), image from homoiconic `793b583`.
-- [Second morphie run](evidence/2026-11-23-morphie-aa2ab1a.md), image built fresh from homoiconic `aa2ab1a` (`reflect-net.elf` sha256 `f8fdc41c…1d15`), with the [full transcript](evidence/2026-11-23-morphie-aa2ab1a-full.log) and the green `mix test` gate.
+- [Second morphie run](evidence/2026-11-23-morphie-aa2ab1a.md), image built fresh from homoiconic `aa2ab1a` (`reflect-net.elf` sha256 `f8fdc41c…1d15`), with the [full transcript](evidence/2026-11-23-morphie-aa2ab1a-transcript.txt) and the green `mix test` gate.
