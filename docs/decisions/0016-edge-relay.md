@@ -1,9 +1,9 @@
 # ADR 0016 — Edge relay
 
-**Status:** Accepted for implementation (2026-11-21). Not folded.
-**Change:** [`add-edge-relay`](../../openspec/changes/add-edge-relay/proposal.md)
-**Contract:** `d94e71e` ([`reviews/2026-11-21-advise-2.md`](../../openspec/changes/add-edge-relay/reviews/2026-11-21-advise-2.md))
-**Full argument:** [`design.md`](../../openspec/changes/add-edge-relay/design.md)
+**Status:** Accepted for implementation (2026-11-21). Folded 2026-11-23: living spec [`edge-relay`](../../openspec/specs/edge-relay/spec.md). Live at `media-relay.worldtree.network`.
+**Change:** [`add-edge-relay`](../../openspec/changes/archive/2026-11-23-add-edge-relay/proposal.md)
+**Contract:** `d94e71e` ([`reviews/2026-11-21-advise-2.md`](../../openspec/changes/archive/2026-11-23-add-edge-relay/reviews/2026-11-21-advise-2.md))
+**Full argument:** [`design.md`](../../openspec/changes/archive/2026-11-23-add-edge-relay/design.md)
 
 ## One screen
 

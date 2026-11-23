@@ -70,3 +70,11 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-10-21 / add-recording-blob:** Recrypt `Store.has_chunk?/1` downloads the ciphertext, so a recording presence check is HEAD (door) or `File.stat` (local).
 
 - **2026-10-27 / add-recording-blob:** `conn.assigns.user_id` is not a holder. `:user` sets it to the JWT `sub` (`lib/mjolnir/api/auth.ex`). `:capability` is the constant `"capability"`, `:operator` is `"localhost"`, and `:sites` is `sites_token:<id>`, which changes when the token rotates. A row bound to `user_id` without `principal_kind == :user` is either shared by every biscuit or stranded on the next token.
+
+- **2026-11-23 / add-edge-relay:** Iroh relay sessions did not end at token expiry while WebTransport ones did. `From<Grant> for Authorization` in moq-ext-access sets `expires: None`, so `expiry()` waited forever. This change's tests covered expiry on WebTransport only; a later review found it, fixed in `105acf0`. Test every session property on both transports.
+
+- **2026-11-23 / add-edge-relay:** The upstream `iroh-live-relay` crate fetches a web client with npm at build time, and the production host has no Node. The relay adapts its Iroh session code (`iroh_sessions.rs`, from iroh-live `747b1bd`) instead of depending on the crate.
+
+- **2026-11-23 / add-edge-relay:** A cold compile of `native/mjolnir_relay` on the production host took 63 minutes. Plan a first relay deploy around it, or build elsewhere.
+
+- **2026-11-23 / add-edge-relay:** A disabled `deploy.sh --relay` must still create the `mjolnir-relay` user. Without it, certificate issue for `:relay_host` fails at the copy (`install: invalid group 'mjolnir-relay'`) before the first enable. Fixed in `3dd4df9`.

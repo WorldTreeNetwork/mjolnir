@@ -828,6 +828,22 @@ File subjects; bytes stay on the door. Living spec
 HTTP, LAN publish, and `meshd` are later beads
 (`mjolnir-h2fp.3`, `mjolnir-h2fp.4`).
 
+The edge relay is a public host service, not a guest locator. It is
+`mjolnir-relay` (`native/mjolnir_relay`), its own process, user and
+systemd unit beside the gateway. It relays Media-over-QUIC:
+WebTransport on public UDP 443 at `:relay_host` with a certificate
+copied by root from the gateway's issuer, and Iroh sessions on its own
+endpoint. Every session needs a moq-auth relay token verified against
+`/etc/mjolnir-relay/relay-keys.json`. It never dials out for a client.
+Off by default; only `deploy.sh --relay` installs or removes it and its
+firewall rule, and a gateway or controller restart leaves its sessions
+open. The host can read relayed media. ADR
+[`0016`](decisions/0016-edge-relay.md), living spec
+[`edge-relay`](../openspec/specs/edge-relay/spec.md)
+(`add-edge-relay` folded 2026-11-23). Runbook
+[`runbooks/edge-relay.md`](runbooks/edge-relay.md). Room tokens and
+key rotation are `add-relay-room-auth`, not yet folded.
+
 ### Channel System (Future)
 
 The local Buzz client fabric (living spec
