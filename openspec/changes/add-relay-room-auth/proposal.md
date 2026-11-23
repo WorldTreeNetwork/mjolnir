@@ -18,7 +18,7 @@ A removed participant keeps a working token until it expires. They stay connecte
 
 ## Impact
 
-- Capabilities: ADDED `relay-room-auth`. No living requirement is modified. `edge-relay` is still only a change, not a living spec.
+- Capabilities: ADDED `relay-room-auth`. No living requirement is modified. `edge-relay` became a living spec on 2026-11-23 (`openspec/specs/edge-relay/spec.md`); this change does not modify it.
 - ADRs: none in this change. Fold may add a short note under ADR 0016 when the mint exists. This change does not amend ARCHITECTURE.md.
 
 ## User journey & surfaces

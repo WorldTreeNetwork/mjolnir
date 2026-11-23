@@ -2,7 +2,7 @@
 
 Auth blast. Banner on the proposal stays PENDING. This amendment answers the send-back in `reviews/2026-11-22-advise.md`.
 
-The relay verifies a moq-auth JWT from `/etc/mjolnir-relay/relay-keys.json` and refuses a root that is not `t/<canonical owner>` or below it (`openspec/changes/add-edge-relay`). WebTransport closes a session at `exp`. Iroh did not, until `Authorization.expires` was set from the token (`105acf0`). This change does not claim that close was already true on both transports before that fix.
+The relay verifies a moq-auth JWT from `/etc/mjolnir-relay/relay-keys.json` and refuses a root that is not `t/<canonical owner>` or below it (`openspec/specs/edge-relay/spec.md`, archived change `openspec/changes/archive/2026-11-23-add-edge-relay`). WebTransport closes a session at `exp`. Iroh did not, until `Authorization.expires` was set from the token (`105acf0`). This change does not claim that close was already true on both transports before that fix.
 
 ## Decisions
 
