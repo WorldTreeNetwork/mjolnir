@@ -11,7 +11,7 @@
 - [x] Config keys `:relay_enabled`, `:relay_host`; firewall opening for UDP 443 when enabled
 - [x] Docs: `docs/guide/host-sidecars.md`, a runbook, `CLAUDE.md`
 - [x] ASK: Duke enables the relay on prod and picks `:relay_host` — Duke, 2026-11-21: "yeah, prod is fine. how about media-relay.worldtree.network"
-- [ ] EYES: real-name journey on prod — `irl publish --relay` from behind NAT, a browser on another network plays it, a gateway restart does not interrupt it
+- [x] EYES: real-name journey on prod — `irl publish --relay` from behind NAT, a WebTransport reader on another network plays it, a gateway restart does not interrupt it. Run 2026-11-22 with the command-line WebTransport client (`wt-session`, certificate verified); see `notes/acceptance.md`. No browser page exists yet. Duke 2026-11-23, asked whether to fold on the command-line proof and move the browser check to the browser client node: "yes, that's fine, go for it." PUNT: a real browser on another network playing through `media-relay.worldtree.network` is owed by `add-browser-call-client` (mjolnir-rurh.5).
 
 - Handoff: `add-relay-room-auth` defines the paths under `t/<owner>/` and the mint.
 - Finding to carry: the host can read relayed media (see `design.md`).
