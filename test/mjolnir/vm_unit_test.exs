@@ -3,7 +3,9 @@ defmodule Mjolnir.VMUnitTest do
   Unit tests for VM module logic that doesn't require a running hypervisor.
   Tests pure functions and deterministic behavior.
   """
-  use ExUnit.Case, async: true
+  # Not async: setup repoints the global :btrfs_root, which other modules read
+  # concurrently (mjolnir-tinp).
+  use ExUnit.Case, async: false
 
   describe "spawn refuses memory snapshots" do
     test "returns memory_snapshot_requires_thaw without starting a VM" do

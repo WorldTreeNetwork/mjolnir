@@ -67,6 +67,13 @@ end
 
 command = fn args ->
   {output, status} = System.cmd(mj, args ++ ["--owner", owner], env: env, stderr_to_stdout: true)
+  # Transcript: the command as typed (owner elided) and what it printed.
+  shown = if String.printable?(output), do: output, else: "<hex> " <> Base.encode16(output)
+
+  IO.puts(
+    "$ mj #{Enum.join(args, " ")} --owner <owner>\n#{String.trim_trailing(shown)}\n[exit #{status}]"
+  )
+
   check.(status == 0, "mj #{Enum.join(args, " ")}")
   output
 end
@@ -102,10 +109,42 @@ try do
     System.cmd("curl", ["-sS", "--unix-socket", vm.socket_path, "http://localhost/api/v1/vm.info"])
 
   config = Jason.decode!(info)["config"]
+  payload = config["payload"] || %{}
+  IO.puts("VMINFO payload #{Jason.encode!(payload)}")
+
+  IO.puts(
+    "VMINFO cpus #{Jason.encode!(config["cpus"])} memory #{Jason.encode!(config["memory"])}"
+  )
+
+  IO.puts(
+    "VMINFO disks #{Jason.encode!(config["disks"])} fs #{Jason.encode!(config["fs"])} vsock #{Jason.encode!(config["vsock"])}"
+  )
 
   check.(
     config["fs"] in [nil, []] and config["vsock"] == nil and config["disks"] in [nil, []],
     "no rootfs, virtiofs or vsock"
+  )
+
+  words = String.split(payload["cmdline"] || "")
+
+  check.(
+    payload["kernel"] == kernel and payload["initramfs"] == nil and length(words) == 3 and
+      Enum.map(words, &(&1 |> String.split("=") |> hd())) ==
+        ["reflect.ip", "reflect.port", "reflect.quic_port"],
+    "kernel is the Reflect ELF and the command line is three reflect.* words"
+  )
+
+  check.(
+    config["cpus"]["boot_vcpus"] == 1 and config["memory"]["size"] == 512 * 1024 * 1024,
+    "1 vCPU and 512 MiB"
+  )
+
+  {procs, _} = System.cmd("pgrep", ["-af", "virtiofsd|mjolnir-agent"])
+  check.(not String.contains?(procs, id), "no virtiofsd or agent process for the guest")
+
+  check.(
+    vm.rootfs_path == nil and not File.exists?(Mjolnir.Reconcile.rootfs_path(id)),
+    "no rootfs clone for the guest"
   )
 
   {route, 0} = System.cmd("ip", ["route", "get", vm.net_config.guest_ip])

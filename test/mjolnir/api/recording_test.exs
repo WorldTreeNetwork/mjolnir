@@ -386,6 +386,10 @@ defmodule Mjolnir.API.RecordingTest do
   defp wait_store(old, n) do
     case Process.whereis(Mjolnir.Sites.Store) do
       pid when is_pid(pid) and pid != old ->
+        # The name is registered before init/1 returns, and init/1 creates
+        # directories under the test root. Wait for it so on_exit's rm_rf!
+        # does not race those mkdirs (eexist).
+        _ = :sys.get_state(pid)
         true
 
       _ ->

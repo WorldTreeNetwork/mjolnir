@@ -13,7 +13,9 @@ defmodule Mjolnir.MemorySnapshotTest do
   the end-to-end proof (freeze, thaw, marker process still at the same PID)
   needs KVM and lives in the integration suite.
   """
-  use ExUnit.Case, async: true
+  # Not async: setup repoints the global :btrfs_root, which other modules read
+  # concurrently (mjolnir-tinp).
+  use ExUnit.Case, async: false
 
   alias Mjolnir.BTRFS
   alias Mjolnir.MemorySnapshot

@@ -47,7 +47,11 @@ defmodule Mjolnir.Policy.CoverageTest do
     "authorize_mailbox",
     # Holder-bound redeem and the egress proxy. The handler proves the
     # holder; a TCP peer is not a scope.
-    "Secrets.Redeem"
+    "Secrets.Redeem",
+    # Relay room token: Mint.issue derives the owner from the caller's sub
+    # and roots the token at t/<owner>/<room>, so a caller can only mint
+    # into its own namespace.
+    "Relay.Mint.issue"
   ]
 
   test "all non-whitelisted endpoints have policy enforcement" do

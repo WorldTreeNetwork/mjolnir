@@ -173,6 +173,77 @@ defmodule Mjolnir.UnikernelLifecycleTest do
     assert :ok = Mjolnir.Health.Monitor.handle_check_result(id, {:error, :unikernel_unsupported})
   end
 
+  describe "the host QUIC client's exit status" do
+    # Drives Exchange.port/1, the production path, with a stub client that
+    # records its arguments and exits with the status the real client
+    # (native/reflect_quic/host.zig) gives for each outcome.
+    setup do
+      dir = Path.join(System.tmp_dir!(), "reflect-stub-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      old_bin = Application.get_env(:mjolnir, :reflect_quic_client)
+      Application.delete_env(:mjolnir, :unikernel_exchange)
+
+      on_exit(fn ->
+        if old_bin,
+          do: Application.put_env(:mjolnir, :reflect_quic_client, old_bin),
+          else: Application.delete_env(:mjolnir, :reflect_quic_client)
+
+        File.rm_rf(dir)
+      end)
+
+      %{dir: dir}
+    end
+
+    defp stub_client(dir, status) do
+      bin = Path.join(dir, "client-#{status}")
+      File.write!(bin, "#!/bin/sh\necho \"$@\" > #{dir}/args\nexit #{status}\n")
+      File.chmod!(bin, 0o755)
+      Application.put_env(:mjolnir, :reflect_quic_client, bin)
+    end
+
+    test "silence until the client's deadline is unikernel_timeout and releases the guest",
+         %{id: id, dir: dir} do
+      # host.zig returns 4 when 60 s pass with no reply frame.
+      stub_client(dir, 4)
+
+      assert {:error, :unikernel_timeout} =
+               VM.unikernel_message(id, <<1>>, 5000, "000000000000000a")
+
+      assert ["10.0.0.2", "30001", "5000", pin, _path, "000000000000000A"] =
+               dir |> Path.join("args") |> File.read!() |> String.split()
+
+      assert pin == String.duplicate("ab", 32)
+      refute GenServer.call(caller_name(id), :get_state).unikernel_busy
+
+      assert {:ok, %{isError: true, content: [%{"text" => text}]}, %{}} =
+               Mjolnir.MCP.Server.handle_tool_call(
+                 "deliver_message",
+                 %{"vm_id" => id, "program_b64" => "AQ=="},
+                 %{}
+               )
+
+      assert text =~ "unikernel_timeout"
+    end
+
+    test "statuses 3, 5 and 6 are the refused pin and transport statuses 2 and 3", %{dir: dir} do
+      job = %{
+        program: <<1>>,
+        budget: 5000,
+        guest_ip: "10.0.0.2",
+        quic_port: 30001,
+        peer_pin: String.duplicate("ab", 32),
+        correlation_id: <<1::64>>
+      }
+
+      stub_client(dir, 3)
+      assert {:error, :peer_key_refused} = Mjolnir.Unikernel.Exchange.port(job)
+      stub_client(dir, 5)
+      assert {:ok, 2, ""} = Mjolnir.Unikernel.Exchange.port(job)
+      stub_client(dir, 6)
+      assert {:ok, 3, ""} = Mjolnir.Unikernel.Exchange.port(job)
+    end
+  end
+
   defp caller_name(id), do: {:via, Registry, {Mjolnir.VMRegistry, id}}
   defp wait_unlocked(_id, 0), do: flunk("caller monitor did not release admission")
 

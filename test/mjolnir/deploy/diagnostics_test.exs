@@ -4,7 +4,11 @@ defmodule Mjolnir.Deploy.DiagnosticsTest do
   # place the guest KERNEL speaks — with it. An OOM-killed bundler and a
   # genuinely broken command both arrived as {:vsock_unavailable, ...}, so
   # diagnosis meant guessing, at ~8 minutes per guess.
-  use ExUnit.Case, async: true
+  #
+  # Not async: capture/2's setup repoints the global :socket_dir and deletes it
+  # on exit, and async tests that hash (Sites.Crypto.blake3_hash/1 writes its
+  # temp file under :socket_dir) then lose the directory mid-write (mjolnir-tinp).
+  use ExUnit.Case, async: false
 
   alias Mjolnir.Deploy.Diagnostics
 

@@ -1,5 +1,7 @@
 defmodule Mjolnir.BTRFSTest do
-  use ExUnit.Case, async: true
+  # Not async: setup repoints the global :btrfs_root, which other modules read
+  # concurrently (mjolnir-tinp).
+  use ExUnit.Case, async: false
 
   describe "path construction" do
     test "clone/2 constructs correct source and dest paths" do

@@ -72,6 +72,7 @@ defmodule Mjolnir.AIE.AdmitTest do
     assert Jason.decode!(conn.resp_body)["error"] == "unknown"
   end
 
+  @tag :needs_getent
   test "socket perms are 0660 mjolnir-aie" do
     assert Admit.socket_mode() == 0o660
     assert Admit.socket_group() == "mjolnir-aie"

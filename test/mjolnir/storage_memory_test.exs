@@ -6,6 +6,9 @@ defmodule Mjolnir.StorageMemoryTest do
   """
   use ExUnit.Case, async: false
 
+  # Storage.overview/0 runs `btrfs filesystem du`.
+  @moduletag :needs_btrfs
+
   setup do
     tmp = Path.join(System.tmp_dir!(), "storage-mem-#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(tmp, "@snapshots"))

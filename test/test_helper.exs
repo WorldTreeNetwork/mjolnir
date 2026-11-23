@@ -7,15 +7,23 @@
 #   :recrypt_storage — needs mjolnir-blob-door (Linux host); opt in via
 #                      --include recrypt_storage + MJOLNIR_RECRYPT_STORAGE_URL
 ExUnit.configure(
-  exclude: [
-    :integration,
-    :e2e,
-    :chaos,
-    :destructive,
-    :requires_ots,
-    :postgres,
-    :recrypt_storage
-  ]
+  # Tests that shell out to a host tool run only where that tool exists
+  # (mjolnir-tinp): macOS has no `getent` and dev machines lack `btrfs`.
+  exclude:
+    [
+      :integration,
+      :e2e,
+      :chaos,
+      :destructive,
+      :requires_ots,
+      :postgres,
+      :recrypt_storage
+    ] ++
+      for(
+        {tag, tool} <- [needs_getent: "getent", needs_btrfs: "btrfs"],
+        System.find_executable(tool) == nil,
+        do: tag
+      )
 )
 
 # mjolnir-7qh: give each run its own StateStore directory.
