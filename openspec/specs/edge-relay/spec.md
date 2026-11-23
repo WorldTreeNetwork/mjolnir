@@ -16,8 +16,8 @@ Notes on this fold:
 - "A key file is malformed" includes a key with no `kid`, a duplicate
   `kid`, and an algorithm other than EdDSA or ES256. That is the loader
   as it is (`d4d5443`, landed under `add-relay-room-auth`). Rotation,
-  the mint and room paths are capability `relay-room-auth` and fold with
-  that change.
+  the mint and room paths are capability
+  [`relay-room-auth`](../relay-room-auth/spec.md) (folded 2026-11-23).
 - The browser scenarios were accepted on a command-line WebTransport
   client with a verified certificate. A real browser on another network
   is owed by `add-browser-call-client` (`mjolnir-rurh.5`).

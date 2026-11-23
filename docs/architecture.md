@@ -841,8 +841,15 @@ open. The host can read relayed media. ADR
 [`0016`](decisions/0016-edge-relay.md), living spec
 [`edge-relay`](../openspec/specs/edge-relay/spec.md)
 (`add-edge-relay` folded 2026-11-23). Runbook
-[`runbooks/edge-relay.md`](runbooks/edge-relay.md). Room tokens and
-key rotation are `add-relay-room-auth`, not yet folded.
+[`runbooks/edge-relay.md`](runbooks/edge-relay.md). Room tokens are
+minted by the controller (`Mjolnir.Relay.Mint`, `POST
+/api/relay/rooms/:room/participants/:participant/token`, user
+principals only) with a private key in the root-only directory
+`/var/lib/mjolnir/relay-mint/`; the relay sees only the public half.
+`scripts/relay-mint-key.sh` installs, rotates and emergency-revokes
+that key. Living spec
+[`relay-room-auth`](../openspec/specs/relay-room-auth/spec.md)
+(`add-relay-room-auth` folded 2026-11-23).
 
 ### Channel System (Future)
 

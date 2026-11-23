@@ -43,3 +43,5 @@ Browser tokens arrive as `?jwt=`. The admission loop reads that query and a SETU
 Built with this ADR: the crate, refusal tests, the systemd unit, `deploy.sh --relay`, the root copy step, and the config keys. Off by default.
 
 Remaining, and not this node: Duke enables the relay on production and picks the hostname. The real-name journey runs there. Room tokens, the browser client, and a self-hosted Iroh relay are later nodes.
+
+**Note 2026-11-23 (fold of `add-relay-room-auth`):** the mint in the 2026-11-22 decision exists and is live on production (`Mjolnir.Relay.Mint`, living spec [`relay-room-auth`](../../openspec/specs/relay-room-auth/spec.md)). The relay host is `media-relay.worldtree.network`. Default token life is 3600 seconds, because a subscriber does not follow a publisher's reconnect and a shorter default would cut every call at that interval; the browser client (`mjolnir-rurh.5`) owes resubscribe and make-before-break. Rotation, `finish` and emergency revoke have run on the laptop only.

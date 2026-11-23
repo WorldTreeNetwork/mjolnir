@@ -78,3 +78,13 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-11-23 / add-edge-relay:** A cold compile of `native/mjolnir_relay` on the production host took 63 minutes. Plan a first relay deploy around it, or build elsewhere.
 
 - **2026-11-23 / add-edge-relay:** A disabled `deploy.sh --relay` must still create the `mjolnir-relay` user. Without it, certificate issue for `:relay_host` fails at the copy (`install: invalid group 'mjolnir-relay'`) before the first enable. Fixed in `3dd4df9`.
+
+- **2026-11-23 / add-relay-room-auth:** The first mint contract took the owner from the caller-supplied `x-owner-id` header, which would have let any signed-in user mint a token rooted in another tenant. The advise review caught it before code; the owner is now the verified `sub` only.
+
+- **2026-11-23 / add-relay-room-auth:** `relay-mint-key.sh` that failed midway left the private key world-readable, and re-running a failed emergency revoke re-trusted the revoked key. Code review found both, not the tests; `scripts/relay-mint-key-test.sh` now injects those crash points.
+
+- **2026-11-23 / add-relay-room-auth:** When a publisher reconnects on the same path, existing subscribers silently get nothing from the new session, on WebTransport and on Iroh, with no `Restart`. The relay does not bridge publishers; the client must resubscribe on re-announce.
+
+- **2026-11-23 / add-relay-room-auth:** The example Iroh publisher keeps writing locally after the relay closes it at token expiry, so client byte counts and run time do not show the close. Use the relay journal line (`the iroh client's authorization expired, closing its session`).
+
+- **2026-11-23 / add-relay-room-auth:** The running relay picked up the first-install public key set on its one-second key poll, so first install on production needed no relay restart.
