@@ -25,6 +25,9 @@ defmodule Mjolnir.MCP.Server do
     input_schema(%{
       type: "object",
       properties: %{
+        kind: %{type: "string", enum: ["linux", "unikernel"]},
+        kernel: %{type: "string", description: "Host path of an allowed unikernel ELF."},
+        peer_pin: %{type: "string", description: "SHA-256 hex of the guest certificate."},
         base_image: %{
           type: "string",
           description: "Base rootfs image name (e.g. 'ubuntu-24.04')."
@@ -182,7 +185,17 @@ defmodule Mjolnir.MCP.Server do
           type: "string",
           description: "Producer message id. Same id retried is a duplicate."
         },
-        payload: %{type: "object", description: "Arbitrary JSON payload."}
+        program_b64: %{
+          type: "string",
+          description: "Base64 program bytes for a unikernel (at most 1176 decoded bytes)."
+        },
+        budget: %{
+          type: "integer",
+          minimum: 1,
+          maximum: 100_000_000,
+          description: "Unikernel step budget; default 100000000."
+        },
+        payload: %{type: "object", description: "Arbitrary JSON payload for a Linux guest."}
       },
       required: ["vm_id"]
     })
@@ -385,21 +398,58 @@ defmodule Mjolnir.MCP.Server do
     end
   end
 
-  def handle_tool_call("deliver_message", %{"vm_id" => id} = args, state) do
-    from = Map.get(args, "from_vm_id", "external")
-    payload = Map.get(args, "payload", %{})
-    opts = if args["id"], do: [id: args["id"]], else: []
+  def handle_tool_call(
+        "deliver_message",
+        %{"vm_id" => id, "program_b64" => encoded} = args,
+        state
+      ) do
+    result =
+      with true <- is_binary(encoded),
+           {:ok, program} <- Base.decode64(encoded) do
+        Mjolnir.VM.unikernel_message(id, program, args["budget"], args["id"])
+      else
+        _ -> {:error, :program_b64}
+      end
 
-    case Mjolnir.VM.deliver_message(id, from, payload, opts) do
-      {:ok, %{message_id: mid, status: status}} ->
-        body = Jason.encode!(%{ok: true, message_id: mid, status: status})
-        {:ok, %{content: [text(body)]}, state}
+    case result do
+      {:ok, status, payload} ->
+        body = %{ok: true, transport_status: status, reply_b64: Base.encode64(payload)}
 
-      {:error, :not_found} ->
-        {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
+        body =
+          case status do
+            2 -> Map.put(body, :error, "reply_too_large")
+            3 -> Map.put(body, :error, "invalid_budget")
+            _ -> body
+          end
+
+        {:ok, %{content: [text(Jason.encode!(body))]}, state}
 
       {:error, reason} ->
         {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
+    end
+  end
+
+  def handle_tool_call("deliver_message", %{"vm_id" => id} = args, state) do
+    case Mjolnir.StateStore.get(id) do
+      {:ok, %{spawn_config: %{"kind" => "unikernel"}}} ->
+        handle_tool_call("deliver_message", Map.put(args, "program_b64", nil), state)
+
+      _ ->
+        from = Map.get(args, "from_vm_id", "external")
+        payload = Map.get(args, "payload", %{})
+        opts = if args["id"], do: [id: args["id"]], else: []
+
+        case Mjolnir.VM.deliver_message(id, from, payload, opts) do
+          {:ok, %{message_id: mid, status: status}} ->
+            body = Jason.encode!(%{ok: true, message_id: mid, status: status})
+            {:ok, %{content: [text(body)]}, state}
+
+          {:error, :not_found} ->
+            {:ok, %{content: [text("VM not found: #{id}")], isError: true}, state}
+
+          {:error, reason} ->
+            {:ok, %{content: [text("Failed: #{inspect(reason)}")], isError: true}, state}
+        end
     end
   end
 
@@ -514,7 +564,7 @@ defmodule Mjolnir.MCP.Server do
 
   # ── Helpers ────────────────────────────────────────────
 
-  @spawn_keys ~w(base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
+  @spawn_keys ~w(kind kernel peer_pin base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
 
   defp args_to_spawn_opts(args) do
     args

@@ -114,6 +114,14 @@ defmodule Mjolnir.MCP.ServerTest do
       assert "get_connection_ticket" in tool_names
       assert "list_dormant" in tool_names
       assert "await_pty" in tool_names
+
+      message = Enum.find(tools, &(&1["name"] == "deliver_message"))["inputSchema"]["properties"]
+      assert message["program_b64"]["type"] == "string"
+      assert message["budget"]["maximum"] == 100_000_000
+      spawn = Enum.find(tools, &(&1["name"] == "spawn_vm"))["inputSchema"]["properties"]
+      assert spawn["kind"]["enum"] == ["linux", "unikernel"]
+      assert spawn["kernel"]["type"] == "string"
+      assert spawn["peer_pin"]["type"] == "string"
     end
   end
 

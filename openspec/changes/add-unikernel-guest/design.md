@@ -53,8 +53,8 @@ The QUIC spike and the KVM acceptance run on morphie (Cloud Hypervisor 54 at `~/
 - Editing homoiconic.
 - Filtering the plain UDP port.
 
-## Unverified hypotheses
+## Verified hypothesis
 
-- **H1.** The host stack named below completes one handshake with the `793b583` listener over a Mjolnir /32 TAP. Confidence: low until that spike. The homoiconic `quic-client` is the same `quic.zig` on both ends, so it does not prove a different stack. Verification: one factorial exchange on morphie, spike only, no product code. If it fails, amend. Do not add TCP.
+- **H1.** The host stack named below completes one handshake with the `793b583` listener over a Mjolnir /32 TAP. Verified on morphie on 2026-11-23; see `evidence/2026-11-23-morphie.md`. The homoiconic `quic-client` is the same `quic.zig` on both ends, so it does not prove a different stack. Verification: the shipped host client completes factorial over the real Mjolnir /32 TAP. The original pre-code spike was not recorded; the repeatable product acceptance run now supplies the evidence. No TCP was added.
 
 The spike holds these listener constraints fixed (`quic.zig` at `793b583`): QUIC version 1 only; destination and source connection ids of exactly 8 bytes; an X25519 key share found as the bytes `00 1d 00 20`; a ClientHello of at most 1024 bytes; `TLS_AES_128_GCM_SHA256`; ECDSA P-256 SHA-256; no ALPN required in the server reply; datagrams of at most 1400 bytes. The stack Mjolnir ships is a client written to those constraints, not a stock QUIC library on its default connection-id and ALPN settings.

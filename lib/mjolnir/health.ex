@@ -54,9 +54,12 @@ defmodule Mjolnir.Health do
     passed through to it.
   """
   @spec check(String.t(), keyword()) ::
-          {:ok, vm_report()} | {:error, :not_found | :unreachable}
+          {:ok, vm_report()} | {:error, :not_found | :unreachable | :unikernel_unsupported}
   def check(vm_id, opts \\ []) when is_binary(vm_id) do
     case Mjolnir.VM.get(vm_id) do
+      {:ok, %{config: %{guest_kind: :unikernel}}} ->
+        {:error, :unikernel_unsupported}
+
       {:ok, vm} ->
         checks =
           @default_vm_checks
@@ -87,11 +90,15 @@ defmodule Mjolnir.Health do
     end
   end
 
-  @spec heal(String.t(), keyword()) :: {:ok, vm_report()} | {:error, :not_found | :unreachable}
+  @spec heal(String.t(), keyword()) ::
+          {:ok, vm_report()} | {:error, :not_found | :unreachable | :unikernel_unsupported}
   def heal(vm_id, opts \\ []) when is_binary(vm_id) do
     max_level = Keyword.get(opts, :max_level, 2)
 
     case Mjolnir.VM.get(vm_id) do
+      {:ok, %{config: %{guest_kind: :unikernel}}} ->
+        {:error, :unikernel_unsupported}
+
       # Belt and braces alongside the Monitor's :busy branch: heal/2 is public
       # and reachable from the API and an operator's `mj doctor --fix`. The L1
       # heal stops the VM's Vsock.Connection, so running it while an exec is in

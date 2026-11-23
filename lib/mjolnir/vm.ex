@@ -833,6 +833,9 @@ defmodule Mjolnir.VM do
   @spec reboot(vm_id()) :: {:ok, map()} | {:error, term()}
   def reboot(vm_id) when is_binary(vm_id) do
     case Mjolnir.StateStore.get(vm_id) do
+      {:ok, %{spawn_config: %{"kind" => "unikernel"}}} ->
+        {:error, :unikernel_restart_refused}
+
       {:ok, record} ->
         _ = kill_hypervisor_process(vm_id)
 
@@ -1089,6 +1092,8 @@ defmodule Mjolnir.VM do
       _ = GenServer.call(via_tuple(vm_id), {:unikernel_finish, result})
       result
     end
+  catch
+    :exit, {:noproc, _} -> {:error, :not_found}
   end
 
   defp reject_unikernel(vm_id) do
@@ -1293,6 +1298,9 @@ defmodule Mjolnir.VM do
   idempotently to recover from any guest drift.
   """
   @spec resume(Mjolnir.StateStore.Record.t()) :: {:ok, t()} | {:error, term()}
+  def resume(%Mjolnir.StateStore.Record{spawn_config: %{"kind" => "unikernel"}}),
+    do: {:error, :unikernel_restart_refused}
+
   def resume(%Mjolnir.StateStore.Record{uuid: uuid} = record) do
     # Claim before start_child. Registry registration is atomic; the VM's own
     # via-name is a different key and is taken only once start_link runs.
@@ -2474,6 +2482,7 @@ defmodule Mjolnir.VM do
             Mjolnir.StateStore.Record.new(state.id, :stopped,
               spawn_config: %{
                 "kind" => "unikernel",
+                "owner_id" => state.owner_id,
                 "kernel" => state.config.kernel_path,
                 "peer_pin" => state.config.peer_pin,
                 "restart_policy" => "never"
@@ -2499,6 +2508,9 @@ defmodule Mjolnir.VM do
     Logger.warning("[vm-terminate] #{state.id} done")
     :ok
   end
+
+  defp preserve_rootfs?({:hypervisor_exit, _}, %{config: %{guest_kind: :unikernel}}),
+    do: false
 
   defp preserve_rootfs?(:normal, %{state: :running}), do: false
   defp preserve_rootfs?(_reason, _state), do: true

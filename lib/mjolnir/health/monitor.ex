@@ -109,6 +109,9 @@ defmodule Mjolnir.Health.Monitor do
   @doc false
   def handle_check_result(vm_id, result) do
     case result do
+      {:error, :unikernel_unsupported} ->
+        :ok
+
       {:ok, %{overall: :ok}} ->
         :ok
 

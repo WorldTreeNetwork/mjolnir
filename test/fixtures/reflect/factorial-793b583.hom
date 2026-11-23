@@ -1,0 +1,7 @@
+; exact arithmetic on numbers of any size
+def factorial n =
+  case n
+    0 -> 1
+    m + 1 -> mul n (factorial m)
+
+factorial 30

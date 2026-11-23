@@ -1,5 +1,17 @@
 defmodule Mjolnir.UnikernelTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  setup do
+    old = Application.get_env(:mjolnir, :unikernel_kernel_prefixes)
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:mjolnir, :unikernel_kernel_prefixes, old),
+        else: Application.delete_env(:mjolnir, :unikernel_kernel_prefixes)
+    end)
+
+    :ok
+  end
 
   alias Mjolnir.CloudHypervisor.Config
   alias Mjolnir.Unikernel

@@ -94,6 +94,10 @@ pub struct SnapshotNameParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DeliverMessageParams {
+    #[schemars(description = "Base64 program bytes for a unikernel (at most 1176 decoded bytes).")]
+    pub program_b64: Option<String>,
+    #[schemars(description = "Unikernel step budget, 1..100000000; default 100000000.")]
+    pub budget: Option<u64>,
     #[schemars(description = "Target VM UUID.")]
     pub vm_id: String,
     #[schemars(description = "Source VM UUID or 'external'.")]
@@ -104,6 +108,25 @@ pub struct DeliverMessageParams {
         description = "Producer message id. Same id retried is a host duplicate, not a second turn. Omit only when retry safety is not needed."
     )]
     pub id: Option<String>,
+}
+
+impl DeliverMessageParams {
+    fn body(&self) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "from_vm_id": self.from_vm_id.clone().unwrap_or_else(|| "external".into()),
+            "payload": self.payload.clone().unwrap_or(serde_json::Value::Object(Default::default())),
+        });
+        if let Some(id) = self.id.clone() {
+            body["id"] = serde_json::Value::String(id);
+        }
+        if let Some(program) = self.program_b64.clone() {
+            body["program_b64"] = serde_json::Value::String(program);
+        }
+        if let Some(budget) = self.budget {
+            body["budget"] = serde_json::json!(budget);
+        }
+        body
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -458,13 +481,7 @@ impl MjolnirMcpService {
         &self,
         Parameters(p): Parameters<DeliverMessageParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut body = serde_json::json!({
-            "from_vm_id": p.from_vm_id.unwrap_or_else(|| "external".into()),
-            "payload": p.payload.unwrap_or(serde_json::Value::Object(Default::default())),
-        });
-        if let Some(id) = p.id {
-            body["id"] = serde_json::Value::String(id);
-        }
+        let body = p.body();
         self.api_post(&format!("/api/vms/{}/messages", p.vm_id), &body)
             .await
     }
@@ -705,4 +722,38 @@ pub async fn run_mcp_server(
     let server = service.serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod unikernel_tests {
+    use super::*;
+
+    #[test]
+    fn message_contract_keeps_program_budget_and_correlation() {
+        let p: DeliverMessageParams = serde_json::from_value(serde_json::json!({
+            "vm_id": "guest", "program_b64": "AP8=", "budget": 5000, "id": "turn"
+        }))
+        .unwrap();
+        let body = p.body();
+        assert_eq!(body["program_b64"], "AP8=");
+        assert_eq!(body["budget"], 5000);
+        assert_eq!(body["id"], "turn");
+        let schema = serde_json::to_value(schemars::schema_for!(DeliverMessageParams)).unwrap();
+        assert!(schema["properties"].get("program_b64").is_some());
+        assert!(schema["properties"].get("budget").is_some());
+    }
+
+    #[test]
+    fn linux_message_body_preserves_mailbox_contract() {
+        let p: DeliverMessageParams = serde_json::from_value(serde_json::json!({
+            "vm_id": "guest", "payload": {"hello": "world"}, "id": "retry"
+        }))
+        .unwrap();
+        assert_eq!(
+            p.body(),
+            serde_json::json!({
+                "from_vm_id": "external", "payload": {"hello": "world"}, "id": "retry"
+            })
+        );
+    }
 }

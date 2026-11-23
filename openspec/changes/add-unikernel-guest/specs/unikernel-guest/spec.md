@@ -62,9 +62,9 @@ Only one exchange SHALL run at a time for a guest. A second message that arrives
 
 #### Scenario: Factorial
 
-- GIVEN a ready unikernel guest, the peer pin for homoiconic `793b583`, and the bytes of `examples/factorial.hom` from that commit
+- GIVEN a ready unikernel guest, the peer pin for homoiconic `793b583`, and the wire bytes produced by `reply source examples/factorial.hom` from that commit
 - WHEN `mj message --budget 100000000 <id> <that file>` runs
-- THEN stdout is byte-for-byte the payload produced by that commit's `reply run 100000000 examples/factorial.hom`, and the HTTP body has `transport_status` 0
+- THEN stdout is byte-for-byte the payload produced by that commit's `reply run 100000000 factorial-793b583.wire`, and the HTTP body has `transport_status` 0
 
 #### Scenario: Wrong peer key
 
@@ -74,9 +74,9 @@ Only one exchange SHALL run at a time for a guest. A second message that arrives
 
 #### Scenario: Budget exhaustion is a status-0 payload
 
-- GIVEN a ready unikernel guest and the bytes of `examples/forever.hom` from homoiconic `793b583`
+- GIVEN a ready unikernel guest and the wire bytes produced by `reply source examples/forever.hom` from homoiconic `793b583`
 - WHEN `mj message --budget 5000 <id> <that file>` runs
-- THEN stdout matches that commit's `reply run 5000 examples/forever.hom`, `transport_status` is 0, and a later factorial message to the same guest still returns the factorial payload
+- THEN stdout matches that commit's `reply run 5000 forever-793b583.wire`, `transport_status` is 0, and a later factorial message to the same guest still returns the factorial payload
 
 #### Scenario: Second message while one is open
 

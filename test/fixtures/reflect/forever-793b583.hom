@@ -1,0 +1,3 @@
+; this never finishes; the step budget ends it
+def loop x = loop x
+loop 0
