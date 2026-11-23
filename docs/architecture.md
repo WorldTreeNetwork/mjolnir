@@ -251,6 +251,31 @@ HTTP POST /api/vms/:id/exec {"command": "apt install -y nginx"}
   +------------------+
 ```
 
+### Unikernel guests (kind `unikernel`)
+
+A second guest kind boots a Reflect unikernel: one Cloud Hypervisor ELF
+with no Linux, no rootfs and no guest agent
+([`unikernel-guest`](../openspec/specs/unikernel-guest/spec.md)).
+`mj spawn --kind unikernel --kernel <reflect.elf> --peer-pin <sha256>`
+takes a kernel from the `unikernel_kernel_prefixes` allow-list. The boot
+skips the rootfs clone, agent injection, virtiofsd and the vsock wait. It
+keeps the /32 TAP, and the command line is only
+`reflect.ip=… reflect.port=… reflect.quic_port=…`, with 1 vCPU and 512 MiB.
+
+```
+mj message <id> <program> --> POST /api/vms/:id/messages --> VM GenServer (one caller at a time)
+                                                                  |
+                                    priv/reflect-quic-client (host.zig, pinned peer key)
+                                                                  |
+                                                 QUIC over the /32 TAP --> guest reflect.quic_port
+```
+
+The host never decodes the Lean reply. A wrong pin is refused and latched.
+A second caller gets `unikernel_busy`, and silence for 60 s is
+`unikernel_timeout`. `mj kill` removes the TAP and the scope. Restart is
+refused (`unikernel_restart_refused`), and a guest that powers itself off is
+recorded `stopped`/`guest_exit`.
+
 ---
 
 ## The Components in Detail

@@ -88,3 +88,7 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-11-23 / add-relay-room-auth:** The example Iroh publisher keeps writing locally after the relay closes it at token expiry, so client byte counts and run time do not show the close. Use the relay journal line (`the iroh client's authorization expired, closing its session`).
 
 - **2026-11-23 / add-relay-room-auth:** The running relay picked up the first-install public key set on its one-second key poll, so first install on production needed no relay restart.
+
+- **2026-11-23 / add-unikernel-guest:** The full `mix test` "baseline failures" were mostly test defects: `async: true` modules that repoint global app env (`:socket_dir`, `:btrfs_root`) and delete it on exit break unrelated async tests at random. A test that mutates `Application` env must be `async: false`.
+
+- **2026-11-23 / add-unikernel-guest:** Pricing Reflect steps (`runPriced`, homoiconic after `793b583`) did not change the reply bytes for the `793b583` factorial and forever fixtures at budgets 100000000 and 5000, so fixtures pinned to an older image still hold on a fresh one.
