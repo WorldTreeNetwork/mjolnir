@@ -1469,14 +1469,28 @@ defmodule Mjolnir.VM do
 
   @doc false
   def resolve_spawn_network(opts) do
-    base_image = opts[:base_image] || Application.get_env(:mjolnir, :default_base_image)
+    base_image =
+      snapshot_base_image(opts) || opts[:base_image] ||
+        Application.get_env(:mjolnir, :default_base_image)
+
     class = Mjolnir.ProxyGuest.image_class(base_image)
     default = Application.get_env(:mjolnir, :enable_iroh, true)
 
     with {:ok, enabled} <- Mjolnir.ProxyGuest.resolve_iroh(class, opts[:enable_iroh], default) do
-      {:ok, Map.put(opts, :enable_iroh, enabled)}
+      {:ok, Map.merge(opts, %{base_image: base_image, enable_iroh: enabled})}
     end
   end
+
+  defp snapshot_base_image(%{resume: true}), do: nil
+
+  defp snapshot_base_image(%{snapshot: name}) when is_binary(name) do
+    case BTRFS.get_snapshot(name) do
+      {:ok, %{metadata: %{base_image: image}}} when is_binary(image) -> image
+      _ -> nil
+    end
+  end
+
+  defp snapshot_base_image(_opts), do: nil
 
   defp store_identity(opts) do
     case opts[:identity] do
@@ -4224,6 +4238,7 @@ defmodule Mjolnir.VM do
           with :ok <- maybe_scrub_hosted_key(state, name) do
             BTRFS.create_snapshot(state.id, name,
               source_vm_id: state.id,
+              base_image: state.config.base_image,
               owner_id: opts[:owner_id] || state.owner_id
             )
           end

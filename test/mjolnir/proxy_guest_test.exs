@@ -61,6 +61,20 @@ defmodule Mjolnir.ProxyGuestTest do
              })
   end
 
+  test "snapshot provenance drives the clone configuration and guest class", %{root: root} do
+    dir = Path.join(root, "@snapshots")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "worker.json")
+    File.write!(path, Jason.encode!(%{base_image: "proxy-fixture"}))
+    opts = %{snapshot: "worker", base_image: "ubuntu-24.04"}
+
+    assert {:ok, %{base_image: "proxy-fixture", enable_iroh: false}} =
+             VM.resolve_spawn_network(opts)
+
+    File.write!(path, "{}")
+    assert {:ok, %{base_image: "ubuntu-24.04"}} = VM.resolve_spawn_network(opts)
+  end
+
   test "ordinary explicit false does not create a proxy class", %{root: root} do
     ordinary = Path.join([root, "@base", "ordinary"])
     File.mkdir_p!(Path.join(ordinary, "usr/local/bin"))
