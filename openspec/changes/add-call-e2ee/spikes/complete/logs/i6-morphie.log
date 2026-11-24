@@ -1,0 +1,17 @@
+Tue Nov 24 22:37:48 UTC 2026
+Linux 7.2.6-arch2-1 x86_64
+12
+ 16:37:48 up 10 days, 21:57,  6 users,  load average: 5.31, 4.03, 3.24
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 3  0 989072 2074988    28 11497600  0    0   124   529 4073  238  2  6 91  1  0  0
+ 3  0 989072 2076196    28 11497860  0    0   128 55844 13734 226653 2 12 74 1 0 11
+{"A":{"sameSession":true,"newPath":"alice/xtJB-_HANtPBpKw1kz2fNQ/01a20fb5-5d7a-7101-9d19-bf66bc683bec","announcedMs":22,"discoveredByAnnouncementMs":37,"playing15FramesMs":5143,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":89,"firstAdvanceMs":0},"2":{"firstMs":43,"maxFrames":410,"firstAdvanceMs":3817}},"longestNoFrameMs":9501,"firstFrameFromNewPlayerMs":3817,"sampledMs":16526},"removedWhileOldUnretired":{"additionalDecodedFrames":158},"removedReadsNewBroadcast":{"path":"alice/xtJB-_HANtPBpKw1kz2fNQ/01a20fb5-5d7a-7101-9d19-bf66bc683bec","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":42,"lastRemovedMediaChangeMs":1958,"observedMs":10355},"remainingAdvancedFrames":250}}
+{"B":{"label":"carol","switched":{"sessionSame":true,"path":"carol/IgIYDeXM6By_4vWdCm99Dw/01a20fb5-a597-71a3-b054-a68914ff4b6e","skippedInactive":0},"retiredImmediately":true,"discoveredByAnnouncementMs":24,"recovered":true,"playing15FramesMs":482,"readerGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":31,"firstAdvanceMs":0},"2":{"firstMs":19,"maxFrames":45,"firstAdvanceMs":280}},"longestNoFrameMs":280,"firstFrameFromNewPlayerMs":280,"sampledMs":1480}}}
+{"browser":"159.0.8154.6","layout":"label","discovery":"relay.announced() + path parse","tokens":"room tokens alice/bob/carol, 3600 s","A":{"sameSession":true,"newPath":"alice/xtJB-_HANtPBpKw1kz2fNQ/01a20fb5-5d7a-7101-9d19-bf66bc683bec","announcedMs":22,"discoveredByAnnouncementMs":37,"playing15FramesMs":5143,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":89,"firstAdvanceMs":0},"2":{"firstMs":43,"maxFrames":410,"firstAdvanceMs":3817}},"longestNoFrameMs":9501,"firstFrameFromNewPlayerMs":3817,"sampledMs":16526},"removedWhileOldUnretired":{"additionalDecodedFrames":158},"removedReadsNewBroadcast":{"path":"alice/xtJB-_HANtPBpKw1kz2fNQ/01a20fb5-5d7a-7101-9d19-bf66bc683bec","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":42,"lastRemovedMediaChangeMs":1958,"observedMs":10355},"remainingAdvancedFrames":250},"B":{"label":"carol","switched":{"sessionSame":true,"path":"carol/IgIYDeXM6By_4vWdCm99Dw/01a20fb5-a597-71a3-b054-a68914ff4b6e","skippedInactive":0},"retiredImmediately":true,"discoveredByAnnouncementMs":24,"recovered":true,"playing15FramesMs":482,"readerGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":31,"firstAdvanceMs":0},"2":{"firstMs":19,"maxFrames":45,"firstAdvanceMs":280}},"longestNoFrameMs":280,"firstFrameFromNewPlayerMs":280,"sampledMs":1480}}}
+browser.close begin
+browser.close returned_ms=36
+driver_exit=0
+ 16:38:13 up 10 days, 21:57,  5 users,  load average: 5.64, 4.23, 3.33
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 1  0 985892 1670632    28 11751612  0    0   124   529 4074  238  2  6 91  1  0  0
+ 1  0 985892 1678156    28 11750488  0    0     0  1668 4327 283354 2 6 92  0  0  0
