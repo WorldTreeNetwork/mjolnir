@@ -1,9 +1,8 @@
 defmodule Mjolnir.Cleanup do
   @moduledoc """
   Startup sweep. Does not kill a process because its command line contains
-  the socket directory. Socket unlink of an attached or unclassified scope
-  waits for reattach. Disks with a state record and this instance's DOWN
-  TAPs are still handled here. Published-port rules of VMs with no
+  the socket directory. Socket cleanup preserves scopes that may still own a guest.
+  Disks with a state record and this instance's DOWN TAPs are still handled here. Published-port rules of VMs with no
   `:running` record are removed.
   """
 
@@ -13,12 +12,36 @@ defmodule Mjolnir.Cleanup do
 
   def sweep do
     btrfs_root = Application.get_env(:mjolnir, :btrfs_root)
+    sweep_sockets(Application.fetch_env!(:mjolnir, :socket_dir), Mjolnir.VmmScope.list_scopes())
     clean_stale_vms(btrfs_root)
     clean_orphan_taps()
     clean_published_ports()
     reap_trash()
 
     :ok
+  end
+
+  # This sweep runs synchronously before VMRegistry and VMSupervisor start.
+  # An active controller cannot infer socket ownership from scopes alone.
+  @doc false
+  def sweep_sockets(_socket_dir, {:error, :unlisted}), do: :ok
+
+  def sweep_sockets(socket_dir, {:ok, scopes}) do
+    protected = for {id, state} <- scopes, state not in ["inactive", "failed"], do: id
+
+    case File.ls(socket_dir) do
+      {:ok, files} ->
+        Enum.each(files, fn file ->
+          stale = String.ends_with?(file, ".sock") or String.ends_with?(file, "_vsock")
+
+          if stale and not Mjolnir.VmmScope.socket_protected?(file, protected) do
+            File.rm(Path.join(socket_dir, file))
+          end
+        end)
+
+      _ ->
+        :ok
+    end
   end
 
   # Published-port rules whose VM has no :running record. A VM that is

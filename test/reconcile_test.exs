@@ -263,6 +263,23 @@ defmodule Mjolnir.ReconcileTest do
       :ok
     end
 
+    test "reconcile preserves a bound thaw socket before the VMM scope exists", ctx do
+      id = Mjolnir.VmId.generate()
+      {:ok, _} = Registry.register(Mjolnir.VMRegistry, id, nil)
+      old = Application.fetch_env!(:mjolnir, :socket_dir)
+      Application.put_env(:mjolnir, :socket_dir, ctx.btrfs_root)
+      on_exit(fn -> Application.put_env(:mjolnir, :socket_dir, old) end)
+
+      path = Mjolnir.VirtioFS.socket_path(ctx.btrfs_root, id)
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ifaddr: {:local, path}])
+
+      assert :ok = Reconcile.run()
+      # Use a stand-in listener: a probe connection would consume virtiofsd's single client.
+      assert {:ok, client} = :gen_tcp.connect({:local, path}, 0, [:binary], 1_000)
+      :gen_tcp.close(client)
+      :gen_tcp.close(listener)
+    end
+
     test "a second caller skips while a pass is held" do
       parent = self()
 
