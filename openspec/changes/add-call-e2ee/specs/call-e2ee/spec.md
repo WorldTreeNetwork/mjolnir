@@ -1,72 +1,98 @@
 ## ADDED Requirements
 
 ### Requirement: Content credentials never pass through Mjolnir
-A relayed call SHALL protect media, catalogs and track names with profile `moq-e2ee-01-wip` under a content credential `{profile, kid, secret}` whose `context` is `mjolnir-call/v1/<owner id>/<room>`. The secret SHALL be 32 bytes from a cryptographically secure generator on the client that starts the call. Mjolnir SHALL NOT generate, receive, store, log or forward a content credential or usable key material derived from its secret. Opaque paths, physical track names and ciphertext MAY reach the relay as required by this profile. The room token minted by `Mjolnir.Relay.Mint` SHALL NOT change: root `t/<owner id>/<room>`, publish `[<label>/**]`, subscribe `[**]`. The relay SHALL NOT need code or configuration changes to carry a protected call.
+A relayed call SHALL protect media, catalogs and semantic names against relay and host processes with client-generated `{profile, kid, secret}`. The origin serving browser code is trusted for this iteration (Duke, 2026-11-23); non-extractable keys do not prevent that origin from using keys or accessing plaintext. The secret SHALL be 32 cryptographically random bytes. For `moq-e2ee-01-wip`, each publisher label's credential context SHALL be `mjolnir-call/v1/<owner>/<room>/<label>`. Receivers SHALL derive it from the announced label and known room, rather than trust a transmitted context. Mjolnir SHALL NOT generate, receive, store, log or forward usable content key material. Derived opaque paths, physical names and ciphertext MAY reach the relay. Admission tokens are governed by `relay-room-auth`, independently of this credential; this capability SHALL NOT require a deployed relay change.
 
-#### Scenario: Mint request carries no credential
-- GIVEN an owner starting an encrypted call
-- WHEN their client mints a room token
-- THEN the request body has at most `ttl`
-- AND the mint log line and the relay log over the call contain neither the secret nor its base64url or hex encoding
+#### Scenario: No content credential at the mint
+- GIVEN an owner starting a protected call
+- WHEN the client obtains admission and publishes
+- THEN no secret or usable derived key reaches the mint, relay or their logs
+- AND the content secret is never derived from an admission token or server-held secret
 
-#### Scenario: Room token alone does not read
-- GIVEN a participant with a valid room token for the room and no content credential
-- WHEN they subscribe to every announced broadcast and every semantic track name they can guess
-- THEN each semantic name is `NotFound`
-- AND any physical track they fetch yields only ciphertext that does not contain the publisher's plaintext
+#### Scenario: Token-only reader
+- GIVEN a valid admitted reader without a content credential
+- WHEN it lists the room
+- THEN it can see every announcement's label, opaque and epoch
+- AND a semantic-name probe returns NotFound
+- AND given physical names it can fetch ciphertext but cannot recover the protected catalog or media content
 
-### Requirement: A protected broadcast sits under the participant label
-A publisher SHALL announce a protected broadcast at `<label>/<opaque>/<epoch>` relative to the token root (Iroh: `t/<owner id>/<room>/<label>/<opaque>/<epoch>`). `<opaque>` SHALL be `credential.path(<label>)`. `<epoch>` SHALL be the canonical UUIDv7 text the publisher instance minted with `credential.produce()`. A subscriber SHALL take the epoch from the announced path, SHALL refuse a non-canonical epoch, and SHALL refuse a broadcast whose `<opaque>` is not `credential.path(<announced label>)`. Among several epochs under one label and opaque, a subscriber SHALL read the greatest and SHALL follow a newer one when it is announced. A client SHALL NOT fall back to plaintext in an encrypted room.
+### Requirement: Profile-specific broadcast identity and instance selection
+For `moq-e2ee-01-wip`, a publisher SHALL announce `<label>/<opaque>/<epoch>` relative to the room root (Iroh absolute `t/<owner>/<room>/<label>/<opaque>/<epoch>`), with opaque equal to the label-context credential's `path("call")` and epoch the canonical UUIDv7 minted by produce(). A receiver SHALL validate the announced segments and derived opaque, consume with that label-context credential, and select the greatest canonical epoch among active matching announcements. It SHALL retain the greatest observed epoch per credential/label and SHALL NOT automatically downgrade when that instance disappears; it SHALL wait for a greater epoch or report unavailable. This ordering/layout belongs only to the profile named in the invite and SHALL be reconsidered at a successor-profile upgrade. Neither ordering nor authentication SHALL be represented as proof that a relay disclosed the newest instance. No encrypted room SHALL fall back to plaintext.
 
-#### Scenario: Two credential holders
-- GIVEN alice and bob in room R, each with a room token for their own label and the same content credential
-- WHEN alice publishes video and a catalog
-- THEN bob decrypts both
-- AND the relay forwards only paths of the form `<label>/<22 base64url>/<UUIDv7>`
+#### Scenario: Two holders
+- GIVEN alice and bob sharing the room secret/kid and deriving label-specific credentials
+- WHEN alice publishes at alice's derived opaque and epoch
+- THEN bob discovers the announcement and decrypts using alice's context
 
-#### Scenario: A relay re-labels a broadcast
-- GIVEN alice's broadcast at `alice/<path(alice)>/<epoch>`
-- WHEN a subscriber is offered the same bytes under `bob/<path(alice)>/<epoch>`
-- THEN the subscriber refuses it because `path(bob)` differs
+#### Scenario: Relay swaps both label and opaque
+- GIVEN alice's ciphertext under `alice/<opaque-alice>/<epoch-alice>`
+- WHEN a relay serves it under `bob/<opaque-bob>/<epoch-alice>` and aliases it under the physical track names a bob-context reader requests
+- THEN bob-context authentication fails even though the opaque and canonical epoch checks pass
 
-### Requirement: Track names are opaque at the relay
-Every semantic track and broadcast name SHALL reach the relay only as its `moq-e2ee` physical name or opaque segment. The shipped client SHALL keep every semantic track name at 15 bytes or less so that every physical name has the same length. Display names SHALL appear only inside the encrypted catalog.
+#### Scenario: Stale instance remains active
+- GIVEN two matching active epochs under one label and credential
+- WHEN the older announcement arrives first
+- THEN the reader chooses the greatest canonical epoch
+- AND when that selected instance disappears the reader does not automatically revert to the older one
 
-#### Scenario: Capture at the relay
-- GIVEN the relay running with its QUIC keylog and a capture of a two-client encrypted call
-- WHEN the capture is decrypted with the relay's keys
-- THEN no injected media marker, display name, or semantic track or broadcast name appears in it
+### Requirement: One confidential bridge wire surface
+Both bridges SHALL carry one protected track per semantic local track, including catalogs, plus a protected `bridge.tracks` manifest. Each manifest group SHALL contain one JSON frame mapping semantic names to `{timescale: units/s|null, maxAgeMs: number|null, priority: i8}`. Publishers SHALL send a complete current snapshot on track-set changes and refresh it every second while live. Receivers SHALL derive physical names from manifest entries and the consuming generation; metadata SHALL agree with TRACK_INFO. Publishers SHALL suppress duplicate track listings within a generation rather than recreate a protected track with the same name. Semantic names SHALL be at most 15 UTF-8 bytes; display names SHALL be encrypted. A browser publisher SHALL use H.264 when a native reader is present. Plaintext local origins SHALL never be attached to a relay session, including stats/echo paths.
 
-### Requirement: Removing a member is a new credential
-To remove a member, the remaining members SHALL receive a new credential with a greater `kid` and a fresh secret. Each remaining publisher SHALL announce a new broadcast under it on its open session, and SHALL then finish every track of the old broadcast and close that broadcast. Withdrawing the old route alone SHALL NOT count as removal. Each remaining subscriber SHALL follow the new broadcast without reopening its session.
+#### Scenario: Late reader and re-listed audio
+- GIVEN either bridge has added audio after its initial manifest
+- WHEN a reader subscribes late and the source lists an existing track again
+- THEN periodic manifest snapshots include audio and the reader derives its physical name
+- AND the publisher retains the existing protected track without a duplicate-name failure
 
-#### Scenario: Carol is removed
-- GIVEN alice, bob and carol reading under kid 1
-- WHEN alice and bob receive kid 2 and alice republishes and ends her kid 1 broadcast
-- THEN bob decrypts alice under kid 2 on the same session
-- AND carol stops receiving alice's media
-- AND carol, whose room token is still valid, gets `NotFound` for every semantic name under kid 2
+### Requirement: Removal retires old publication immediately
+After receiving a greater kid and fresh secret, a remaining publisher SHALL mint and announce a new generation, then immediately stop old-key encryption, finish old tracks and close the old broadcast without waiting for reader acknowledgements. Withdraw alone SHALL NOT count as retirement. A remaining reader MAY retain its old credential read-only until old broadcasts end. Same-session switching is required only for clients supplied the replacement credential in-app; for link guests without that mechanism, replacement invitations and rejoin are the baseline. Room-wide removal SHALL NOT be reported complete while any remaining publisher still publishes under the old credential. Buffered old content and recorded content cannot be recalled.
 
-### Requirement: The credential reaches a browser in the link fragment only
-A browser guest SHALL receive the content credential and the room token in the URL fragment of the invite link. The page SHALL remove the fragment from the address bar and history on load. The page SHALL NOT send the secret or usable key material in any request URL, header or body. The room token SHALL go only to the intended relay admission endpoint; derived opaque paths, physical names and ciphertext MAY go to that relay. The page SHALL serve `Referrer-Policy: no-referrer`. A link without a secret SHALL NOT join in plaintext.
+#### Scenario: Removed member and slow hand-out
+- GIVEN carol retains the old credential and a valid admission token
+- WHEN alice adopts kid 2 and immediately retires kid 1
+- THEN bob, already supplied kid 2, follows the new announcement without a session restart, allowing a temporary playback stall
+- AND carol receives no newly encrypted old-key frames after alice's retirement, though buffers may drain
+- AND another publisher not yet supplied kid 2 continues feeding carol, so room-wide removal is not yet complete
 
-#### Scenario: Network log of a join
-- GIVEN a browser opening an invite link and staying in the call for one minute
-- WHEN its full network log is captured
-- THEN no request URL, header or body contains the secret or the room token in any encoding, except the room token in the relay connection's `jwt` parameter
+### Requirement: Content delivery and browser persistence limits
+A link-delivered content credential SHALL be confined to its URL fragment, imported into a non-extractable HKDF handle after length validation, and removed from the address bar and current session-history entry on page load. The page SHALL NOT claim this erases persistent/global history or browser session files: both tested browsers persist the navigated invite before page script runs. Release SHALL wait for the explicit delivery decision: accept this limit and disclose it in the page security note, or deliver the secret outside a navigated URL. The page SHALL NOT send the secret or usable keys in HTTP requests or error reports, or persist raw secret material in application storage. If an admission token is delivered in a link, it SHALL go only to intended relay admission, not other requests/reports. Derived opaque protocol data MAY go to the relay. The page SHALL serve Referrer-Policy no-referrer and no third-party scripts.
 
-### Requirement: Publishers re-mint on a cloned image
-A publisher SHALL mint a new generation for each process instance. A publisher in a Mjolnir guest SHALL mint a new generation when the VM generation id changes and SHALL NOT encrypt under the previous one after the change.
+#### Scenario: Join URL scrubbing is narrower than history erasure
+- GIVEN a browser navigates to a dummy credential invite
+- WHEN page initialization replaces the current URL and the persistent profile is later inspected
+- THEN the address bar and current session-history entry omit the fragment
+- AND retained invite/key/token in persistent history is reported as a delivery limit, not a failed erasure promised by this capability
 
-#### Scenario: Guest thaw
-- GIVEN a guest publisher encrypting under epoch E
-- WHEN the VM is snapshotted and thawed
-- THEN the thawed publisher announces an epoch other than E before it writes another frame
+#### Scenario: Network leak positive control
+- GIVEN a one-minute fixture join and deliberately leaking fixtures
+- WHEN page/mint requests and reports are scanned for raw, base64url and hex secret forms
+- THEN the join has no secret leak and the deliberate leaks are detected
+- AND token use is limited to relay admission
 
-### Requirement: Experimental profile is pinned across clients
-Rust and browser adapters SHALL pin moq revision `4a6f52248` and profile `moq-e2ee-01-wip`. Invite links SHALL name the profile. Clients SHALL refuse unsupported profiles explicitly. Upgrades that change derivation SHALL require coordinated client upgrades and SHALL NOT require a relay change. Release checks SHALL run upstream vectors in Rust and JS and cross-language encryption/decryption and name derivation.
+### Requirement: Producing generation belongs to its process instance
+Each new publishing process instance SHALL mint its producing generation with produce(). A live reconnect MAY retain the generation only with its original nonce/claim state intact. A client SHALL NOT restore or reset producing counters under an existing generation. Guest snapshot support is outside this capability.
 
-#### Scenario: A newer profile invite
-- GIVEN a client implementing only `moq-e2ee-01-wip`
-- WHEN it opens an invite naming another profile
-- THEN it reports an unsupported profile and joins no plaintext broadcast
+#### Scenario: New process versus live reconnect
+- GIVEN a publisher disconnects from transport
+- WHEN the same live process reconnects with intact claims
+- THEN it may retain its generation without rekey
+- AND a replacement process mints a new generation rather than resuming serialized producing state
+
+### Requirement: Experimental profile and resource limits are explicit
+Rust and browser adapters SHALL pin moq `4a6f52248` for the development profile `moq-e2ee-01-wip`; default-on release profile awaits Duke's choice. Links SHALL name the profile and clients SHALL refuse unsupported profiles explicitly. A derivation/profile upgrade SHALL be coordinated across clients and revalidate layout, instance selection and bridge wire surface without a relay change. Release checks SHALL include shared vectors in both languages, browser/native relay interop and tamper cases. At the WIP pin, producers reaching 2^36 bytes or 2^24 operations per key SHALL stop and mint a new generation. Consuming exhaustion MAY rebind the same epoch with bounded retry; repeated failure SHALL be visible, never trigger plaintext fallback.
+
+#### Scenario: Unsupported profile or exhausted key
+- GIVEN a client has only the pinned development profile
+- WHEN an invite names an unsupported profile or a producing key exhausts its budget
+- THEN unsupported profiles join no plaintext broadcast
+- AND exhaustion advances producing generation instead of resetting the old key's counters
+
+### Requirement: Relay-key acceptance checks content on a test harness
+Acceptance SHALL use an in-process harness relay built from the same mjolnir-relay crate with harness-only QUIC keylog. The shipped binary SHALL NOT gain a runtime keylog switch and production SHALL NOT be captured for this test. A plaintext positive control SHALL establish nonempty decrypted/reassembled MoQ data and recover injected media/catalog/name content. A separate passive encrypted two-holder call SHALL reveal no publisher semantic markers or recognizable injected media while both holders play it. A separate token-only run SHALL distinguish its own semantic-name probes from publisher leaks. Captures SHALL test content, including video frames/headers and audio tone correlation, not decoder exit status: Opus can decode ciphertext into noise. Session keys, tokens and pcaps SHALL remain private test artifacts.
+
+#### Scenario: Passive capture versus active probe
+- GIVEN plaintext, passive encrypted and token-only captures decrypted with harness session keys
+- WHEN reassembled bytes and injected audio/video content are checked
+- THEN plaintext recovers recognizable content and passive encrypted traffic does not
+- AND token-only semantic probes may appear in transport plaintext without exposing publisher semantic names
+- AND successful Opus decoder exit alone counts as neither recovered content nor encryption failure

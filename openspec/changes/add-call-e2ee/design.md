@@ -1,125 +1,136 @@
 # add-call-e2ee — design
 
-Architecture rigor: cryptography and protocol. Every claim below cites a spike transcript in `spikes/` or says it was not run. Spike sources: `spikes/rust/tests/` (one crate, real `moq-relay` with the Mjolnir WebTransport decider and Iroh session handler, tokens with exactly the claims `Mjolnir.Relay.Mint.sign/7` writes) and `spikes/js/`. Re-run any Rust spike with:
+PENDING contract revision, 2026-11-24. Addresses B1–B6 of `reviews/2026-11-23-advise.md`; that review is unchanged. No product implementation is authorized. The complete disposable spike is `spikes/complete/finding.md`; commands and toolchain are in `spikes/complete/README.md`. Evidence below means the logged harness result, not a shipped client or a new run in this revision.
 
-```bash
-cd openspec/changes/add-call-e2ee/spikes/rust
-CARGO_TARGET_DIR=../../../../../native/mjolnir_relay/target cargo test --test <e2ee_path|e2ee_iroh_live|e2ee_rekey> -- --nocapture
-```
+## Evidence and corrected labels
 
-## Spike verdicts
+All complete runs below use moq `4a6f522483168ace392718d68b58a402533c897d`, iroh-live `747b1bd0567d2f6b019a89633c04e6561ccac460`, room-token admission, default moq-lite-06 and the label-in-context layout unless explicitly marked old. Log paths are relative to this change.
 
-| Spike | Verdict | Evidence |
+| Observation | Verdict and exact scope | Evidence under `spikes/` |
 |---|---|---|
-| e2ee-path | **Proven** | `spikes/e2ee-path.out`. `alice/<opaque>` admitted under the unchanged room token; bob decrypts `"PLAINTEXT-MARKER-video-0"` and the catalog; carol (token, no credential) gets `NotFound` for `"video"` and for a wrong secret, and 40 bytes with no marker on the physical name (24 plaintext + 16 tag). Epoch in the last path segment, label-bound opaque, default wire: bob decrypts. |
-| e2ee-js | **Proven for frames; components not run** | `spikes/e2ee-js.out`: Chromium 158 and Firefox 159 decrypt catalog and three frames over WebTransport/moq-lite-06; no-credential reader sees ciphertext, wrong-secret subscription fails. `spikes/e2ee-js-components.out`: bundle fails on upstream worklet/CSS imports before browser launch. Hang watch/publish integration is not run. |
-| e2ee-iroh-live | **Proven, with a bridge** | `spikes/e2ee-iroh-live.out`. An `iroh_live::Node` publishes `t/<owner>/r1/alice/<opaque>` through `publish_with`; a WebTransport subscriber decrypts `"PLAINTEXT-MARKER-iroh-42..44"`. iroh-live's real `LocalBroadcast` encoder behind the bridge: **not run**. An iroh-live subscriber/player reading a protected broadcast: **not run**. |
-| e2ee-rekey | **Proven** | `spikes/e2ee-rekey.out`. kid 2 decrypts at bob 47–48 ms after the new credential, same sessions; carol sees the kid 2 path and gets `NotFound`. First run refuted "withdraw is enough": carol received 51 more kid 1 frames. |
+| Original path spike | Admission and unequal path strings only; it did not try a two-segment transplant | `e2ee-path.out` |
+| B1 old layout, claim 5a | NO-GO: relay swaps label AND opaque; victim decrypts alice as bob | `complete/logs/b1-relabel.log`, regression `rust/tests/b1_relabel.rs::relay_relabel_passes_d2_checks` (passes when vulnerable) |
+| B1 label context, claim 5b | GO: same transplant, even aliasing physical names, returns Authentication | `complete/logs/b1-relabel.log`, `label_in_context_refuses_the_relabel` |
+| Original rekey | Second broadcast on same sessions and finish/close only; used path("call"), route instance and out-of-band epoch, not D2 discovery | `e2ee-rekey.out` |
+| Original native path | Synthetic Node bridge only, no epoch path segment; epoch-in-path test was WebTransport only | `e2ee-iroh-live.out`, `e2ee-path.out` |
+| Real Hang browser media | GO: Chromium 158 and Firefox 159, announced path discovery, decoded video and audio, label context | `complete/logs/b-chromium.log`, `complete/logs/b-firefox.log` |
+| Real native media | GO: LocalBroadcast H.264/Opus, Iroh ingress, WebTransport reader, RemoteBroadcast decode, epoch in path, no fork | `complete/logs/b-native.log` |
+| Cross-language | GO: primitives, payload/group/name/key/label tamper refusals; timestamp mutation still decrypts. Through-relay native→browser both browsers; browser→native Chromium only | `complete/logs/b-interop.log`, `complete/logs/b5-cross-chromium.log`, `complete/logs/b5-cross-firefox.log` |
+| Vectors | Primitive agreement already held: review ran JS 9 tests/205 assertions and Rust 51 tests (`reviews/2026-11-23-upstream-vectors.out`), not “no cross-language agreement”. Complete run adds JS vectors/layout validation, 61 pass; Rust not re-run there | `complete/logs/js-unit.log`; Rust repeat remains owed |
+| Rekey in real layout | GO with buffered tails: new credential injected into page, announce discovery; immediate retirement gives ~190 ms stall then recovery in clean runs | `complete/logs/b-rekey-run1.log`, `b-rekey-run2.log`; loaded run `b-rekey-run3.log` not a latency guarantee |
+| Expiry | WebTransport reader/publisher mid-media expiry and reconnect; bare Iroh close only | `complete/logs/b-expiry.log` |
+| Fragment requests and keys | Chromium 60 s network scan, deliberate leak control 3/3; both browsers reject export but permit same-origin key use | `complete/logs/fragment.log`, `complete/logs/crypto-browsers.log` |
+| Persistent history | NO-GO for erasure: invite URL, key, token persist in both browsers; Chromium session files also retain them | `complete/logs/b3c-history-chromium.log`, `complete/logs/b3c-history-firefox.log` |
+| Relay-key capture | GO in Chromium harness: plaintext content recovered; passive encrypted capture has no semantic markers/content; separate token-only capture reveals its own semantic probes | `complete/logs/capture-{plaintext,encrypted,tokenonly}.log` and corresponding `-results.json` |
 
-Two findings changed the design:
-
-1. **The epoch does not survive the default wire.** At this pin, `moq_net::Versions::all()` excludes `moq-lite-07-wip`, and the production relay (`native/mjolnir_relay/src/main.rs` sets no `listen.version`) negotiates an older lite. The relay then mints its own route instance: bob saw `Instance("7b76…", "minted")` and `Epoch::of` returned `None`. With lite-07 opted in on relay and clients, the instance carried the epoch. iroh-live's `Node::publish` routes with `RouteOptions::hidden()` and no instance, so its epoch is minted regardless of wire (`Epoch::of` = `None` in e2ee-iroh-live). D2 puts the epoch in the path.
-2. **Removal must end the old broadcast.** `Route::withdraw` hides a route from new subscribers. A subscriber already reading keeps receiving whatever the publisher still writes. D5.
+The original JS fixtures in `spikes/js/` used public/no-auth relay and query-string dummy keys. They are historical API probes, superseded for integration evidence by `spikes/complete/`. Neither a passing harness nor this contract completes product implementation boxes.
 
 ## Decisions
 
-**D1. Two credentials, never mixed.**
-The room token (moq-auth JWT, `relay-room-auth`) decides who may open a session and under which label they may publish. The content credential decides who may read. Mjolnir mints, logs and can revoke-by-expiry the first. It never generates, receives, stores, logs or forwards the second. Derived opaque paths, physical track names and ciphertext necessarily reach the relay; these are not the secret or usable key material. The relay's grant is unchanged: root `t/<owner>/<room>`, publish `[<label>/**]`, subscribe `[**]`. Alternative: derive the content key from something Mjolnir holds (the token, a server secret). Rejected: then the operator can read the calls, which is the property this change exists to remove.
+### D1. Separate admission and content; put the label in the context
 
-**D2. Path layout: `t/<owner>/<room>/<label>/<opaque>/<epoch>`.**
+Room tokens authorize relay sessions and publish labels under `relay-room-auth`; their issuance, delivery and expiry are not encryption requirements. The mint, token claims and deployed relay remain unchanged. Content uses client-generated `{profile, kid, secret}`, with 32 random secret bytes; every holder derives a separate `Credential` for each publisher label using context **`mjolnir-call/v1/<owner>/<room>/<label>`**. It shares the room secret and kid, not a room-wide context. Opaque is **`credential.path("call")`**. A subscriber constructs the credential from the announced label, never the sender-supplied context.
 
-- `<label>` is the room-token participant label. The relay's `<label>/**` grant binds it. The shipped client SHOULD pick a random label (`[A-Za-z0-9_-]{16}`) per join; the display name rides only in the encrypted catalog.
-- `<opaque>` is `credential.path(<label>)`: 22 base64url characters, HKDF of `(context, kid, label)`. Binding it to the label means a relay that re-mounts alice's broadcast under `bob/` is caught: the subscriber recomputes `path("bob")` and it does not match (proven in the epoch-in-path test). Different credentials give different opaques, so old and new generations of one label coexist during a rekey.
-- `<epoch>` is the publisher instance's UUIDv7 text (`Epoch::mint`, never chosen). Subscribers parse it from the announced path (`Epoch: FromStr` refuses non-canonical text) and bind it with `credential.consume(epoch)`.
+The relay and host processes never receive usable key material; derived opaque paths, physical names and ciphertext necessarily reach them. The origin serving browser code is trusted for this iteration (Duke accepted 2026-11-23). Deriving the secret from a room token or server secret would give the operator content access and is rejected.
 
-This departs from the draft-01 layout (`<opaque>` with the epoch as the route Instance). The cryptography is the draft's: every key, nonce and physical name is derived exactly as `moq-e2ee` derives it; only where the subscriber learns the epoch differs (draft-00 had it as the last path segment). Options weighed:
+B1 is a correction, not an alternative still offered: the old room-context/path(label) layout does not bind payload keys to the label. Claim 5a demonstrates the attack; claim 5b rejects it with label context (`spikes/complete/logs/b1-relabel.log`). A holder cannot publish under another label if relay grants are enforced; a relay without the secret cannot move ciphertext across label contexts. A relay colluding with a credential holder can impersonate; holders are not cryptographically authenticated against one another.
 
-| Option | Default wire | iroh-live publisher | Evidence | Cost |
-|---|---|---|---|---|
-| A. Route Instance (draft-01) | No: relay mints | No: Node mints | e2ee-path both ways; e2ee-iroh-live | Relay and every client opt into `moq-lite-07-wip`, a WIP wire; iroh-live needs an instance option (fork or upstream) |
-| **B. Last path segment (chosen)** | Yes | Yes (caller names the path) | epoch-in-path test | Not draft-01 conformant in layout; epoch visible (it is in A too) |
-| C. Application channel | Yes | Yes | not run | Needs a signalling channel the platform does not have for guests |
+### D2. Profile-specific path and reader instance rule
 
-A subscriber picks the greatest epoch announced under a label's opaque (UUIDv7 sorts by creation time) and follows announce events to the next one, which is the resubscribe-on-announce `mjolnir-rurh.5` already owes (relay-room-auth C6). **Needs Duke / advise:** B is a deliberate deviation from the upstream profile's layout.
+For **`moq-e2ee-01-wip` only**, the full path is `t/<owner>/<room>/<label>/<opaque>/<epoch>`, WebTransport relative spelling `<label>/<opaque>/<epoch>`, Iroh absolute spelling. Opaque is 22 base64url characters from D1's label credential and path("call"); epoch is canonical UUIDv7 from `credential.produce()`, never caller-selected for encryption. The owner chooses a random participant label when minting a guest token; the browser client should also choose a random room id. Display names stay encrypted.
 
-**D3. The credential reaches a browser guest in the URL fragment, and nowhere else.**
-Link: `https://<call page>/#v=1&p=moq-e2ee-01-wip&kid=<u53>&k=<43 base64url chars>&t=<room token>`. `context` is not in the link; both ends derive it as `mjolnir-call/v1/<owner>/<room>` from the token's root. A user agent dereferences a fragment locally and does not send it in the request target (RFC 3986 §3.5), and `Referer` must not include it (RFC 9110 §10.1.3). A task below checks this with a captured network log rather than trusting the RFCs. The page owes:
+The subscriber validates all segments, derives that label's credential, checks opaque, and consumes the epoch from the path. **Among active valid announcements for one credential and label, select the greatest canonical UUIDv7 epoch; retain the greatest observed value as a high-water mark and never automatically downgrade to an older epoch when the selected one disappears.** Follow a greater epoch when announced; otherwise wait/report unavailable. This pins the earlier greatest-epoch proposal to this profile. Its high-water behavior still needs a product regression test; it is not claimed as measured.
 
-1. Read `location.hash` once at load, then `history.replaceState(null, "", location.pathname + location.search)` so the secret is not left in the address bar or session history.
-2. Never place `k` or usable key material in a request URL, header, body, `postMessage` to another origin, storage readable by another origin, or an error report. The room token `t` goes only to the intended relay as its existing `jwt` query parameter (WebTransport) or admission credential (Iroh); it must never reach other page requests or reports. Derived opaque paths, physical names and ciphertext go to the relay by design. Hold the secret in a `CryptoKey`-like closure, not in `localStorage`.
-3. Serve with `Referrer-Policy: no-referrer`, a CSP whose `connect-src` is the page's own origin and the relay host, and no third-party script.
-4. The mint route is never called by a guest (relay-room-auth: the owner mints and hands the token over). The owner's mint request body carries only `ttl`; there is no field the credential could travel in, and the mint log line has room, label, `jti`, `exp` only.
+Reason: all broadcasts under one credential/label share an opaque. The first-live-match rule selected an old broadcast from a killed run whose session was still alive (complete finding F2; the retained `spikes/complete/logs/b-rekey.log` records the later manifest diagnosis, not the earlier stale-path mismatch). Sorting by announcement arrival is also vulnerable to initial listing order. UUID ordering gives a deterministic preference at this pin, not authenticated freshness or a guarantee about clock order. A relay can hide the newer epoch, replay an old one to a fresh reader, or deny service; the rule does not solve those powers.
 
-What this does not cover: whoever serves the page's JavaScript can serve code that reads the fragment. If Mjolnir serves the page, Mjolnir is trusted for code integrity though not for transport. That is the standing limit of web E2EE. It is `mjolnir-rurh.5`'s decision where the page is served from (a pinned, content-addressed site; SRI; a native client). **Needs Duke:** whether shipping the page from the same operator is acceptable for "on by default".
+The default wire loses the upstream route Instance (`spikes/e2ee-path.out`); iroh-live cannot supply it at its pin. Epoch-in-path now has native media evidence too (`spikes/complete/logs/b-native.log`), rather than the old inference from a WebTransport test. Alternative A requires every peer and relay to opt into lite-07 plus an iroh-live instance hook; alternative C needs an authenticated application channel absent for guests. Recommend the path fallback at this pin; Duke's existing epoch-layout ASK remains open. The layout belongs to the profile named in the invite. Upstream's successor deletes UUIDv7 epoch ordering: at a `moq-e2ee-01` bump this rule and path must be decided again, not silently carried forward.
 
-**D4. Native iroh-live publishers take part without a fork.**
-`iroh_live::Node::publish_with(path, audience, fill)` gives the caller the `moq_net::broadcast::Producer` before it is announced. The caller wraps it in `moq_e2ee::broadcast::Producer` and creates the protected tracks in `fill` (proven). iroh-live's media pipeline (`moq_ext_publisher::LocalBroadcast`) writes plaintext into a broadcast it owns, so a native publisher runs it on a local, never-announced broadcast and bridges each group into the protected track: same group start, same frame timestamps, payload sealed (`spikes/rust/tests/e2ee_iroh_live.rs::bridge`, proven with a plain local broadcast standing in for `LocalBroadcast`; the real encoder: not run). Iroh spells the absolute path; WebTransport the token-relative one (relay-room-auth). The subscriber side is the mirror (decrypt into a local plaintext broadcast for `moq-ext-player`): not run.
+### D3. Link delivery and the accepted browser boundary
 
-If the bridge cannot carry a real encoder (for example, if `LocalBroadcast` needs demand signals the bridge does not forward), the fallback is an upstream hook in `moq-ext-publisher` that accepts a caller-supplied track factory, offered to n0 as a PR. Until one of the two works, a native iroh-live participant without the bridge sees only ciphertext in an encrypted room and is not supported there; the room does not fall back to plaintext for it.
+Content invite fields are `#v=1&p=moq-e2ee-01-wip&kid=<u53>&k=<43 base64url characters>`. Context is derived as D1, not delivered by the link. The call page may also receive an independently issued room token; if a token is delivered in a link it goes only to relay admission, never other page requests, logs or reports. Encryption does not require co-delivery or prescribe its format.
 
-**D5. Removing a member is a new credential; the old broadcast is ended.**
-The draft has no in-epoch rekey and no revocation ("The profile does not distribute keys … or rotate a key inside an epoch"). Removal:
+The page reads the fragment, checks the 32-byte length, imports the secret to a non-extractable HKDF CryptoKey, passes only the handle to the library, and replaces the current URL using `history.replaceState`. This removes the fragment from the address bar and **current session-history entry only**. Do not retain raw bytes in application storage or error reporting; parser strings cannot be reliably wiped. An owner making later links must retain secret/link material or create invitations up front, so a handle-only guest model is not an owner guarantee. Serve no third-party scripts, Referrer-Policy no-referrer and a CSP limiting scripts and connection origins. The content key must never reach mint requests; token admission and opaque protocol data are explicit network exceptions, not exceptions for the secret.
 
-1. The owner's client mints `kid + 1` with a fresh secret and gives it to the remaining members over the same channel the first credential used.
-2. Each remaining publisher mints a new generation under it and announces `<label>/<opaque'>/<epoch'>` on its open session, beside the old broadcast.
-3. Each remaining subscriber follows the new path on its open session. In the spike bob decrypted kid 2 47–48 ms after the publisher announced it.
-4. Each publisher then **finishes its old tracks and closes the old broadcast**. Withdraw alone left carol receiving 51 more frames.
+**Navigated-link limit:** Chromium and Firefox write the full initial invite URL, key and token to persistent history before page script runs; Chromium also retains them in session files. replaceState cannot prevent or erase this (`spikes/complete/logs/b3c-history-{chromium,firefox}.log`). No claim is made about unscanned compressed Firefox session storage. Duke must accept this limit with a page security note, or choose secret delivery other than a navigated URL. Paste into an open page is recommended; same-document hash navigation is untested and must not be described as avoiding persistence.
 
-Nobody reconnects; everyone remaining resubscribes. A publisher that misses step 4 keeps feeding the removed member.
+Duke already accepted that the page origin is trusted (2026-11-23). Non-extractable keys are a partial mitigation: both browsers reject export but a script holding the HKDF handle derives raw media keys and decrypts (`spikes/complete/logs/crypto-browsers.log`). They stop export, not use or access to plaintext, and cannot defend against replaced origin code.
 
-What the removed member still has: a room token valid until its `exp`, up to 3600 s (relay-room-auth Limits: no early revocation). Until then they can connect, list the room's announcements, and fetch ciphertext under the new credential. They learn labels, opaques, epochs, sizes and timing. They cannot derive the new physical names (`NotFound`, proven) or decrypt. They can also publish noise under their own label, which remaining members ignore because it is not under the current credential's opaque. Content access ends at step 4; metadata access ends at token `exp`. Nothing un-shares what they already recorded.
+Admission limits owned by `mjolnir-rurh.5` and existing `relay-room-auth`, not this encryption capability:
 
-A member whose token expires and who is not re-minted is out of the relay as well. Short tokens shorten the metadata window, but are capped below by the handoff gap the client must bridge (relay-room-auth C6).
+1. A link's token expires at its fixed exp, normally at most 3600 s after mint, not after opening (ceiling is operator-configurable).
+2. A link guest cannot renew: only the owner can mint this room's tokens. Calls end at exp; owner refresh/reconnect or future delegated invites are separate work, with no delegated-invite change currently named here.
+3. One link carries one publish label. Forwarding it shares that label; the reader instance rule selects one stream, not two people. The owner must issue per-guest links.
 
-**D6. Catalog and track names.**
-A physical track name is `nonce ‖ AES-128-GCM(name_key, nonce, pad16(semantic ‖ 0x80))`, base64url. The relay learns only the padded length. Every semantic name of 15 bytes or less pads to 16 and gives a 59-character physical name (`"video"` and `"catalog.json"` both did in e2ee-path). The shipped client keeps every semantic track name ≤ 15 bytes so all physical names are one length class. The catalog is an ordinary protected track; inside it semantic names stay (that is how subscribers derive physical names). Display names live only in the catalog. What the relay can still count: tracks per broadcast, stream versus datagram, group cadence, frame and datagram sizes, timestamps. Subscribing a semantic name returns `NotFound` (proven); a forged physical name opens nothing and costs the publisher no state (draft §derive).
+### D4. Both bridges use one protected manifest surface
 
-**D7. Pinning `moq-e2ee-01-wip`, and what moves when the draft moves.**
-We pin moq `4a6f52248` for `moq-e2ee` (git dependency; upstream `publish = false`) and consume `js/e2ee` from source at the same revision (upstream `"private": true`). The profile string is the HKDF salt and the prefix of every label. A new profile (`-01`, `-02`) changes every opaque path, physical name and key. Clients on different profiles do not find each other's broadcasts at all: a silent no-show, never plaintext, never a wrong-key decrypt. Consequences:
+Choose the **manifest model demonstrated by the complete spike**, rather than the review's preferred catalog-only model. Both browser and native bridges carry every local semantic track, catalog representations included, plus protected **`bridge.tracks`**, all under D2's broadcast. Each manifest group has one JSON frame:
 
-- The link names the profile (`p=`). A client refuses a profile it does not implement and says so. One room runs one profile.
-- A bump is a coordinated client upgrade. The browser client updates on reload. Native clients lag, and an invite with the new profile is unreadable to them until they update.
-- The relay is untouched by a bump. It sees paths and bytes.
-- CI runs the draft's vectors (`drafts/moq-e2ee-01-wip.json`) through both the Rust crate and `@moq/e2ee` at our pin, and a Rust↔JS interop test, so a pin bump that silently changes either side fails before it ships.
-- The epoch-in-path layout (D2) is ours. If upstream changes how the epoch travels, D2 does not move with it.
+`{"<semantic>": {"timescale": <units/s or null>, "maxAgeMs": <number or null>, "priority": <i8>}}`
 
-**D8. Cloned process images re-mint.**
-Two copies of one producing generation reuse AES-GCM nonces under one key, which is catastrophic and undetectable on the wire (draft §epoch). Mjolnir snapshots and thaws VMs (`vm-freeze`). Any publisher that runs inside a Mjolnir guest SHALL call `produce()` again when the VM generation id changes, and SHALL NOT encrypt another frame under the old generation. Browser tabs and native processes are not cloned by Mjolnir. This change ships no guest publisher; the requirement binds the change that does.
+It is a complete current track snapshot, encrypted like any track. Publish an updated snapshot when the track set changes and refresh every second while live, so late readers and rekey do not depend on a single cached snapshot. Readers obtain semantic names from this manifest and derive physical names with their consuming generation; they do not hardcode browser or native track names. Metadata must agree with physical TRACK_INFO; native readers may use TRACK_INFO. Skip duplicate listed names within a generation instead of creating the same protected track twice. Keep track handles across camera toggles, or mint a new generation when a fresh producer is required.
 
-**D9. Acceptance: a capture at the relay process, with the relay's keys.**
-The bead's acceptance is run as `tasks.md` §Acceptance: the relay runs with `quic.keylog` (moq-tokio's `--quic-keylog` / `quic.keylog` setting) so the tester holds the relay's QUIC session secrets; `tshark` records UDP 443 on the relay host for a two-client call; `tshark -o tls.keylog_file:<file>` decrypts the QUIC streams; the decrypted MoQ payload is searched for known plaintext the clients injected (a marker in every media frame, the catalog's display name, every semantic track name and the semantic broadcast name `call`). A third client with a token and no credential records what it receives. A relay-side tap (an all-room subscriber session with no credential) is the cross-check for what the relay process itself can assemble.
+Evidence: the first bridge died on JS `Failure: reuse` after re-listing; an early manifest missed audio. Duplicate suppression and periodic refresh fixed the harness (`spikes/complete/logs/b-rekey.log`, finding F3). Both directions work with the shared JSON shape (`spikes/complete/logs/b5-cross-{chromium,firefox}.log`); that does not separately establish every native periodic-refresh edge case, which remains a bridge conformance test. The catalog-only/no-extra-track model is **unrun**; adopting it now would discard the tested discovery mechanism. This manifest is an application wire commitment for this profile, to revisit when upstream trait wrappers remove the bridges.
 
-## What the relay and host can see
+Native Node::publish_with wraps LocalBroadcast's local, never network-connected plaintext origin. Decryption mirrors into another local origin for RemoteBroadcast/Watch. Groups, timestamps and payloads pass through the bridge; names and catalogs reach the relay encrypted. No fork is needed at these pins (`spikes/complete/logs/b-native.log`). Browser must publish **H.264 when a native reader is present**: native player supports H.264, not the default browser VP8. Chromium publishing H.264 to native is logged; Firefox publishing H.264 to native is unrun despite advertised codec support. Browser reading native H.264 succeeds in both logs. Disable plaintext stats/echo and never attach a plaintext origin to a session.
 
-| Visible | Example | Hidden |
-|---|---|---|
-| Owner id, room, participant label | `t/cGfH…/r1/alice` | Display names, what a label means |
-| Opaque segment (per label, per credential) | `WizDAU0CTwZI5yCky5IYrg` | The semantic broadcast name |
-| Epoch (UUIDv7: publisher start time to the ms) | `01a20af5-67f8-…` | — |
-| Physical track names, count, kind, length class | 59 chars each | Semantic track names, the catalog |
-| Group/frame structure, sizes, timestamps, cadence | 40-byte frame = 24 + 16 | Payload bytes |
-| Who connects when, with which token | mint log, relay log | — |
+### D5. Removal, distribution and immediate retirement
 
-## Open questions
+The owner generates a greater kid and fresh secret, and distributes it only to remaining members. This change guarantees same-session switching only for clients **already supplied** the replacement credential through an in-app API. For link guests the baseline is a new per-guest replacement invite and rejoin; delivery into an open page is not demonstrated. Recommend an explicit paste-replacement-invite action in `mjolnir-rurh.5` so a guest can adopt it on the same session, pending Duke's choice and a network/history test. The rekey harness injects the credential directly, not by paste or hashchange.
 
-- Whether D2's departure from the draft-01 layout is acceptable, or whether we should instead push lite-07 onto the relay and iroh-live (Duke / advise).
-- Whether the shipped page may be served by the operator (D3).
-- The real `LocalBroadcast` encoder through the bridge, and the iroh-live subscriber mirror (D4): not run.
-- The removal window: a removed member keeps metadata visibility for up to 3600 s. Shorter default tokens are blocked on the C6 handoff.
-- Opus/VBR size leakage is out of scope; a constant-bitrate audio setting in the client would reduce it and is `mjolnir-rurh.5`'s call.
+On adopting it, each publisher creates and announces a new producing generation, then **immediately stops encrypting under the previous credential, finishes its tracks and closes the old broadcast**. Do not wait for reader acknowledgements. Withdrawal alone does not stop existing readers. Remaining readers MAY keep the old credential **read-only** until old broadcasts end while following the new one; this never authorizes more old-key publication.
 
+Chromium runs 1/2 recorded recovery with ~190 ms of no new frame when old publication retired immediately (`spikes/complete/logs/b-rekey-run1.log`, `b-rekey-run2.log`). Leaving it up fed removed readers another 34–46 frames; buffers continued for ~0.5–0.7 s after retirement. Runs 1/2 also end with a 90-second watchdog record after those recovery metrics; they do not demonstrate a clean driver exit. These are observations, not timing guarantees. Loaded run 3 had a 5 s tail/watchdog; idle rerun and Firefox rekey remain owed. Removal across the room is only complete when the slowest remaining publisher receives the replacement and retires old publication. An offline/missed publisher keeps feeding the removed member; the UI must not declare completion without accounting for it.
 
-## Unverified hypotheses
+A removed member retains old recordings and credentials, announcements and metadata access until token exp. A token-only client sees label/opaque/epoch and can fetch ciphertext if given physical names (the relay learns them from subscriptions); failing semantic-name requests is not denial of physical access (`spikes/complete/logs/capture-tokenonly.log`). It cannot decrypt new content. Token expiry ends the session: WebTransport publisher and reader media stop, bare Iroh enters Reconnecting; fresh owner tokens can resume with the same live generation/counters (`spikes/complete/logs/b-expiry.log`). Reconnect is not rekey; never reset counters under an existing generation. Iroh publisher mid-media expiry is still unrun; link guests cannot renew themselves.
 
-- **e2ee-js-components** — unmodified Hang publish/watch can bridge a real encoder and player; confidence low, verification not run (bundle blocked before launch); synthesis: `spikes/e2ee-js-components.out`. Resolve with upstream Vite worklet/libav plugins and a moving-image plus audio observation in both browsers before supporting the shipped client.
-- **e2ee-native-media** — `LocalBroadcast` demand/encoder and player can traverse the in-process bridge; confidence medium, verification not run; synthesis: `spikes/e2ee-iroh-live.out` proves only synthetic local frames through Node. Run the real pipeline; fallback is the upstream factory hook in D4.
-- **e2ee-fragment** — the shipped page sends no secret in requests or logs; confidence medium, verification not run (no shipped page yet). Synthesis path: future `evidence/fragment-network.out`, with captured requests and deliberate leak positive control.
-- **e2ee-capture** — relay-session-key capture exposes MoQ control and ciphertext while two clients play real media; confidence medium, verification not run. Synthesis path: future `evidence/relay-capture.out`; method below and tasks A1–A3.
+### D6. Confidentiality and active-relay capabilities
 
-## Acceptance capture method and limits
+Semantic track names at most 15 UTF-8 bytes share a padded physical-name length class (59 base64url characters). Catalogs, manifest and display names are protected tracks. Labels/room/owner, opaque/epoch, physical names, track counts/kinds, group/frame structure, public timestamps, sizes and timing remain visible; there is no traffic-analysis protection. Frame timestamps are **not authenticated**: 124→999 ms still decrypts (`spikes/complete/logs/b-interop.log`).
 
-D9 is a proposed method, not a completed capture. First prove tshark can decrypt and reassemble this pinned QUIC/MoQ traffic. Save the keylog, pcap and extracted stream/datagram bytes in a private test artifact location (session keys are sensitive), with tool versions and commands in the transcript. The capture must include the relay's actual UDP listener and both clients. An opaque pcap or zero extracted bytes fails the test.
+| Active relay capability | Limit / basis |
+|---|---|
+| Drop, delay, reorder; truncate a group after any frame | No completeness/liveness guarantee; pinned draft §Security Considerations, lines 329, 372–373 |
+| Replay earlier ciphertext of the same producing instance to a new/late reader | No authenticated freshness; draft line 329 |
+| Shift timestamps | Public metadata not AEAD-bound; `spikes/complete/logs/b-interop.log` |
+| Hide a newer instance/credential or replay stale announcements | D2 cannot force disclosure; draft line 148, spike F2 |
+| Spend a consuming key's budget through failed opens | WIP limits include failed attempts; upstream `quest/m3/e2ee-format.md:64-70` |
+| Fetch/serve physical ciphertext to a token-only client | `spikes/complete/logs/capture-tokenonly.log` |
+| Re-label to another context without a holder's secret | Rejected with Authentication after D1 fix; `spikes/complete/logs/b1-relabel.log` |
+| Read/forge payload or splice across context/kid/epoch/semantic track/group/frame identity | AEAD boundary; tested tamper cases in `spikes/complete/logs/b-interop.log`; no protection against a colluding credential holder |
 
-Run a plaintext positive control with the same harness and injected media/catalog markers: the extracted bytes must contain those markers and semantic names and the unprotected media must decode. Then run the protected call, verify decrypted transport control contains the announced opaque paths and physical track names, and search reassembled application bytes for those exact markers and names. Attempt media decoding from the relay-side bytes; it must fail while both credential holders render moving video and play audio. A token-only tap records ciphertext and fails to decode it. Search results alone do not prove absence of decodable media. If tshark cannot reassemble this wire revision, instrument a relay-process application tap after QUIC decryption, retain the pcap/keylog as a cross-check, and return the changed acceptance method for advise rather than claim the capture passed.
+Permanent product consequence: the platform cannot record, transcode, transcribe, compose or preview protected calls while it lacks the credential. Only a credential-holding endpoint can perform those operations; putting one in a Mjolnir guest places its credential inside the host trust boundary. Content encryption permits future untrusted fan-out, but this change delivers no peer bandwidth savings: the relay still serves central egress.
 
-The browser fixtures use public/no-auth local relay and fixed dummy keys in query parameters for convenience. They prove crypto/browser API compatibility only. They deliberately do not implement the invite fragment, room admission, secret handling, epoch-in-path layout, or production security headers. Those properties need their own tests. Rust's room-token and path spike covers admission separately; composing all these layers remains acceptance work.
+Not chosen: SFrame with MLS would provide forward secrecy, post-compromise recovery and membership removal, but requires member identity keys and a delivery service with no implementation at this pin. A future MLS exporter could supply `{kid, secret}` per MLS epoch through the credential seam; this revision does not implement or claim those group-security properties.
+
+### D7. Upstream is not ready yet; keep the adapter thin
+
+At pinned moq `4a6f52248`, upstream explicitly says **“not ready yet”**, with `moq-e2ee-01` decided 2026-11-16 and not landed in that tree (`quest/m5/e2ee/README.md:11`; `rs/moq-e2ee/Cargo.toml:13` links the format work). The review's 2026-11-24 upstream check also found it not landed; this revision makes no new claim about current remote main.
+
+`quest/m3/e2ee-format.md:25-49,54-82,109-130` decides: bind semantic broadcast name natively via produce/consume; one key per group replacing per-track exhaustion budgets; public per-track wrapper and moq-net trait-compatible wrappers; Epoch becomes moq_net::Instance, deleting UUIDv7 ordering; no compression in the profile. `quest/m5/e2ee/README.md:38-39` closes/supersedes the upstream mux bridge; `quest/m5/e2ee/browser.md:11` plans native encrypted-broadcast integration in publish/watch. These are plans at this pin, not APIs we may assume available.
+
+Until then each track key is capped at **2^36 plaintext bytes or 2^24 operations**, failed opens included. On producer Exhausted, stop old encryption and mint/announce a new generation without resetting claims. A subscriber may rebind the same epoch to a new consuming handle/budget with bounded retry and visible failure under repeated exhaustion; this grants no producing rights. Never silently drop encryption to recover. JS refuses duplicate track creation; Rust resumes claims, so bridge behavior must respect the stricter side.
+
+Keep Mjolnir's surface to a crypto adapter, profile-specific layout/manifest, and invite parsing. Pin both languages and vectors together. The link names the profile; reject unsupported profiles explicitly, no plaintext fallback. A profile bump changes keys/names/paths and is a coordinated client upgrade; it changes neither relay nor admission. Re-decide the D2 ordering/layout and D4 manifest at the bump. Duke still chooses which profile ships on by default; recommend `01-wip` only as a development target, and prefer finished `01` for default-on if available after validation. Do not guess his answer.
+
+### D8. Per-process-instance uniqueness
+
+Every new publisher process instance calls produce() to mint its generation. Live reconnects may retain that generation only while all original nonce/claim state remains intact; do not serialize/recreate a producing generation. This change ships browser/native process clients, not guest snapshot support. Future guest constraints, including VMGENID/legacy-capture conditions, are in ADR 0017 rather than an unimplemented requirement here.
+
+### D9. Acceptance uses a harness relay, never a production keylog
+
+The relay is the **in-process harness built from the same mjolnir-relay crate**, using its admission decider and Iroh handler. Only the harness enables moq-tokio quic.keylog, as `spikes/complete/README.md` describes. No capture runs on production and the shipped binary gets **no runtime keylog switch**.
+
+Use `spikes/complete/capture.sh`: tshark 4.4.0 captures the harness listener on lo0, decrypts with harness session keys, reassembles STREAM bytes per connection/stream without filling holes, and compares to publisher-local reference payloads. Keep pcaps, tokens and keys private. An opaque/empty capture fails instrumentation.
+
+Separate three captures: plaintext control, passive encrypted call with holders only, and active token-only semantic probes/physical reads. Check content: VP8 headers and distinct decoded frames, injected catalog/display/name markers, content-key encodings, and the injected 440 Hz tone ratio in decoded Opus. **Decoder exit status is insufficient: Opus accepts ciphertext as noise.** Passive encrypted capture must have no publisher semantic markers or recognizable injected media while holders render/hear it. Negative semantic requests themselves appear in decrypted transport; token-only capture's `video` ×6 is its own probe, not a publisher leak.
+
+The logs and results JSON show plaintext 171 distinct VP8 frames/tone ratio .995, encrypted zero frames/headers and .005 tone ratio, token-only zero video and .007 tone ratio (`spikes/complete/logs/capture-{plaintext,encrypted,tokenonly}-results.json`). This is Chromium harness evidence, not Firefox capture or a production acceptance run. Repeat against the shipped adapter before shipping; compare content metrics with positive controls rather than requiring every decoder to error.
+
+## Remaining unverified hypotheses / decisions
+
+- Handing a replacement credential to an open page: INCONCLUSIVE, fixture injects it. `mjolnir-rurh.5` owns the paste/rejoin choice and secure flow; `tasks.md` keeps it open.
+- Firefox H.264→native, rekey and capture: unrun; browser/native API support is not enough.
+- Iroh-ingress publisher expiring mid-media: unrun; bare link close is narrower evidence.
+- Idle-machine rekey: rerun to distinguish loaded harness starvation from relay buffering; no fixed latency guarantee.
+- Rust upstream vectors: review's 51-pass result remains valid historical evidence, but complete spike did not re-run them.
+- ASK: default-on profile; navigated invite/history limit; guest lifetime beyond one token; replacement credential delivery; existing epoch-in-path approval. Recommendations are in tasks; none is answered here.
