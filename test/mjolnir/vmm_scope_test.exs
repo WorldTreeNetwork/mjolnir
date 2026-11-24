@@ -192,7 +192,6 @@ defmodule Mjolnir.VmmScopeTest do
     source = File.read!("lib/mjolnir/cleanup.ex")
     refute source =~ "System.cmd(\"ps\""
     refute source =~ "System.cmd(\"kill\""
-    refute source =~ "File.rm("
     refute source =~ "delete_tap"
   end
 end

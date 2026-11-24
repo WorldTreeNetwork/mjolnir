@@ -180,9 +180,8 @@ defmodule Mjolnir.Reconcile do
     :ok
   end
 
-  # Stop scopes that are not a live :running guest, and delete sockets that
-  # do not belong to an active scope. If the scope list cannot be read, do
-  # neither: an unlisted slice is not a license to reap.
+  # Live reconciliation can stop orphan scopes. Socket sweeping belongs to the
+  # synchronous startup phase: thaw binds its filesystem socket before starting its scope.
   defp prepare_scopes do
     case Mjolnir.VmmScope.list_scopes() do
       {:error, :unlisted} ->
@@ -191,7 +190,6 @@ defmodule Mjolnir.Reconcile do
       {:ok, scopes} ->
         active = for {id, "active"} <- scopes, do: id
         stop_finished_or_orphan(active)
-        drop_unprotected_sockets(active)
     end
   rescue
     exception ->
@@ -220,24 +218,6 @@ defmodule Mjolnir.Reconcile do
   end
 
   def scope_should_stop?(_id, _record), do: false
-
-  defp drop_unprotected_sockets(active_ids) do
-    socket_dir = Application.get_env(:mjolnir, :socket_dir)
-
-    case File.ls(socket_dir) do
-      {:ok, files} ->
-        Enum.each(files, fn file ->
-          stale = String.ends_with?(file, ".sock") or String.ends_with?(file, "_vsock")
-
-          if stale and not Mjolnir.VmmScope.socket_protected?(file, active_ids) do
-            File.rm(Path.join(socket_dir, file))
-          end
-        end)
-
-      _ ->
-        :ok
-    end
-  end
 
   defp vm_registered?(%Record{uuid: uuid}), do: vm_registered?(uuid)
 

@@ -16,6 +16,29 @@ defmodule Mjolnir.CleanupTest do
     end
   end
 
+  @tag :tmp_dir
+  test "startup socket cleanup requires scope evidence and preserves transitioning guests", %{
+    tmp_dir: dir
+  } do
+    names = ~w(live.sock starting_virtiofs.sock stopping_vsock dead.sock orphan.sock keep.log)
+    Enum.each(names, &File.touch!(Path.join(dir, &1)))
+
+    assert :ok = Cleanup.sweep_sockets(dir, {:error, :unlisted})
+    assert Enum.sort(File.ls!(dir)) == Enum.sort(names)
+
+    scopes = [
+      {"live", "active"},
+      {"starting", "activating"},
+      {"stopping", "deactivating"},
+      {"dead", "failed"}
+    ]
+
+    assert :ok = Cleanup.sweep_sockets(dir, {:ok, scopes})
+
+    assert Enum.sort(File.ls!(dir)) ==
+             ~w(keep.log live.sock starting_virtiofs.sock stopping_vsock)
+  end
+
   describe "process names" do
     test "includes all expected hypervisor process names" do
       names = Cleanup.hypervisor_process_names()
