@@ -1,0 +1,18 @@
+# Spike outputs that must never be committed: captures, keys, media, builds.
+target/
+node_modules/
+dist/
+*.pcap
+*.pcapng
+*.keylog
+*keylog*.txt
+*.pem
+*.key
+*.der
+*.jwk
+*.ivf
+*.webm
+*.mp4
+*.wav
+*.h264
+*.raw
