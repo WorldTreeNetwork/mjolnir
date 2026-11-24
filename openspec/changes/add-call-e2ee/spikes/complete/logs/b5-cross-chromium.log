@@ -1,0 +1,11 @@
+{"h264Encode":true,"h264Decode":true}
+pub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/alice","semantic":"call"}
+pub: root export rejected NotSupportedError
+sub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/bob","semantic":"call"}
+sub: root export rejected NotSupportedError
+sub: discovered nat/XOmhHxYKfmIzYEf5tc-oEw/01a20c7b-e869-71c3-bcf3-1a119723e7a4
+sub: decrypt bridge: track "catalog.json" {"timescale":1000,"maxAgeMs":null,"priority":100}
+sub: decrypt bridge: track "catalog" {"timescale":1000,"maxAgeMs":null,"priority":100}
+sub: decrypt bridge: track "opus" {"timescale":1000000,"maxAgeMs":null,"priority":80}
+sub: decrypt bridge: track "video" {"timescale":1000000,"maxAgeMs":null,"priority":60}
+{"browser":"chromium","version":"158.0.8127.18","webcodecs":{"h264Encode":true,"h264Decode":true},"browserPublish":{"path":"alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c7c-5cb5-775d-a081-4d223cd4d695"},"browserReadsNative":{"metrics":{"uniqueFrames":15,"samples":71680,"rms":0.32610633177788184,"peak":0.502561092376709,"decodedVideo":105,"videoError":""},"logs":["discovered nat/XOmhHxYKfmIzYEf5tc-oEw/01a20c7b-e869-71c3-bcf3-1a119723e7a4","decrypt bridge: track \"catalog.json\" {\"timescale\":1000,\"maxAgeMs\":null,\"priority\":100}","decrypt bridge: track \"catalog\" {\"timescale\":1000,\"maxAgeMs\":null,\"priority\":100}","decrypt bridge: track \"opus\" {\"timescale\":1000000,\"maxAgeMs\":null,\"priority\":80}","decrypt bridge: track \"video\" {\"timescale\":1000000,\"maxAgeMs\":null,\"priority\":60}","PLAYBACK {\"uniqueFrames\":15,\"samples\":71680,\"rms\":0.32610633177788184,\"peak\":0.502561092376709,\"decodedVideo\":105,\"videoError\":\"\"}"]},"nativeReadsBrowser":{"path":"alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c7c-5cb5-775d-a081-4d223cd4d695","manifest":["catalog.json","video","audio"],"decodedFrames":20,"distinctPixels":20,"audioSamples":37776,"peak":1.0520340204238892}}

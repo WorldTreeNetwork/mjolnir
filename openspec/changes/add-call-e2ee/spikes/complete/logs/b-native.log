@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling call-e2ee-spikes v0.0.0 (/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-call-e2ee/spikes/rust)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.35s
+     Running tests/complete_native.rs (../../../../../native/mjolnir_relay/target/debug/deps/complete_native-73e62691be2f825f)
+
+running 1 test
+native publish: listed catalog.json timescale Some(Timescale::MILLI)
+native publish: listed catalog timescale Some(Timescale::MILLI)
+native publish: listed opus timescale Some(Timescale::MICRO)
+native publish: listed video timescale Some(Timescale::MICRO)
+NATIVE PLAYBACK layout=label path=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c7b-8f99-7727-b36c-610b58c56af8 manifest=["catalog.json", "catalog", "opus", "video"] decoded_frames=20 distinct_pixels=20 audio_samples=18888 peak=0.5093922
+test real_native_media ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.31s
+

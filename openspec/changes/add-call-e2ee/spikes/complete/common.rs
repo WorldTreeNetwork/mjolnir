@@ -188,3 +188,19 @@ pub async fn iroh_node(relay: iroh::EndpointId, token: &str) -> (iroh_live::Node
     .expect("iroh link connected");
     (node, link)
 }
+
+/// Review B1 layout: the label is in the credential context; the opaque segment is `path("call")`.
+pub fn label_credential(secret: [u8; 32], kid: u64, label: &str) -> moq_e2ee::Credential {
+    moq_e2ee::Credential::new(moq_e2ee::credential::Config {
+        context: format!("mjolnir-call/v1/{}/r1/{label}", owner()).into(),
+        kid,
+        secret,
+    })
+    .unwrap()
+}
+
+/// One `bridge.tracks` manifest entry in the format the browser bridge writes and reads
+/// (`{"timescale": units/s | null, "maxAgeMs": null, "priority": i8}`).
+pub fn manifest_entry(info: &moq_net::track::Info) -> serde_json::Value {
+    serde_json::json!({"timescale": info.timescale.map(u64::from), "maxAgeMs": null, "priority": info.priority})
+}

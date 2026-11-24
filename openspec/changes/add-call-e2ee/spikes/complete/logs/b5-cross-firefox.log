@@ -1,0 +1,9 @@
+{"h264Encode":true,"h264Decode":true}
+sub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/bob","semantic":"call"}
+sub: root export rejected InvalidAccessError
+sub: discovered nat/XOmhHxYKfmIzYEf5tc-oEw/01a20c7b-e869-71c3-bcf3-1a119723e7a4
+sub: decrypt bridge: track "catalog.json" {"timescale":1000,"maxAgeMs":null,"priority":100}
+sub: decrypt bridge: track "catalog" {"timescale":1000,"maxAgeMs":null,"priority":100}
+sub: decrypt bridge: track "opus" {"timescale":1000000,"maxAgeMs":null,"priority":80}
+sub: decrypt bridge: track "video" {"timescale":1000000,"maxAgeMs":null,"priority":60}
+{"browser":"firefox","version":"159.0","webcodecs":{"h264Encode":true,"h264Decode":true},"browserReadsNative":{"metrics":{"uniqueFrames":15,"samples":34816,"rms":0.3196042071438212,"peak":0.5025611519813538,"decodedVideo":63,"videoError":""},"logs":["discovered nat/XOmhHxYKfmIzYEf5tc-oEw/01a20c7b-e869-71c3-bcf3-1a119723e7a4","decrypt bridge: track \"catalog.json\" {\"timescale\":1000,\"maxAgeMs\":null,\"priority\":100}","decrypt bridge: track \"catalog\" {\"timescale\":1000,\"maxAgeMs\":null,\"priority\":100}","decrypt bridge: track \"opus\" {\"timescale\":1000000,\"maxAgeMs\":null,\"priority\":80}","decrypt bridge: track \"video\" {\"timescale\":1000000,\"maxAgeMs\":null,\"priority\":60}","PLAYBACK {\"uniqueFrames\":15,\"samples\":34816,\"rms\":0.3196042071438212,\"peak\":0.5025611519813538,\"decodedVideo\":63,\"videoError\":\"\"}"]}}

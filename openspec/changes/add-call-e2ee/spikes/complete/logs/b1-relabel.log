@@ -1,0 +1,18 @@
+   Compiling call-e2ee-spikes v0.0.0 (/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-call-e2ee/spikes/rust)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.59s
+     Running tests/b1_relabel.rs (../../../../../native/mjolnir_relay/target/debug/deps/b1_relabel-56347733acee9160)
+
+running 2 tests
+test label_in_context_refuses_the_relabel ... probe relabel/context: dave reading the re-mount under label `bob` -> refused: Authentication
+probe relabel/context: REFUSED (label in the credential context binds every key and name)
+ok
+test relay_relabel_passes_d2_checks ... probe relabel: alice at alice/Poo1JpbJnlJ5J5J1weBUSg/01a20c79-ab21-7151-908a-b568fd0d3e8d
+probe relabel: bob   at bob/VgnZo2FYE3-Vkx2r5LXGXw/01a20c79-ab05-75f3-9f5b-6dd7df5738d4
+probe relabel: a session with no content credential re-serves alice's ciphertext at bob/VgnZo2FYE3-Vkx2r5LXGXw/01a20c79-ab21-7151-908a-b568fd0d3e8d
+probe relabel: dave sees 2 canonical epoch(s) under bob/VgnZo2FYE3-Vkx2r5LXGXw/: [Epoch("01a20c79-ab05-75f3-9f5b-6dd7df5738d4"), Epoch("01a20c79-ab21-7151-908a-b568fd0d3e8d")]
+probe relabel: dave, reading label `bob` with every D2 check passed, decrypted "ALICE-FRAME-35"
+probe relabel: D2 CLAIM REFUTED (label-bound opaque does not bind the keys to the label)
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
+
