@@ -27,7 +27,18 @@ defmodule Mjolnir.MCP.Server do
       properties: %{
         kind: %{type: "string", enum: ["linux", "unikernel"]},
         kernel: %{type: "string", description: "Host path of an allowed unikernel ELF."},
-        peer_pin: %{type: "string", description: "SHA-256 hex of the guest certificate."},
+        entity_key: %{
+          type: "string",
+          description:
+            "Unikernel only, required: the entity's key, a 32-byte Ed25519 seed as base58. The caller supplies and keeps it; it is given to the guest at boot and never stored or returned."
+        },
+        allow: %{
+          type: "array",
+          items: %{type: "string"},
+          maxItems: 7,
+          description:
+            "Unikernel only: up to 7 entity names (base58, 32 bytes) that may also call the guest."
+        },
         base_image: %{
           type: "string",
           description: "Base rootfs image name (e.g. 'ubuntu-24.04')."
@@ -564,7 +575,7 @@ defmodule Mjolnir.MCP.Server do
 
   # ── Helpers ────────────────────────────────────────────
 
-  @spawn_keys ~w(kind kernel peer_pin base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
+  @spawn_keys ~w(kind kernel entity_key allow base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
 
   defp args_to_spawn_opts(args) do
     args

@@ -1,13 +1,19 @@
 # Run as root on morphie: MIX_ENV=prod mix run --no-start scripts/acceptance/unikernel.exs
-# Required: REFLECT_KERNEL, MJ_BINARY. Uses an isolated control plane and real KVM.
+# Required: REFLECT_KERNEL (a reflect-net.elf built at homoiconic e9a4c86 or
+# later), MJ_BINARY, and priv/reflect-quic-client and priv/reflect-entity
+# built from native/reflect_quic. Uses an isolated control plane and real KVM.
 # Does not start production cleanup/reconciliation, Forge, or sidecars.
-alias Mjolnir.{VM, StateStore}
+# Entity keys are made per run and never printed.
+alias Mjolnir.{VM, StateStore, Unikernel}
+alias Mjolnir.Unikernel.Exchange
 root = System.fetch_env!("REFLECT_TEST_ROOT")
 kernel = System.fetch_env!("REFLECT_KERNEL")
 mj = System.fetch_env!("MJ_BINARY")
-pin = "c917ae04e69fa83d5d3e34bb1d86be4196d904fe42e03800fbb459ca820d90d1"
 socket = Path.join(root, "operator.sock")
 File.mkdir_p!(root)
+keys = Path.join(root, "keys")
+File.mkdir_p!(keys)
+File.chmod!(keys, 0o700)
 
 for {key, value} <- [
       state_dir: "#{root}/state",
@@ -78,17 +84,97 @@ command = fn args ->
   output
 end
 
-spawn_guest = fn peer_pin ->
-  output = command.(["spawn", "--kind", "unikernel", "--kernel", kernel, "--peer-pin", peer_pin])
+# An entity's key: 32 random bytes in a 0600 file. Only the path is shown.
+make_key = fn label ->
+  path = Path.join(keys, "#{label}.key")
+  :ok = Unikernel.write_private(path, :crypto.strong_rand_bytes(32))
+  path
+end
+
+key_name = fn path ->
+  {:ok, name} = Unikernel.entity_name(path)
+  name
+end
+
+# The key text a spawn sends, to prove it is kept nowhere.
+key_text = fn path -> Mjolnir.Base58.encode(File.read!(path)) end
+
+spawn_guest = fn key_path, extra ->
+  output =
+    command.(
+      ["spawn", "--kind", "unikernel", "--kernel", kernel, "--entity-key-file", key_path] ++
+        extra
+    )
+
   output = Regex.replace(~r/\e\[[0-9;]*m/, output, "")
   [_, id] = Regex.run(~r/VM:\s+([A-Za-z0-9]+)/, output)
-  id
+  [_, entity] = Regex.run(~r/Entity:\s+([A-Za-z0-9]+)/, output)
+  {id, entity}
 end
+
+job_for = fn id, program, budget ->
+  {:ok, vm} = VM.get(id)
+
+  %{
+    guest_ip: vm.net_config.guest_ip,
+    quic_port: vm.config.quic_port,
+    entity: vm.config.entity,
+    budget: budget,
+    program: program,
+    correlation_id: Unikernel.correlation_id(nil)
+  }
+end
+
+key1 = make_key.("entity-1")
+key2 = make_key.("entity-2")
+key3 = make_key.("entity-3")
+name1 = key_name.(key1)
+name2 = key_name.(key2)
+name3 = key_name.(key3)
+{:ok, client_key} = Unikernel.client_key()
+client_name = key_name.(client_key)
+
+check.(
+  File.stat!(client_key).mode |> Bitwise.band(0o777) == 0o600 and
+    byte_size(File.read!(client_key)) == 32,
+  "Mjolnir's client key is a 0600 file of 32 bytes"
+)
+
+check.(
+  length(Enum.uniq([name1, name2, name3, client_name])) == 4,
+  "four keys, four names"
+)
 
 Process.put(:guests, [])
 
 try do
-  id = spawn_guest.(pin)
+  # A spawn with no entity key is refused before anything starts, by the
+  # API and by VM.spawn.
+  {refused, 0} =
+    System.cmd("curl", [
+      "-sS",
+      "--unix-socket",
+      socket,
+      "-H",
+      "X-Owner-Id: #{owner}",
+      "-H",
+      "Content-Type: application/json",
+      "--data",
+      Jason.encode!(%{kind: "unikernel", kernel: kernel}),
+      "http://localhost/api/vms"
+    ])
+
+  IO.puts("SPAWN WITHOUT KEY #{refused}")
+  check.(Jason.decode!(refused)["error"] == "entity_key_required", "API: entity_key_required")
+
+  check.(
+    VM.spawn(%{kind: :unikernel, kernel: kernel, owner_id: owner}) ==
+      {:error, :entity_key_required},
+    "VM.spawn: entity_key_required"
+  )
+
+  # The first guest also allows entity 3, which may call it directly.
+  {id, entity} = spawn_guest.(key1, ["--allow", name3])
   Process.put(:guests, [id])
   {:ok, vm} = VM.get(id)
   {:ok, record} = StateStore.get(id)
@@ -97,12 +183,40 @@ try do
     "GUEST #{id} IP #{vm.net_config.guest_ip} TAP #{vm.net_config.tap_name} SCOPE #{Mjolnir.VmmScope.scope_name(id)}"
   )
 
-  IO.puts(File.read!(vm.serial_path))
+  serial = File.read!(vm.serial_path)
+  IO.puts(serial)
 
   check.(
     record.spawn_config["kind"] == "unikernel" and
       record.spawn_config["restart_policy"] == "never",
     "persisted kind and never-restart"
+  )
+
+  check.(
+    entity == name1 and vm.config.entity == name1 and record.spawn_config["entity"] == name1 and
+      record.spawn_config["allow"] == [name3],
+    "the guest's name is its key's name, returned and stored with allow"
+  )
+
+  check.(
+    String.contains?(serial, "reflect: entity #{name1}\n"),
+    "the guest printed its name on serial"
+  )
+
+  key_file = Unikernel.key_file_path(Application.fetch_env!(:mjolnir, :socket_dir), id)
+  check.(not File.exists?(key_file), "the key file is gone once the guest is ready")
+
+  stored = File.read!(Path.join(Application.fetch_env!(:mjolnir, :state_dir), "#{id}.json"))
+  ch_log = Path.join(Application.fetch_env!(:mjolnir, :socket_dir), "cloud-hypervisor-#{id}.log")
+  ch_log = if File.exists?(ch_log), do: File.read!(ch_log), else: ""
+
+  check.(
+    not Enum.any?([stored, serial, ch_log, inspect(vm.config), inspect(record)], fn text ->
+      String.contains?(text, key_text.(key1)) or
+        String.contains?(text, File.read!(key1)) or
+        String.contains?(text, Base.encode16(File.read!(key1), case: :lower))
+    end),
+    "the key is not in the record, the serial log, the hypervisor log or the VM state"
   )
 
   {info, 0} =
@@ -128,10 +242,11 @@ try do
   words = String.split(payload["cmdline"] || "")
 
   check.(
-    payload["kernel"] == kernel and payload["initramfs"] == nil and length(words) == 3 and
+    payload["kernel"] == kernel and payload["initramfs"] == key_file and length(words) == 4 and
       Enum.map(words, &(&1 |> String.split("=") |> hd())) ==
-        ["reflect.ip", "reflect.port", "reflect.quic_port"],
-    "kernel is the Reflect ELF and the command line is three reflect.* words"
+        ["reflect.ip", "reflect.port", "reflect.quic_port", "reflect.allow"] and
+      List.last(words) == "reflect.allow=#{client_name},#{name3}",
+    "kernel is the Reflect ELF, the key file is the initramfs, and the command line is four reflect.* words allowing Mjolnir then entity 3"
   )
 
   check.(
@@ -151,7 +266,12 @@ try do
   IO.puts("ROUTE #{String.trim(route)}")
   check.(String.contains?(route, vm.net_config.tap_name), "Mjolnir TAP route")
   reply = command.(["message", "--budget", "100000000", id, "#{fixtures}/factorial-793b583.wire"])
-  check.(reply == expected, "QUIC factorial exact Lean reply #{Base.encode16(reply)}")
+
+  check.(
+    reply == expected,
+    "QUIC factorial with Mjolnir's client key, exact Lean reply #{Base.encode16(reply)}"
+  )
+
   reply = command.(["message", "--budget", "5000", id, "#{fixtures}/forever-793b583.wire"])
   check.(reply == budget_reply, "QUIC budget outcome #{Base.encode16(reply)}")
   {:ok, still_running} = VM.get(id)
@@ -202,16 +322,40 @@ try do
     "guest still works after refused restart"
   )
 
-  bad = spawn_guest.("d" <> String.slice(pin, 1..-1//1))
-  Process.put(:guests, [id, bad])
-  check.(VM.unikernel_message(bad, fact) == {:error, :peer_key_refused}, "wrong peer pin refused")
+  {second, entity2} = spawn_guest.(key2, [])
+  Process.put(:guests, [id, second])
+  check.(entity2 == name2 and entity2 != entity, "two keys, two guest names")
 
   check.(
-    VM.unikernel_message(bad, fact) == {:error, :peer_key_refused},
-    "wrong peer stays refused"
+    VM.unikernel_message(second, fact) == {:ok, 0, expected},
+    "the second guest answers Mjolnir's client key"
   )
 
-  for guest <- [id, bad] do
+  # Exchanges run directly, as the API cannot choose the client key or the
+  # name expected. Each starts from the first guest's own job.
+  job = job_for.(id, fact, 100_000_000)
+
+  check.(
+    Exchange.port(Map.put(job, :client_key, key3)) == {:ok, 0, expected},
+    "a client with entity 3's key, on the guest's allow list, is answered"
+  )
+
+  check.(
+    Exchange.port(Map.put(job, :client_key, key2)) == {:error, :unikernel_timeout},
+    "a client key the guest does not allow gets no answer (unikernel_timeout)"
+  )
+
+  check.(
+    Exchange.port(Map.put(job, :entity, name2)) == {:error, :peer_key_refused},
+    "a client that expects another guest name refuses the guest (peer_key_refused)"
+  )
+
+  check.(
+    VM.unikernel_message(id, fact) == {:ok, 0, expected},
+    "the guest still answers Mjolnir after the refused connections"
+  )
+
+  for guest <- [id, second] do
     {:ok, before} = VM.get(guest)
     command.(["kill", guest])
 
@@ -234,7 +378,9 @@ try do
   end
 
   Process.put(:guests, [])
-  fatal = spawn_guest.(pin)
+  # The first key again, on a new guest: the same entity, the same name.
+  {fatal, fatal_entity} = spawn_guest.(key1, [])
+  check.(fatal_entity == name1, "the same key spawned again has the same name")
   # This image exhausts its fixed memory on the large forever run and self-exits.
   fatal_call = Task.async(fn -> VM.unikernel_message(fatal, forever, 100_000_000) end)
 
@@ -253,6 +399,12 @@ try do
   check.(exited, "guest self-exit records stopped/guest_exit")
   {:ok, stopped} = StateStore.get(fatal)
   check.(stopped.spawn_config["owner_id"] == owner, "guest-exit record retains ownership")
+
+  check.(
+    stopped.spawn_config["entity"] == name1 and not Map.has_key?(stopped.spawn_config, "peer_pin"),
+    "guest-exit record keeps the entity name"
+  )
+
   check.(VM.revive(fatal) == {:error, :unikernel_restart_refused}, "stopped guest cannot restart")
 
   check.(

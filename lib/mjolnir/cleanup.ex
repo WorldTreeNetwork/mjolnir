@@ -32,6 +32,13 @@ defmodule Mjolnir.Cleanup do
     case File.ls(socket_dir) do
       {:ok, files} ->
         Enum.each(files, fn file ->
+          # A unikernel's entity key file lives only for its boot. One found
+          # here is from a boot this BEAM no longer runs: always remove it.
+          if String.ends_with?(file, ".entity-key"), do: File.rm(Path.join(socket_dir, file))
+          # The 0700 directory `Mjolnir.Unikernel.write_private/2` writes in,
+          # left only if the BEAM died mid-write.
+          if String.starts_with?(file, ".private-"), do: File.rm_rf(Path.join(socket_dir, file))
+
           stale = String.ends_with?(file, ".sock") or String.ends_with?(file, "_vsock")
 
           if stale and not Mjolnir.VmmScope.socket_protected?(file, protected) do

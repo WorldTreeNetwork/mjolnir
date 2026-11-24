@@ -1,0 +1,370 @@
+== builds done
+127783a51aace5dc00996fa476a137e940aad4dcbb6b7e4c5217b2fc1c7de89d  priv/reflect-quic-client
+9619d2a493ea9daadd1e1d451b1b9cc7429337f105d80b5762fabf0e156a12d7  priv/reflect-entity
+d781b2458511b16a65195c83dc3179819d927f1d0d390ba49f824bc35454a6be  native/target/release/mjolnir
+562c8143fc9d8c0018061af8573c81b14bc61307f4acf8929fc6d62fc7fcac4c  /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf
+== acceptance, root /var/tmp/mj-uk-20261124-e9a4c86-3487962
+
+16:12:56.213 [debug] SessionManager started
+
+16:12:56.222 [info] SecretStore: root=/var/tmp/mj-uk-20261124-e9a4c86-3487962/secrets
+
+16:12:56.224 [info] DormantRegistry: persist interval 250ms
+
+16:12:56.245 [info] Running Mjolnir.API.OperatorPipeline with Bandit 1.14.1 at /var/tmp/mj-uk-20261124-e9a4c86-3487962/operator.sock (http+unix)
+PASS Mjolnir's client key is a 0600 file of 32 bytes
+PASS four keys, four names
+
+16:12:56.302 [info] POST /api/vms
+
+16:12:56.318 [error] VM spawn failed: :entity_key_required
+
+16:12:56.319 [info] Sent 400 in 17ms
+SPAWN WITHOUT KEY {"error":"entity_key_required"}
+PASS API: entity_key_required
+PASS VM.spawn: entity_key_required
+
+16:12:56.348 [info] POST /api/vms
+
+16:12:56.448 [info] Created TAP mju-8vfP33Fv for VM 8vfP33Fv with IP 10.204.208.62
+
+16:12:56.503 [debug] vm.create payload: {
+  "console": {
+    "mode": "Off"
+  },
+  "cpus": {
+    "boot_vcpus": 1,
+    "max_vcpus": 1
+  },
+  "memory": {
+    "shared": false,
+    "size": 536870912
+  },
+  "net": [
+    {
+      "mac": "02:FC:00:65:0c:d0",
+      "offload_csum": true,
+      "offload_tso": true,
+      "offload_ufo": true,
+      "tap": "mju-8vfP33Fv"
+    }
+  ],
+  "payload": {
+    "cmdline": "reflect.ip=10.204.208.62 reflect.port=20803 reflect.quic_port=30803 reflect.allow=7vt4dpWa3DPkfXXFM7RdDMdiBMpJJpHA659onWh3uCtG,ByC1YqSCATWjFCg7Q8ySj1aK1E14bBgJQMn8u9XMptMh",
+    "initramfs": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/8vfP33FvGi72CWnu6aDepg.entity-key",
+    "kernel": "/home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf"
+  },
+  "serial": {
+    "file": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/8vfP33FvGi72CWnu6aDepg_serial.log",
+    "mode": "File"
+  }
+}
+
+16:12:56.592 [info] Sent 201 in 243ms
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.15>, :normal}
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.16>, :normal}
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.17>, :normal}
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.18>, :normal}
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.19>, :normal}
+
+16:12:56.593 [debug] Hypervisor output: Invalid environment variable name evaluates to an empty string: #pids[@], pids[@]
+
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.21>, :normal}
+
+16:12:56.593 [debug] VM 8vfP33FvGi72CWnu6aDepg received: {:EXIT, #Port<0.22>, :normal}
+$ mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-1.key --allow ByC1YqSCATWjFCg7Q8ySj1aK1E14bBgJQMn8u9XMptMh --owner <owner>
+Spawning VM...
+[1;32mVM:[0m           8vfP33FvGi72CWnu6aDepg
+Entity:       5BqShot3PfnSWnYxDJcfw9z2h9kyfKmxieqNAJwdSeJ9
+(no ticket yet \x{2014} use `mj ticket get 8vfP33FvGi72CWnu6aDepg` once ready)
+[36m\x{1F4BE} Persist interval: 250ms[0m
+[exit 0]
+PASS mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-1.key --allow ByC1YqSCATWjFCg7Q8ySj1aK1E14bBgJQMn8u9XMptMh
+GUEST 8vfP33FvGi72CWnu6aDepg IP 10.204.208.62 TAP mju-8vfP33Fv SCOPE mju-8vfP33FvGi72CWnu6aDepg.scope
+reflect: entity 5BqShot3PfnSWnYxDJcfw9z2h9kyfKmxieqNAJwdSeJ9
+reflect: ready 10.204.208.62:20803
+reflect: quic 30803
+
+PASS persisted kind and never-restart
+PASS the guest's name is its key's name, returned and stored with allow
+PASS the guest printed its name on serial
+PASS the key file is gone once the guest is ready
+PASS the key is not in the record, the serial log, the hypervisor log or the VM state
+VMINFO payload {"cmdline":"reflect.ip=10.204.208.62 reflect.port=20803 reflect.quic_port=30803 reflect.allow=7vt4dpWa3DPkfXXFM7RdDMdiBMpJJpHA659onWh3uCtG,ByC1YqSCATWjFCg7Q8ySj1aK1E14bBgJQMn8u9XMptMh","initramfs":"/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/8vfP33FvGi72CWnu6aDepg.entity-key","kernel":"/home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf"}
+VMINFO cpus {"boot_vcpus":1,"core_scheduling":"Vm","features":{"amx":false},"kvm_hyperv":false,"max_phys_bits":46,"max_vcpus":1,"nested":false,"profile":"Host"} memory {"hotplug_method":"Acpi","hugepages":false,"mergeable":false,"prefault":false,"shared":false,"size":536870912,"thp":true}
+VMINFO disks null fs null vsock null
+PASS no rootfs, virtiofs or vsock
+PASS kernel is the Reflect ELF, the key file is the initramfs, and the command line is four reflect.* words allowing Mjolnir then entity 3
+PASS 1 vCPU and 512 MiB
+PASS no virtiofsd or agent process for the guest
+PASS no rootfs clone for the guest
+ROUTE 10.204.208.62 dev mju-8vfP33Fv src 192.168.0.164 uid 0 
+    cache
+PASS Mjolnir TAP route
+
+16:12:56.647 [info] POST /api/vms/8vfP33FvGi72CWnu6aDepg/messages
+
+16:12:56.652 [info] Sent 200 in 4ms
+$ mj message --budget 100000000 8vfP33FvGi72CWnu6aDepg /home/dorje/mj-uk-src/test/fixtures/reflect/factorial-793b583.wire --owner <owner>
+<hex> 82008200C24E0D13F6370F96865DF5DD54000000
+[exit 0]
+PASS mj message --budget 100000000 8vfP33FvGi72CWnu6aDepg /home/dorje/mj-uk-src/test/fixtures/reflect/factorial-793b583.wire
+PASS QUIC factorial with Mjolnir's client key, exact Lean reply 82008200C24E0D13F6370F96865DF5DD54000000
+
+16:12:56.663 [info] POST /api/vms/8vfP33FvGi72CWnu6aDepg/messages
+
+16:12:56.667 [info] Sent 200 in 3ms
+$ mj message --budget 5000 8vfP33FvGi72CWnu6aDepg /home/dorje/mj-uk-src/test/fixtures/reflect/forever-793b583.wire --owner <owner>
+<hex> 8101
+[exit 0]
+PASS mj message --budget 5000 8vfP33FvGi72CWnu6aDepg /home/dorje/mj-uk-src/test/fixtures/reflect/forever-793b583.wire
+PASS QUIC budget outcome 8101
+PASS guest running after budget
+PASS MCP program and budget over QUIC
+PASS first caller admitted
+PASS second caller refused busy
+PASS first caller completes after busy refusal
+PASS live reboot refused
+PASS persisted resume refused
+PASS guest still works after refused restart
+
+16:12:56.707 [info] POST /api/vms
+
+16:12:56.770 [info] Created TAP mju-DkNtWHVC for VM DkNtWHVC with IP 10.206.26.212
+
+16:12:56.821 [debug] vm.create payload: {
+  "console": {
+    "mode": "Off"
+  },
+  "cpus": {
+    "boot_vcpus": 1,
+    "max_vcpus": 1
+  },
+  "memory": {
+    "shared": false,
+    "size": 536870912
+  },
+  "net": [
+    {
+      "mac": "02:FC:00:ae:0e:1a",
+      "offload_csum": true,
+      "offload_tso": true,
+      "offload_ufo": true,
+      "tap": "mju-DkNtWHVC"
+    }
+  ],
+  "payload": {
+    "cmdline": "reflect.ip=10.206.26.212 reflect.port=27896 reflect.quic_port=37896 reflect.allow=7vt4dpWa3DPkfXXFM7RdDMdiBMpJJpHA659onWh3uCtG",
+    "initramfs": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/DkNtWHVCa4xt4eHuC2RF65.entity-key",
+    "kernel": "/home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf"
+  },
+  "serial": {
+    "file": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/DkNtWHVCa4xt4eHuC2RF65_serial.log",
+    "mode": "File"
+  }
+}
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.38>, :normal}
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.39>, :normal}
+
+16:12:56.890 [info] Sent 201 in 182ms
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.40>, :normal}
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.41>, :normal}
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.42>, :normal}
+
+16:12:56.890 [debug] Hypervisor output: Invalid environment variable name evaluates to an empty string: #pids[@], pids[@]
+
+
+16:12:56.890 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.44>, :normal}
+
+16:12:56.891 [debug] VM DkNtWHVCa4xt4eHuC2RF65 received: {:EXIT, #Port<0.45>, :normal}
+$ mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-2.key --owner <owner>
+Spawning VM...
+[1;32mVM:[0m           DkNtWHVCa4xt4eHuC2RF65
+Entity:       ABUDJ9sfBsPVWZS9K7wyN5MQjnpyWo7C9yHz1fMhBC71
+(no ticket yet \x{2014} use `mj ticket get DkNtWHVCa4xt4eHuC2RF65` once ready)
+[36m\x{1F4BE} Persist interval: 250ms[0m
+[exit 0]
+PASS mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-2.key
+PASS two keys, two guest names
+PASS the second guest answers Mjolnir's client key
+PASS a client with entity 3's key, on the guest's allow list, is answered
+PASS a client key the guest does not allow gets no answer (unikernel_timeout)
+PASS a client that expects another guest name refuses the guest (peer_key_refused)
+PASS the guest still answers Mjolnir after the refused connections
+
+16:13:07.083 [info] DELETE /api/vms/8vfP33FvGi72CWnu6aDepg
+
+16:13:07.086 [warning] [vm-terminate] 8vfP33FvGi72CWnu6aDepg start reason=:normal state=running
+
+16:13:07.086 [warning] [vm-terminate] 8vfP33FvGi72CWnu6aDepg preserve=false \x{2192} calling cleanup
+
+16:13:07.086 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg start @ -576460740288
+
+16:13:07.126 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg virtiofsd socket rm begin @ -576460740249
+
+16:13:07.130 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg virtiofsd socket rm done @ -576460740245
+
+16:13:07.130 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg TAP delete begin @ -576460740245
+
+16:13:07.174 [debug] Deleted TAP mju-8vfP33Fv
+
+16:13:07.174 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg TAP deleted @ -576460740201
+
+16:13:07.174 [warning] [ch-cleanup] 8vfP33FvGi72CWnu6aDepg done @ -576460740201
+
+16:13:07.174 [warning] [vm-terminate] 8vfP33FvGi72CWnu6aDepg cleanup returned
+
+16:13:07.187 [warning] [vm-terminate] 8vfP33FvGi72CWnu6aDepg done
+
+16:13:07.187 [info] Sent 200 in 103ms
+$ mj kill 8vfP33FvGi72CWnu6aDepg --owner <owner>
+Killed 8vfP33FvGi72CWnu6aDepg
+[exit 0]
+PASS mj kill 8vfP33FvGi72CWnu6aDepg
+PASS kill removed 8vfP33FvGi72CWnu6aDepg TAP and scope
+
+16:13:07.216 [info] DELETE /api/vms/DkNtWHVCa4xt4eHuC2RF65
+
+16:13:07.216 [warning] [vm-terminate] DkNtWHVCa4xt4eHuC2RF65 start reason=:normal state=running
+
+16:13:07.216 [warning] [vm-terminate] DkNtWHVCa4xt4eHuC2RF65 preserve=false \x{2192} calling cleanup
+
+16:13:07.216 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 start @ -576460740159
+
+16:13:07.252 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 virtiofsd socket rm begin @ -576460740122
+
+16:13:07.252 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 virtiofsd socket rm done @ -576460740122
+
+16:13:07.253 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 TAP delete begin @ -576460740122
+
+16:13:07.303 [debug] Deleted TAP mju-DkNtWHVC
+
+16:13:07.303 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 TAP deleted @ -576460740072
+
+16:13:07.304 [warning] [ch-cleanup] DkNtWHVCa4xt4eHuC2RF65 done @ -576460740071
+
+16:13:07.304 [warning] [vm-terminate] DkNtWHVCa4xt4eHuC2RF65 cleanup returned
+
+16:13:07.304 [warning] [vm-terminate] DkNtWHVCa4xt4eHuC2RF65 done
+
+16:13:07.304 [info] Sent 200 in 88ms
+$ mj kill DkNtWHVCa4xt4eHuC2RF65 --owner <owner>
+Killed DkNtWHVCa4xt4eHuC2RF65
+[exit 0]
+PASS mj kill DkNtWHVCa4xt4eHuC2RF65
+PASS kill removed DkNtWHVCa4xt4eHuC2RF65 TAP and scope
+
+16:13:07.341 [info] POST /api/vms
+
+16:13:07.407 [info] Created TAP mju-JvXyoub4 for VM JvXyoub4 with IP 10.196.152.64
+
+16:13:07.459 [debug] vm.create payload: {
+  "console": {
+    "mode": "Off"
+  },
+  "cpus": {
+    "boot_vcpus": 1,
+    "max_vcpus": 1
+  },
+  "memory": {
+    "shared": false,
+    "size": 536870912
+  },
+  "net": [
+    {
+      "mac": "02:FC:00:e5:44:98",
+      "offload_csum": true,
+      "offload_tso": true,
+      "offload_ufo": true,
+      "tap": "mju-JvXyoub4"
+    }
+  ],
+  "payload": {
+    "cmdline": "reflect.ip=10.196.152.64 reflect.port=22370 reflect.quic_port=32370 reflect.allow=7vt4dpWa3DPkfXXFM7RdDMdiBMpJJpHA659onWh3uCtG",
+    "initramfs": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/JvXyoub4irVr2qcto2MJfb.entity-key",
+    "kernel": "/home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf"
+  },
+  "serial": {
+    "file": "/var/tmp/mj-uk-20261124-e9a4c86-3487962/sock/JvXyoub4irVr2qcto2MJfb_serial.log",
+    "mode": "File"
+  }
+}
+
+16:13:07.542 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.70>, :normal}
+
+16:13:07.542 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.71>, :normal}
+
+16:13:07.542 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.72>, :normal}
+
+16:13:07.542 [info] Sent 201 in 201ms
+
+16:13:07.542 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.73>, :normal}
+
+16:13:07.542 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.74>, :normal}
+
+16:13:07.543 [debug] Hypervisor output: Invalid environment variable name evaluates to an empty string: #pids[@], pids[@]
+
+
+16:13:07.543 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.76>, :normal}
+
+16:13:07.543 [debug] VM JvXyoub4irVr2qcto2MJfb received: {:EXIT, #Port<0.77>, :normal}
+$ mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-1.key --owner <owner>
+Spawning VM...
+[1;32mVM:[0m           JvXyoub4irVr2qcto2MJfb
+Entity:       5BqShot3PfnSWnYxDJcfw9z2h9kyfKmxieqNAJwdSeJ9
+(no ticket yet \x{2014} use `mj ticket get JvXyoub4irVr2qcto2MJfb` once ready)
+[36m\x{1F4BE} Persist interval: 250ms[0m
+[exit 0]
+PASS mj spawn --kind unikernel --kernel /home/dorje/hom-e9a4c86/unikernel/out-net/reflect-net.elf --entity-key-file /var/tmp/mj-uk-20261124-e9a4c86-3487962/keys/entity-1.key
+PASS the same key spawned again has the same name
+
+16:13:09.256 [info] Hypervisor exited with status: 0
+
+16:13:09.256 [warning] [vm-terminate] JvXyoub4irVr2qcto2MJfb start reason={:hypervisor_exit, 0} state=stopped
+
+16:13:09.256 [warning] [vm-terminate] JvXyoub4irVr2qcto2MJfb preserve=false \x{2192} calling cleanup
+
+16:13:09.256 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb start @ -576460738119
+
+16:13:09.262 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb virtiofsd socket rm begin @ -576460738113
+
+16:13:09.262 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb virtiofsd socket rm done @ -576460738113
+
+16:13:09.262 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb TAP delete begin @ -576460738113
+
+16:13:09.311 [debug] Deleted TAP mju-JvXyoub4
+
+16:13:09.312 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb TAP deleted @ -576460738063
+
+16:13:09.312 [warning] [ch-cleanup] JvXyoub4irVr2qcto2MJfb done @ -576460738063
+
+16:13:09.312 [warning] [vm-terminate] JvXyoub4irVr2qcto2MJfb cleanup returned
+
+16:13:09.314 [warning] [vm-terminate] JvXyoub4irVr2qcto2MJfb done
+PASS guest self-exit records stopped/guest_exit
+PASS guest-exit record retains ownership
+PASS guest-exit record keeps the entity name
+
+16:13:09.314 [error] GenServer {Mjolnir.VMRegistry, "JvXyoub4irVr2qcto2MJfb"} terminating
+** (stop) {:hypervisor_exit, 0}
+Last message: {#Port<0.75>, {:exit_status, 0}}
+State: #Mjolnir.VM<[id: "JvXyoub4irVr2qcto2MJfb", state: :stopped, secrets_payload: nil]>
+PASS stopped guest cannot restart
+PASS in-flight call ends after guest exit
+PASS self-exit removes TAP and scope
+ALL UNIKERNEL HARDWARE CHECKS PASSED
+== acceptance exit 0
+0
+1
+== done

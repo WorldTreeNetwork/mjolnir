@@ -256,25 +256,44 @@ HTTP POST /api/vms/:id/exec {"command": "apt install -y nginx"}
 A second guest kind boots a Reflect unikernel: one Cloud Hypervisor ELF
 with no Linux, no rootfs and no guest agent
 ([`unikernel-guest`](../openspec/specs/unikernel-guest/spec.md)).
-`mj spawn --kind unikernel --kernel <reflect.elf> --peer-pin <sha256>`
+`mj spawn --kind unikernel --kernel <reflect.elf> --entity-key-file <key> [--allow <name>]...`
 takes a kernel from the `unikernel_kernel_prefixes` allow-list. The boot
 skips the rootfs clone, agent injection, virtiofsd and the vsock wait. It
-keeps the /32 TAP, and the command line is only
-`reflect.ip=… reflect.port=… reflect.quic_port=…`, with 1 vCPU and 512 MiB.
+keeps the /32 TAP, and the command line is four words,
+`reflect.ip=… reflect.port=… reflect.quic_port=… reflect.allow=<names>`,
+with 1 vCPU and 512 MiB.
+
+A guest runs for an entity, and its key is the entity's: 32 bytes, an
+Ed25519 seed, that the owner makes (`head -c 32 /dev/urandom`) and keeps.
+`mj` sends it as base58 in `entity_key`. Mjolnir never makes one for a guest
+and never stores or returns it. For the boot it writes the key to
+`<socket_dir>/<vm_id>.entity-key` (0600), gives that file to Cloud
+Hypervisor as the `initramfs`, and removes it once the guest is ready or
+the boot fails. The guest's name, Blake3 of the dCBOR of its public key in
+base58 (`priv/reflect-entity name <key>`, or `mj entity name <key>`), is
+what Mjolnir keeps and returns (`entity`). The boot fails with
+`entity_name_mismatch` if the guest prints another name on serial.
+
+The host BEAM has one QUIC client key of its own (`:reflect_client_key`,
+default `<state_dir>/reflect-client.key`, made 0600 on first use). Its name
+is the first in `reflect.allow`; the caller's `allow` list (at most 7
+names) follows. These guests answer nothing on plain `reflect.port`.
 
 ```
 mj message <id> <program> --> POST /api/vms/:id/messages --> VM GenServer (one caller at a time)
                                                                   |
-                                    priv/reflect-quic-client (host.zig, pinned peer key)
+            priv/reflect-quic-client (host.zig: Mjolnir's key, expects the guest's name)
                                                                   |
                                                  QUIC over the /32 TAP --> guest reflect.quic_port
 ```
 
-The host never decodes the Lean reply. A wrong pin is refused and latched.
-A second caller gets `unikernel_busy`, and silence for 60 s is
-`unikernel_timeout`. `mj kill` removes the TAP and the scope. Restart is
-refused (`unikernel_restart_refused`), and a guest that powers itself off is
-recorded `stopped`/`guest_exit`.
+The host never decodes the Lean reply. A guest that presents another name
+is refused (`peer_key_refused`) and latched. A second caller gets
+`unikernel_busy`, and silence for 60 s, or a handshake the guest never
+answers, is `unikernel_timeout`. `mj kill` removes the TAP and the scope.
+Restart is refused (`unikernel_restart_refused`), and a guest that powers
+itself off is recorded `stopped`/`guest_exit`. Images built before
+homoiconic e9a4c86 do not work with this Mjolnir.
 
 ---
 

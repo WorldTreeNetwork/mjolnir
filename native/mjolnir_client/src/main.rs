@@ -21,6 +21,7 @@ mod connect;
 mod deploy;
 mod dev_manifest;
 mod domain;
+mod entity;
 mod forge;
 mod forge_tui;
 mod mcp;
@@ -95,9 +96,15 @@ enum Command {
         /// Host path of the unikernel ELF. Required with --kind unikernel.
         #[arg(long)]
         kernel: Option<String>,
-        /// SHA-256 hex of the guest certificate. Required with --kind unikernel.
-        #[arg(long)]
-        peer_pin: Option<String>,
+        /// File holding the entity's key: exactly 32 bytes, an Ed25519 seed.
+        /// Required with --kind unikernel. It is sent as base58 and never
+        /// printed. You make and keep this file; the host does not keep it.
+        #[arg(long, value_name = "PATH")]
+        entity_key_file: Option<String>,
+        /// An entity name (base58) that may also call the unikernel guest,
+        /// for example through a published port. Repeatable, at most 7.
+        #[arg(long = "allow", value_name = "NAME")]
+        allow: Vec<String>,
         /// Publish a host UDP port to the guest (kernel DNAT), repeatable:
         /// HOST, HOST:GUEST, or HOST:quic for a unikernel's QUIC port. The
         /// host must allow the port (`published_port_range`).
@@ -361,6 +368,11 @@ enum Command {
     Ticket {
         #[command(subcommand)]
         action: TicketAction,
+    },
+    /// Unikernel entity keys (`mj entity name <key-file>`)
+    Entity {
+        #[command(subcommand)]
+        action: EntityAction,
     },
 
     // --- Snapshots ---
@@ -782,6 +794,15 @@ enum SitesAction {
 }
 
 #[derive(Subcommand)]
+enum EntityAction {
+    /// Print the entity name of a 32-byte key file. Computed here, offline.
+    Name {
+        /// The key file: exactly 32 bytes, an Ed25519 seed
+        key_file: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum TicketAction {
     /// Fetch a VM's connection ticket (--wait blocks for PTY readiness)
     Get {
@@ -962,7 +983,8 @@ async fn main() {
             dry_run,
             kind,
             kernel,
-            peer_pin,
+            entity_key_file,
+            allow,
             publish_udp,
         } => {
             api::cmd_spawn(
@@ -979,7 +1001,8 @@ async fn main() {
                 dry_run,
                 kind.as_deref(),
                 kernel.as_deref(),
-                peer_pin.as_deref(),
+                entity_key_file.as_deref(),
+                &allow,
                 &publish_udp,
             )
             .await
@@ -1326,6 +1349,11 @@ async fn main() {
         },
 
         // --- Ticket ---
+        Command::Entity { action } => match action {
+            EntityAction::Name { key_file } => entity::read_key_file(&key_file).map(|seed| {
+                println!("{}", entity::name_of(&seed));
+            }),
+        },
         Command::Ticket { action } => match action {
             TicketAction::Get {
                 id,

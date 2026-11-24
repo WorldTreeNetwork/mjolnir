@@ -29,7 +29,20 @@ defmodule Mjolnir.API.Views do
       persist_interval_ms: Application.get_env(:mjolnir, :dormant_flush_delay_ms, 250),
       secrets_unlock_failed: render_secrets_unlock_failed(vm)
     }
+    |> Map.merge(render_unikernel(vm.config))
   end
+
+  # A unikernel's entity: its name and the caller's extra allowed names.
+  # Never its key, which is not kept.
+  defp render_unikernel(%{guest_kind: :unikernel} = config) do
+    %{
+      kind: :unikernel,
+      entity: Map.get(config, :entity),
+      allow: Map.get(config, :allow, [])
+    }
+  end
+
+  defp render_unikernel(_), do: %{}
 
   # mjolnir-3v2: a `secrets_mode: :managed` VM whose LUKS unlock failed still
   # comes up `state: :running` — the guest boots fine, it just never got its

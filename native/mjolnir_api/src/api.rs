@@ -17,6 +17,9 @@ pub struct SpawnResponse {
     pub shell_ready: Option<bool>,
     pub persist_interval_ms: Option<u64>,
     pub web_url: Option<String>,
+    /// A unikernel guest's entity name (base58). Its key is never returned.
+    #[serde(default)]
+    pub entity: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -513,7 +516,12 @@ pub struct SpawnOptions {
     pub owner_id: Option<String>,
     pub kind: Option<String>,
     pub kernel: Option<String>,
-    pub peer_pin: Option<String>,
+    /// A unikernel's entity key: the 32-byte Ed25519 seed as base58. The
+    /// caller supplies and keeps it; the host gives it to the guest at boot
+    /// and never stores or returns it.
+    pub entity_key: Option<String>,
+    /// Up to 7 more entity names (base58) the unikernel guest will accept.
+    pub allow: Vec<String>,
     /// UDP ports of the host to DNAT to the guest. Empty sends no field.
     pub published_ports: Vec<PublishUdp>,
 }
@@ -552,8 +560,11 @@ pub async fn spawn_vm(
     if let Some(kernel) = &opts.kernel {
         body["kernel"] = serde_json::Value::String(kernel.clone());
     }
-    if let Some(pin) = &opts.peer_pin {
-        body["peer_pin"] = serde_json::Value::String(pin.clone());
+    if let Some(key) = &opts.entity_key {
+        body["entity_key"] = serde_json::Value::String(key.clone());
+    }
+    if !opts.allow.is_empty() {
+        body["allow"] = serde_json::json!(opts.allow);
     }
     if !opts.published_ports.is_empty() {
         body["published_ports"] = published_ports_json(&opts.published_ports);

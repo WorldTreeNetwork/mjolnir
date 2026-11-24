@@ -258,6 +258,7 @@ defmodule Mjolnir.VM do
   @spec spawn(spawn_opts()) :: {:ok, t()} | {:error, term()}
   def spawn(opts \\ %{}) do
     with {:ok, opts} <- Mjolnir.Unikernel.prepare_spawn(opts),
+         :ok <- Mjolnir.Unikernel.preflight(opts),
          {:ok, opts} <- resolve_spawn_network(opts),
          :ok <- reject_memory_snapshot_spawn(opts),
          :ok <- reject_live_iroh_identity(opts),
@@ -1709,7 +1710,7 @@ defmodule Mjolnir.VM do
         job = %{
           guest_ip: state.net_config.guest_ip,
           quic_port: state.config.quic_port,
-          peer_pin: state.config.peer_pin,
+          entity: state.config.entity,
           budget: req.budget,
           program: req.program,
           correlation_id: req.correlation_id
@@ -2433,6 +2434,12 @@ defmodule Mjolnir.VM do
     # boot failure mid-resume — preserves so Mjolnir.Reconcile can retry.
     preserve = preserve_rootfs?(reason, state)
 
+    # Normally gone once the guest was ready; a boot cut short may leave it.
+    if Map.get(state.config || %{}, :guest_kind) == :unikernel do
+      socket_dir = Application.get_env(:mjolnir, :socket_dir)
+      if socket_dir, do: File.rm(Mjolnir.Unikernel.key_file_path(socket_dir, state.id))
+    end
+
     Logger.warning("[vm-terminate] #{state.id} preserve=#{preserve} → calling cleanup")
 
     # On a non-preserving teardown (user kill), soft-delete the rootfs with a
@@ -2498,7 +2505,8 @@ defmodule Mjolnir.VM do
                 "kind" => "unikernel",
                 "owner_id" => state.owner_id,
                 "kernel" => state.config.kernel_path,
-                "peer_pin" => state.config.peer_pin,
+                "entity" => Map.get(state.config, :entity),
+                "allow" => Map.get(state.config, :allow, []),
                 "restart_policy" => "never"
               },
               runtime: %{"reason" => "guest_exit"}
@@ -2599,7 +2607,12 @@ defmodule Mjolnir.VM do
           do: opts[:kernel],
           else: Application.get_env(:mjolnir, :ch_kernel_path)
         ),
-      peer_pin: opts[:peer_pin],
+      # Unikernel: the entity key as a closure (never printed, never stored),
+      # dropped once the guest is booted; the caller's extra allowed names;
+      # and the guest's name, set during boot.
+      entity_key: if(kind == :unikernel, do: opts[:entity_key]),
+      allow: if(kind == :unikernel, do: opts[:allow] || [], else: []),
+      entity: nil,
       # Set during boot
       rootfs_path: "",
       base_image: opts[:base_image] || Application.get_env(:mjolnir, :default_base_image),
@@ -2619,20 +2632,29 @@ defmodule Mjolnir.VM do
     }
   end
 
-  defp do_boot(%{config: %{guest_kind: :unikernel}} = state), do: do_boot_unikernel(state)
-
   defp do_boot_unikernel(state) do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
     hypervisor = state.hypervisor
     socket_path = Path.join(socket_dir, "#{state.id}.sock")
     vsock_path = hypervisor.vsock_path(socket_dir, state.id)
     serial_path = Path.join(socket_dir, "#{state.id}_serial.log")
+    key_path = Mjolnir.Unikernel.key_file_path(socket_dir, state.id)
     {udp, quic} = Mjolnir.Unikernel.ports(state.id)
     Process.put(:boot_partial, %{})
     _ = File.rm(socket_path)
     _ = File.rm(serial_path)
+    _ = File.rm(key_path)
 
+    # The key leaves this process only as the 0600 file Cloud Hypervisor
+    # gives the guest at boot. It is removed on ready and on every failure.
     with :ok <- File.mkdir_p(socket_dir),
+         {:ok, key_fun} <- fetch_entity_key(state),
+         _ = boot_partial_put(:entity_key_file, key_path),
+         :ok <- Mjolnir.Unikernel.write_private(key_path, key_fun.()),
+         {:ok, entity} <- Mjolnir.Unikernel.entity_name(key_path),
+         {:ok, client_key} <- Mjolnir.Unikernel.client_key(),
+         {:ok, client_name} <- Mjolnir.Unikernel.entity_name(client_key),
+         allow = Map.get(state.config, :allow, []),
          {:ok, net_config} <- Mjolnir.Network.create_tap(state.id),
          _ = boot_partial_put(:net_config, net_config),
          :ok <- publish_ports(state, net_config),
@@ -2640,19 +2662,25 @@ defmodule Mjolnir.VM do
            start_hypervisor(hypervisor, state.id, socket_path, serial_path, []),
          _ = boot_partial_put(:hv_port, hv_port),
          :ok <- wait_for_socket(socket_path),
-         boot_args = Mjolnir.Unikernel.cmdline(net_config.guest_ip, udp, quic),
+         boot_args =
+           Mjolnir.Unikernel.cmdline(net_config.guest_ip, udp, quic, [client_name | allow]),
          config =
-           Map.merge(state.config, %{
+           state.config
+           |> Map.delete(:entity_key)
+           |> Map.merge(%{
              network_interface: net_config,
              boot_args: boot_args,
              serial_log: serial_path,
+             initramfs_path: key_path,
              vcpu_count: 1,
              mem_size_mib: 512,
              guest_kind: :unikernel
            }),
          :ok <- configure_vm(hypervisor, socket_path, config),
          :ok <- hypervisor.start_instance(socket_path),
-         :ok <- wait_for_reflect(serial_path, quic) do
+         :ok <- wait_for_reflect(serial_path, quic, entity) do
+      _ = File.rm(key_path)
+
       {:ok,
        %{
          state
@@ -2662,21 +2690,35 @@ defmodule Mjolnir.VM do
            net_config: net_config,
            hypervisor_port: hv_port,
            config:
-             Map.merge(state.config, %{
+             state.config
+             |> Map.delete(:entity_key)
+             |> Map.merge(%{
                quic_port: quic,
                udp_port: udp,
                boot_args: boot_args,
-               serial_log: serial_path
+               serial_log: serial_path,
+               entity: entity
              })
        }}
     else
       error ->
+        _ = File.rm(key_path)
         handle_boot_failure(state, error, socket_path, vsock_path, serial_path)
         error
     end
   end
 
-  defp wait_for_reflect(serial_path, quic_port) do
+  defp fetch_entity_key(%{config: %{entity_key: fun}}) when is_function(fun, 0) do
+    case fun.() do
+      <<0::256>> -> {:error, :entity_key_invalid}
+      <<_::binary-size(32)>> -> {:ok, fun}
+      _ -> {:error, :entity_key_invalid}
+    end
+  end
+
+  defp fetch_entity_key(_state), do: {:error, :entity_key_required}
+
+  defp wait_for_reflect(serial_path, quic_port, entity) do
     deadline = System.monotonic_time(:millisecond) + Mjolnir.Unikernel.boot_deadline_ms()
 
     Stream.repeatedly(fn ->
@@ -2686,20 +2728,23 @@ defmodule Mjolnir.VM do
           _ -> ""
         end
 
-      cond do
-        Mjolnir.Unikernel.ready_line?(log, quic_port) ->
-          :ok
+      case Mjolnir.Unikernel.boot_outcome(log, quic_port, entity) do
+        :wait ->
+          if System.monotonic_time(:millisecond) > deadline do
+            {:error, :boot_timeout}
+          else
+            Process.sleep(50)
+            :wait
+          end
 
-        System.monotonic_time(:millisecond) > deadline ->
-          {:error, :boot_timeout}
-
-        true ->
-          Process.sleep(50)
-          :wait
+        outcome ->
+          outcome
       end
     end)
     |> Enum.find(&(&1 != :wait))
   end
+
+  defp do_boot(%{config: %{guest_kind: :unikernel}} = state), do: do_boot_unikernel(state)
 
   defp do_boot(state) do
     socket_dir = Application.get_env(:mjolnir, :socket_dir)
@@ -3143,6 +3188,9 @@ defmodule Mjolnir.VM do
         _ -> File.rm_rf(partial.rootfs_path)
       end
     end
+
+    # A unikernel's entity key file, if the boot wrote one.
+    if partial[:entity_key_file], do: File.rm(partial.entity_key_file)
 
     # Remove sockets
     if socket_path, do: File.rm(socket_path)
@@ -4388,7 +4436,8 @@ defmodule Mjolnir.VM do
       if Map.get(state.config, :guest_kind) == :unikernel do
         Map.merge(spawn_config, %{
           "kernel" => state.config.kernel_path,
-          "peer_pin" => state.config.peer_pin,
+          "entity" => Map.get(state.config, :entity),
+          "allow" => Map.get(state.config, :allow, []),
           "quic_port" => Map.get(state.config, :quic_port),
           "reflect_port" => Map.get(state.config, :udp_port),
           "guest_ip" => if(state.net_config, do: state.net_config.guest_ip)

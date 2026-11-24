@@ -37,7 +37,8 @@ defmodule Mjolnir.CloudHypervisor.Config do
     # Extra virtio-fs mounts beyond the primary rootfs. Each entry is a map:
     # %{tag: String.t(), socket: String.t()}
     field(:extra_fs, list(map()), default: [])
-    # Initramfs image path for two-phase boot (nil = legacy direct virtiofs boot)
+    # Initramfs image path for two-phase boot (nil = legacy direct virtiofs boot).
+    # For a unikernel, the entity key file given to the guest at boot.
     field(:initramfs_path, String.t(), default: nil)
     # Preserve iroh key from snapshot (default: false, generates unique key)
     field(:preserve_iroh_key, boolean(), default: false)
@@ -63,7 +64,7 @@ defmodule Mjolnir.CloudHypervisor.Config do
         Path.join(Path.dirname(config.kernel_path), "#{config.vm_id}_serial.log")
 
     payload = %{
-      "payload" => %{"kernel" => config.kernel_path, "cmdline" => config.boot_args},
+      "payload" => unikernel_payload(config),
       "cpus" => %{"boot_vcpus" => 1, "max_vcpus" => 1},
       "memory" => %{"size" => 512 * 1024 * 1024, "shared" => false},
       "serial" => %{"mode" => "File", "file" => serial_log},
@@ -94,6 +95,19 @@ defmodule Mjolnir.CloudHypervisor.Config do
       nil -> payload
       net -> Map.put(payload, "net", net)
     end
+  end
+
+  # A unikernel's `initramfs` is its entity key file (32 bytes): the guest
+  # takes the one boot module as its key. Only the path is in the payload.
+  defp unikernel_payload(%__MODULE__{initramfs_path: nil} = config),
+    do: %{"kernel" => config.kernel_path, "cmdline" => config.boot_args}
+
+  defp unikernel_payload(%__MODULE__{} = config) do
+    %{
+      "kernel" => config.kernel_path,
+      "cmdline" => config.boot_args,
+      "initramfs" => config.initramfs_path
+    }
   end
 
   @doc """

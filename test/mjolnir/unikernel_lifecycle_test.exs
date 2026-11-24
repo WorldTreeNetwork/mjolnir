@@ -3,6 +3,8 @@ defmodule Mjolnir.UnikernelLifecycleTest do
   alias Mjolnir.{VM, StateStore}
   alias Mjolnir.StateStore.Record
 
+  @entity "6mUFfKo4KPLqjeAVqthhCZB82jgWjbo3RPJAAWdTynq1"
+
   # Boot-free harness; all message admission/finish callbacks are production VM code.
   defmodule Guest do
     use GenServer
@@ -19,7 +21,8 @@ defmodule Mjolnir.UnikernelLifecycleTest do
            config: %{
              guest_kind: :unikernel,
              quic_port: 30001,
-             peer_pin: String.duplicate("ab", 32)
+             entity: "6mUFfKo4KPLqjeAVqthhCZB82jgWjbo3RPJAAWdTynq1",
+             allow: []
            },
            net_config: %{guest_ip: "10.0.0.2"}
          }}
@@ -44,7 +47,8 @@ defmodule Mjolnir.UnikernelLifecycleTest do
     %{id: id}
   end
 
-  test "wrong peer pin poisons subsequent attempts without another exchange", %{id: id} do
+  test "a guest that presented another name poisons later attempts without another exchange",
+       %{id: id} do
     parent = self()
 
     Application.put_env(:mjolnir, :unikernel_exchange, fn _ ->
@@ -181,12 +185,18 @@ defmodule Mjolnir.UnikernelLifecycleTest do
       dir = Path.join(System.tmp_dir!(), "reflect-stub-#{System.unique_integer([:positive])}")
       File.mkdir_p!(dir)
       old_bin = Application.get_env(:mjolnir, :reflect_quic_client)
+      old_key = Application.get_env(:mjolnir, :reflect_client_key)
       Application.delete_env(:mjolnir, :unikernel_exchange)
+      Application.put_env(:mjolnir, :reflect_client_key, Path.join(dir, "reflect-client.key"))
 
       on_exit(fn ->
         if old_bin,
           do: Application.put_env(:mjolnir, :reflect_quic_client, old_bin),
           else: Application.delete_env(:mjolnir, :reflect_quic_client)
+
+        if old_key,
+          do: Application.put_env(:mjolnir, :reflect_client_key, old_key),
+          else: Application.delete_env(:mjolnir, :reflect_client_key)
 
         File.rm_rf(dir)
       end)
@@ -209,10 +219,13 @@ defmodule Mjolnir.UnikernelLifecycleTest do
       assert {:error, :unikernel_timeout} =
                VM.unikernel_message(id, <<1>>, 5000, "000000000000000a")
 
-      assert ["10.0.0.2", "30001", "5000", pin, _path, "000000000000000A"] =
+      assert ["10.0.0.2", "30001", "5000", key, @entity, _path, "000000000000000A"] =
                dir |> Path.join("args") |> File.read!() |> String.split()
 
-      assert pin == String.duplicate("ab", 32)
+      # This host's client key, made on first use: a 0600 file of 32 bytes.
+      assert key == Path.join(dir, "reflect-client.key")
+      assert byte_size(File.read!(key)) == 32
+      assert File.stat!(key).mode |> Bitwise.band(0o777) == 0o600
       refute GenServer.call(caller_name(id), :get_state).unikernel_busy
 
       assert {:ok, %{isError: true, content: [%{"text" => text}]}, %{}} =
@@ -225,13 +238,18 @@ defmodule Mjolnir.UnikernelLifecycleTest do
       assert text =~ "unikernel_timeout"
     end
 
-    test "statuses 3, 5 and 6 are the refused pin and transport statuses 2 and 3", %{dir: dir} do
+    test "statuses 3, 5, 6 and 7 are the refused guest, transport statuses 2 and 3, and no answer",
+         %{dir: dir} do
+      key = Path.join(dir, "other.key")
+      File.write!(key, :binary.copy(<<7>>, 32))
+
       job = %{
         program: <<1>>,
         budget: 5000,
         guest_ip: "10.0.0.2",
         quic_port: 30001,
-        peer_pin: String.duplicate("ab", 32),
+        entity: @entity,
+        client_key: key,
         correlation_id: <<1::64>>
       }
 
@@ -241,6 +259,16 @@ defmodule Mjolnir.UnikernelLifecycleTest do
       assert {:ok, 2, ""} = Mjolnir.Unikernel.Exchange.port(job)
       stub_client(dir, 6)
       assert {:ok, 3, ""} = Mjolnir.Unikernel.Exchange.port(job)
+      # A flight given up with no answer: the guest does not allow this key.
+      stub_client(dir, 7)
+      assert {:error, :unikernel_timeout} = Mjolnir.Unikernel.Exchange.port(job)
+
+      # The job's own key file is the one passed.
+      assert [_, _, _, ^key, @entity, _, _] =
+               dir |> Path.join("args") |> File.read!() |> String.split()
+
+      assert {:error, :entity_required} =
+               Mjolnir.Unikernel.Exchange.port(Map.delete(job, :entity))
     end
   end
 

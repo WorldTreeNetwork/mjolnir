@@ -121,7 +121,10 @@ defmodule Mjolnir.MCP.ServerTest do
       spawn = Enum.find(tools, &(&1["name"] == "spawn_vm"))["inputSchema"]["properties"]
       assert spawn["kind"]["enum"] == ["linux", "unikernel"]
       assert spawn["kernel"]["type"] == "string"
-      assert spawn["peer_pin"]["type"] == "string"
+      assert spawn["entity_key"]["type"] == "string"
+      assert spawn["allow"]["type"] == "array"
+      assert spawn["allow"]["maxItems"] == 7
+      refute Map.has_key?(spawn, "peer_pin")
     end
   end
 

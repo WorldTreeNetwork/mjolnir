@@ -46,12 +46,30 @@ pub struct SpawnVmParams {
     pub kind: Option<String>,
     #[schemars(description = "Host path of a unikernel ELF.")]
     pub kernel: Option<String>,
-    #[schemars(description = "SHA-256 hex of the unikernel certificate.")]
-    pub peer_pin: Option<String>,
+    #[schemars(
+        description = "Unikernel only, required: the entity's key, a 32-byte Ed25519 seed as base58. You supply and keep it; the host gives it to the guest at boot and never stores or returns it."
+    )]
+    pub entity_key: Option<EntityKey>,
+    #[schemars(
+        description = "Unikernel only: up to 7 entity names (base58) that may also call the guest."
+    )]
+    pub allow: Option<Vec<String>>,
     #[schemars(
         description = "UDP ports of the host to publish to the guest by kernel DNAT, e.g. [{\"host_port\": 20001, \"guest_port\": 4433}]. guest_port defaults to host_port. The host must allow the port (published_port_range)."
     )]
     pub published_ports: Option<Vec<PublishedPortParam>>,
+}
+
+/// An entity key as base58 text. Its `Debug` never shows it.
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+#[schemars(transparent)]
+pub struct EntityKey(pub String);
+
+impl std::fmt::Debug for EntityKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EntityKey(<redacted>)")
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -361,8 +379,11 @@ impl MjolnirMcpService {
         if let Some(v) = p.kernel {
             body.insert("kernel".into(), serde_json::Value::String(v));
         }
-        if let Some(v) = p.peer_pin {
-            body.insert("peer_pin".into(), serde_json::Value::String(v));
+        if let Some(EntityKey(v)) = p.entity_key {
+            body.insert("entity_key".into(), serde_json::Value::String(v));
+        }
+        if let Some(names) = p.allow.filter(|names| !names.is_empty()) {
+            body.insert("allow".into(), serde_json::json!(names));
         }
         if let Some(ports) = p.published_ports.filter(|ports| !ports.is_empty()) {
             let ports: Vec<serde_json::Value> = ports

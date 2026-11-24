@@ -37,7 +37,8 @@ pub async fn cmd_spawn(
     dry_run: bool,
     kind: Option<&str>,
     kernel: Option<&str>,
-    peer_pin: Option<&str>,
+    entity_key_file: Option<&str>,
+    allow: &[String],
     publish_udp: &[PublishUdp],
 ) -> Result<()> {
     if target.is_some() && !publish_udp.is_empty() {
@@ -87,6 +88,19 @@ pub async fn cmd_spawn(
     if kind == Some("unikernel") && connect {
         anyhow::bail!("--connect is not available for a unikernel guest");
     }
+    if kind != Some("unikernel") && (entity_key_file.is_some() || !allow.is_empty()) {
+        anyhow::bail!("--entity-key-file and --allow are for --kind unikernel");
+    }
+    if kind == Some("unikernel") && entity_key_file.is_none() {
+        anyhow::bail!(
+            "--kind unikernel needs --entity-key-file <path> (32 bytes, your entity's key)"
+        );
+    }
+    // Read here and sent as base58. The key is never printed.
+    let entity_key = match entity_key_file {
+        Some(path) => Some(crate::entity::base58(&crate::entity::read_key_file(path)?)),
+        None => None,
+    };
 
     let opts = SpawnOptions {
         memory_mb: *memory_mb,
@@ -96,7 +110,8 @@ pub async fn cmd_spawn(
         owner_id: owner.clone(),
         kind: kind.map(str::to_string),
         kernel: kernel.map(str::to_string),
-        peer_pin: peer_pin.map(str::to_string),
+        entity_key,
+        allow: allow.to_vec(),
         published_ports: publish_udp.to_vec(),
         ..SpawnOptions::default()
     };
@@ -118,6 +133,9 @@ pub async fn cmd_spawn(
     // Emitted on stderr so stdout keeps carrying only the ticket, unchanged,
     // for anything scripting off `mj spawn` output.
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
+    if let Some(entity) = &resp.entity {
+        eprintln!("Entity:       {entity}");
+    }
     for p in publish_udp {
         match p.guest_port {
             GuestPort::Number(guest) => {
@@ -224,11 +242,34 @@ async fn curl_operator(
         .arg(format!("X-Owner-Id: {owner_id}"))
         .arg("-H")
         .arg("Content-Type: application/json");
-    if let Some(body) = body {
-        cmd.arg("--data").arg(body.to_string());
+    // The body goes on stdin, not argv: a spawn body can hold an entity key,
+    // and every local user can read a process's arguments.
+    if body.is_some() {
+        cmd.arg("--data-binary").arg("@-");
     }
     cmd.arg(format!("http://localhost{path}"));
-    let out = cmd.output().await.context("operator socket curl failed")?;
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("operator socket curl failed")?;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("operator socket curl has no stdin")?;
+        if let Some(body) = body {
+            stdin
+                .write_all(body.to_string().as_bytes())
+                .await
+                .context("operator socket curl stdin")?;
+        }
+        // Dropping stdin closes it, so curl sees the end of the body.
+    }
+    let out = child
+        .wait_with_output()
+        .await
+        .context("operator socket curl failed")?;
     if !out.status.success() {
         anyhow::bail!(
             "operator socket curl failed: {}",
@@ -1239,8 +1280,11 @@ fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
     if let Some(kernel) = &opts.kernel {
         body["kernel"] = serde_json::json!(kernel);
     }
-    if let Some(pin) = &opts.peer_pin {
-        body["peer_pin"] = serde_json::json!(pin);
+    if let Some(key) = &opts.entity_key {
+        body["entity_key"] = serde_json::json!(key);
+    }
+    if !opts.allow.is_empty() {
+        body["allow"] = serde_json::json!(opts.allow);
     }
     if !opts.published_ports.is_empty() {
         body["published_ports"] = published_ports_json(&opts.published_ports);
@@ -1845,6 +1889,7 @@ mod tests {
             None,
             None,
             &[],
+            &[],
         )
         .await;
         assert!(result.is_err());
@@ -1870,6 +1915,28 @@ mod tests {
         // Unset: the field is absent, so an older host sees the body it always saw.
         let plain = super::spawn_body(&super::SpawnOptions::default());
         assert!(plain.get("published_ports").is_none());
+    }
+
+    #[test]
+    fn entity_key_and_allow_reach_the_spawn_body() {
+        let opts = super::SpawnOptions {
+            kind: Some("unikernel".into()),
+            entity_key: Some(crate::entity::base58(&[0x11; 32])),
+            allow: vec!["6mUFfKo4KPLqjeAVqthhCZB82jgWjbo3RPJAAWdTynq1".into()],
+            ..Default::default()
+        };
+        let body = super::spawn_body(&opts);
+        assert_eq!(
+            body["entity_key"],
+            serde_json::json!(crate::entity::base58(&[0x11; 32]))
+        );
+        assert_eq!(
+            body["allow"],
+            serde_json::json!(["6mUFfKo4KPLqjeAVqthhCZB82jgWjbo3RPJAAWdTynq1"])
+        );
+        assert!(body.get("peer_pin").is_none());
+        let plain = super::spawn_body(&super::SpawnOptions::default());
+        assert!(plain.get("entity_key").is_none() && plain.get("allow").is_none());
     }
 
     #[test]

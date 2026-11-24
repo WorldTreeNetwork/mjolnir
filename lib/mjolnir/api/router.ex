@@ -327,11 +327,20 @@ defmodule Mjolnir.API.Router do
           _ -> Keyword.put(opts, :_validation_error, "kernel must be a path")
         end
 
+      # The entity key is the caller's: it is checked and carried to the boot,
+      # and never echoed in an error, a log or the response.
       opts =
-        case conn.body_params["peer_pin"] do
+        case conn.body_params["entity_key"] do
           nil -> opts
-          pin when is_binary(pin) -> Keyword.put(opts, :peer_pin, pin)
-          _ -> Keyword.put(opts, :_validation_error, "peer_pin must be a hex string")
+          key when is_binary(key) -> Keyword.put(opts, :entity_key, key)
+          _ -> Keyword.put(opts, :_validation_error, "entity_key_invalid")
+        end
+
+      opts =
+        case conn.body_params["allow"] do
+          nil -> opts
+          names when is_list(names) -> Keyword.put(opts, :allow, names)
+          _ -> Keyword.put(opts, :_validation_error, "allow_invalid")
         end
 
       opts =
@@ -2239,7 +2248,9 @@ defmodule Mjolnir.API.Router do
        when reason in [
               :kernel_not_allowed,
               :unikernel_memory,
-              :peer_pin_required,
+              :entity_key_required,
+              :entity_key_invalid,
+              :allow_invalid,
               :kernel_required,
               :unikernel_unsupported
             ] do
@@ -2287,6 +2298,19 @@ defmodule Mjolnir.API.Router do
 
   defp spawn_failure(conn, {:published_port_rules_failed, _reason}) do
     json(conn, 500, %{error: "spawn_failed", reason: "published_port_rules_failed"})
+  end
+
+  # A unikernel boot that failed on its entity: named, never with the key.
+  defp spawn_failure(conn, reason)
+       when reason in [
+              :entity_name_mismatch,
+              :entity_key_refused,
+              :reflect_config_refused,
+              :entity_name_failed,
+              :reflect_entity_missing,
+              :reflect_client_key_invalid
+            ] do
+    json(conn, 500, %{error: "spawn_failed", reason: Atom.to_string(reason)})
   end
 
   defp spawn_failure(conn, _reason) do
