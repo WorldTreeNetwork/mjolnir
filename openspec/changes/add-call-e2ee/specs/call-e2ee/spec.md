@@ -19,7 +19,9 @@ A relayed call SHALL protect media, catalogs and semantic names against relay an
 - AND given physical names it can fetch ciphertext but cannot recover the protected catalog or media content
 
 ### Requirement: Profile-specific broadcast identity and instance selection
-For `moq-e2ee-01-wip`, a publisher SHALL announce `<label>/<opaque>/<epoch>` relative to the room root (Iroh absolute `t/<owner>/<room>/<label>/<opaque>/<epoch>`), with opaque equal to the label-context credential's `path("call")` and epoch the canonical UUIDv7 minted by produce(). A receiver SHALL validate segments and opaque and try candidate epochs greatest first. An instance SHALL be accepted only after a frame from it authenticates under the label-context credential. An announcement alone SHALL NOT advance the mark. The receiver SHALL retain the greatest accepted epoch per credential/kid/label only in page memory for that page's lifetime. It SHALL skip authentication failures and candidates with no authentic frame within 1500 ms, falling through to a candidate at or above the mark while keeping an accepted stream playing. It SHALL attempt at most 12 new candidates per label per rolling 60 seconds, one at a time, without retrying a failed epoch within that window. Exhausting this budget SHALL produce a retryable unavailable state without clearing the mark/accepted stream. It SHALL NOT render a below-mark instance automatically; when only older instances remain it SHALL show “newer stream expected, older one present”. Reload SHALL discard the mark. A publisher SHALL watch its own label using the same authentication rule; when another greater instance authenticates it SHALL stop its own publication and tell the user “you joined somewhere else”. Resuming on that device by explicit user action SHALL mint a new generation. No encrypted room SHALL fall back to plaintext.
+For `moq-e2ee-01-wip`, a publisher SHALL announce `<label>/<opaque>/<epoch>` relative to the room root (Iroh absolute `t/<owner>/<room>/<label>/<opaque>/<epoch>`), with opaque equal to the label-context credential's `path("call")` and epoch the canonical UUIDv7 minted by produce(). A receiver SHALL validate segments and opaque and try candidate epochs greatest first. The first authentic `bridge.tracks` frame under the label-context credential SHALL accept an instance; manifest schema validation SHALL still precede applying its snapshot. An announcement alone SHALL NOT advance the mark. The receiver SHALL retain the greatest accepted epoch per credential/kid/label only in page memory for that page's lifetime. The 1500 ms candidate deadline SHALL start with subscription to `bridge.tracks`. Authentication failure SHALL bar that candidate for the rolling 60-second window; a timeout alone SHALL NOT bar it. Either outcome SHALL fall through to a candidate at or above the mark while keeping accepted playback. A timed-out candidate SHALL be retried with backoff starting at 3 seconds and doubling on successive timeouts. Every probe, including a retry, SHALL count toward at most 12 attempts per label per rolling 60 seconds, one at a time. Exhausting this budget SHALL expose `unavailable_retryable` without clearing the mark/accepted stream. It SHALL NOT render a below-mark instance automatically; when only older instances remain it SHALL expose `older_stream_only`. Reload SHALL discard the mark. A publisher SHALL watch its own label using the same authentication rule; when another greater instance authenticates it SHALL stop its own publication and expose `superseded_by_another_instance`. Resuming on that device by explicit user action SHALL mint a new generation. No encrypted room SHALL fall back to plaintext.
+
+An authentication failure on a track inside an accepted instance SHALL NOT un-accept the instance or bar its epoch as a candidate. At this pin the failure ends that subscription. The reader SHALL resubscribe that track on the **same consuming generation**, keeping its group/frame mark and local mirror, at most 6 resubscriptions per track per rolling 60 seconds. After that it SHALL expose `unavailable_retryable` for that track; retries SHALL respect the budget. This path SHALL NOT rebind the generation to reset its failed-open budget.
 
 #### Scenario: Two holders
 - GIVEN alice and bob sharing the room secret/kid and deriving label-specific credentials
@@ -39,25 +41,26 @@ For `moq-e2ee-01-wip`, a publisher SHALL announce `<label>/<opaque>/<epoch>` rel
 
 #### Scenario: Forged greater announcement
 - GIVEN a real authenticating instance and a relay announcing a greater canonical epoch with the same public opaque
-- WHEN the forged candidate fails authentication or times out within 1500 ms
+- WHEN its manifest subscription fails authentication or times out within 1500 ms of subscription
 - THEN it does not advance the mark and the reader tries the real candidate within the per-label attempt budget
 - AND a currently accepted stream keeps playing
+- AND a timeout is retried after backoff starting at 3 seconds, with every retry counted in the 12-attempt budget; only an authentication failure bars the candidate
 
 #### Scenario: Second device under one label
 - GIVEN a laptop publishes E1 and a phone using the same invite publishes greater E2
 - WHEN an E2 frame authenticates at the laptop and other readers
-- THEN readers mark E2 and the laptop stops E1 publication with “you joined somewhere else”
+- THEN readers mark E2 and the laptop stops E1 publication and exposes `superseded_by_another_instance`
 - AND an explicit resume action on the laptop mints a new generation, rather than resuming E1 counters
 
 #### Scenario: Reload is a fresh reader
 - GIVEN the page accepted E2 and scrubbed its invite URL
 - WHEN the page reloads
-- THEN no instance mark or credential is restored from application storage and the page asks for the invite again
+- THEN no instance mark or credential is restored from application storage and the adapter exposes `invite_needed`
 - AND after re-entry it is a fresh reader with no persisted E2 mark
 
 
 ### Requirement: One confidential bridge wire surface
-Both bridges SHALL carry one protected track per semantic local track, including catalogs, plus a protected `bridge.tracks` manifest. Each manifest group SHALL contain one JSON frame mapping semantic names to `{timescale: units/s|null, maxAgeMs: number|null, priority: i8}`. Publishers SHALL send a complete current snapshot on track-set changes and refresh it every second while live. Receivers SHALL derive physical names from manifest entries and the consuming generation; authenticated manifest metadata SHALL be authoritative for local tracks. A mismatch with relay-supplied TRACK_INFO SHALL reject the affected track with a visible metadata error rather than substitute relay values. Publishers SHALL suppress duplicate track listings within a generation rather than recreate a protected track with the same name. Semantic names SHALL be at most 15 UTF-8 bytes; display names SHALL be encrypted. Plaintext local origins SHALL never be attached to a relay session, including stats/echo paths.
+Both bridges SHALL carry one protected track per semantic local track, including catalogs, plus a protected `bridge.tracks` manifest. Each manifest group SHALL contain one JSON frame mapping semantic names to `{timescale: units/s|null, maxAgeMs: number|null, priority: i8}`. Publishers SHALL send a complete current snapshot on track-set changes and refresh it every second while live. Receivers SHALL derive physical names from manifest entries and the consuming generation; authenticated manifest metadata SHALL be authoritative for local tracks. Relay-supplied TRACK_INFO SHALL NOT be substituted for manifest values; a difference SHALL be reported through `metadata_difference`, without rejecting the track solely for that difference. Publishers SHALL suppress duplicate track listings within a generation rather than recreate a protected track with the same name. Semantic names SHALL be at most 15 UTF-8 bytes; display names SHALL be encrypted. Plaintext local origins SHALL never be attached to a relay session, including stats/echo paths.
 
 For invite `v=1` and context `mjolnir-call/v1/...`, the manifest SHALL use exactly this map shape; unsupported invite/context versions SHALL be refused. Before creating subscriptions the reader SHALL reject an entire snapshot exceeding 16 KiB of UTF-8 JSON or 32 entries, duplicate keys, empty/non-string names, names longer than 15 UTF-8 bytes, non-object entries, extra metadata fields, or invalid values. Timescale SHALL be null or a positive safe integer; maxAgeMs SHALL be null or a finite nonnegative safe integer; priority SHALL be an integer in [-128,127]. A snapshot SHALL be applied atomically only after authentication and validation, with one frame per group and a group start strictly greater than the last applied manifest group for this kid/label/epoch. Older or duplicate groups and their late frames SHALL NOT replace newer metadata. The reader SHALL NOT partially apply an invalid snapshot.
 
@@ -65,7 +68,7 @@ For invite `v=1` and context `mjolnir-call/v1/...`, the manifest SHALL use exact
 - GIVEN a valid authenticated v1 snapshot from group G has been applied
 - WHEN an oversized snapshot, invalid metadata, duplicate keys, or an authenticated snapshot at or below G arrives
 - THEN subscriptions and metadata do not change
-- AND a valid greater snapshot uses its authenticated metadata, refusing conflicting relay TRACK_INFO
+- AND a valid greater snapshot uses its authenticated metadata, reporting a TRACK_INFO difference without substituting relay values or rejecting the track solely for it
 
 
 #### Scenario: Late reader and re-listed audio
@@ -75,15 +78,16 @@ For invite `v=1` and context `mjolnir-call/v1/...`, the manifest SHALL use exact
 - AND the publisher retains the existing protected track without a duplicate-name failure
 
 ### Requirement: Removal retires old publication immediately
-The owner SHALL deliver a replacement credential with a greater kid, fresh secret and a canonical removedLabels list alongside it. A reader adopting it SHALL immediately stop rendering/unsubscribe removed labels, including buffered old media. For every other label it MAY retain an old credential read-only only until that label has an accepted/authenticated instance under the new kid; it SHALL then stop that label's old subscriptions and discard its old consuming handles. It SHALL discard the old credential handle when no retained labels need it, or on leave/reload. Old credentials SHALL NOT be used to produce after adoption.
+The owner SHALL deliver a replacement credential with a greater kid, fresh secret and a canonical `removedLabels` list covering every label removed since CreateCredential, including removals missed by this recipient. The v1 invite field SHALL be `removedLabels=<unpadded base64url of a UTF-8 JSON array of canonical labels>`, at most 4096 encoded ASCII characters and at most 32 unique entries; invalid encoding, duplicate/noncanonical labels or overflow SHALL be refused, never truncated. An initial invite MAY omit the field to mean empty; every replacement SHALL include it. A reader adopting it SHALL immediately stop rendering/unsubscribe removed labels, including buffered old media. For every other label it MAY retain an old credential read-only only until that label has an accepted/authenticated instance under the new kid or 10 minutes from adoption, whichever occurs first; it SHALL then stop that label's old subscriptions and discard its old consuming handles. The retention timer SHALL use elapsed page time and SHALL NOT be extended for the same old credential by later replacements. On retention expiry without new-key media the adapter SHALL expose `waiting_for_new_key`. During retention, a removed member with the relay's help can forge old-key media of a retained label; the time bound limits that exposure, not the forgery itself. It SHALL discard the old credential handle when no retained labels need it, or on leave/reload. Old credentials SHALL NOT be used to produce after adoption.
 
-A remaining publisher SHALL mint and announce a new generation, then immediately stop old-generation sealing, finish old tracks and close the old broadcast without waiting for reader acknowledgements. Withdraw alone SHALL NOT count as retirement. Same-session switching applies only to clients supplied the replacement credential in-app; replacement invitation and rejoin remain the link-guest baseline. The page SHALL warn a rejoining guest to close the old tab, unless a tested same-origin stop mechanism retires it. Owner-side completion SHALL mean every label in the owner's locally maintained set of replacement recipients has an accepted/authenticated instance under the new kid; it SHALL show missing labels as pending, not infer completion from absent old announcements. If reload loses the owner's removal-cycle recipient set, completion SHALL be unknown until that set is re-established by the owner, never inferred from relay announcements. This observation does not attest termination of other tabs. Buffered and recorded content cannot be recalled.
+A remaining publisher SHALL mint and announce a new generation, then immediately stop old-generation sealing, finish old tracks and close the old broadcast without waiting for reader acknowledgements. Withdraw alone SHALL NOT count as retirement. Same-session switching applies only to clients supplied the replacement credential in-app; replacement invitation and rejoin remain the link-guest baseline. The adapter SHALL expose `close_old_tab` on rejoin unless a tested same-origin stop mechanism retires the old tab. Owner-side completion SHALL mean every label in the owner's locally maintained set of replacement recipients has an accepted/authenticated instance under the new kid; it SHALL expose missing labels as `removal_pending`, not infer completion from absent old announcements. A recipient that never publishes cannot supply an accepted instance and SHALL stay `removal_pending` with reason `nonpublishing_unobservable`, not be treated as a failed publication. If reload loses the owner's removal-cycle recipient set, the adapter SHALL expose `removal_completion_unknown` until that set is re-established by the owner, never inferred from relay announcements. This observation does not attest termination of other tabs. Buffered and recorded content cannot be recalled.
 
 #### Scenario: Removed member and slow hand-out
 - GIVEN carol retains the old key/token and continues her own old broadcast
 - WHEN bob adopts a replacement listing carol as removed
 - THEN bob stops rendering carol immediately even if her old broadcast never ends
-- AND bob may read another non-removed label with the old key only until that label's new-kid instance authenticates
+- AND bob may read another non-removed label with the old key only until its new-kid instance authenticates or 10 minutes elapse from adoption
+- AND a reader skipping an intermediate replacement still stops every label removed since CreateCredential
 
 #### Scenario: Retirement is asserted at the publisher
 - GIVEN alice adopts kid 2 and announces its new generation
@@ -101,7 +105,7 @@ A remaining publisher SHALL mint and announce a new generation, then immediately
 
 
 ### Requirement: Content delivery and browser persistence limits
-A link-delivered content credential SHALL be confined to its URL fragment, imported into a non-extractable HKDF handle after length validation, and removed from the address bar and current session-history entry on page load. The page SHALL NOT claim this erases persistent/global history or browser session files: both tested browsers persist the navigated invite before page script runs. The page SHALL NOT send the secret or usable keys in HTTP requests or error reports, or persist raw secret material in application storage. Guest handles SHALL remain in page memory only. The owner's secret/invite copy for later invitations SHALL live only in a private page-memory closure, not persistent storage. Leave, call-end or replacement SHALL discard obsolete application references, apart from read-only consuming handles allowed above; reload SHALL lose the current credential/owner copy, join nothing and ask for the invite again. A new call without a retained external invite SHALL create a new credential, not recover from application storage. If an admission token is delivered in a link, it SHALL go only to intended relay admission, not other requests/reports. Derived opaque protocol data MAY go to the relay. The page SHALL serve Referrer-Policy no-referrer and no third-party scripts.
+A link-delivered content credential SHALL be confined to its URL fragment, imported into a non-extractable HKDF handle after length validation, and removed from the address bar and current session-history entry on page load. The page SHALL NOT claim this erases persistent/global history or browser session files: both tested browsers persist the navigated invite before page script runs. The page SHALL NOT send the secret or usable keys in HTTP requests or error reports, or persist raw secret material in application storage. Guest handles SHALL remain in page memory only. The owner's secret/invite copy for later invitations SHALL live only in a private page-memory closure, not persistent storage. Leave, call-end or replacement SHALL discard obsolete application references, apart from read-only consuming handles allowed above; reload SHALL lose the current credential/owner copy, join nothing and expose `invite_needed`. A new call without a retained external invite SHALL create a new credential, not recover from application storage. If an admission token is delivered in a link, it SHALL go only to intended relay admission, not other requests/reports. Derived opaque protocol data MAY go to the relay. The page SHALL serve Referrer-Policy no-referrer and no third-party scripts.
 
 #### Scenario: Join URL scrubbing is narrower than history erasure
 - GIVEN a browser navigates to a dummy credential invite
@@ -116,13 +120,31 @@ A link-delivered content credential SHALL be confined to its URL fragment, impor
 - AND token use is limited to relay admission
 
 ### Requirement: Live readers advance group order only on authentication
-For each protected track/kid/label/epoch, the reader SHALL keep a page-memory group-start mark advanced only by an authentic frame. For a manifest it SHALL also require snapshot validation. It SHALL NOT reopen newly offered groups at or below the mark; frames within the currently accepted group MAY continue in order until a greater group authenticates, after which its older tail SHALL be discarded. The reorder allowance SHALL be zero. A non-authenticating high group SHALL NOT advance the mark. This does not reject never-seen delayed content or establish freshness after a reload.
+For each protected track/kid/label/epoch, the reader SHALL keep a page-memory mark comprising group start and last authenticated frame index. Authentication SHALL advance that pair; manifest snapshot application SHALL additionally require validation. Re-offering the equal group SHALL continue only at frame indices strictly above its last authenticated index; indices at or below it SHALL NOT reopen. The local mirror of the track SHALL live as long as its mark, and resubscription SHALL reset neither. Zero reorder allowance SHALL apply to manifest and catalog tracks: older groups SHALL NOT roll back their mirrored state. A non-authenticating high group/frame SHALL NOT advance the mark. A replay to a fresh reader or never-seen delayed content remains outside this protection.
 
-#### Scenario: Replay to a reader already in the call
-- GIVEN a reader has authenticated group G2 after G1 in one protected track
-- WHEN a relay re-serves G1 with a current public timestamp or presents an unauthenticating higher group
-- THEN G1 is not reopened/rendered and the failed higher group does not advance the mark
-- AND an older authenticated manifest cannot roll back the current track set
+Media reorder allowance is **undecided until I8**: zero versus a short window of remembered starts has not been selected. At the pin audio has one 20 ms frame per group; zero allowance drops each audio frame arriving after a later group. The media parameter remains an explicit unrun contract parameter pending I8, not a zero-allowance requirement by default.
+
+#### Scenario: Replay and failure inside an accepted instance
+- GIVEN an accepted instance whose track has authenticated group G2 after G1
+- WHEN a relay replays already opened frames with current public timestamps or supplies a bad frame in the accepted track
+- THEN already authenticated frame indices are not reopened and the bad frame advances no mark
+- AND the instance remains accepted; the reader resubscribes that track on the same consuming generation with its mark and mirror kept, at most 6 times per track per 60 seconds, then exposes `unavailable_retryable`
+- AND an older manifest/catalog group cannot roll back mirrored state
+
+#### Scenario: Equal group resumes after resubscription
+- GIVEN the catalog or video mirror contains frames through authenticated index F in group G
+- WHEN resubscription offers G again starting at an index above F
+- THEN only authenticated frames strictly above F continue into the existing mirror
+- AND neither the mark nor mirror is reset, so a long-lived catalog group need not wait for another group
+
+### Requirement: Adapter states are surfaced by the page
+The adapter SHALL expose `superseded_by_another_instance`, `older_stream_only`, `unavailable_retryable`, `metadata_difference`, `invite_needed` and `close_old_tab` with affected label/track scope where applicable. It SHALL also expose `waiting_for_new_key`, `removal_pending` and `removal_completion_unknown` for the retention/completion rules. The browser page SHALL surface these adapter states; page wording belongs to `mjolnir-rurh.5` rather than this adapter contract.
+
+#### Scenario: State rather than page copy
+- GIVEN the adapter has no credential after reload or observes a metadata difference
+- WHEN it reports the outcome
+- THEN it exposes `invite_needed` or `metadata_difference` with relevant scope
+- AND the page surfaces that state without requiring a particular sentence from the adapter
 
 
 ### Requirement: Producing generation belongs to its process instance
