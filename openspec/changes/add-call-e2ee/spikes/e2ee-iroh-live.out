@@ -1,5 +1,4 @@
-  --> tests/e2ee_iroh_live.rs:47:14
-  --> tests/e2ee_iroh_live.rs:47:27
+$ CARGO_TARGET_DIR=native/mjolnir_relay/target cargo test --test e2ee_iroh_live -- --nocapture
 warning: `call-e2ee-spikes` (test "e2ee_iroh_live") generated 2 warnings (run `cargo fix --test "e2ee_iroh_live" -p call-e2ee-spikes` to apply 2 suggestions)
 spike e2ee-iroh-live: iroh-live published t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/r1/alice/WizDAU0CTwZI5yCky5IYrg (absolute; WebTransport reads alice/WizDAU0CTwZI5yCky5IYrg)
 spike e2ee-iroh-live: route instance as an epoch = None (iroh-live routes with a minted instance)

@@ -1,3 +1,4 @@
+$ for L in 0 1; do SPIKE_LITE07=$L CARGO_TARGET_DIR=native/mjolnir_relay/target cargo test --test e2ee_path -- --nocapture; done
 === SPIKE_LITE07=0
 spike e2ee-path: opaque segment = WizDAU0CTwZI5yCky5IYrg (len 22)
 spike e2ee-path: publish path (token-relative) = alice/WizDAU0CTwZI5yCky5IYrg

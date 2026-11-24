@@ -1,0 +1,18 @@
+# First run (route withdraw only, publisher kept writing kid 1), before commit:
+spike e2ee-rekey: kid 1 still delivering during overlap = true
+spike e2ee-rekey: carol kid 1 frames after withdraw drained = 51, then ended
+thread 'new_credential_removes_a_member_without_restarting_sessions' panicked at tests/e2ee_rekey.rs:146:5   (assert c_after < 50: "kid 1 kept flowing after withdraw")
+
+# Second run (publisher finishes the kid 1 track and closes that broadcast):
+$ CARGO_TARGET_DIR=native/mjolnir_relay/target cargo test --test e2ee_rekey -- --nocapture
+warning: `call-e2ee-spikes` (test "e2ee_rekey") generated 1 warning (run `cargo fix --test "e2ee_rekey" -p call-e2ee-spikes` to apply 1 suggestion)
+spike e2ee-rekey: before removal bob and carol both decrypt under kid 1 at alice/79FPP_hqH-U7jQpoDS546Q
+spike e2ee-rekey: kid 2 path alice/toGNIAoHyjDD-Z8xxESFlA (kid 1 path alice/79FPP_hqH-U7jQpoDS546Q); alice session unchanged = true
+spike e2ee-rekey: bob decrypts kid 2 "PLAINTEXT-MARKER-1" 48 ms after the new credential, same bob session
+spike e2ee-rekey: kid 1 still delivering during overlap = true
+spike e2ee-rekey: carol kid 1 frames after withdraw drained = 1, then ended
+spike e2ee-rekey: carol can see kid 2 path at the relay: alice/toGNIAoHyjDD-Z8xxESFlA
+spike e2ee-rekey: carol subscribing kid 2 with kid 1 secret -> Ok(Err(Net(Stream(NotFound))))
+spike e2ee-rekey: bob after withdraw "PLAINTEXT-MARKER-3"
+spike e2ee-rekey: PROVEN
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
