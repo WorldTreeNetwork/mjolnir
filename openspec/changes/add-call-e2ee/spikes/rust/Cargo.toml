@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+name = "call-e2ee-spikes"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Spikes for add-call-e2ee (mjolnir-rurh.9). Not product code.
+# Pins match native/mjolnir_relay: moq 4a6f52248, iroh-live 747b1bd.
+[dependencies]
+
+[dev-dependencies]
+anyhow = "1"
+bs58 = "0.5"
+kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+mjolnir-relay = { path = "../../../../../native/mjolnir_relay" }
+moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-e2ee = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+rcgen = "0.13"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+url = "2"

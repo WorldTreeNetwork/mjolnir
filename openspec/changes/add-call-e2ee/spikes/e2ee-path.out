@@ -1,0 +1,35 @@
+=== SPIKE_LITE07=0
+spike e2ee-path: opaque segment = WizDAU0CTwZI5yCky5IYrg (len 22)
+spike e2ee-path: publish path (token-relative) = alice/WizDAU0CTwZI5yCky5IYrg
+spike e2ee-path: absolute path at relay = t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/r1/alice/WizDAU0CTwZI5yCky5IYrg
+spike e2ee-path: epoch (route instance) = 01a20aef-d280-7565-bb7c-8828570e93c9
+spike e2ee-path: physical name of "video" = gOEGmfMSQ5Lpw3Oq3J58k6GeeprhD3hKSoEVbg-PQg0hUUpWqni-A-AS18A
+spike e2ee-path: physical name of "catalog.json" = wynlcTL-LRgGgh73arwbtx5ghcXv0Z2gGXnvJDwV_NeMP3ggHgLDZ--CrqU
+spike e2ee-path: bob sees announcement RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/WizDAU0CTwZI5yCky5IYrg"), captures: Some([Pattern("alice/WizDAU0CTwZI5yCky5IYrg")]), route: RouteInfo { instance: Some(Instance("7b7622509c3f99e0366297f8b41f072e", "minted")), epoch: 0, …draining: false, available: true } } }
+spike e2ee-path: bob read epoch from route instance = None
+spike e2ee-path: default wire carries no epoch; taking it from the app channel
+spike e2ee-path: bob decrypted video frame = "PLAINTEXT-MARKER-video-0"
+spike e2ee-path: bob decrypted catalog = {"display":"Alice","video":{"track":"video"}}
+spike e2ee-path: carol subscribes semantic "video" -> Ok(Err(Stream(NotFound)))
+spike e2ee-path: carol with a wrong secret -> Ok(Err(Net(Stream(NotFound))))
+spike e2ee-path: carol raw frame on physical name: 40 bytes, marker present = false
+spike e2ee-path: alice publishing bob/<opaque> visible to carol? false
+spike e2ee-path: PROVEN
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.12s
+=== SPIKE_LITE07=1
+spike e2ee-path: opaque segment = WizDAU0CTwZI5yCky5IYrg (len 22)
+spike e2ee-path: publish path (token-relative) = alice/WizDAU0CTwZI5yCky5IYrg
+spike e2ee-path: absolute path at relay = t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/r1/alice/WizDAU0CTwZI5yCky5IYrg
+spike e2ee-path: epoch (route instance) = 01a20aef-dc33-7797-a543-25efa1458457
+spike e2ee-path: physical name of "video" = 8_oaV1XVmcJezpLLbaTULpjJ42C4HCTSm1bOY0X41yTyODlnWMbuvDXNJ3A
+spike e2ee-path: physical name of "catalog.json" = jMttsZHTpmWxBSjYfZFl3tPAyfoUqi5wIIKwgxICU_KwSvFWCJF0OGQDXKs
+spike e2ee-path: bob sees announcement RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/WizDAU0CTwZI5yCky5IYrg"), captures: Some([Pattern("alice/WizDAU0CTwZI5yCky5IYrg")]), route: RouteInfo { instance: Some(Instance("01a20aef-dc33-7797-a543-25efa1458457")), epoch: 0, …draining: false, available: true } } }
+spike e2ee-path: bob read epoch from route instance = Some(Epoch("01a20aef-dc33-7797-a543-25efa1458457"))
+spike e2ee-path: bob decrypted video frame = "PLAINTEXT-MARKER-video-0"
+spike e2ee-path: bob decrypted catalog = {"display":"Alice","video":{"track":"video"}}
+spike e2ee-path: carol subscribes semantic "video" -> Ok(Err(Stream(NotFound)))
+spike e2ee-path: carol with a wrong secret -> Ok(Err(Net(Stream(NotFound))))
+spike e2ee-path: carol raw frame on physical name: 40 bytes, marker present = false
+spike e2ee-path: alice publishing bob/<opaque> visible to carol? false
+spike e2ee-path: PROVEN
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.08s
