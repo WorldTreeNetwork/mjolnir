@@ -1,0 +1,29 @@
+$ E2EE_PHASE=emit cargo test --test complete_interop
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.08s
+     Running tests/complete_interop.rs (../../../../native/mjolnir_relay/target/debug/deps/complete_interop-e573ac19bbf1e0ad)
+
+running 1 test
+Rust emitted grouped frame at group=123 index=0
+test interop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ bun interop.ts
+Rust -> JS name/path/frame agreement; JS -> Rust response emitted
+$ cargo test --test complete_interop (verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/complete_interop.rs (../../../../native/mjolnir_relay/target/debug/deps/complete_interop-e573ac19bbf1e0ad)
+
+running 1 test
+interop valid: decrypted timestamp=124ms
+interop payload: rejected Err(Authentication)
+interop group: rejected Err(Authentication)
+interop semantic: rejected Err(Authentication)
+interop timestamp: decrypted timestamp=999ms
+interop wrong-key: rejected Err(Authentication)
+interop other-label: rejected Err(Authentication)
+INTEROP both directions; timestamp modification accepted (not authenticated by profile)
+test interop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -63,6 +63,9 @@ export async function encryptBridge(o: {
 	void (async () => {
 		for await (const ev of plain.tracks()) {
 			if (ev.kind !== "added" || ev.datagrams) continue;
+			// A name can be listed again (the local track was replaced). A JS generation refuses to create a
+			// name twice, so keep the existing protected track instead of letting the listing loop die.
+			if (physical[ev.name]) { o.log(`encrypt bridge: "${ev.name}" listed again; keeping ${physical[ev.name]}`); continue; }
 			const meta = { timescale: ev.info.timescale, maxAgeMs: ev.info.maxAge?.asMillis() ?? null, priority: ev.info.priority };
 			const track = await bc.createTrack(ev.name, init(meta));
 			tracks.push(track);
@@ -78,7 +81,10 @@ export async function encryptBridge(o: {
 		}
 	})().catch((e) => o.log(`encrypt bridge listing error ${e}`));
 	await seen;
-	return { physical, retire: () => { for (const track of tracks) track.finish(); route.broadcast.close(); route.withdraw(); } };
+	// Republish the manifest every second: a reader that joined on an older snapshot (latest-group delivery
+	// can skip groups) converges without depending on the next track change.
+	const refresh = setInterval(() => { try { const now = Time.Timestamp.now(); const g = manifest.appendGroup(now); void g.writeFrame(now, enc.encode(JSON.stringify(known))).then(() => g.finish()); } catch {} }, 1000);
+	return { physical, retire: () => { clearInterval(refresh); for (const track of tracks) track.finish(); route.broadcast.close(); route.withdraw(); } };
 }
 
 async function pumpEncrypt(sub: NetTrack.Subscriber, out: Track.Producer, name: string, log: Log) {

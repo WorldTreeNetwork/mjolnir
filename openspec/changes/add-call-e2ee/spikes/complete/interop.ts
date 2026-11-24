@@ -3,7 +3,7 @@ import {trackKey} from '../src/key.ts';import {nonce} from '../src/derive.ts';
 const dir=process.argv[2];const row=await Bun.file(dir+'/rust.json').json();
 const cred=new Credential({context:new TextEncoder().encode(row.context),kid:1,secret:new Uint8Array(32).fill(17)});
 const epoch=Epoch.parse(row.epoch),g=cred.consume(epoch);
-if(await g.name('video')!==row.name||await cred.path('alice')!==row.path)throw Error('name/path mismatch');
+if(await g.name('video')!==row.name||await cred.path(row.semantic)!==row.path)throw Error('name/path mismatch');
 const key=trackKey(cred,epoch,'video',0);const plain=await key.decrypt(nonce(123n,0),Uint8Array.fromHex(row.ciphertext));
 if(new TextDecoder().decode(plain)!=='RUST-TO-JS real pinned public API')throw Error('payload');
 const payload=await key.encrypt(nonce(124n,0),new TextEncoder().encode('JS-TO-RUST real pinned key derivation'));

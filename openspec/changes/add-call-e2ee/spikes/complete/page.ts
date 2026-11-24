@@ -1,5 +1,5 @@
 import { Connection, Origin, Path } from '@moq/net';
-import { Credential, Epoch } from '@moq/e2ee';
+import { Broadcast, Credential, Epoch } from '@moq/e2ee';
 import {inviteFields,announcedPath,contextFor,semanticFor,variantOf} from './validation.ts';
 import * as Publish from '../../publish/src/index.ts';
 import * as Watch from '../../watch/src/index.ts';
@@ -22,6 +22,8 @@ async function main(){
  const key=await crypto.subtle.importKey('raw',v.raw,'HKDF',false,['deriveBits']);v.raw.fill(0);
  const variant=variantOf(q),label=q.get('label')??'alice',watch=q.get('watch')??'alice',codec=q.get('codec')??'vp8';
  const credFor=(l:string,kid=v.kid,secret:CryptoKey|Uint8Array=key)=>new Credential({context:enc.encode(contextFor(variant,v.root,l)),kid,secret});
+ // Second credential (removal by rekey). Fixture: from the fragment `k2` if given, else the dummy 32 x 0x22.
+ const k2text=invite.get('k2');const K2=k2text?Uint8Array.from(atob(k2text.replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0)):new Uint8Array(32).fill(34);
  const cred=credFor(label);w.layout={variant,context:contextFor(variant,v.root,label).replace(/v1\/[^/]+\//,'v1/<owner>/'),semantic:semanticFor(variant,label)};log('layout '+JSON.stringify(w.layout));
  try {await crypto.subtle.exportKey('raw',key);throw Error('EXPORT SUCCEEDED')} catch(e:any){if(e.message==='EXPORT SUCCEEDED')throw e;log('root export rejected '+e.name)}
  const relay=new Origin.Producer();
@@ -48,7 +50,7 @@ async function main(){
   const info=control?{physical:{'catalog.json':'catalog.json',video:'video',audio:'audio'}}:await encryptBridge({local,localPath:LOCAL,relay,path,generation,log});
   w.info={path:control?LOCAL:path,physical:info.physical};
   w.rotate=async(retire=true)=>{
-   const next=credFor(label,2,new Uint8Array(32).fill(34));const gen=next.produce();
+   const next=credFor(label,2,K2.slice());const gen=next.produce();
    const np=Path.from(label+'/'+await next.path(semanticFor(variant,label))+'/'+gen.epoch);
    const bridge=await encryptBridge({local,localPath:LOCAL,relay,path:np,generation:gen,log});
    if(retire)(info as any).retire();return {path:np,physical:bridge.physical};
@@ -76,16 +78,28 @@ async function main(){
   const player=new Watch.Player({origin:local,name:LOCAL,video:{canvas,backend:'2d'},audio:{muted:false,volume:0}});w.player=player;
   w.readMetrics=()=>({video:w.player.video.out.stats.peek()?.frameCount??0,audioBytes:w.player.audio.out.stats.peek()?.bytesReceived??0,audioTime:w.player.audio.out.timestamp.peek()?.asMicros()??0});
   w.switchKey=async()=>{
-   const next=credFor(watch,2,new Uint8Array(32).fill(34));
+   const next=credFor(watch,2,K2.slice());
    for await(const ev of relay.announced()){
     if(ev.kind!=='present')continue;const parts=String(ev.prefix).split('/');
     if(parts.length!==3||parts[0]!==watch||parts[1]!==await next.path(semanticFor(variant,watch)))continue;
+    // Several announcements can carry the same opaque (same credential and label): a closed publisher's
+    // announcement may linger. Take the first one that is actually active within 1.5 s.
+    {const f=relay.follow(Path.from(ev.prefix));let b=f.active.peek();const until=Date.now()+1500;while(!b&&Date.now()<until){await Promise.race([f.active.changed(),new Promise(r=>setTimeout(r,100))]);b=f.active.peek()}
+     if(!b){log('switchKey: skipped inactive candidate '+ev.prefix);w.skipped=(w.skipped||0)+1;continue}}
     const epoch=Epoch.parse(parts[2]);const newLocal=Path.from('rekey-local');
     await decryptBridge({relay,path:Path.from(ev.prefix),credential:next,appEpoch:()=>epoch,local,localPath:newLocal,log});
     w.player.close();w.player=new Watch.Player({origin:local,name:newLocal,video:{canvas,backend:'2d'},audio:{muted:false,volume:0}});
-    return {sessionSame:w.session===s,path:ev.prefix};
+    return {sessionSame:w.session===s,path:ev.prefix,skippedInactive:w.skipped||0};
    }
   };
+  // Removed-member probe: what can this page's CURRENT (old) credential do with a broadcast it did not discover?
+  w.tryRead=async(p:string)=>{const out:any={path:p};
+   try{await announcedPath(p,l=>credFor(l),variant);out.discoveryRule='accepted'}catch(e){out.discoveryRule='rejected: '+e}
+   try{const f=relay.follow(Path.from(p));let b=f.active.peek();const until=Date.now()+5000;while(!b&&Date.now()<until){await Promise.race([f.active.changed(),new Promise(r=>setTimeout(r,250))]);b=f.active.peek()}
+    if(!b)throw Error('no active broadcast');out.broadcastVisible=true;
+    const bc=new Broadcast.Consumer(b,rcred.consume(Epoch.parse(p.split('/')[2])));const t=await bc.subscribe('bridge.tracks',{});
+    const g:any=await Promise.race([t.recvGroup(),new Promise((_,rej)=>setTimeout(()=>rej(Error('no group in 5 s')),5000))]);const fr=await g.readFrame();out.read='PLAINTEXT '+new TextDecoder().decode(fr.plaintext)}catch(e){out.read=String(e)}
+   return out};
   const checks=new Set<number>();let samples=0,energy=0,peak=0;let analyser:AnalyserNode|undefined;
   for(let i=0;i<200;i++){
    await new Promise(r=>setTimeout(r,100));

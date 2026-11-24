@@ -1,0 +1,12 @@
+{"A":{"sameSession":true,"newPath":"alice/P-nbAo_ScmUYNhBJRPnsLQ/01a20c8f-9e35-7304-8443-8898e5a5e4d4","announcedMs":9,"discoveredByAnnouncementMs":16,"playing15FramesMs":330,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":81,"firstAdvanceMs":0},"2":{"firstMs":20,"maxFrames":581,"firstAdvanceMs":148}},"longestNoFrameMs":25560,"firstFrameFromNewPlayerMs":148,"sampledMs":27745},"removedWhileOldUnretired":{"additionalDecodedFrames":35},"removedReadsNewBroadcast":{"path":"alice/P-nbAo_ScmUYNhBJRPnsLQ/01a20c8f-9e35-7304-8443-8898e5a5e4d4","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":23,"lastRemovedMediaChangeMs":5181,"observedMs":26418},"remainingAdvancedFrames":497}}
+{"browser":"158.0.8127.18","layout":"label","discovery":"relay.announced() + path parse","tokens":"room tokens alice/bob/carol, 3600 s","A":{"sameSession":true,"newPath":"alice/P-nbAo_ScmUYNhBJRPnsLQ/01a20c8f-9e35-7304-8443-8898e5a5e4d4","announcedMs":9,"discoveredByAnnouncementMs":16,"playing15FramesMs":330,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":81,"firstAdvanceMs":0},"2":{"firstMs":20,"maxFrames":581,"firstAdvanceMs":148}},"longestNoFrameMs":25560,"firstFrameFromNewPlayerMs":148,"sampledMs":27745},"removedWhileOldUnretired":{"additionalDecodedFrames":35},"removedReadsNewBroadcast":{"path":"alice/P-nbAo_ScmUYNhBJRPnsLQ/01a20c8f-9e35-7304-8443-8898e5a5e4d4","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":23,"lastRemovedMediaChangeMs":5181,"observedMs":26418},"remainingAdvancedFrames":497}}
+file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/harness/rekey-drive.mjs:45
+ const limit=ms=>new Promise((_,rej)=>setTimeout(()=>rej(Error('scenario B: no switch within '+ms+' ms')),ms));
+                                                         ^
+
+Error: scenario B: no switch within 20000 ms
+    at Timeout._onTimeout (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/harness/rekey-drive.mjs:45:58)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+
+Node.js v26.3.0
