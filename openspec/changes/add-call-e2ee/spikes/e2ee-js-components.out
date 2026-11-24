@@ -1,0 +1,35 @@
+# e2ee-js-components — NOT RUN (browser never launched)
+# Command: COMPONENTS=1 bash openspec/changes/add-call-e2ee/spikes/js/run.sh "$W" chromium default
+# Build exited 1. The simple Bun builder does not process upstream worklet/CSS imports.
+# Firefox component run NOT RUN: same build prerequisite failed, not a browser compatibility verdict.
+# Retry with upstream Vite worklet/libav plugins. components-page.ts and bridge.ts are unvalidated scaffolding.
+
+36 | import RenderWorklet from "./render-worklet.ts?worklet";
+                               ^
+error: Could not resolve: "./render-worklet.ts?worklet"
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/watch/src/audio/decoder.ts:36:27
+
+16 | import CaptureWorklet from "./capture-worklet.ts?worklet";
+                                ^
+error: Could not resolve: "./capture-worklet.ts?worklet"
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/publish/src/audio/capture.ts:16:28
+
+4 | import captionsCss from "media-captions/styles/captions.css?inline";
+                            ^
+error: Could not resolve: "media-captions/styles/captions.css?inline". Maybe you need to "bun install"?
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/watch/src/text/captions.ts:4:25
+
+5 | import regionsCss from "media-captions/styles/regions.css?inline";
+                           ^
+error: Could not resolve: "media-captions/styles/regions.css?inline". Maybe you need to "bun install"?
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/watch/src/text/captions.ts:5:24
+
+5 | import CaptureWorker from "./capture-worker.ts?worklet";
+                              ^
+error: Could not resolve: "./capture-worker.ts?worklet"
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/publish/src/video/processor.ts:5:27
+
+31 | 		import("@moq/libav"),
+              ^
+error: Could not resolve: "@moq/libav". Maybe you need to "bun install"?
+    at /private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/moq/js/hang/src/util/libav.ts:31:10

@@ -206,7 +206,7 @@ async fn credential_path_under_participant_label_is_admitted_and_opaque() {
 async fn epoch_as_last_path_segment_on_the_default_wire() {
     let running = start().await;
     let cred = credential([7u8; 32], 1);
-    let opaque = cred.path("call").unwrap();
+    let opaque = cred.path("alice").unwrap();
     let generation = cred.produce();
     let path = format!("alice/{opaque}/{}", generation.epoch());
     let a_origin = moq_tokio::origin::spawn();
@@ -240,8 +240,9 @@ async fn epoch_as_last_path_segment_on_the_default_wire() {
         .established()
         .await
         .unwrap();
-    // Bob knows only the credential: derive the opaque segment, find `<label>/<opaque>/<epoch>`.
-    let want = cred.path("call").unwrap().to_string();
+    // Bob knows only the credential: the opaque segment is bound to the label (path(label)).
+    let want = cred.path("alice").unwrap().to_string();
+    assert_ne!(want, cred.path("bob").unwrap().to_string(), "label-bound opaque differs per label");
     let found = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let event = routes.next().await.expect("route event");
@@ -257,6 +258,8 @@ async fn epoch_as_last_path_segment_on_the_default_wire() {
     .await
     .expect("announcement under the opaque segment");
     println!("spike e2ee-path/epoch-in-path: announced label={} epoch={}", found.0, found.1);
+    assert_eq!(cred.path(&found.0).unwrap().to_string(), want, "opaque matches path(announced label)");
+    println!("spike e2ee-path/epoch-in-path: path(label) check: path(\"{}\") == announced opaque: true; path(\"bob\") would not match", found.0);
     let epoch: moq_e2ee::Epoch = found.1.parse().expect("canonical UUIDv7 from the path");
     let full = format!("{}/{want}/{epoch}", found.0);
     let remote = b_table.follow(full.as_str(), None).unwrap().available().await.unwrap().unwrap();

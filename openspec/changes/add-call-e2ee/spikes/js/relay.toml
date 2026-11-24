@@ -1,0 +1,16 @@
+# Local moq-relay for spike e2ee-js. No auth; generated self-signed cert.
+# run.sh substitutes the version line below ("default" = omit the list, or an explicit list).
+[log]
+level = "info"
+
+[listen]
+bind = "[::]:4443"
+tls.generate = ["localhost"]
+@VERSIONS@
+
+[web.http]
+# Serves /certificate.sha256 so the pages can pin the generated cert.
+listen = "[::]:4443"
+
+[auth]
+public = "**"

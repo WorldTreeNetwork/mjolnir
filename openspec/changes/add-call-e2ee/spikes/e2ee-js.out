@@ -1,0 +1,121 @@
+# e2ee-js — fixture frame API, not component or secret-handling acceptance
+# Mac, 2026-11-23. moq 4a6f52248, default wire moq-lite-06, Playwright 1.65.1.
+# Commands from repo root (W is the prepared scratch workspace; see js/README.md):
+# bash openspec/changes/add-call-e2ee/spikes/js/run.sh "$W" chromium default
+# bash openspec/changes/add-call-e2ee/spikes/js/run.sh "$W" firefox default
+# VERDICT: PROVEN for JS frame/catalog crypto in both browsers; Hang components NOT RUN.
+# Fixed dummy secrets in query strings are test fixtures only, not invite-fragment proof.
+
+relay certificate.sha256=0c5fe5503b188c9ad15dda5e588c58906c864a33ee2ed01d91297e4413698f5a mode=default
+browser chromium version=158.0.8127.18
+[chromium:pub] https://localhost:4443 connected via WebTransport
+[chromium:pub] https://localhost:4443 negotiated ALPN: moq-lite-06
+[chromium:pub] spike e2ee-js [pub]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[chromium:pub] spike e2ee-js [pub]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.8127.18 Safari/537.36
+[chromium:pub] spike e2ee-js [pub]: path=fz90X00EvmC7oKIXpW0PLw
+[chromium:pub] spike e2ee-js [pub]: epoch=01a20afb-50d0-71f0-aaf2-5f90e9b7b509
+[chromium:pub] spike e2ee-js [pub]: physical catalog.json=4EZ1qyLtaUcU_ivVubYpwWcKXMQFATdGheVaQUQD4c64lIffKgL8OYiyob0
+[chromium:pub] spike e2ee-js [pub]: physical video=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:pub] announce: prefix=
+[chromium:pub] announce: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=01a20afb-50d0-71f0-aaf2-5f90e9b7b509
+[chromium:sub] https://localhost:4443 connected via WebTransport
+[chromium:sub] https://localhost:4443 negotiated ALPN: moq-lite-06
+[chromium:sub] spike e2ee-js [sub]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[chromium:sub] spike e2ee-js [sub]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.8127.18 Safari/537.36
+[chromium:sub] announced: prefix=fz90X00EvmC7oKIXpW0PLw
+[chromium:sub] announce: prefix=
+[chromium:sub] announced: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=6c5133447ddb644e899f290e3adbd5cf
+[chromium:sub] spike e2ee-js [sub]: resolved path=fz90X00EvmC7oKIXpW0PLw instance=6c5133447ddb644e899f290e3adbd5cf Epoch.of=undefined
+[chromium:sub] spike e2ee-js [sub]: using epoch=01a20afb-50d0-71f0-aaf2-5f90e9b7b509 (source=app channel)
+[chromium:sub] subscribe start: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=4EZ1qyLtaUcU_ivVubYpwWcKXMQFATdGheVaQUQD4c64lIffKgL8OYiyob0
+[chromium:pub] track info: broadcast=fz90X00EvmC7oKIXpW0PLw track=4EZ1qyLtaUcU_ivVubYpwWcKXMQFATdGheVaQUQD4c64lIffKgL8OYiyob0
+[chromium:sub] subscribe ok: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=4EZ1qyLtaUcU_ivVubYpwWcKXMQFATdGheVaQUQD4c64lIffKgL8OYiyob0
+[chromium:pub] publish ok: broadcast=fz90X00EvmC7oKIXpW0PLw track=4EZ1qyLtaUcU_ivVubYpwWcKXMQFATdGheVaQUQD4c64lIffKgL8OYiyob0
+[chromium:sub] spike e2ee-js [sub]: decrypted catalog.json = {"display":"Alice","video":{"track":"video"},"marker":"PLAINTEXT-MARKER-catalog"}
+[chromium:sub] subscribe start: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:pub] track info: broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:pub] publish ok: broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:sub] subscribe ok: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:sub] spike e2ee-js [sub]: decrypted video group start=88 = "PLAINTEXT-MARKER-video-0"
+[chromium:sub] spike e2ee-js [sub]: decrypted video group start=240 = "PLAINTEXT-MARKER-video-1"
+[chromium:sub] spike e2ee-js [sub]: decrypted video group start=392 = "PLAINTEXT-MARKER-video-2"
+[chromium:sub] spike e2ee-js [sub]: RESULT sub decrypted=true
+[chromium:eve] https://localhost:4443 connected via WebTransport
+[chromium:eve] https://localhost:4443 negotiated ALPN: moq-lite-06
+[chromium:eve] spike e2ee-js [eve]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[chromium:eve] spike e2ee-js [eve]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.8127.18 Safari/537.36
+[chromium:eve] announced: prefix=fz90X00EvmC7oKIXpW0PLw
+[chromium:eve] announce: prefix=
+[chromium:eve] announced: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=4755f81f02adf8636ff656a152198feb
+[chromium:eve] subscribe start: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:eve] subscribe ok: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:eve] spike e2ee-js [eve]: no-credential raw video frame 0: 40 bytes, marker present=false, head=9858e673ae1653e3
+[chromium:eve] spike e2ee-js [eve]: no-credential raw video frame 1: 40 bytes, marker present=false, head=35b8bc0968e957c1
+[chromium:eve] spike e2ee-js [eve]: no-credential raw video frame 2: 40 bytes, marker present=false, head=4179b41ca100628c
+[chromium:eve] spike e2ee-js [eve]: wrong-secret path=YI5iikN_3w_y4I13-G_cHA (real path=fz90X00EvmC7oKIXpW0PLw)
+[chromium:eve] subscribe close: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=k1-s0r2j6fgcJlDa-_9UEWJPJHD5iB1xKkUJTQCEIblSbiGQWFAr6mDAZ64
+[chromium:eve] subscribe start: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g
+[chromium:pub] track unknown: broadcast=fz90X00EvmC7oKIXpW0PLw track=7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g
+[chromium:pub] track unknown: broadcast=fz90X00EvmC7oKIXpW0PLw track=7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g
+[chromium:pub] publish error: broadcast=fz90X00EvmC7oKIXpW0PLw track=7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g error=not found: datagram track 7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g
+[chromium:eve] subscribe error: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=7N2EZ27rzTMmgFzQoTkIQtcAfdA7l449xqguYRGPWJ56UoqYL6FERopin1g error=remote error: 51
+[chromium:eve] spike e2ee-js [eve]: wrong-secret subscribe "video" -> Stream: remote error: 51
+[chromium:eve] spike e2ee-js [eve]: RESULT eve plaintext_leaked=false
+VERDICT chromium: PROVEN
+
+relay certificate.sha256=4f73a83a4158fe8cad1ed1183cec8a061fbc08e844cd9c2df351941c17197701 mode=default
+browser firefox version=159.0
+[firefox:pub] https://localhost:4443 connected via WebTransport
+[firefox:pub] https://localhost:4443 negotiated ALPN: moq-lite-06
+[firefox:pub] spike e2ee-js [pub]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[firefox:pub] spike e2ee-js [pub]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:159.0) Gecko/20100101 Firefox/159.0
+[firefox:pub] spike e2ee-js [pub]: path=fz90X00EvmC7oKIXpW0PLw
+[firefox:pub] spike e2ee-js [pub]: epoch=01a20afc-6835-7043-af1e-a73369a6bd7a
+[firefox:pub] spike e2ee-js [pub]: physical catalog.json=FcrlyWkgzyCGmtwIm6hyboIxDdFDCOccPK_6CiKF8VjkNIt-6FOaSiNCFkQ
+[firefox:pub] spike e2ee-js [pub]: physical video=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:pub] announce: prefix=
+[firefox:pub] announce: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=01a20afc-6835-7043-af1e-a73369a6bd7a
+[firefox:sub] https://localhost:4443 connected via WebTransport
+[firefox:sub] https://localhost:4443 negotiated ALPN: moq-lite-06
+[firefox:sub] spike e2ee-js [sub]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[firefox:sub] spike e2ee-js [sub]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:159.0) Gecko/20100101 Firefox/159.0
+[firefox:sub] announced: prefix=fz90X00EvmC7oKIXpW0PLw
+[firefox:sub] announce: prefix=
+[firefox:sub] announced: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=b9331bac28efca9264b85d958468e665
+[firefox:sub] spike e2ee-js [sub]: resolved path=fz90X00EvmC7oKIXpW0PLw instance=b9331bac28efca9264b85d958468e665 Epoch.of=undefined
+[firefox:sub] spike e2ee-js [sub]: using epoch=01a20afc-6835-7043-af1e-a73369a6bd7a (source=app channel)
+[firefox:sub] subscribe start: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=FcrlyWkgzyCGmtwIm6hyboIxDdFDCOccPK_6CiKF8VjkNIt-6FOaSiNCFkQ
+[firefox:pub] track info: broadcast=fz90X00EvmC7oKIXpW0PLw track=FcrlyWkgzyCGmtwIm6hyboIxDdFDCOccPK_6CiKF8VjkNIt-6FOaSiNCFkQ
+[firefox:sub] subscribe ok: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=FcrlyWkgzyCGmtwIm6hyboIxDdFDCOccPK_6CiKF8VjkNIt-6FOaSiNCFkQ
+[firefox:pub] publish ok: broadcast=fz90X00EvmC7oKIXpW0PLw track=FcrlyWkgzyCGmtwIm6hyboIxDdFDCOccPK_6CiKF8VjkNIt-6FOaSiNCFkQ
+[firefox:sub] spike e2ee-js [sub]: decrypted catalog.json = {"display":"Alice","video":{"track":"video"},"marker":"PLAINTEXT-MARKER-catalog"}
+[firefox:sub] subscribe start: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:pub] track info: broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:sub] subscribe ok: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:pub] publish ok: broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:sub] spike e2ee-js [sub]: decrypted video group start=539 = "PLAINTEXT-MARKER-video-2"
+[firefox:sub] spike e2ee-js [sub]: decrypted video group start=690 = "PLAINTEXT-MARKER-video-3"
+[firefox:sub] spike e2ee-js [sub]: decrypted video group start=841 = "PLAINTEXT-MARKER-video-4"
+[firefox:sub] spike e2ee-js [sub]: RESULT sub decrypted=true
+[firefox:eve] https://localhost:4443 connected via WebTransport
+[firefox:eve] https://localhost:4443 negotiated ALPN: moq-lite-06
+[firefox:eve] spike e2ee-js [eve]: connected transport=webtransport version=moq-lite-06 offered=(default)
+[firefox:eve] spike e2ee-js [eve]: userAgent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:159.0) Gecko/20100101 Firefox/159.0
+[firefox:eve] announced: prefix=fz90X00EvmC7oKIXpW0PLw
+[firefox:eve] announced: broadcast=fz90X00EvmC7oKIXpW0PLw active=true instance=ef4394b681c5e8c481aee60ca07767bf
+[firefox:eve] subscribe start: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:eve] announce: prefix=
+[firefox:eve] subscribe ok: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:eve] spike e2ee-js [eve]: no-credential raw video frame 0: 40 bytes, marker present=false, head=53b9cd03c6b8423a
+[firefox:eve] spike e2ee-js [eve]: no-credential raw video frame 1: 40 bytes, marker present=false, head=f375a7850333170b
+[firefox:eve] spike e2ee-js [eve]: no-credential raw video frame 2: 40 bytes, marker present=false, head=bc10fda72eca4aa8
+[firefox:eve] subscribe close: id=0 broadcast=fz90X00EvmC7oKIXpW0PLw track=VGgxIKHplc3cnvjA1KVXr3hWv7R5HZFgORKhDmEcEmCZhrDPki64pOdk2jA
+[firefox:eve] spike e2ee-js [eve]: wrong-secret path=YI5iikN_3w_y4I13-G_cHA (real path=fz90X00EvmC7oKIXpW0PLw)
+[firefox:eve] subscribe start: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM
+[firefox:pub] track unknown: broadcast=fz90X00EvmC7oKIXpW0PLw track=knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM
+[firefox:pub] track unknown: broadcast=fz90X00EvmC7oKIXpW0PLw track=knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM
+[firefox:pub] publish error: broadcast=fz90X00EvmC7oKIXpW0PLw track=knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM error=not found: datagram track knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM
+[firefox:eve] subscribe error: id=1 broadcast=fz90X00EvmC7oKIXpW0PLw track=knguJI2YAifm95y6mCALjTD_eQ8ketviTT71TZ4R-e1bcExHlBzWOWU4ukM error=Error in input stream
+[firefox:eve] spike e2ee-js [eve]: wrong-secret subscribe "video" -> TypeError: Error in input stream
+[firefox:eve] spike e2ee-js [eve]: RESULT eve plaintext_leaked=false
+VERDICT firefox frames: PROVEN

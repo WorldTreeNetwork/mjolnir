@@ -41,3 +41,12 @@ spike e2ee-path/epoch-in-path: route instance on the default wire = None
 spike e2ee-path/epoch-in-path: bob decrypted "PLAINTEXT-MARKER-0"
 spike e2ee-path/epoch-in-path: PROVEN
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s
+
+$ ... cargo test --test e2ee_path epoch_as_last -- --nocapture   (label-bound opaque: path("alice"))
+   Compiling call-e2ee-spikes v0.0.0 (/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-call-e2ee/spikes/rust)
+spike e2ee-path/epoch-in-path: announced label=alice epoch=01a20af6-ef7a-7538-b19e-25ea607f4e4d
+spike e2ee-path/epoch-in-path: path(label) check: path("alice") == announced opaque: true; path("bob") would not match
+spike e2ee-path/epoch-in-path: route instance on the default wire = None
+spike e2ee-path/epoch-in-path: bob decrypted "PLAINTEXT-MARKER-0"
+spike e2ee-path/epoch-in-path: PROVEN
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.07s
