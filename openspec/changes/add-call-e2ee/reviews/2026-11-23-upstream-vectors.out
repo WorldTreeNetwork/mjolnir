@@ -1,0 +1,22 @@
+# Upstream shared vectors at the pin, run by the advise reader on 2026-11-23 PST (Mac).
+# Source tree: a copy of moq-dev/moq whose js/e2ee/src, rs/moq-e2ee and drafts/moq-e2ee-01-wip.json are byte-identical (diff -r) to the cargo checkout of 4a6f522483168ace392718d68b58a402533c897d.
+# Vector file sha256: b3327368cd46a16aa23967b0290963cd6eaafc3715d29c96d7665839e1399f6f
+
+$ cd moq/js/e2ee && bun test src/vectors.test.ts src/epoch.test.ts     (Bun 1.3.14; this is Bun's WebCrypto, not a browser engine)
+bun test v1.3.14 (0d9b296a)
+
+ 9 pass
+ 0 fail
+ 205 expect() calls
+Ran 9 tests across 2 files. [350.00ms]
+
+$ cd moq && cargo test -p moq-e2ee --lib
+test epoch::tests::epoch_vectors ... ok
+test tests::constants_match_vectors ... ok
+test tests::datagram_vectors ... ok
+test tests::derivation_vectors ... ok
+test tests::group_vectors ... ok
+test tests::naming_vectors ... ok
+test tests::path_vectors ... ok
+test tests::negative_vectors ... ok
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

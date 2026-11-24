@@ -1,0 +1,16 @@
+$ cargo test --offline --test relabel -- --nocapture --test-threads=1   (Mac, 2026-11-23 PST; moq 4a6f52248, iroh-live 747b1bd; real moq-relay with mjolnir_relay::spawn_web_decider; tokens shaped as Mjolnir.Relay.Mint signs them)
+
+running 2 tests
+test label_in_context_refuses_the_relabel ... probe relabel/context: dave reading the re-mount under label `bob` -> refused: Authentication
+probe relabel/context: REFUSED (label in the credential context binds every key and name)
+ok
+test relay_relabel_passes_d2_checks ... probe relabel: alice at alice/Poo1JpbJnlJ5J5J1weBUSg/01a20c5a-d74c-7432-ba37-cd62da5a54f3
+probe relabel: bob   at bob/VgnZo2FYE3-Vkx2r5LXGXw/01a20c5a-d729-7091-862e-0929df4649dc
+probe relabel: a session with no content credential re-serves alice's ciphertext at bob/VgnZo2FYE3-Vkx2r5LXGXw/01a20c5a-d74c-7432-ba37-cd62da5a54f3
+probe relabel: dave sees 2 canonical epoch(s) under bob/VgnZo2FYE3-Vkx2r5LXGXw/: [Epoch("01a20c5a-d729-7091-862e-0929df4649dc"), Epoch("01a20c5a-d74c-7432-ba37-cd62da5a54f3")]
+probe relabel: dave, reading label `bob` with every D2 check passed, decrypted "ALICE-FRAME-36"
+probe relabel: D2 CLAIM REFUTED (label-bound opaque does not bind the keys to the label)
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.42s
+
