@@ -10,7 +10,7 @@ const dir=process.argv[2]||'/tmp/mjolnir-e2ee-private4';const[addr,owner,alice,b
 // announcement from an earlier run on a long-lived relay is then indistinguishable by path.
 const RUN_SECRET=crypto.randomBytes(32).toString('base64url'),RUN_SECRET2=crypto.randomBytes(32).toString('base64url');
 const browser=await chromium.launch({args:['--autoplay-policy=no-user-gesture-required']});
-setTimeout(()=>{console.log(JSON.stringify({watchdog:'90 s',partial:out}));process.exit(2)},90000);
+const watchdog=setTimeout(()=>{console.log(JSON.stringify({watchdog:'90 s',partial:out}));process.exit(2)},90000);
 const out={browser:browser.version(),layout:'label',discovery:'relay.announced() + path parse',tokens:'room tokens alice/bob/carol, 3600 s'};
 async function open(role,token,label,watch='alice'){const ctx=await browser.newContext();const p=await ctx.newPage();const q=new URLSearchParams({role,relay:'https://'+addr+'/',hash,ctx:'label',label,watch});const f=new URLSearchParams({v:'1',p:'moq-e2ee-01-wip',kid:'1',k:RUN_SECRET,k2:RUN_SECRET2,t:token});await p.goto('http://localhost:8124/?'+q+'#'+f);await p.waitForFunction(()=>window.ready||window.error,null,{timeout:45000});const e=await p.evaluate(()=>window.error);if(e)throw Error(e);p.ctx=ctx;return p}
 const startSampler=p=>p.evaluate(()=>{window.samples=[];let id=0,last=null;const tick=()=>{const pl=window.player;if(pl!==last){id++;last=pl}window.samples.push([performance.now(),id,pl.video.out.stats.peek()?.frameCount??0])};window.t0=performance.now();tick();window.sampler=setInterval(tick,10)});
@@ -42,10 +42,10 @@ try{
  // Own label (carol publishes) so no announcement from scenario A shares its opaque.
  const pub2=await open('pub',carol,'carol'),reader=await open('sub',bob,'bob','carol');
  await startSampler(reader);const t=Date.now();
- const limit=ms=>new Promise((_,rej)=>setTimeout(()=>rej(Error('scenario B: no switch within '+ms+' ms')),ms));
- const [next2,sw2]=await Promise.race([Promise.all([pub2.evaluate(()=>window.rotate(true)),reader.evaluate(()=>window.switchKey())]),limit(20000)]);const disc2=Date.now()-t;
+ let switchTimer; const limit=ms=>new Promise((_,rej)=>{switchTimer=setTimeout(()=>rej(Error('scenario B: no switch within '+ms+' ms')),ms)});
+ let next2,sw2;try{[next2,sw2]=await Promise.race([Promise.all([pub2.evaluate(()=>window.rotate(true)),reader.evaluate(()=>window.switchKey())]),limit(20000)])}finally{clearTimeout(switchTimer)}const disc2=Date.now()-t;
  let recovered=true;try{await reader.waitForFunction(()=>{window.player.audio.out.context.peek()?.resume();const m=window.readMetrics();return m.video>=15&&m.audioBytes>1000},null,{timeout:15000})}catch{recovered=false}
  await reader.waitForTimeout(1000);
  out.B={label:'carol',switched:sw2,retiredImmediately:true,discoveredByAnnouncementMs:disc2,recovered,playing15FramesMs:Date.now()-t-1000,readerGap:await gap(reader)};
- console.log(JSON.stringify({B:out.B}));
-}finally{console.log(JSON.stringify(out));await browser.close()}
+ console.log(JSON.stringify({B:out.B}));if(!recovered)throw Error('scenario B: playback did not recover');
+}finally{console.log(JSON.stringify(out));const started=Date.now();console.log('browser.close begin');try{await browser.close();console.log('browser.close returned_ms='+String(Date.now()-started))}finally{clearTimeout(watchdog)}}

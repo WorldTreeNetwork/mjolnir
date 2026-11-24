@@ -1,0 +1,15 @@
+Tue Nov 24 22:24:17 UTC 2026
+14:24  up 10 days,  6:37, 3 users, load averages: 7.26 17.52 33.88
+Processes: 1018 total, 9 running, 1009 sleeping, 6829 threads
+2026/11/24 14:24:19
+Load Avg: 7.26, 17.52, 33.88
+CPU usage: 28.8% user, 20.59% sys, 51.31% idle
+SharedLibs: 717M resident, 146M data, 118M linkedit.
+{"watchdog":"90 s","partial":{"browser":"158.0.8127.18","layout":"label","discovery":"relay.announced() + path parse","tokens":"room tokens alice/bob/carol, 3600 s"}}
+driver_exit=2
+14:25  up 10 days,  6:38, 3 users, load averages: 26.08 19.12 32.73
+Processes: 1027 total, 90 running, 1 stuck, 936 sleeping, 7169 threads
+2026/11/24 14:25:50
+Load Avg: 26.08, 19.12, 32.73
+CPU usage: 23.38% user, 20.10% sys, 56.51% idle
+SharedLibs: 719M resident, 145M data, 119M linkedit.

@@ -1,0 +1,27 @@
+Tue Nov 24 22:21:49 UTC 2026
+14:21  up 10 days,  6:34, 3 users, load averages: 14.36 23.96 38.91
+Processes: 1017 total, 5 running, 1012 sleeping, 6794 threads
+2026/11/24 14:21:50
+Load Avg: 14.36, 23.96, 38.91
+CPU usage: 19.53% user, 16.60% sys, 63.85% idle
+SharedLibs: 716M resident, 145M data, 118M linkedit.
+{"A":{"sameSession":true,"newPath":"alice/cqK-ao2G3ixpJeSVfBktqQ/01a20fa6-bc6c-75dd-93e5-118563b05524","announcedMs":10,"discoveredByAnnouncementMs":17,"playing15FramesMs":547,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":88,"firstAdvanceMs":0},"2":{"firstMs":21,"maxFrames":234,"firstAdvanceMs":211}},"longestNoFrameMs":5853,"firstFrameFromNewPlayerMs":211,"sampledMs":8471},"removedWhileOldUnretired":{"additionalDecodedFrames":45},"removedReadsNewBroadcast":{"path":"alice/cqK-ao2G3ixpJeSVfBktqQ/01a20fa6-bc6c-75dd-93e5-118563b05524","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":15,"lastRemovedMediaChangeMs":511,"observedMs":6924},"remainingAdvancedFrames":24}}
+{"B":{"label":"carol","switched":{"sessionSame":true,"path":"carol/VkyC2yVxeN8E03LWdTDLDQ/01a20fa6-e4f9-721d-ad4c-27ddab5c8052","skippedInactive":0},"retiredImmediately":true,"discoveredByAnnouncementMs":9,"recovered":false,"playing15FramesMs":20625,"readerGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":49,"firstAdvanceMs":0},"2":{"firstMs":11,"maxFrames":15,"firstAdvanceMs":20670}},"longestNoFrameMs":20670,"firstFrameFromNewPlayerMs":20670,"sampledMs":21622}}}
+{"browser":"158.0.8127.18","layout":"label","discovery":"relay.announced() + path parse","tokens":"room tokens alice/bob/carol, 3600 s","A":{"sameSession":true,"newPath":"alice/cqK-ao2G3ixpJeSVfBktqQ/01a20fa6-bc6c-75dd-93e5-118563b05524","announcedMs":10,"discoveredByAnnouncementMs":17,"playing15FramesMs":547,"remainingGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":88,"firstAdvanceMs":0},"2":{"firstMs":21,"maxFrames":234,"firstAdvanceMs":211}},"longestNoFrameMs":5853,"firstFrameFromNewPlayerMs":211,"sampledMs":8471},"removedWhileOldUnretired":{"additionalDecodedFrames":45},"removedReadsNewBroadcast":{"path":"alice/cqK-ao2G3ixpJeSVfBktqQ/01a20fa6-bc6c-75dd-93e5-118563b05524","discoveryRule":"rejected: Error: label or credential mismatch","broadcastVisible":true,"read":"Stream: remote error: 51"},"afterRetire":{"removedDecodedFrames":15,"lastRemovedMediaChangeMs":511,"observedMs":6924},"remainingAdvancedFrames":24},"B":{"label":"carol","switched":{"sessionSame":true,"path":"carol/VkyC2yVxeN8E03LWdTDLDQ/01a20fa6-e4f9-721d-ad4c-27ddab5c8052","skippedInactive":0},"retiredImmediately":true,"discoveredByAnnouncementMs":9,"recovered":false,"playing15FramesMs":20625,"readerGap":{"perPlayer":{"1":{"firstMs":0,"maxFrames":49,"firstAdvanceMs":0},"2":{"firstMs":11,"maxFrames":15,"firstAdvanceMs":20670}},"longestNoFrameMs":20670,"firstFrameFromNewPlayerMs":20670,"sampledMs":21622}}}
+browser.close begin
+browser.close returned_ms=31
+file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/harness/rekey-drive.mjs:50
+ console.log(JSON.stringify({B:out.B}));if(!recovered)throw Error('scenario B: playback did not recover');
+                                                            ^
+
+Error: scenario B: playback did not recover
+    at file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/a991f588-a18f-4e1a-a6a6-55c19c2be74e/scratchpad/e2ee-js/harness/rekey-drive.mjs:50:61
+
+Node.js v26.3.0
+driver_exit=1
+14:22  up 10 days,  6:35, 3 users, load averages: 11.32 22.14 37.65
+Processes: 1018 total, 9 running, 1009 sleeping, 6940 threads
+2026/11/24 14:22:28
+Load Avg: 11.14, 21.93, 37.48
+CPU usage: 24.15% user, 22.25% sys, 53.59% idle
+SharedLibs: 715M resident, 145M data, 118M linkedit.
