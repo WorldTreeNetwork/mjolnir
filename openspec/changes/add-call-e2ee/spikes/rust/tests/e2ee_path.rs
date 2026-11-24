@@ -199,3 +199,86 @@ async fn credential_path_under_participant_label_is_admitted_and_opaque() {
     let _ = tokio::time::timeout(Duration::from_secs(8), running.join).await;
     println!("spike e2ee-path: PROVEN");
 }
+
+/// Option B for the default wire: the epoch is the last path segment. A subscriber learns it
+/// from the announcement under `<label>/<opaque>/`, with no app channel and no lite-07.
+#[tokio::test(flavor = "multi_thread")]
+async fn epoch_as_last_path_segment_on_the_default_wire() {
+    let running = start().await;
+    let cred = credential([7u8; 32], 1);
+    let opaque = cred.path("call").unwrap();
+    let generation = cred.produce();
+    let path = format!("alice/{opaque}/{}", generation.epoch());
+    let a_origin = moq_tokio::origin::spawn();
+    let route = a_origin
+        .route(path.as_str(), moq_net::origin::RouteOptions::hidden())
+        .unwrap();
+    let protected = moq_e2ee::broadcast::Producer::new(route.broadcast().clone(), generation);
+    let mut video = protected.create_track("video", timed()).unwrap();
+    route.announce().unwrap();
+    let _a = client()
+        .with_publisher(a_origin.consume())
+        .connect(url(&running, &room_token(&running.key, "r1", "alice", 60)))
+        .established()
+        .await
+        .unwrap();
+    let writer = tokio::spawn(async move {
+        for n in 0..40u32 {
+            let mut g = video.append_group(now()).unwrap();
+            g.write_frame(now(), format!("PLAINTEXT-MARKER-{n}").as_bytes()).unwrap();
+            g.finish().unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
+    let b_origin = moq_tokio::origin::spawn();
+    let b_table = b_origin.consume();
+    let mut routes = b_table.routes();
+    let _b = client()
+        .with_subscriber(b_origin)
+        .connect(url(&running, &room_token(&running.key, "r1", "bob", 60)))
+        .established()
+        .await
+        .unwrap();
+    // Bob knows only the credential: derive the opaque segment, find `<label>/<opaque>/<epoch>`.
+    let want = cred.path("call").unwrap().to_string();
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = routes.next().await.expect("route event");
+            let text = format!("{event:?}");
+            if let Some(at) = text.find(&format!("/{want}/")) {
+                let rest = &text[at + want.len() + 2..];
+                let epoch_text: String = rest.chars().take(36).collect();
+                let label_start = text[..at].rfind('"').unwrap() + 1;
+                return (text[label_start..at].to_string(), epoch_text);
+            }
+        }
+    })
+    .await
+    .expect("announcement under the opaque segment");
+    println!("spike e2ee-path/epoch-in-path: announced label={} epoch={}", found.0, found.1);
+    let epoch: moq_e2ee::Epoch = found.1.parse().expect("canonical UUIDv7 from the path");
+    let full = format!("{}/{want}/{epoch}", found.0);
+    let remote = b_table.follow(full.as_str(), None).unwrap().available().await.unwrap().unwrap();
+    println!(
+        "spike e2ee-path/epoch-in-path: route instance on the default wire = {:?}",
+        moq_e2ee::Epoch::of(&remote)
+    );
+    let bob = moq_e2ee::broadcast::Consumer::new(remote, cred.consume(epoch));
+    let mut track = bob.subscribe("video", None).unwrap().await.unwrap();
+    let mut group = tokio::time::timeout(Duration::from_secs(5), track.recv_group())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame = group.read_frame().await.unwrap().unwrap();
+    println!(
+        "spike e2ee-path/epoch-in-path: bob decrypted {:?}",
+        String::from_utf8_lossy(&frame.plaintext)
+    );
+    assert!(frame.plaintext.starts_with(b"PLAINTEXT-MARKER"));
+    writer.abort();
+    running.trigger.start();
+    let _ = tokio::time::timeout(Duration::from_secs(8), running.join).await;
+    println!("spike e2ee-path/epoch-in-path: PROVEN");
+}

@@ -34,3 +34,10 @@ spike e2ee-path: carol raw frame on physical name: 40 bytes, marker present = fa
 spike e2ee-path: alice publishing bob/<opaque> visible to carol? false
 spike e2ee-path: PROVEN
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.08s
+
+$ CARGO_TARGET_DIR=native/mjolnir_relay/target cargo test --test e2ee_path epoch_as_last -- --nocapture   (default wire, no lite-07)
+spike e2ee-path/epoch-in-path: announced label=alice epoch=01a20af5-821f-77a5-8bfe-33f81d5142b9
+spike e2ee-path/epoch-in-path: route instance on the default wire = None
+spike e2ee-path/epoch-in-path: bob decrypted "PLAINTEXT-MARKER-0"
+spike e2ee-path/epoch-in-path: PROVEN
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s
