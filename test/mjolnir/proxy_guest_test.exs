@@ -75,6 +75,34 @@ defmodule Mjolnir.ProxyGuestTest do
     assert {:ok, %{base_image: "ubuntu-24.04"}} = VM.resolve_spawn_network(opts)
   end
 
+  @tag :integration
+  test "a filesystem snapshot supplies the clone base image before boot", %{root: root} do
+    id = Mjolnir.VmId.generate()
+    source = Path.join([root, "@vms", id])
+    File.mkdir_p!(Path.dirname(source))
+    assert {_, 0} = System.cmd("btrfs", ["subvolume", "create", source])
+    on_exit(fn -> Mjolnir.BTRFS.delete_subvolume(source) end)
+
+    vm = %VM{id: id, hypervisor: Mjolnir.Hypervisor.Mock, config: %{base_image: "proxy-fixture"}}
+
+    assert {:reply, {:ok, _}, _} =
+             VM.handle_call({:snapshot, "saved", []}, {self(), make_ref()}, vm)
+
+    on_exit(fn -> Mjolnir.BTRFS.delete_snapshot("saved") end)
+
+    assert {:ok, %{metadata: %{base_image: "proxy-fixture"}}} =
+             Mjolnir.BTRFS.get_snapshot("saved")
+
+    assert {:ok, clone, {:continue, :boot}} =
+             VM.init(%{id: Mjolnir.VmId.generate(), snapshot: "saved"})
+
+    assert clone.config.base_image == "proxy-fixture"
+    assert clone.config.snapshot == "saved"
+
+    assert {:error, :proxy_guest_iroh_forbidden} =
+             VM.spawn(%{snapshot: "saved", enable_iroh: true})
+  end
+
   test "ordinary explicit false does not create a proxy class", %{root: root} do
     ordinary = Path.join([root, "@base", "ordinary"])
     File.mkdir_p!(Path.join(ordinary, "usr/local/bin"))

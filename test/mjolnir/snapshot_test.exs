@@ -53,9 +53,16 @@ defmodule Mjolnir.SnapshotTest do
 
       on_exit(fn -> Mjolnir.BTRFS.delete_snapshot(snapshot_name) end)
 
+      # A different default makes a lost base image visible even on a one-image test host.
+      default = Application.fetch_env!(:mjolnir, :default_base_image)
+      Application.put_env(:mjolnir, :default_base_image, "unused-clone-default")
+      on_exit(fn -> Application.put_env(:mjolnir, :default_base_image, default) end)
+
       # Phase 2: Restore from snapshot
       {:ok, vm2} = Mjolnir.VM.spawn(%{snapshot: snapshot_name})
       on_exit(fn -> Mjolnir.VM.stop(vm2.id) end)
+
+      assert vm2.config.base_image == vm1.config.base_image
 
       # Verify state was preserved
       {:ok, output} = Mjolnir.VM.exec(vm2.id, "cat /root/state.txt")

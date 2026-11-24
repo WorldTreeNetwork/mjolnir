@@ -138,8 +138,8 @@ defmodule Mjolnir.VmgenidThawTest do
     assert first != second
   end
 
-  test "thaw spawn keeps iroh off for a boolean or a legacy string false", %{root: root} do
-    for stored <- [false, "false"] do
+  test "thaw spawn restores boolean and historical string iroh settings", %{root: root} do
+    for {stored, expected} <- [{false, false}, {"false", false}, {true, true}, {"true", true}] do
       name = "iroh-#{System.unique_integer([:positive])}"
       File.mkdir_p!(Path.join([root, "@snapshots", name]))
       File.mkdir_p!(MemorySnapshot.memory_dir(name))
@@ -159,7 +159,7 @@ defmodule Mjolnir.VmgenidThawTest do
       )
 
       assert {:ok, opts} = VM.thaw(name, spawn_fun: fn opts -> {:ok, opts} end)
-      assert opts.enable_iroh == false
+      assert opts.enable_iroh === expected
       assert opts.secrets_mode == :none
       assert opts.restart_policy == :never
     end

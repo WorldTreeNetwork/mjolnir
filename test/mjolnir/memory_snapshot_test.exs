@@ -224,6 +224,29 @@ defmodule Mjolnir.MemorySnapshotTest do
       {:ok, root: tmp}
     end
 
+    test "freeze persists explicit false as a JSON boolean and thaw restores it", %{root: root} do
+      alias Mjolnir.VM
+
+      vm = %VM{
+        id: Mjolnir.VmId.generate(),
+        state: :running,
+        enable_iroh: false,
+        secrets_mode: :none,
+        config: %{base_image: "worker", vcpu_count: 1, mem_size_mib: 128}
+      }
+
+      opts = [pause_fun: fn _ -> :ok end, capture_fun: capture_ok(root)]
+
+      assert {:stop, :normal, {:ok, _}, _} =
+               VM.handle_call({:freeze, "worker", opts}, {self(), make_ref()}, vm)
+
+      metadata = root |> Path.join("@snapshots/worker.json") |> File.read!() |> Jason.decode!()
+      assert metadata["restore_config"]["enable_iroh"] === false
+
+      assert {:ok, %{enable_iroh: false}} =
+               VM.thaw("worker", spawn_fun: fn opts -> {:ok, opts} end)
+    end
+
     test "refuses a name whose memory dir already exists, without pausing", ctx do
       # Pausing first would stop a live VM for a freeze that was never going to
       # happen — and since vm.snapshot is terminal, a needless pause on the way
