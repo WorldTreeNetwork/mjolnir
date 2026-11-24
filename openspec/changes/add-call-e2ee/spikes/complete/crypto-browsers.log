@@ -1,0 +1,2 @@
+{"browser":"chromium","version":"158.0.8127.18","profile":"moq-e2ee-01-wip","cipher":"AES-128-GCM","root":"HKDF-SHA-256 nonextractable","rootExportRejected":true,"aesExportRejected":true,"byteKeyInterop":true,"tamperRejections":3,"derivedKeyBytes":16,"sameOriginDecrypt":true}
+{"browser":"firefox","version":"159.0","profile":"moq-e2ee-01-wip","cipher":"AES-128-GCM","root":"HKDF-SHA-256 nonextractable","rootExportRejected":true,"aesExportRejected":true,"byteKeyInterop":true,"tamperRejections":3,"derivedKeyBytes":16,"sameOriginDecrypt":true}

@@ -16,3 +16,7 @@ dist/
 *.wav
 *.h264
 *.raw
+
+# Evidence transcripts are committed (root ignores *.log).
+!complete/*.log
+!complete/logs/*.log

@@ -1,0 +1,6 @@
+{"mode": "encrypted", "packetsWithStreamData": 14255, "streamSegments": 13730, "reassembledFragments": 5934, "bytes": 1252766, "holes": 0, "capturedPayloadMatches": {"catalog.json": 1, "video": 188, "audio": 200}, "markers": {"catalog.json": false, "video": true, "audio": false, "alice/call": false}, "decoder": "ffmpeg VP8 IVF -> framemd5", "decoderExit": 69, "decodedFrames": 0, "uniqueDecodedFrames": 0, "decoderErrorBytes": 39999}
+Traceback (most recent call last):
+  File "/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-call-e2ee/spikes/complete/extract.py", line 64, in <module>
+    else:assert len(frames)==0 and not any(markers.values())
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

@@ -1,0 +1,61 @@
+pub: root export rejected InvalidAccessError
+pub: https://127.0.0.1:63107 connected via WebTransport
+pub: https://127.0.0.1:63107 negotiated ALPN: moq-lite-06
+pub: connected webtransport moq-lite-06
+pub: announce: prefix=
+pub: You should append .hang to broadcast name "local" to make the catalog format explicit.
+pub: [JavaScript Warning: "The execution of microtasks on this page was reordered to avoid unsafe execution." {file: "http://localhost:8124/?role=pub&relay=https%3A%2F%2F127.0.0.1%3A63107%2F&hash=c2f19a3f87e5102acbc53e02002199b130a16a912a510735df59bf97cc045e1a" line: 0}]
+pub: announce: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 active=true instance=01a20c59-933a-718c-964f-b274f57495a0
+pub: encrypt bridge: track "catalog.json" -> physical 0r-oCzksvt--99oPAJmkAis6_xU8sl8o2p9AklsuzyyLdnMvkfHpGN8-HSo {"timescale":1000,"maxAgeMs":30000,"priority":100}
+pub: encrypt bridge: catalog.json group 385
+pub: encrypt bridge: track "video" -> physical B9IJtOfGGHQmOicQxNsQleokU3-zEz7Vf9s4fRfIXrsvOv2SAzUhK46hxAI {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+pub: published alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0
+pub: encrypt bridge: track "audio" -> physical djEPcRdl0ol-ApZyKtPwJSXsERRXinXyb35_zhwS-tV2MDw8WnrxQ9DZv8U {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+pub: Using MediaStreamTrackProcessor polyfill; performance might suffer.
+{"browser":"firefox","version":"159.0","role":"pub","metrics":{},"fragment":""}
+pub: encoding audio JSHandle@object
+pub: encrypt bridge: catalog.json group 416
+pub: encrypt bridge: audio group 415333
+pub: encrypt bridge: audio group 435333
+pub: encrypt bridge: video group 503340
+sub: root export rejected InvalidAccessError
+sub: https://127.0.0.1:63107 connected via WebTransport
+sub: https://127.0.0.1:63107 negotiated ALPN: moq-lite-06
+sub: connected webtransport moq-lite-06
+sub: announced: prefix=
+sub: announced: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 active=true instance=9fe8e38aafa3a10aa528f47b9f777379
+sub: announce: prefix=
+sub: discovered alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0
+sub: subscribe start: id=0 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=96kCFKDazUgXgcZZhVoHec09IOEVUXncONxrjA3DCu6CXbi20jvSV2M0kqU
+pub: track info: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=96kCFKDazUgXgcZZhVoHec09IOEVUXncONxrjA3DCu6CXbi20jvSV2M0kqU
+pub: publish ok: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=96kCFKDazUgXgcZZhVoHec09IOEVUXncONxrjA3DCu6CXbi20jvSV2M0kqU
+sub: subscribe ok: id=0 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=96kCFKDazUgXgcZZhVoHec09IOEVUXncONxrjA3DCu6CXbi20jvSV2M0kqU
+sub: decrypt bridge: track "catalog.json" {"timescale":1000,"maxAgeMs":30000,"priority":100}
+sub: decrypt bridge: track "video" {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+sub: subscribe start: id=1 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=0r-oCzksvt--99oPAJmkAis6_xU8sl8o2p9AklsuzyyLdnMvkfHpGN8-HSo
+sub: decrypt bridge: track "audio" {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+sub: subscribe start: id=2 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=B9IJtOfGGHQmOicQxNsQleokU3-zEz7Vf9s4fRfIXrsvOv2SAzUhK46hxAI
+pub: track info: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=0r-oCzksvt--99oPAJmkAis6_xU8sl8o2p9AklsuzyyLdnMvkfHpGN8-HSo
+sub: subscribe start: id=3 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=djEPcRdl0ol-ApZyKtPwJSXsERRXinXyb35_zhwS-tV2MDw8WnrxQ9DZv8U
+pub: publish ok: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=0r-oCzksvt--99oPAJmkAis6_xU8sl8o2p9AklsuzyyLdnMvkfHpGN8-HSo
+sub: subscribe ok: id=1 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=0r-oCzksvt--99oPAJmkAis6_xU8sl8o2p9AklsuzyyLdnMvkfHpGN8-HSo
+pub: track info: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=B9IJtOfGGHQmOicQxNsQleokU3-zEz7Vf9s4fRfIXrsvOv2SAzUhK46hxAI
+pub: track info: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=djEPcRdl0ol-ApZyKtPwJSXsERRXinXyb35_zhwS-tV2MDw8WnrxQ9DZv8U
+pub: publish ok: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=djEPcRdl0ol-ApZyKtPwJSXsERRXinXyb35_zhwS-tV2MDw8WnrxQ9DZv8U
+sub: subscribe ok: id=2 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=B9IJtOfGGHQmOicQxNsQleokU3-zEz7Vf9s4fRfIXrsvOv2SAzUhK46hxAI
+sub: subscribe ok: id=3 broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=djEPcRdl0ol-ApZyKtPwJSXsERRXinXyb35_zhwS-tV2MDw8WnrxQ9DZv8U
+sub: decrypt bridge: catalog.json group 442 first frame 503 bytes
+sub: received catalog hang local JSHandle@object
+pub: publish ok: broadcast=alice/YeprHZ7j_0xyBJVwDh_iPw/01a20c59-933a-718c-964f-b274f57495a0 track=B9IJtOfGGHQmOicQxNsQleokU3-zEz7Vf9s4fRfIXrsvOv2SAzUhK46hxAI
+sub: decrypt bridge: audio group 655333 first frame 223 bytes
+sub: decrypt bridge: video group 503340 first frame 341 bytes
+sub: decrypt bridge: audio group 675333 first frame 219 bytes
+sub: audio underflow: 165ms
+pub: reset a lower stream to make room: sendOrder=-2238811832582145 waiting=-2237437443047425
+sub: decrypt bridge: video group error TooFarBehind: lagged: frames were evicted before being read
+pub: encrypt bridge: video group 2561680
+sub: decrypt bridge: video group 2561680 first frame 311 bytes
+sub: skipping missing groups: track=video 503341 -> 2561680
+sub: PLAYBACK {"uniqueFrames":15,"samples":45056,"rms":0.6737040606722763,"peak":1.0093185901641846,"decodedVideo":33,"videoError":""}
+{"browser":"firefox","version":"159.0","role":"sub","metrics":{"uniqueFrames":15,"samples":45056,"rms":0.6737040606722763,"peak":1.0093185901641846,"decodedVideo":33,"videoError":""},"fragment":""}
+{"requestCount":9,"contentKeyLeaks":0}

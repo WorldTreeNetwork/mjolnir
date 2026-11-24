@@ -1,0 +1,31 @@
+vite v8.3.8 building client environment for production...
+transforming...
+✓ 547 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                       0.11 kB │ gzip:   0.12 kB
+dist/assets/capture-worklet.js                        0.36 kB
+dist/assets/capture-worker.js                         0.64 kB
+dist/assets/render-worklet.js                        15.54 kB
+dist/assets/libav-6.10.9.0-opus-aac-af.wasm.mjs     287.08 kB
+dist/assets/libav-6.10.9.0-opus-aac-af.wasm.wasm  1,769.21 kB │ gzip: 761.63 kB
+dist/assets/capture-worklet-DPvMwYp7.js               0.45 kB │ gzip:   0.33 kB
+dist/assets/srt-parser-DBLyZhWU.js                    0.46 kB │ gzip:   0.31 kB
+dist/assets/capture-worker-CVcZR5CB.js                0.73 kB │ gzip:   0.44 kB
+dist/assets/errors-6LbYhn-A.js                        1.13 kB │ gzip:   0.35 kB
+dist/assets/ssa-parser-BCTUNeRx.js                    4.59 kB │ gzip:   2.00 kB
+dist/assets/cmaf-rrhBGVUN.js                          5.60 kB │ gzip:   2.35 kB
+dist/assets/render-worklet-li1WH6oz.js               15.63 kB │ gzip:   5.37 kB
+dist/assets/captions-fjaXUlx9.js                     17.74 kB │ gzip:   6.88 kB
+dist/assets/libav-opus-aac-af-CAPYGbzD.js            26.48 kB │ gzip:   7.51 kB
+dist/assets/src-aD9pc_i8.js                          44.84 kB │ gzip:  13.44 kB
+dist/assets/main-Bgs2lSet.js                         49.78 kB │ gzip:  11.52 kB
+dist/assets/connection-CuvUqTM-.js                  110.88 kB │ gzip:  33.31 kB
+dist/assets/index-DyaaNom0.js                       746.04 kB │ gzip: 234.15 kB
+
+✓ built in 765ms
+[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.

@@ -1,0 +1,15 @@
+   Compiling call-e2ee-spikes v0.0.0 (/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-call-e2ee/spikes/rust)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.25s
+     Running tests/complete_native.rs (native/mjolnir_relay/target/debug/deps/complete_native-c8b8af1378fe332b)
+
+running 1 test
+native bridge listed catalog.json scale Some(Timescale::MILLI)
+native bridge listed catalog scale Some(Timescale::MILLI)
+native bridge listed opus scale Some(Timescale::MICRO)
+native bridge listed video scale Some(Timescale::MICRO)
+native moving pixel checksums=20
+NATIVE PLAYBACK decoded_frames=20 audio_samples=18888 peak=0.5093922 stats=PublishStats { source_fps: None, renditions: {"video": EncodeStats { size: Some(Size { width: 320, height: 180 }), fps: None, bitrate: None, encode_time: Some(337.176µs), keyframe_bytes: Some(4190), delta_bytes: Some(588), keyframe_interval: None, track: "video" }}, sent: {"opus": Rendition { frames: 39, bytes: 3354, keyframes: 0, skipped: 0, bitrate: Some(32000) }, "video": Rendition { frames: 24, bytes: 17978, keyframes: 1, skipped: 0, bitrate: None }}, audio: Some(AudioEncodeStats { codec: Some("opus"), frames: 39, dropped: 0 }) }
+test real_native_media ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.20s
+
