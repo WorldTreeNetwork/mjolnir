@@ -1,0 +1,10 @@
+  --> tests/e2ee_iroh_live.rs:47:14
+  --> tests/e2ee_iroh_live.rs:47:27
+warning: `call-e2ee-spikes` (test "e2ee_iroh_live") generated 2 warnings (run `cargo fix --test "e2ee_iroh_live" -p call-e2ee-spikes` to apply 2 suggestions)
+spike e2ee-iroh-live: iroh-live published t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/r1/alice/WizDAU0CTwZI5yCky5IYrg (absolute; WebTransport reads alice/WizDAU0CTwZI5yCky5IYrg)
+spike e2ee-iroh-live: route instance as an epoch = None (iroh-live routes with a minted instance)
+spike e2ee-iroh-live: bob (WebTransport) decrypted "PLAINTEXT-MARKER-iroh-42"
+spike e2ee-iroh-live: bob (WebTransport) decrypted "PLAINTEXT-MARKER-iroh-43"
+spike e2ee-iroh-live: bob (WebTransport) decrypted "PLAINTEXT-MARKER-iroh-44"
+spike e2ee-iroh-live: PROVEN (node layer + in-process bridge, no fork)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.72s

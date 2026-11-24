@@ -15,6 +15,7 @@ pub struct Running {
     pub trigger: moq_relay::shutdown::Trigger,
     pub join: tokio::task::JoinHandle<anyhow::Result<()>>,
     pub key: Key,
+    pub cluster: moq_relay::cluster::Cluster,
     _dir: tempfile::TempDir,
 }
 
@@ -55,6 +56,7 @@ pub async fn start() -> Running {
     let quic = relay.quic_addr().unwrap();
     let trigger = relay.shutdown_trigger().clone();
     let admissions = relay.admissions().unwrap();
+    let cluster = relay.cluster().clone();
     let ready = relay.ready();
     let join = tokio::spawn(relay.run());
     ready.wait().await.unwrap();
@@ -74,6 +76,7 @@ pub async fn start() -> Running {
         trigger,
         join,
         key,
+        cluster,
         _dir: dir,
     }
 }
@@ -128,4 +131,54 @@ pub fn credential(secret: [u8; 32], kid: u64) -> moq_e2ee::Credential {
 
 pub fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Mount the Mjolnir Iroh session handler on the same relay cluster.
+pub async fn iroh_relay(running: &Running) -> (iroh::protocol::Router, iroh::EndpointId) {
+    let policy = mjolnir_relay::TokenPolicy {
+        keys: Arc::new(Mutex::new(KeySet {
+            keys: vec![Arc::new(running.key.public().unwrap())],
+        })),
+        draining: Arc::new(AtomicBool::new(false)),
+        keys_ok: Arc::new(AtomicBool::new(true)),
+        max_ttl: Duration::from_secs(3600),
+    };
+    let alpns = moq_transport_iroh::alpns()
+        .into_iter()
+        .map(<[u8]>::to_vec)
+        .collect();
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .secret_key(iroh::SecretKey::generate())
+        .alpns(alpns)
+        .bind()
+        .await
+        .unwrap();
+    let id = endpoint.id();
+    let router = mjolnir_relay::IrohSessions::new(running.cluster.clone())
+        .with_policy(policy)
+        .mount(iroh::protocol::Router::builder(endpoint))
+        .spawn();
+    (router, id)
+}
+
+pub async fn iroh_node(relay: iroh::EndpointId, token: &str) -> (iroh_live::Node, iroh_live::RelayLink) {
+    use iroh::Watcher;
+    let client = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await
+        .unwrap();
+    let node = iroh_live::Node::new(client, iroh_live::NodeConfig::default());
+    let config = iroh_live::RelayConfig::iroh(relay)
+        .with_consume(false)
+        .with_token(token.parse().unwrap());
+    let link = node.attach_relay(config).unwrap();
+    let mut status = link.status();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while status.get() != iroh_live::RelayStatus::Connected {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("iroh link connected");
+    (node, link)
 }
