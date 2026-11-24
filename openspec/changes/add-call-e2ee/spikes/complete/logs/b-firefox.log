@@ -1,0 +1,58 @@
+pub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/alice","semantic":"call"}
+pub: root export rejected InvalidAccessError
+pub: https://127.0.0.1:62236 connected via WebTransport
+pub: https://127.0.0.1:62236 negotiated ALPN: moq-lite-06
+pub: connected webtransport moq-lite-06
+pub: announce: prefix=
+pub: You should append .hang to broadcast name "local" to make the catalog format explicit.
+pub: [JavaScript Warning: "The execution of microtasks on this page was reordered to avoid unsafe execution." {file: "http://localhost:8124/?role=pub&relay=https%3A%2F%2F127.0.0.1%3A62236%2F&hash=efa3b3e1e4512e616b08a9612ad6e24b17edcad39fd6de7fb575dcb4d4aa2262&ctx=label&label=alice&codec=vp8" line: 0}]
+pub: announce: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 active=true instance=01a20c76-d56a-7637-9c94-805f81121698
+pub: encrypt bridge: track "catalog.json" -> physical IkXUNV6KGkANByUS1k5dtNgnjZhboepmLg3gSNsC_EJIBnl17wRyNBg1SGo {"timescale":1000,"maxAgeMs":30000,"priority":100}
+pub: encrypt bridge: catalog.json group 393
+pub: encrypt bridge: track "video" -> physical 2bxjljJnSjFAlOgBQNSQnxcB2Q8S7El3HVCq6G7aJH4jkmbICeIPDOx-N-I {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+pub: published alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698
+pub: encrypt bridge: track "audio" -> physical Z08Y2PvQkrLA7xZqO1GbuwgWviSUwQ9NkF4BjGg0U-utTixXtfKQ8HOFPOI {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+{"browser":"firefox","version":"159.0","role":"pub","metrics":{},"fragment":""}
+pub: Using MediaStreamTrackProcessor polyfill; performance might suffer.
+pub: encoding audio JSHandle@object
+pub: encrypt bridge: catalog.json group 469
+pub: encrypt bridge: audio group 465333
+pub: encrypt bridge: audio group 485333
+pub: encrypt bridge: video group 567200
+sub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/bob","semantic":"call"}
+sub: root export rejected InvalidAccessError
+sub: https://127.0.0.1:62236 connected via WebTransport
+sub: https://127.0.0.1:62236 negotiated ALPN: moq-lite-06
+sub: connected webtransport moq-lite-06
+sub: announced: prefix=
+sub: announced: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 active=true instance=dd663d0ebbcb0052bb464e5bb9f1e2e2
+sub: announce: prefix=
+sub: discovered alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698
+sub: subscribe start: id=0 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=T9CzmLb9Mj6Z74OXTeSF6zcOmzoHOy25_sg0L67DN0V4m5Oo9VhP2Vm28jY
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=T9CzmLb9Mj6Z74OXTeSF6zcOmzoHOy25_sg0L67DN0V4m5Oo9VhP2Vm28jY
+sub: subscribe ok: id=0 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=T9CzmLb9Mj6Z74OXTeSF6zcOmzoHOy25_sg0L67DN0V4m5Oo9VhP2Vm28jY
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=T9CzmLb9Mj6Z74OXTeSF6zcOmzoHOy25_sg0L67DN0V4m5Oo9VhP2Vm28jY
+sub: decrypt bridge: track "catalog.json" {"timescale":1000,"maxAgeMs":30000,"priority":100}
+sub: decrypt bridge: track "video" {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+sub: subscribe start: id=1 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=IkXUNV6KGkANByUS1k5dtNgnjZhboepmLg3gSNsC_EJIBnl17wRyNBg1SGo
+sub: decrypt bridge: track "audio" {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+sub: subscribe start: id=2 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=2bxjljJnSjFAlOgBQNSQnxcB2Q8S7El3HVCq6G7aJH4jkmbICeIPDOx-N-I
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=IkXUNV6KGkANByUS1k5dtNgnjZhboepmLg3gSNsC_EJIBnl17wRyNBg1SGo
+sub: subscribe start: id=3 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=Z08Y2PvQkrLA7xZqO1GbuwgWviSUwQ9NkF4BjGg0U-utTixXtfKQ8HOFPOI
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=2bxjljJnSjFAlOgBQNSQnxcB2Q8S7El3HVCq6G7aJH4jkmbICeIPDOx-N-I
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=IkXUNV6KGkANByUS1k5dtNgnjZhboepmLg3gSNsC_EJIBnl17wRyNBg1SGo
+sub: subscribe ok: id=1 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=IkXUNV6KGkANByUS1k5dtNgnjZhboepmLg3gSNsC_EJIBnl17wRyNBg1SGo
+sub: subscribe ok: id=2 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=2bxjljJnSjFAlOgBQNSQnxcB2Q8S7El3HVCq6G7aJH4jkmbICeIPDOx-N-I
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=2bxjljJnSjFAlOgBQNSQnxcB2Q8S7El3HVCq6G7aJH4jkmbICeIPDOx-N-I
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=Z08Y2PvQkrLA7xZqO1GbuwgWviSUwQ9NkF4BjGg0U-utTixXtfKQ8HOFPOI
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=Z08Y2PvQkrLA7xZqO1GbuwgWviSUwQ9NkF4BjGg0U-utTixXtfKQ8HOFPOI
+sub: decrypt bridge: catalog.json group 504 first frame 556 bytes
+sub: received catalog hang local JSHandle@object
+sub: subscribe ok: id=3 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-d56a-7637-9c94-805f81121698 track=Z08Y2PvQkrLA7xZqO1GbuwgWviSUwQ9NkF4BjGg0U-utTixXtfKQ8HOFPOI
+sub: decrypt bridge: audio group 705333 first frame 221 bytes
+sub: decrypt bridge: video group 567200 first frame 320 bytes
+sub: decrypt bridge: audio group 725333 first frame 221 bytes
+sub: audio underflow: 176ms
+sub: PLAYBACK {"uniqueFrames":15,"samples":30720,"rms":0.6565864335498731,"peak":1.0076956748962402,"decodedVideo":31,"videoError":""}
+{"browser":"firefox","version":"159.0","role":"sub","metrics":{"uniqueFrames":15,"samples":30720,"rms":0.6565864335498731,"peak":1.0076956748962402,"decodedVideo":31,"videoError":""},"fragment":""}
+{"requestCount":9,"contentKeyLeaks":0}

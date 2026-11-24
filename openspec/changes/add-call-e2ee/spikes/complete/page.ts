@@ -1,6 +1,6 @@
 import { Connection, Origin, Path } from '@moq/net';
 import { Credential, Epoch } from '@moq/e2ee';
-import {inviteFields,announcedPath} from './validation.ts';
+import {inviteFields,announcedPath,contextFor,semanticFor,variantOf} from './validation.ts';
 import * as Publish from '../../publish/src/index.ts';
 import * as Watch from '../../watch/src/index.ts';
 import { encryptBridge, decryptBridge } from './bridge.ts';
@@ -14,13 +14,15 @@ const enc=new TextEncoder();
 function parseInvite() {
  const {raw,token,kid}=inviteFields(invite);
  const claims=JSON.parse(atob(token.split('.')[1].replaceAll('-','+').replaceAll('_','/')));
- return {raw,token,kid,context:'mjolnir-call/v1/'+claims.root.split('/').slice(1).join('/')};
+ return {raw,token,kid,root:claims.root as string};
 }
 async function main(){
  Publish.assets(new URL("/assets/",location.href));Watch.assets(new URL("/assets/",location.href));
  const v=parseInvite();
  const key=await crypto.subtle.importKey('raw',v.raw,'HKDF',false,['deriveBits']);v.raw.fill(0);
- const cred=new Credential({context:enc.encode(v.context),kid:v.kid,secret:key});
+ const variant=variantOf(q),label=q.get('label')??'alice',watch=q.get('watch')??'alice',codec=q.get('codec')??'vp8';
+ const credFor=(l:string,kid=v.kid,secret:CryptoKey|Uint8Array=key)=>new Credential({context:enc.encode(contextFor(variant,v.root,l)),kid,secret});
+ const cred=credFor(label);w.layout={variant,context:contextFor(variant,v.root,label).replace(/v1\/[^/]+\//,'v1/<owner>/'),semantic:semanticFor(variant,label)};log('layout '+JSON.stringify(w.layout));
  try {await crypto.subtle.exportKey('raw',key);throw Error('EXPORT SUCCEEDED')} catch(e:any){if(e.message==='EXPORT SUCCEEDED')throw e;log('root export rejected '+e.name)}
  const relay=new Origin.Producer();
  const url=new URL(q.get('relay')!);url.searchParams.set('jwt',v.token);
@@ -38,42 +40,46 @@ async function main(){
   const capture=new Publish.Video.Capture({source:video});
   const broadcast=new Publish.Broadcast({origin:local,enabled:true,name:LOCAL,display:capture.out.display,rotation:capture.out.rotation});
   broadcast.catalog.mutate((c:any)=>{c.spike={displayName:'E2EE-TEST-DISPLAY-ALICE-57'}});
-  const ve=new Publish.Video.Encoder('video',{broadcast,capture,enabled:true,config:{codec:'vp8'}});
+  const ve=new Publish.Video.Encoder('video',{broadcast,capture,enabled:true,config:{codec}});
   const audioCapture=new Publish.Audio.Capture({source:dst.stream.getAudioTracks()[0]});
   const ae=new Publish.Audio.Encoder('audio',{broadcast,capture:audioCapture,enabled:true});
   w.publisher={broadcast,ve,ae,ac};
-  const generation=cred.produce();const path=Path.from('alice/'+await cred.path('alice')+'/'+generation.epoch);
+  const generation=cred.produce();const path=Path.from(label+'/'+await cred.path(semanticFor(variant,label))+'/'+generation.epoch);
   const info=control?{physical:{'catalog.json':'catalog.json',video:'video',audio:'audio'}}:await encryptBridge({local,localPath:LOCAL,relay,path,generation,log});
   w.info={path:control?LOCAL:path,physical:info.physical};
   w.rotate=async(retire=true)=>{
-   const next=new Credential({context:enc.encode(v.context),kid:2,secret:new Uint8Array(32).fill(34)});const gen=next.produce();
-   const np=Path.from('alice/'+await next.path('alice')+'/'+gen.epoch);
+   const next=credFor(label,2,new Uint8Array(32).fill(34));const gen=next.produce();
+   const np=Path.from(label+'/'+await next.path(semanticFor(variant,label))+'/'+gen.epoch);
    const bridge=await encryptBridge({local,localPath:LOCAL,relay,path:np,generation:gen,log});
    if(retire)(info as any).retire();return {path:np,physical:bridge.physical};
   };
   w.retire=()=>{(info as any).retire()};
+  // Passive-capture reference: read our own ciphertext from the local relay origin (no wire traffic).
+  w.cipher={};w.recordCipher=async(limit=200)=>{const f=relay.follow(w.info.path);let b=f.active.peek();while(!b){await f.active.changed();b=f.active.peek()}
+   for(const [semantic,physical] of Object.entries(info.physical)){w.cipher[semantic]=[];void(async()=>{const sub=b!.track(physical as string).subscribe({});for(;;){const g=await sub.recvGroup();if(!g)return;let index=0;void(async()=>{for(let fr=await g.readFrame();fr;fr=await g.readFrame()){if(w.cipher[semantic].length<limit)w.cipher[semantic].push({group:String(g.start),index:index++,payload:btoa(String.fromCharCode(...fr.payload))})}})().catch(()=>{})}})().catch(()=>{})}};
   log('published '+path);w.ready=true;
  }else{
-  let path:any,epoch:any;
+  let path:any,epoch:any,rcred:any=cred;
  if(control){path=LOCAL}else{
   for await(const ev of relay.announced()){
    if(ev.kind!=='present'&&ev.kind!=='available')continue;
    const parts=String(ev.prefix).split('/');
-   if(parts.length!==3||parts[0]!=='alice'||parts[1]!==await cred.path(parts[0]))continue;
-   epoch=(await announcedPath(String(ev.prefix),cred)).epoch;path=Path.from(parts.join('/'));break;
+   if(parts.length!==3||parts[0]!==watch)continue;
+   let ok;try{ok=await announcedPath(String(ev.prefix),l=>credFor(l),variant)}catch(e){log('rejected announcement '+ev.prefix+' '+e);continue}
+   epoch=ok.epoch;rcred=ok.credential;path=Path.from(parts.join('/'));break;
   }
   }
   if(!path)throw Error('no valid announcement');
   log('discovered '+path);
-  if(!control)await decryptBridge({relay,path,credential:cred,appEpoch:()=>epoch,local,localPath:LOCAL,log});
+  if(!control)await decryptBridge({relay,path,credential:rcred,appEpoch:()=>epoch,local,localPath:LOCAL,log});
   const canvas=document.createElement('canvas');document.body.append(canvas);
   const player=new Watch.Player({origin:local,name:LOCAL,video:{canvas,backend:'2d'},audio:{muted:false,volume:0}});w.player=player;
   w.readMetrics=()=>({video:w.player.video.out.stats.peek()?.frameCount??0,audioBytes:w.player.audio.out.stats.peek()?.bytesReceived??0,audioTime:w.player.audio.out.timestamp.peek()?.asMicros()??0});
   w.switchKey=async()=>{
-   const next=new Credential({context:enc.encode(v.context),kid:2,secret:new Uint8Array(32).fill(34)});
+   const next=credFor(watch,2,new Uint8Array(32).fill(34));
    for await(const ev of relay.announced()){
     if(ev.kind!=='present')continue;const parts=String(ev.prefix).split('/');
-    if(parts.length!==3||parts[0]!=='alice'||parts[1]!==await next.path('alice'))continue;
+    if(parts.length!==3||parts[0]!==watch||parts[1]!==await next.path(semanticFor(variant,watch)))continue;
     const epoch=Epoch.parse(parts[2]);const newLocal=Path.from('rekey-local');
     await decryptBridge({relay,path:Path.from(ev.prefix),credential:next,appEpoch:()=>epoch,local,localPath:newLocal,log});
     w.player.close();w.player=new Watch.Player({origin:local,name:newLocal,video:{canvas,backend:'2d'},audio:{muted:false,volume:0}});

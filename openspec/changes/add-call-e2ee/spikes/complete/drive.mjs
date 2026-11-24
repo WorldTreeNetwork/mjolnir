@@ -14,7 +14,7 @@ try{
  page.on('console',m=>console.log(role+': '+m.text().replaceAll(token,'[TOKEN]')));
  page.on('console',async m=>{if(m.type()==='error')for(const a of m.args())try{console.log(role+' DETAIL '+await a.evaluate(v=>v?.stack||v?.message||String(v)))}catch{}});
  page.on('pageerror',e=>console.log(role+': ERROR '+e));
- const q=new URLSearchParams({role,relay:'https://'+addr+'/',hash});
+ const q=new URLSearchParams({role,relay:'https://'+addr+'/',hash,ctx:process.env.CTX||'label',label:role==='pub'?'alice':'bob',codec:process.env.CODEC||'vp8'});
  const fragment=new URLSearchParams({v:'1',p:'moq-e2ee-01-wip',kid:'1',k:secret.toString('base64url'),t:token});
  await page.goto('http://localhost:8124/?'+q+'#'+fragment);
  await page.waitForFunction(()=>window.ready||window.error,null,{timeout:45000});

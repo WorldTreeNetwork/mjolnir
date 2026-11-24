@@ -1,0 +1,69 @@
+pub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/alice","semantic":"call"}
+pub: root export rejected NotSupportedError
+pub: https://127.0.0.1:62236 connected via WebTransport
+pub: https://127.0.0.1:62236 negotiated ALPN: moq-lite-06
+pub: connected webtransport moq-lite-06
+pub: You should append .hang to broadcast name "local" to make the catalog format explicit.
+pub: encrypt bridge: track "catalog.json" -> physical D-jyscHQobX95RqlhpQbZ7EWBFYjZkSn_SmOdmDcswBBh6gaumi4o-ktb8Q {"timescale":1000,"maxAgeMs":30000,"priority":100}
+pub: encrypt bridge: catalog.json group 213
+pub: encrypt bridge: track "video" -> physical cC7vsBR8uXiIjaqL7LT-RPtLlvq1MnC1izLFy-KQZIlTRvvEOiY9Tcp_pbU {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+pub: published alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01
+pub: encrypt bridge: track "audio" -> physical kYb2QYsV-H8F8Xj7fBW2KnzhEXkpLk7JQVVpZ6EZudkRgF2ZY7HAulAP7IU {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+pub: announce: prefix=
+pub: announce: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 active=true instance=01a20c76-c697-7639-ac8c-db8a5d877f01
+pub: encrypt bridge: catalog.json group 245
+{"browser":"chromium","version":"158.0.8127.18","role":"pub","metrics":{},"fragment":""}
+pub: encoding audio {codec: opus, sampleRate: 48000, numberOfChannels: 2, bitrate: 64000, opus: Object}
+pub: encrypt bridge: audio group 252967
+pub: encrypt bridge: video group 290675
+pub: encrypt bridge: audio group 272967
+sub: layout {"variant":"label","context":"mjolnir-call/v1/<owner>/r1/bob","semantic":"call"}
+sub: root export rejected NotSupportedError
+sub: https://127.0.0.1:62236 connected via WebTransport
+sub: https://127.0.0.1:62236 negotiated ALPN: moq-lite-06
+sub: connected webtransport moq-lite-06
+sub: announced: prefix=
+sub: announce: prefix=
+sub: announced: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 active=true instance=82b3e2ef66d86a382ccac0e5f7767282
+sub: discovered alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01
+sub: subscribe start: id=0 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=RLIDAPcj3LFx2QsLzEOFMwBxS9bzt_AcgwdXZGBZrSOSMfakZj13dLlEiS4
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=RLIDAPcj3LFx2QsLzEOFMwBxS9bzt_AcgwdXZGBZrSOSMfakZj13dLlEiS4
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=RLIDAPcj3LFx2QsLzEOFMwBxS9bzt_AcgwdXZGBZrSOSMfakZj13dLlEiS4
+sub: subscribe ok: id=0 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=RLIDAPcj3LFx2QsLzEOFMwBxS9bzt_AcgwdXZGBZrSOSMfakZj13dLlEiS4
+sub: decrypt bridge: track "catalog.json" {"timescale":1000,"maxAgeMs":30000,"priority":100}
+sub: decrypt bridge: track "video" {"timescale":1000000,"maxAgeMs":30000,"priority":60}
+sub: subscribe start: id=1 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=D-jyscHQobX95RqlhpQbZ7EWBFYjZkSn_SmOdmDcswBBh6gaumi4o-ktb8Q
+sub: decrypt bridge: track "audio" {"timescale":1000000,"maxAgeMs":30000,"priority":80}
+sub: subscribe start: id=2 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=cC7vsBR8uXiIjaqL7LT-RPtLlvq1MnC1izLFy-KQZIlTRvvEOiY9Tcp_pbU
+sub: subscribe start: id=3 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=kYb2QYsV-H8F8Xj7fBW2KnzhEXkpLk7JQVVpZ6EZudkRgF2ZY7HAulAP7IU
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=D-jyscHQobX95RqlhpQbZ7EWBFYjZkSn_SmOdmDcswBBh6gaumi4o-ktb8Q
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=D-jyscHQobX95RqlhpQbZ7EWBFYjZkSn_SmOdmDcswBBh6gaumi4o-ktb8Q
+sub: subscribe ok: id=1 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=D-jyscHQobX95RqlhpQbZ7EWBFYjZkSn_SmOdmDcswBBh6gaumi4o-ktb8Q
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=cC7vsBR8uXiIjaqL7LT-RPtLlvq1MnC1izLFy-KQZIlTRvvEOiY9Tcp_pbU
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=cC7vsBR8uXiIjaqL7LT-RPtLlvq1MnC1izLFy-KQZIlTRvvEOiY9Tcp_pbU
+pub: track info: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=kYb2QYsV-H8F8Xj7fBW2KnzhEXkpLk7JQVVpZ6EZudkRgF2ZY7HAulAP7IU
+sub: subscribe ok: id=2 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=cC7vsBR8uXiIjaqL7LT-RPtLlvq1MnC1izLFy-KQZIlTRvvEOiY9Tcp_pbU
+pub: publish ok: broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=kYb2QYsV-H8F8Xj7fBW2KnzhEXkpLk7JQVVpZ6EZudkRgF2ZY7HAulAP7IU
+sub: subscribe ok: id=3 broadcast=alice/mI5WLvryMAlmeYGL3jVRWQ/01a20c76-c697-7639-ac8c-db8a5d877f01 track=kYb2QYsV-H8F8Xj7fBW2KnzhEXkpLk7JQVVpZ6EZudkRgF2ZY7HAulAP7IU
+sub: decrypt bridge: catalog.json group 254 first frame 556 bytes
+sub: received catalog hang local {video: Object, audio: Object, sync: Object, spike: Object}
+sub: decrypt bridge: audio group 272967 first frame 232 bytes
+sub: decrypt bridge: audio group 332967 first frame 165 bytes
+sub: decrypt bridge: video group 290675 first frame 302 bytes
+sub: skipping missing groups: track=audio 272968 -> 332967
+sub: Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently
+sub: skipping covered group: 552967 -> 572967
+sub: skipping covered group: 592967 -> 612967
+sub: skipping covered group: 692967 -> 712967
+sub: skipping covered group: 732967 -> 752967
+sub: skipping covered group: 752967 -> 772967
+sub: skipping covered group: 892967 -> 912967
+sub: skipping covered group: 932967 -> 952967
+sub: skipping covered group: 1352967 -> 1372967
+sub: skipping covered group: 1392967 -> 1412967
+sub: skipping covered group: 1512967 -> 1532967
+sub: skipping covered group: 1592967 -> 1612967
+sub: skipping covered group: 1752967 -> 1772967
+sub: PLAYBACK {"uniqueFrames":15,"samples":30720,"rms":0.6604004797375462,"peak":1.0769881010055542,"decodedVideo":48,"videoError":""}
+{"browser":"chromium","version":"158.0.8127.18","role":"sub","metrics":{"uniqueFrames":15,"samples":30720,"rms":0.6604004797375462,"peak":1.0769881010055542,"decodedVideo":48,"videoError":""},"fragment":""}
+{"requestCount":4,"contentKeyLeaks":0}
