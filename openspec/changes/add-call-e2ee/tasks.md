@@ -8,7 +8,7 @@ PENDING activation. Third advise ACCEPT at `reviews/2026-11-24-advise-3.md` (7cc
 - [x] P2. Historical browser frame API test, `spikes/e2ee-js.out`. Complete real Hang media now has `spikes/complete/logs/b-chromium.log` and `b-firefox.log`; original bundle failure is historical only.
 - [x] P3. Historical synthetic Node bridge test, `spikes/e2ee-iroh-live.out`; no epoch path segment was tested there. Complete label-layout native media now has `spikes/complete/logs/b-native.log`.
 - [x] P4. Historical second-broadcast/finish-close test, `spikes/e2ee-rekey.out`, with out-of-band epoch; not announcement discovery proof. Complete rekey uses announcements in the new layout (`spikes/complete/logs/b-rekey-run1.log`, `b-rekey-run2.log`).
-- [ ] Fresh advise after preparation
+- [x] Fresh advise after preparation — ACCEPT: `reviews/2026-11-24-advise-3.md` (review commit `7cc6222`); all six conditions landed in `c483bc9`. Product implementation remains blocked on Duke's profile/build and epoch-in-path answers; this check authorizes no run in this turn.
 - [ ] ASK (build gate, answer 2): Duke accepts epoch-in-path for `01-wip`, or chooses lite-07/upstream instance transport. Recommendation: use the tested path fallback only for this profile and revisit at the profile bump. Evidence: `spikes/e2ee-path.out`, `spikes/complete/logs/b-native.log`; design D2.
 - Recorded decision (not an open ASK): operator-served JavaScript trust boundary. Answered by Duke 2026-11-23 for this iteration, recorded in the review; non-extractable keys are only a partial mitigation. Evidence of export refusal but allowed use: `spikes/complete/logs/crypto-browsers.log`. This does not answer invite persistence or default-on profile.
 
