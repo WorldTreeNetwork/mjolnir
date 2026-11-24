@@ -1,0 +1,69 @@
+✔ I01 announcement alone cannot move mark (0.87975ms)
+✔ I02 candidates tried greatest first (0.306542ms)
+✔ I03 forged greater authentication failure falls through (0.220958ms)
+✔ I04 re-served older instance does not roll back (0.097458ms)
+✔ I05 plaintext wrong label and wrong opaque refused (0.087042ms)
+✔ I06 timeout retries after 3 seconds and counts budget (0.118167ms)
+✔ I07 successive timeout doubles backoff (0.081458ms)
+✔ I08 probing failure keeps accepted playback (0.071292ms)
+✔ I09 twelve attempt rolling budget (0.174916ms)
+✔ I10 authentication bars candidate for sixty seconds (0.111375ms)
+✔ I11 noncanonical epochs rejected (0.110708ms)
+✔ I12 ended selected instance keeps mark (0.119167ms)
+✔ I13 second device supersedes publisher only after authentication (0.087ms)
+✔ I14 reload new page loses credential and mark (0.066125ms)
+✔ I15 fast clock blocks honest lower until explicit page reset (0.056458ms)
+✔ I16 recorded greater manifest supersedes after each resume (0.056917ms)
+✔ I17 track failure keeps instance generation mark and mirror (0.539292ms)
+✔ I18 six resubscriptions then unavailable (0.072917ms)
+✔ I19 resubscription budget recovers after rolling minute (0.065292ms)
+✔ I20 resubscription budget is per track (0.048542ms)
+✔ I21 only manifest accepts instance (0.03675ms)
+✔ I22 late frame after probe timeout cannot accept (0.03375ms)
+✔ I23 timeout starts at subscription not announcement (0.033ms)
+✔ I24 invalid and backward policy clocks refused (0.188ms)
+✔ I25 immutable credential scope validation (0.073958ms)
+✔ I26 accepted failure is not candidate rejection (0.039292ms)
+✔ I27 withdrawal reannouncement cannot clear refusal or backoff (0.065292ms)
+✔ I28 announcement flood has bounded candidate memory (0.251ms)
+✔ I29 retracting announcement does not stop accepted media (0.034167ms)
+✖ I30 stale retired subscription failure cannot consume new epoch budget (0.099208ms)
+✔ G01 authentic first frame advances pair (0.040541ms)
+✔ G02 higher authenticated group advances pair (0.056708ms)
+✔ G03 equal group continues strictly above saved index (0.034917ms)
+✔ G04 frame replay cannot reopen (0.039458ms)
+✔ G05 manifest catalog zero window rejects older group (0.053875ms)
+✔ G06 forged high frame never advances mark (0.044958ms)
+✔ G07 media accepts unseen older start within 120ms (0.043791ms)
+✔ G08 window boundary inclusive and older refused (0.035833ms)
+✔ G09 late group frame index remembered independently (0.042792ms)
+✔ G10 mirror identity survives equal group continuation (0.041292ms)
+✔ G11 frame gap resumes at authenticated transport index (0.032125ms)
+✔ G12 group identities keep uint64 precision (0.031333ms)
+✔ G13 invalid nonce identities refused (0.122916ms)
+✔ G14 dense starts have bounded replay memory (1.456958ms)
+✔ G15 per instance and track marks do not mix (0.090584ms)
+✔ G16 changing window cannot reset existing mark (0.072791ms)
+ℹ tests 46
+ℹ suites 0
+ℹ pass 45
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 102.166583
+
+✖ failing tests:
+
+test at clients/call-crypto/reader-policy.test.ts:525:33
+✖ I30 stale retired subscription failure cannot consume new epoch budget (0.099208ms)
+  RangeError: policy clock must be monotonic milliseconds
+      at #clock (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:130:13)
+      at InstancePolicy.trackFailure (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:271:16)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:363:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

@@ -1,0 +1,98 @@
+✔ I01 announcement alone cannot move mark (0.723875ms)
+✔ I02 candidates tried greatest first (0.213042ms)
+✔ I03 forged greater authentication failure falls through (0.167084ms)
+✔ I04 re-served older instance does not roll back (0.092667ms)
+✔ I05 plaintext wrong label and wrong opaque refused (0.086208ms)
+✔ I06 timeout retries after 3 seconds and counts budget (0.08575ms)
+✔ I07 successive timeout doubles backoff (0.085ms)
+✔ I08 probing failure keeps accepted playback (0.074792ms)
+✔ I09 twelve attempt rolling budget (0.132ms)
+✔ I10 authentication bars candidate for sixty seconds (0.103583ms)
+✔ I11 noncanonical epochs rejected (0.072417ms)
+✔ I12 withdrawing selected instance keeps mark (0.089666ms)
+✔ I13 second device supersedes publisher only after authentication (0.079583ms)
+✔ I14 reload new page loses credential and mark (0.0485ms)
+✔ I15 fast clock blocks honest lower until explicit page reset (0.059959ms)
+✔ I16 recorded greater manifest supersedes after each resume (0.065292ms)
+✔ I17 track failure keeps instance generation mark and mirror (0.484416ms)
+✔ I18 six resubscriptions then unavailable (0.0665ms)
+✔ I19 resubscription budget recovers after rolling minute (0.056541ms)
+✔ I20 resubscription budget is per track (0.043166ms)
+✔ I21 only manifest accepts instance (0.03775ms)
+✔ I22 late frame after probe timeout cannot accept (0.032708ms)
+✔ I23 timeout starts at subscription not announcement (0.032708ms)
+✔ I24 invalid and backward policy clocks refused (0.189417ms)
+✔ I25 immutable credential scope validation (0.102417ms)
+✔ I26 accepted failure is not candidate rejection (0.034416ms)
+✖ I27 withdrawal reannouncement cannot clear refusal or backoff (0.474209ms)
+✖ I28 announcement flood has bounded candidate memory (0.288875ms)
+✔ G01 authentic first frame advances pair (0.053334ms)
+✔ G02 higher authenticated group advances pair (0.03775ms)
+✔ G03 equal group continues strictly above saved index (0.041375ms)
+✔ G04 frame replay cannot reopen (0.037834ms)
+✔ G05 manifest catalog zero window rejects older group (0.049042ms)
+✔ G06 forged high frame never advances mark (0.043625ms)
+✔ G07 media accepts unseen older start within 120ms (0.034292ms)
+✔ G08 window boundary inclusive and older refused (0.040583ms)
+✔ G09 late group frame index remembered independently (0.041625ms)
+✔ G10 mirror identity survives equal group continuation (0.04775ms)
+✔ G11 frame gap resumes at authenticated transport index (0.034ms)
+✔ G12 group identities keep uint64 precision (0.031541ms)
+✔ G13 invalid nonce identities refused (0.113667ms)
+✔ G14 dense starts have bounded replay memory (1.178ms)
+✔ G15 per instance and track marks do not mix (0.053584ms)
+✔ G16 changing window cannot reset existing mark (0.050292ms)
+ℹ tests 44
+ℹ suites 0
+ℹ pass 42
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 100.463625
+
+✖ failing tests:
+
+test at clients/call-crypto/reader-policy.test.ts:59:30
+✖ I27 withdrawal reannouncement cannot clear refusal or backoff (0.474209ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + '00000001-0000-7000-8000-000000000000'
+  - undefined
+
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:40:172)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '00000001-0000-7000-8000-000000000000',
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:59:30
+✖ I28 announcement flood has bounded candidate memory (0.288875ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  true !== false
+
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:41:142)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

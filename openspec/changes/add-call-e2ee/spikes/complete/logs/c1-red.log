@@ -1,0 +1,600 @@
+✖ I01 announcement alone cannot move mark (0.74825ms)
+✖ I02 candidates tried greatest first (0.063709ms)
+✖ I03 forged greater authentication failure falls through (0.053041ms)
+✖ I04 re-served older instance does not roll back (0.04675ms)
+✖ I05 plaintext wrong label and wrong opaque refused (0.062042ms)
+✖ I06 timeout retries after 3 seconds and counts budget (0.046208ms)
+✖ I07 successive timeout doubles backoff (0.049ms)
+✖ I08 probing failure keeps accepted playback (0.038542ms)
+✖ I09 twelve attempt rolling budget (0.06625ms)
+✖ I10 authentication bars candidate for sixty seconds (0.093833ms)
+✖ I11 noncanonical epochs rejected (0.069583ms)
+✖ I12 withdrawing selected instance keeps mark (0.046958ms)
+✖ I13 second device supersedes publisher only after authentication (0.043666ms)
+✖ I14 reload new page loses credential and mark (0.034041ms)
+✖ I15 fast clock blocks honest lower until explicit page reset (0.032125ms)
+✖ I16 recorded greater manifest supersedes after each resume (0.056042ms)
+✖ I17 track failure keeps instance generation mark and mirror (0.048042ms)
+✖ I18 six resubscriptions then unavailable (0.036792ms)
+✖ I19 resubscription budget recovers after rolling minute (0.064834ms)
+✖ I20 resubscription budget is per track (0.057958ms)
+✖ I21 only manifest accepts instance (0.042625ms)
+✖ I22 late frame after probe timeout cannot accept (0.041083ms)
+✖ I23 timeout starts at subscription not announcement (0.039792ms)
+✖ I24 invalid and backward policy clocks refused (0.052541ms)
+✖ I25 immutable credential scope validation (0.420167ms)
+✖ I26 accepted failure is not candidate rejection (0.042208ms)
+✖ G01 authentic first frame advances pair (0.045625ms)
+✖ G02 higher authenticated group advances pair (0.039083ms)
+✖ G03 equal group continues strictly above saved index (0.047666ms)
+✖ G04 frame replay cannot reopen (0.037333ms)
+✖ G05 manifest catalog zero window rejects older group (0.047375ms)
+✖ G06 forged high frame never advances mark (0.042958ms)
+✖ G07 media accepts unseen older start within 120ms (0.036417ms)
+✖ G08 window boundary inclusive and older refused (0.03525ms)
+✖ G09 late group frame index remembered independently (0.065417ms)
+✖ G10 mirror identity survives equal group continuation (0.0485ms)
+✖ G11 frame gap resumes at authenticated transport index (0.043666ms)
+✖ G12 group identities keep uint64 precision (0.045458ms)
+✖ G13 invalid nonce identities refused (0.054167ms)
+✖ G14 dense starts have bounded replay memory (0.041541ms)
+✖ G15 per instance and track marks do not mix (0.04525ms)
+✖ G16 changing window cannot reset existing mark (0.037916ms)
+ℹ tests 42
+ℹ suites 0
+ℹ pass 0
+ℹ fail 42
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 113.913
+
+✖ failing tests:
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I01 announcement alone cannot move mark (0.74825ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:14:58)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I02 candidates tried greatest first (0.063709ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:15:54)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I03 forged greater authentication failure falls through (0.053041ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:16:74)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I04 re-served older instance does not roll back (0.04675ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:17:66)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I05 plaintext wrong label and wrong opaque refused (0.062042ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:18:69)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I06 timeout retries after 3 seconds and counts budget (0.046208ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:19:72)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I07 successive timeout doubles backoff (0.049ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:20:57)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I08 probing failure keeps accepted playback (0.038542ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:21:62)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I09 twelve attempt rolling budget (0.06625ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:22:52)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I10 authentication bars candidate for sixty seconds (0.093833ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:23:70)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I11 noncanonical epochs rejected (0.069583ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:24:51)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I12 withdrawing selected instance keeps mark (0.046958ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:25:63)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I13 second device supersedes publisher only after authentication (0.043666ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:26:83)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I14 reload new page loses credential and mark (0.034041ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:27:64)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I15 fast clock blocks honest lower until explicit page reset (0.032125ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:28:79)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I16 recorded greater manifest supersedes after each resume (0.056042ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:29:77)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I17 track failure keeps instance generation mark and mirror (0.048042ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:30:78)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I18 six resubscriptions then unavailable (0.036792ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:31:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I19 resubscription budget recovers after rolling minute (0.064834ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:32:74)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I20 resubscription budget is per track (0.057958ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:33:57)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I21 only manifest accepts instance (0.042625ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:34:53)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I22 late frame after probe timeout cannot accept (0.041083ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:35:67)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I23 timeout starts at subscription not announcement (0.039792ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:36:70)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I24 invalid and backward policy clocks refused (0.052541ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at assert.throws.InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:37:65)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I25 immutable credential scope validation (0.420167ms)
+  AssertionError [ERR_ASSERTION]: The error is expected to be an instance of "TypeError". Received "Error"
+
+  Error message:
+
+  C1 not implemented
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:38:59)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: C1 not implemented
+        at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+        at file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:38:70
+        at getActual (node:assert:580:5)
+        at strict.throws (node:assert:728:24)
+        at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:38:59)
+        at Test.runInAsyncScope (node:async_hooks:226:14)
+        at Test.run (node:internal/test_runner/test:1382:25)
+        at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+        at Test.postRun (node:internal/test_runner/test:1522:19)
+        at Test.run (node:internal/test_runner/test:1447:12),
+    operator: 'throws',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ I26 accepted failure is not candidate rejection (0.042208ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:39:66)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G01 authentic first frame advances pair (0.045625ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:40:58)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G02 higher authenticated group advances pair (0.039083ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:41:63)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G03 equal group continues strictly above saved index (0.047666ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:42:71)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G04 frame replay cannot reopen (0.037333ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:43:49)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G05 manifest catalog zero window rejects older group (0.047375ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:44:71)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G06 forged high frame never advances mark (0.042958ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:45:60)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G07 media accepts unseen older start within 120ms (0.036417ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:46:68)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G08 window boundary inclusive and older refused (0.03525ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:47:66)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G09 late group frame index remembered independently (0.065417ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.mirror (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:48:70)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G10 mirror identity survives equal group continuation (0.0485ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:49:88)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G11 frame gap resumes at authenticated transport index (0.043666ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:50:73)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G12 group identities keep uint64 precision (0.045458ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:51:61)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G13 invalid nonce identities refused (0.054167ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:52:55)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G14 dense starts have bounded replay memory (0.041541ms)
+  Error: C1 not implemented
+      at new GroupTracker (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:3:70)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:53:62)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G15 per instance and track marks do not mix (0.04525ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:54:62)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:57:30
+✖ G16 changing window cannot reset existing mark (0.037916ms)
+  Error: C1 not implemented
+      at new InstancePolicy (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:2:72)
+      at make (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:8:27)
+      at TestContext.rows (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:55:65)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

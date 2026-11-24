@@ -1,0 +1,78 @@
+✔ I01 announcement alone cannot move mark (0.838708ms)
+✔ I02 candidates tried greatest first (0.24975ms)
+✔ I03 forged greater authentication failure falls through (0.206083ms)
+✔ I04 re-served older instance does not roll back (0.097708ms)
+✔ I05 plaintext wrong label and wrong opaque refused (0.086208ms)
+✔ I06 timeout retries after 3 seconds and counts budget (0.093666ms)
+✔ I07 successive timeout doubles backoff (0.090541ms)
+✔ I08 probing failure keeps accepted playback (0.075625ms)
+✔ I09 twelve attempt rolling budget (0.175875ms)
+✔ I10 authentication bars candidate for sixty seconds (0.107542ms)
+✔ I11 noncanonical epochs rejected (0.071333ms)
+✔ I12 withdrawing selected instance keeps mark (0.112625ms)
+✔ I13 second device supersedes publisher only after authentication (0.09725ms)
+✔ I14 reload new page loses credential and mark (0.051542ms)
+✔ I15 fast clock blocks honest lower until explicit page reset (0.049083ms)
+✔ I16 recorded greater manifest supersedes after each resume (0.053167ms)
+✔ I17 track failure keeps instance generation mark and mirror (0.532542ms)
+✔ I18 six resubscriptions then unavailable (0.068833ms)
+✔ I19 resubscription budget recovers after rolling minute (0.061416ms)
+✔ I20 resubscription budget is per track (0.065291ms)
+✔ I21 only manifest accepts instance (0.040625ms)
+✔ I22 late frame after probe timeout cannot accept (0.037208ms)
+✔ I23 timeout starts at subscription not announcement (0.035167ms)
+✔ I24 invalid and backward policy clocks refused (0.189875ms)
+✔ I25 immutable credential scope validation (0.073708ms)
+✔ I26 accepted failure is not candidate rejection (0.036125ms)
+✔ I27 withdrawal reannouncement cannot clear refusal or backoff (0.055958ms)
+✔ I28 announcement flood has bounded candidate memory (0.252334ms)
+✖ I29 retracting announcement does not stop accepted media (0.523583ms)
+✔ G01 authentic first frame advances pair (0.048125ms)
+✔ G02 higher authenticated group advances pair (0.040625ms)
+✔ G03 equal group continues strictly above saved index (0.047458ms)
+✔ G04 frame replay cannot reopen (0.044875ms)
+✔ G05 manifest catalog zero window rejects older group (0.050583ms)
+✔ G06 forged high frame never advances mark (0.04275ms)
+✔ G07 media accepts unseen older start within 120ms (0.048416ms)
+✔ G08 window boundary inclusive and older refused (0.034333ms)
+✔ G09 late group frame index remembered independently (0.055417ms)
+✔ G10 mirror identity survives equal group continuation (0.039917ms)
+✔ G11 frame gap resumes at authenticated transport index (0.033708ms)
+✔ G12 group identities keep uint64 precision (0.034ms)
+✔ G13 invalid nonce identities refused (0.125666ms)
+✔ G14 dense starts have bounded replay memory (1.520292ms)
+✔ G15 per instance and track marks do not mix (0.138125ms)
+✔ G16 changing window cannot reset existing mark (0.089167ms)
+ℹ tests 45
+ℹ suites 0
+ℹ pass 44
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 120.634167
+
+✖ failing tests:
+
+test at clients/call-crypto/reader-policy.test.ts:514:33
+✖ I29 retracting announcement does not stop accepted media (0.523583ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + undefined
+  - '00000001-0000-7000-8000-000000000000'
+
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:353:12)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '00000001-0000-7000-8000-000000000000',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

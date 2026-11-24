@@ -1,0 +1,2 @@
+Command: tsc --noEmit --strict --target ES2022 --module esnext clients/call-crypto/reader-policy.ts
+exit=0; no diagnostics
