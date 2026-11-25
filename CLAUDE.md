@@ -62,6 +62,7 @@ just format           # mix format
 just iex              # iex -S mix
 just deps             # mix deps.get
 just build-client     # Build Rust `mj` client (macOS --install re-signs; a plain cp is SIGKILL)
+just build-reflect    # Unikernel helpers into priv/ (reflect-quic-client, reflect-entity); Zig 0.16.0, Linux; deploy runs it before mix release
 ```
 
 **Deploy** — rsync code to server, build release, restart service:

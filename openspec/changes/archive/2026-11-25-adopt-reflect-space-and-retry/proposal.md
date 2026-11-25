@@ -1,6 +1,6 @@
 # adopt-reflect-space-and-retry
 
-> **ACTIVE BUILD** — activated 2026-11-25 by the homoiconic orchestrator at Duke's request ("bring Mjolnir's unikernel guest up to date with the current Reflect image, and prove it again on morphie"), covering beads `mjolnir-qwo5`, `mjolnir-1tvc` and `mjolnir-0wm4`. Rigor `change`: no new dependency, no new protocol of Mjolnir's own (the QUIC code is homoiconic's, copied unmodified), and no change to who holds a key. No advise pass is owed at this rigor.
+> **ACTIVE BUILD** — activated 2026-11-25 by the homoiconic orchestrator at Duke's request ("bring Mjolnir's unikernel guest up to date with the current Reflect image, and prove it again on morphie"), covering beads `mjolnir-qwo5`, `mjolnir-1tvc` and `mjolnir-0wm4`. Rigor `change`: no new dependency, no new protocol of Mjolnir's own (the QUIC code is homoiconic's, copied unmodified), and no change to who holds a key. No advise pass is owed at this rigor. Hardware acceptance passed on morphie on 2026-11-25 (`evidence/`). Folded 2026-11-25.
 
 ## Why
 

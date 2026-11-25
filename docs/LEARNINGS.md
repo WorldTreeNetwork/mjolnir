@@ -92,3 +92,9 @@ Hard-won facts from folded changes. One dated line each.
 - **2026-11-23 / add-unikernel-guest:** The full `mix test` "baseline failures" were mostly test defects: `async: true` modules that repoint global app env (`:socket_dir`, `:btrfs_root`) and delete it on exit break unrelated async tests at random. A test that mutates `Application` env must be `async: false`.
 
 - **2026-11-23 / add-unikernel-guest:** Pricing Reflect steps (`runPriced`, homoiconic after `793b583`) did not change the reply bytes for the `793b583` factorial and forever fixtures at budgets 100000000 and 5000, so fixtures pinned to an older image still hold on a fresh one.
+
+- **2026-11-25 / adopt-reflect-space-and-retry:** A Mjolnir TAP has no address, so Linux picks the source of a datagram to the guest from another interface, `lo` first in device order: adding a test address on the TAP or on `lo` made it the host client's source too, and a "second host" shared Mjolnir's address. Pin the source on the guest's `/32` route (`ip route replace <guest>/32 dev <tap> src <old src>`) and check sources in a capture.
+
+- **2026-11-25 / adopt-reflect-space-and-retry:** Readiness reads the serial log while the guest writes it; a multiline regex ending `\s*$` accepts a half-written last line, so a cut-off `reflect: entity` name failed a boot with `entity_name_mismatch`. Judge only lines that end in `\n`.
+
+- **2026-11-25 / adopt-reflect-space-and-retry:** `tcpdump -w` stopped by SIGINT loses its last libpcap block on a quiet interface (a 24-byte file); a short capture needs `--immediate-mode`.
