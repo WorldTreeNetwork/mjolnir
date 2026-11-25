@@ -195,7 +195,9 @@ defmodule Mjolnir.Unikernel do
   `:wait` otherwise.
   """
   def boot_outcome(log, quic_port, expected) when is_binary(log) and is_binary(expected) do
-    names = Regex.scan(~r/^reflect: entity (\S+)\s*$/m, log, capture: :all_but_first)
+    # Complete lines only: the log is read while the guest writes it, and a
+    # name cut off mid-line is not another name.
+    names = Regex.scan(~r/^reflect: entity (\S+)[ \t\r]*\n/m, log, capture: :all_but_first)
 
     cond do
       Enum.any?(@key_refusals, &String.contains?(log, &1)) ->

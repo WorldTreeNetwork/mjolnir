@@ -237,6 +237,23 @@ defmodule Mjolnir.UnikernelTest do
       assert :wait = Unikernel.boot_outcome("reflect: entity #{@seed_name}\n", 30001, @seed_name)
     end
 
+    test "a name line still being written is not another name" do
+      partial = "reflect: entity " <> String.slice(@seed_name, 0, 10)
+      assert Unikernel.boot_outcome(partial, 30001, @seed_name) == :wait
+
+      assert Unikernel.boot_outcome(
+               partial <> String.slice(@seed_name, 10..-1//1),
+               30001,
+               @seed_name
+             ) == :wait
+
+      assert Unikernel.boot_outcome(
+               "reflect: entity #{@seed_name}\nreflect: quic 30001\n",
+               30001,
+               @seed_name
+             ) == :ok
+    end
+
     test "another name fails at once, without waiting for the QUIC line" do
       assert {:error, :entity_name_mismatch} =
                Unikernel.boot_outcome("reflect: entity #{name(1)}\n", 30001, @seed_name)

@@ -6,5 +6,6 @@
 - [ ] Space fixture from homoiconic `3122521` (`deep`, reply `81 07`), and `forever`/`factorial` checked against that build's `reply`.
 - [ ] Deploy builds both Zig helpers before `mix release`; ignored by Git; one build script (`mjolnir-0wm4`).
 - [ ] A detach in the middle of a unikernel boot removes the key file; `entity_key` leaves `body_params` at parse time.
+- [ ] Readiness judges only complete serial lines (a name cut off mid-write failed a boot on morphie).
 - [ ] Morphie acceptance against a fresh image from homoiconic `origin/main`, with the space, flood/Retry, stall and self-exit checks; image hash and transcript in `evidence/`.
 - [ ] `mix test` green on the Mac and on morphie.

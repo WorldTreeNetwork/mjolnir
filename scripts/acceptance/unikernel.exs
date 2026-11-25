@@ -112,6 +112,56 @@ command = fn args ->
   output <> err
 end
 
+# A capture of a TAP's UDP (tcpdump -w), and its datagrams read back.
+capture = fn tap, file ->
+  port =
+    Port.open(
+      {:spawn_executable, System.find_executable("tcpdump")},
+      [:binary, :stderr_to_stdout, args: ["-i", tap, "-U", "-n", "-w", file, "udp"]]
+    )
+
+  {:os_pid, pid} = Port.info(port, :os_pid)
+  Process.sleep(500)
+  {port, pid}
+end
+
+stop_capture = fn {port, pid} ->
+  Process.sleep(300)
+  System.cmd("kill", ["-INT", Integer.to_string(pid)])
+  Process.sleep(500)
+  if Port.info(port), do: Port.close(port)
+end
+
+ip4 = fn <<a, b, c, d>> -> "#{a}.#{b}.#{c}.#{d}" end
+
+# Each UDP datagram on an Ethernet capture: time (ms), addresses, ports, and
+# the first byte of its payload (a QUIC long header's type is in it).
+datagrams = fn file ->
+  <<_::binary-size(20), link::little-32, rest::binary>> = File.read!(file)
+  1 = link
+
+  Stream.unfold(rest, fn
+    <<sec::little-32, usec::little-32, len::little-32, _::little-32, pkt::binary-size(len),
+      more::binary>> ->
+      {{sec * 1000 + div(usec, 1000), pkt}, more}
+
+    _ ->
+      nil
+  end)
+  |> Enum.flat_map(fn
+    {t,
+     <<_::binary-size(12), 0x08, 0x00, 4::4, ihl::4, _::binary-size(8), 17, _::16,
+       src::binary-size(4), dst::binary-size(4), rest::binary>>} ->
+      <<_::binary-size(^ihl * 4 - 20), sport::16, dport::16, _::32, first, _::binary>> = rest
+      [%{t: t, src: ip4.(src), sport: sport, dst: ip4.(dst), dport: dport, first: first}]
+
+    _ ->
+      []
+  end)
+end
+
+retry? = fn d -> Bitwise.band(d.first, 0xF0) == 0xF0 end
+
 # Milliseconds a function takes, and what it returned.
 timed = fn fun ->
   {us, result} = :timer.tc(fun)
@@ -380,11 +430,17 @@ try do
   check.(Jason.decode!(text)["outcome"] == "space", "MCP outcome space")
 
   # ── The first-flight pool full: Mjolnir's client must answer a Retry. ──
-  # A second address on this guest's TAP floods it with new first flights
+  # A second address of this host floods the guest with new first flights
   # (homoiconic quic-client `flood`, key on no list), as check-quic.sh does.
-  other_ip = "10.199.255.254"
+  # It is on `lo`, not the TAP: an address on the TAP would become the
+  # source of every datagram routed to the guest, Mjolnir's client too. It is
+  # outside 10/8 (TEST-NET-2) so the kernel keeps choosing the host's own
+  # address for Mjolnir's client; the check below confirms it. The flooder
+  # binds it; the guest's replies reach it by proxy ARP.
+  other_ip = "198.51.100.254"
   tap = vm.net_config.tap_name
-  {_, 0} = System.cmd("ip", ["addr", "add", "#{other_ip}/32", "dev", tap])
+  {_, 0} = System.cmd("ip", ["addr", "add", "#{other_ip}/32", "dev", "lo"])
+  Process.put(:other_ip, other_ip)
   empty = Path.join(root, "kept-empty.bin")
   File.write!(empty, "")
   qport = Integer.to_string(vm.config.quic_port)
@@ -411,7 +467,9 @@ try do
       )
     end)
 
-  Process.sleep(1500)
+  flood_pcap = Path.join(root, "flood.pcap")
+  dump = capture.(tap, flood_pcap)
+  Process.sleep(1000)
 
   for i <- 1..5 do
     {ms, result} = timed.(fn -> VM.unikernel_message(id, fact) end)
@@ -423,8 +481,34 @@ try do
     )
   end
 
+  stop_capture.(dump)
+  # Mjolnir's client answered a Retry: the guest sent Retries to Mjolnir's
+  # own address (not the flooding one), and Mjolnir's ports then carried on.
+  from_guest =
+    datagrams.(flood_pcap)
+    |> Enum.filter(&(&1.src == vm.net_config.guest_ip and &1.dst != other_ip))
+
+  check.(from_guest != [], "Mjolnir's client used an address other than the flooding one")
+  mj_retries = Enum.filter(from_guest, retry?)
+  mj_ports = mj_retries |> Enum.map(& &1.dport) |> Enum.uniq()
+
+  answered =
+    Enum.count(mj_ports, fn port ->
+      Enum.any?(from_guest, &(&1.dport == port and not retry?.(&1)))
+    end)
+
+  IO.puts(
+    "     capture: #{length(mj_retries)} Retries to Mjolnir's address on #{length(mj_ports)} client ports; #{answered} of those ports then served"
+  )
+
+  check.(
+    mj_retries != [] and answered == length(mj_ports),
+    "Mjolnir's client was sent a Retry under the flood and was served after it (TAP capture)"
+  )
+
   # Control: the e9a4c86 client, which drops a Retry, with entity 3's key
-  # (on this guest's allow list). Not served while the flood lasts.
+  # (on this guest's allow list). It can only take a first-flight slot the
+  # flood leaves free, so it is not served within 1.5 s (it may be later).
   {ms, {_, old_status}} =
     timed.(fn ->
       System.cmd(
@@ -437,8 +521,8 @@ try do
   IO.puts("     the e9a4c86 client: exit #{old_status} after #{ms} ms under the flood")
 
   check.(
-    old_status == 124,
-    "the client that ignores a Retry is not served under the flood (control)"
+    old_status == 124 or ms >= 1500,
+    "the client that ignores a Retry is not served within 1.5 s under the flood (control)"
   )
 
   {flood_out, flood_status} = Task.await(flood, 30_000)
@@ -450,7 +534,8 @@ try do
     "the flooding address heard #{retries} Retries: the first-flight pool was full"
   )
 
-  {_, 0} = System.cmd("ip", ["addr", "del", "#{other_ip}/32", "dev", tap])
+  {_, 0} = System.cmd("ip", ["addr", "del", "#{other_ip}/32", "dev", "lo"])
+  Process.delete(:other_ip)
 
   # Four stalled handshakes (key on no list) hold the first-flight pool.
   Process.sleep(3000)
@@ -471,6 +556,8 @@ try do
     end
 
   Process.sleep(300)
+  stall_pcap = Path.join(root, "stall.pcap")
+  dump = capture.(tap, stall_pcap)
 
   old_late =
     Task.async(fn ->
@@ -485,6 +572,20 @@ try do
 
   {ms, result} = timed.(fn -> VM.unikernel_message(id, fact) end)
   IO.puts("     Mjolnir's client served in #{ms} ms behind four stalled handshakes")
+  stop_capture.(dump)
+
+  # What the guest sent each client port meanwhile, for the transcript.
+  for {port, ds} <-
+        datagrams.(stall_pcap)
+        |> Enum.filter(&(&1.src == vm.net_config.guest_ip))
+        |> Enum.group_by(& &1.dport) do
+    first = hd(ds).t
+
+    IO.puts(
+      "     guest -> :#{port}: #{length(ds)} datagrams, #{Enum.count(ds, retry?)} Retries, " <>
+        "first at #{first} ms, last #{List.last(ds).t - first} ms later"
+    )
+  end
 
   check.(
     result == {:ok, 0, expected} and ms < 1000,
@@ -689,6 +790,7 @@ try do
 
   IO.puts("ALL UNIKERNEL HARDWARE CHECKS PASSED")
 after
+  if ip = Process.get(:other_ip), do: System.cmd("ip", ["addr", "del", "#{ip}/32", "dev", "lo"])
   for vm <- VM.list(), do: VM.stop(vm.id)
   Supervisor.stop(sup)
   File.rm(socket)
