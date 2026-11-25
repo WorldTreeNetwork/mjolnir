@@ -18,17 +18,22 @@ export type ReaderState =
  * from the policy's state as of its last clocked call.
  * - `playback`: an instance is accepted and its stream may render.
  * - `superseded`: the accepted instance is greater than this device's own publishing epoch.
- * - `probing`: a candidate probe is live, or the 12-probe budget is spent (`budget_exhausted` is
- *   `unavailable_retryable` for candidate probing; it never clears playback or the mark).
- * - `olderStreamOnly`: nothing is accepted, no announced candidate is at or above the mark, and at
- *   least one announced candidate is below it.
+ * - `probing`: a candidate probe is live.
+ * - `budgetExhausted`: all 12 probes of the rolling minute are spent, including the live one
+ *   (`unavailable_retryable` for candidate probing; it never clears playback or the mark).
+ * - `olderStreamOnly`: nothing is accepted, no announced candidate is at or above the mark, at
+ *   least one announced candidate is below it, and the candidate table is complete.
+ * - `candidatesIncomplete`: an announcement was refused as `full` since the table last admitted a
+ *   new record, so the policy may not know every announced epoch. Offer the active set again.
  */
 export type ReaderStatus = Readonly<{
   inviteNeeded: boolean;
   playback: "none" | "ready";
   superseded: boolean;
-  probing: "idle" | "probing" | "budget_exhausted";
+  probing: "idle" | "probing";
+  budgetExhausted: boolean;
   olderStreamOnly: boolean;
+  candidatesIncomplete: boolean;
 }>;
 export type FrameIdentity = Readonly<{ group: bigint; index: number; authenticated: boolean }>;
 export type Mark = Readonly<{ group: bigint; index: number }>;
@@ -49,12 +54,17 @@ export const LIMITS = Object.freeze({
   candidates: 256,
   tracksPerInstance: 128,
   startsPerTrack: 128,
+  /** A failure report from a probe is honored until this long after that probe started. */
+  lateReportMs: 60_000,
+  /** An accepted subscription that ends sooner than this after acceptance is a rapid close. */
+  rapidCloseMs: 10_000,
 });
 const EPOCH = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const WINDOW = LIMITS.windowMs;
 const validEpoch = (v: unknown): v is string => typeof v === "string" && EPOCH.test(v);
 
-/** Window is in authenticated track group-start units, not public presentation timestamps. */
+/** Window is in authenticated track group-start units, not public presentation timestamps.
+ * Standalone replay filter. Inside an `InstancePolicy` it is reached only through a `TrackHandle`. */
 export class GroupTracker {
   readonly window: bigint;
   readonly mirror: unknown;
@@ -111,32 +121,88 @@ export class GroupTracker {
   }
 }
 
-type Candidate = { barUntil: number; retryAt: number; timeouts: number; available: boolean };
-type TrackState = { tracker: GroupTracker; resubs: number[] };
+type Candidate = { retryAt: number; timeouts: number; available: boolean };
+type TrackState = { tracker: GroupTracker; resubs: number[]; handle: TrackHandle | undefined };
+type Sub = { epoch: string; started: number; acceptedAt: number | undefined };
+/**
+ * Opaque identity of ONE manifest (`bridge.tracks`) subscription attempt, returned by `subscribe`.
+ * The caller keeps it with that subscription and passes it back on every callback of that
+ * subscription: `authenticated`, `probeEnded`, `rejectCandidate`, `endInstance` and `track`. A
+ * callback carrying a handle that is not the live probe or the accepted session is refused, so a
+ * late event from an earlier attempt of the same epoch cannot act on its replacement.
+ */
+export type Subscription = Readonly<{ epoch: string }>;
 export type TrackAction =
   | { kind: "resubscribe"; epoch: string; track: string; preserveMark: true; preserveMirror: true }
   | { kind: "unavailable_retryable"; track: string; retryAt: number }
   | { kind: "ignored" };
-/** Track-scoped refusal: the accepted instance already holds `LIMITS.tracksPerInstance` names. */
-export type TrackRefusal = Readonly<{
-  kind: "unavailable_retryable";
-  track: string;
-  reason: "track_limit";
-}>;
+/** Track-scoped refusal: `track_limit` at `LIMITS.tracksPerInstance` names; `stale` when the
+ * session handle is not the accepted session (a callback of a retired subscription). */
+export type TrackRefusal = Readonly<
+  | { kind: "unavailable_retryable"; track: string; reason: "track_limit" }
+  | { kind: "stale"; track: string }
+>;
+export type FrameResult = "deliver" | "duplicate" | "too_old" | "unauthenticated" | "stale";
+
+/**
+ * One track subscription of the accepted session, returned by `InstancePolicy.track`. The mark,
+ * mirror and resubscribe budget belong to the track name for the mark's life; the handle belongs to
+ * one subscription. Once the session ends or the name is subscribed again, this handle is stale:
+ * `frame` returns `stale` without touching the mark, and the caller must not apply that frame to the
+ * mirror. Apply a frame to `mirror` only after `frame` returned `deliver`.
+ */
+export class TrackHandle {
+  readonly name: string;
+  readonly #state: TrackState;
+  readonly #live: (h: TrackHandle) => boolean;
+  constructor(name: string, state: TrackState, live: (h: TrackHandle) => boolean) {
+    this.name = name;
+    this.#state = state;
+    this.#live = live;
+  }
+  /** False once the session retired or the track was subscribed again. */
+  get current(): boolean {
+    return this.#live(this);
+  }
+  get window(): bigint {
+    return this.#state.tracker.window;
+  }
+  get mirror(): unknown {
+    return this.#state.tracker.mirror;
+  }
+  get mark(): Mark | undefined {
+    return this.#state.tracker.mark;
+  }
+  get remembered(): number {
+    return this.#state.tracker.remembered;
+  }
+  frame(identity: FrameIdentity): FrameResult {
+    if (!this.#live(this)) return "stale";
+    return this.#state.tracker.frame(identity);
+  }
+}
 
 /** One immutable credential/label scope per object; create a new object for rekey or page reload. */
 export class InstancePolicy {
   readonly scope: Scope | undefined;
   #own: string | undefined;
   #mark: string | undefined;
-  #accepted: string | undefined;
   #candidates = new Map<string, Candidate>();
-  #probe: { epoch: string; started: number } | undefined;
+  // Authentication bars by epoch, kept apart from the candidate table so that purging a withdrawn
+  // record never shortens a bar. Only issued probes create bars, so this holds at most the probes
+  // of the last two minutes.
+  #bars = new Map<string, number>();
+  #subs = new WeakMap<Subscription, Sub>();
+  #probe: Subscription | undefined;
+  #session: Subscription | undefined;
   #attempts: number[] = [];
   // Group/frame marks, mirrors and resubscribe budgets of the MARK epoch, keyed by track name.
   // They live as long as the mark: released only when a greater epoch is accepted, never when the
-  // accepted instance ends, so re-accepting the same epoch cannot reopen frames or refill budgets.
+  // accepted session ends, so re-accepting the same epoch cannot reopen frames or refill budgets.
   #tracks = new Map<string, TrackState>();
+  // Pacing of re-acceptance of the mark epoch after rapid closes (S4). Reset when the mark moves.
+  #pace = { rapid: 0, retryAt: 0 };
+  #incomplete = false;
   #now = 0;
   constructor(scope?: Scope, publishingEpoch?: string) {
     if (
@@ -153,18 +219,19 @@ export class InstancePolicy {
     this.scope = scope && Object.freeze({ ...scope });
     this.#own = publishingEpoch;
   }
+  get #accepted(): string | undefined {
+    return this.#session && this.#subs.get(this.#session)!.epoch;
+  }
   get status(): ReaderStatus {
     const accepted = this.#accepted;
     return Object.freeze({
       inviteNeeded: !this.scope,
       playback: accepted === undefined ? "none" : "ready",
       superseded: accepted !== undefined && this.#own !== undefined && accepted > this.#own,
-      probing: this.#probe
-        ? "probing"
-        : this.#attempts.length >= LIMITS.probesPerWindow
-          ? "budget_exhausted"
-          : "idle",
-      olderStreamOnly: accepted === undefined && this.#olderOnly(),
+      probing: this.#probe ? "probing" : "idle",
+      budgetExhausted: this.#attempts.length >= LIMITS.probesPerWindow,
+      olderStreamOnly: accepted === undefined && !this.#incomplete && this.#olderOnly(),
+      candidatesIncomplete: this.#incomplete,
     });
   }
   /** Spec state names for the facts in `status`: playback state first, then probing exhaustion. */
@@ -180,7 +247,7 @@ export class InstancePolicy {
           ? "older_stream_only"
           : "unavailable_retryable",
     ];
-    if (s.probing === "budget_exhausted" && !out.includes("unavailable_retryable"))
+    if (s.budgetExhausted && !out.includes("unavailable_retryable"))
       out.push("unavailable_retryable");
     return Object.freeze(out);
   }
@@ -218,18 +285,14 @@ export class InstancePolicy {
       throw new RangeError("policy clock must be monotonic milliseconds");
     this.#now = now;
     this.#attempts = this.#attempts.filter((t) => t > now - WINDOW);
+    for (const [e, until] of this.#bars) if (now >= until) this.#bars.delete(e);
     this.#purge(now);
   }
-  /** Forget retracted records whose bar and backoff have expired. */
+  /** Forget retracted records whose backoff has expired. Bars live in `#bars` and are not lost. */
   #purge(now: number): void {
+    const probe = this.#probe && this.#subs.get(this.#probe)!.epoch;
     for (const [e, c] of this.#candidates)
-      if (
-        !c.available &&
-        now >= c.barUntil &&
-        now >= c.retryAt &&
-        e !== this.#probe?.epoch &&
-        e !== this.#accepted
-      )
+      if (!c.available && now >= c.retryAt && e !== probe && e !== this.#accepted)
         this.#candidates.delete(e);
   }
   /** Timeout rule: back off (3 s doubling, capped at 60 s), never bar. Ends the live probe. */
@@ -239,7 +302,7 @@ export class InstancePolicy {
       c.retryAt = from + Math.min(LIMITS.backoffCapMs, LIMITS.backoffBaseMs * 2 ** c.timeouts);
       c.timeouts = Math.min(c.timeouts + 1, 16);
     }
-    if (this.#probe?.epoch === epoch) this.#probe = undefined;
+    this.#probe = undefined;
   }
   #parse(path: string): string | undefined {
     if (typeof path !== "string") return undefined;
@@ -252,6 +315,18 @@ export class InstancePolicy {
       ? p[2]
       : undefined;
   }
+  /** Make room for an epoch at or above the mark by forgetting a below-mark record. Below-mark
+   * records are never probed; they only feed the older-only report. */
+  #evictBelowMark(): boolean {
+    const mark = this.#mark;
+    if (mark === undefined) return false;
+    for (const e of this.#candidates.keys())
+      if (e < mark && e !== this.#accepted) {
+        this.#candidates.delete(e);
+        return true;
+      }
+    return false;
+  }
   announce(path: string): AnnounceResult {
     const epoch = this.#parse(path);
     if (epoch === undefined) return "invalid";
@@ -261,11 +336,18 @@ export class InstancePolicy {
       existing.available = true;
       return "ok";
     }
-    // At most LIMITS.candidates active announcements/refusal tombstones in one label scope. A relay
+    // At most LIMITS.candidates active announcements/retry tombstones in one label scope. A relay
     // can deny service by flooding this bound, just as it can withhold the real announcement.
     if (this.#candidates.size >= LIMITS.candidates) this.#purge(this.#now);
-    if (this.#candidates.size >= LIMITS.candidates) return "full";
-    this.#candidates.set(epoch, { barUntil: 0, retryAt: 0, timeouts: 0, available: true });
+    if (
+      this.#candidates.size >= LIMITS.candidates &&
+      !(this.#mark !== undefined && epoch >= this.#mark && this.#evictBelowMark())
+    ) {
+      this.#incomplete = true;
+      return "full";
+    }
+    this.#candidates.set(epoch, { retryAt: 0, timeouts: 0, available: true });
+    this.#incomplete = false;
     return "ok";
   }
   /** The relay retracted the announcement. Not stream retirement: an existing subscriber can still
@@ -278,26 +360,35 @@ export class InstancePolicy {
     if (c) c.available = false;
   }
   /**
-   * The ACCEPTED instance's subscription ended (transport close/reset). Not an announcement retract:
-   * the candidate stays announced until `withdraw`, and may be probed and re-accepted, keeping its
-   * marks, mirrors and budgets. A live probe that ends is `probeEnded`; any other epoch is ignored.
+   * The ACCEPTED session's subscription ended (transport close/reset). `sub` must be the accepted
+   * session's handle; a close of any earlier attempt is ignored. Not an announcement retract: the
+   * epoch stays announced and may be re-accepted, keeping its marks, mirrors and budgets. A close
+   * within `LIMITS.rapidCloseMs` of acceptance is rapid: the first allows an immediate reconnect,
+   * each further consecutive rapid close delays re-probing this epoch 3 s doubling to 60 s. A
+   * session that lasted `rapidCloseMs` resets the count. Other epochs and the budget are unaffected.
    */
-  endInstance(epoch: string): boolean {
-    if (!validEpoch(epoch) || epoch !== this.#accepted) return false;
-    this.#accepted = undefined;
+  endInstance(sub: Subscription, now: number): boolean {
+    this.tick(now);
+    if (sub === undefined || sub !== this.#session) return false;
+    const lived = now - this.#subs.get(sub)!.acceptedAt!;
+    this.#pace.rapid = lived < LIMITS.rapidCloseMs ? this.#pace.rapid + 1 : 1;
+    const r = this.#pace.rapid;
+    this.#pace.retryAt =
+      now + (r <= 1 ? 0 : Math.min(LIMITS.backoffCapMs, LIMITS.backoffBaseMs * 2 ** (r - 2)));
+    this.#session = undefined;
     return true;
   }
   /** The live probe's manifest subscription ended before authenticating: the timeout rule applies. */
-  probeEnded(epoch: string, now: number): boolean {
+  probeEnded(sub: Subscription, now: number): boolean {
     this.tick(now);
-    if (!validEpoch(epoch) || this.#probe?.epoch !== epoch) return false;
-    this.#backoff(epoch, now);
+    if (sub === undefined || sub !== this.#probe) return false;
+    this.#backoff(this.#subs.get(sub)!.epoch, now);
     return true;
   }
   /** Advance deadlines without starting a network operation. */
   tick(now: number): void {
     this.#clock(now);
-    const probe = this.#probe;
+    const probe = this.#probe && this.#subs.get(this.#probe)!;
     if (probe && now - probe.started >= LIMITS.probeDeadlineMs)
       this.#backoff(probe.epoch, probe.started + LIMITS.probeDeadlineMs);
   }
@@ -311,7 +402,8 @@ export class InstancePolicy {
           c.available &&
           e !== this.#accepted &&
           (this.#mark === undefined || e >= this.#mark) &&
-          now >= c.barUntil &&
+          (e !== this.#mark || now >= this.#pace.retryAt) &&
+          now >= (this.#bars.get(e) ?? 0) &&
           now >= c.retryAt,
       )
       .map(([e]) => e)
@@ -319,24 +411,33 @@ export class InstancePolicy {
       .reverse();
     return eligible[0];
   }
-  /** Call exactly when starting bridge.tracks subscription: this starts the 1500ms deadline. */
-  subscribe(epoch: string, now: number): boolean {
+  /** Call exactly when starting a bridge.tracks subscription: starts the 1500 ms deadline and
+   * returns the handle every callback of that subscription must carry, or `false`. */
+  subscribe(epoch: string, now: number): Subscription | false {
     if (this.nextCandidate(now) !== epoch) return false;
     this.#attempts.push(now);
-    this.#probe = { epoch, started: now };
-    return true;
+    const sub: Subscription = Object.freeze({ epoch });
+    this.#subs.set(sub, { epoch, started: now, acceptedAt: undefined });
+    this.#probe = sub;
+    return sub;
   }
   /** Only a crypto-authenticated manifest frame may report success; timestamps are not evidence. */
-  authenticated(epoch: string, semantic: string, now: number): Acceptance {
+  authenticated(sub: Subscription, semantic: string, now: number): Acceptance {
     this.tick(now);
-    if (!validEpoch(epoch) || semantic !== "bridge.tracks") return false;
-    if (epoch === this.#accepted) return "refreshed";
-    if (this.#probe?.epoch !== epoch) return false;
+    if (semantic !== "bridge.tracks" || sub === undefined || sub === null) return false;
+    if (sub === this.#session) return "refreshed";
+    if (sub !== this.#probe) return false;
+    const st = this.#subs.get(sub)!;
+    const epoch = st.epoch;
     if (this.#mark !== undefined && epoch < this.#mark) return false;
-    // Only a mark that moves releases track state: older epochs can never be selected again.
-    if (epoch !== this.#mark) this.#tracks.clear();
+    // Only a mark that moves releases track state and pacing: older epochs are never selected again.
+    if (epoch !== this.#mark) {
+      this.#tracks.clear();
+      this.#pace = { rapid: 0, retryAt: 0 };
+    }
     this.#mark = epoch;
-    this.#accepted = epoch;
+    st.acceptedAt = now;
+    this.#session = sub;
     this.#probe = undefined;
     const c = this.#candidates.get(epoch);
     if (c) {
@@ -345,15 +446,18 @@ export class InstancePolicy {
     }
     return "accepted";
   }
-  /** Authentication failed on a candidate's manifest: bar it for 60 s, whether or not its probe
-   * already timed out. The accepted instance is never a candidate failure. */
-  rejectCandidate(epoch: string, now: number): boolean {
+  /**
+   * Authentication failed on a probe's manifest. `sub` must be a probe this policy issued that was
+   * never accepted, reported within `LIMITS.lateReportMs` of its start, whether or not it is still
+   * live; the bar (60 s from the report) does not depend on tick or purge order. A report from an
+   * earlier attempt bars the epoch but does not end a live replacement probe.
+   */
+  rejectCandidate(sub: Subscription, now: number): boolean {
     this.tick(now);
-    if (!validEpoch(epoch) || epoch === this.#accepted) return false;
-    const c = this.#candidates.get(epoch);
-    if (!c) return false;
-    c.barUntil = now + LIMITS.barMs;
-    if (this.#probe?.epoch === epoch) this.#probe = undefined;
+    const st = sub && this.#subs.get(sub);
+    if (!st || st.acceptedAt !== undefined || now >= st.started + LIMITS.lateReportMs) return false;
+    this.#bars.set(st.epoch, Math.max(this.#bars.get(st.epoch) ?? 0, now + LIMITS.barMs));
+    if (this.#probe === sub) this.#probe = undefined;
     return true;
   }
   resumePublishing(epoch: string): void {
@@ -361,38 +465,48 @@ export class InstancePolicy {
       throw new TypeError("resume requires a newly minted epoch");
     this.#own = epoch;
   }
-  /** A track subscription of the accepted instance failed. Only names passed to `track()` count. */
-  trackFailure(epoch: string, track: string, now: number): TrackAction {
+  #live = (h: TrackHandle): boolean =>
+    this.#session !== undefined &&
+    this.#sessionOf.get(h) === this.#session &&
+    this.#tracks.get(h.name)?.handle === h;
+  #sessionOf = new WeakMap<TrackHandle, Subscription>();
+  /** A current track subscription failed. Only a current handle counts; stale ones are ignored. */
+  trackFailure(handle: TrackHandle, now: number): TrackAction {
     this.tick(now);
-    if (this.#accepted === undefined || epoch !== this.#accepted) return { kind: "ignored" };
-    const t = this.#tracks.get(track);
-    if (!t) return { kind: "ignored" };
+    if (!(handle instanceof TrackHandle) || !this.#live(handle)) return { kind: "ignored" };
+    const t = this.#tracks.get(handle.name)!;
     t.resubs = t.resubs.filter((s) => s > now - WINDOW);
     if (t.resubs.length >= LIMITS.resubscribesPerTrack)
-      return { kind: "unavailable_retryable", track, retryAt: t.resubs[0] + WINDOW };
+      return { kind: "unavailable_retryable", track: handle.name, retryAt: t.resubs[0] + WINDOW };
     t.resubs.push(now);
     return {
       kind: "resubscribe",
-      epoch: this.#accepted,
-      track,
+      epoch: this.#accepted!,
+      track: handle.name,
       preserveMark: true,
       preserveMirror: true,
     };
   }
   /**
-   * The track's mark/mirror holder for the accepted instance; call when subscribing it. `window`
-   * and `mirror` are fixed when the tracker is created and kept for the mark's life: a later call
-   * returns the same tracker, so compare `tracker.window` to report a `metadata_difference`.
+   * Start a track subscription of the accepted session `sub`; call when subscribing the track and
+   * again for each resubscription. Returns the handle for that one subscription (any earlier handle
+   * of this name becomes stale) or a refusal: `stale` if `sub` is not the accepted session, or
+   * `track_limit`. `window` and `mirror` are fixed when the name is first seen and kept for the
+   * mark's life; compare `handle.window` to report a `metadata_difference`.
    */
-  track(name: string, window: bigint, mirror?: unknown): GroupTracker | TrackRefusal {
-    if (this.#accepted === undefined) throw new Error("no accepted instance");
+  track(sub: Subscription, name: string, window: bigint, mirror?: unknown): TrackHandle | TrackRefusal {
     if (typeof name !== "string") throw new TypeError("invalid track name");
-    const existing = this.#tracks.get(name);
-    if (existing) return existing.tracker;
-    if (this.#tracks.size >= LIMITS.tracksPerInstance)
-      return Object.freeze({ kind: "unavailable_retryable", track: name, reason: "track_limit" });
-    const tracker = new GroupTracker(window, mirror);
-    this.#tracks.set(name, { tracker, resubs: [] });
-    return tracker;
+    if (sub === undefined || sub !== this.#session) return Object.freeze({ kind: "stale", track: name });
+    let state = this.#tracks.get(name);
+    if (!state) {
+      if (this.#tracks.size >= LIMITS.tracksPerInstance)
+        return Object.freeze({ kind: "unavailable_retryable", track: name, reason: "track_limit" });
+      state = { tracker: new GroupTracker(window, mirror), resubs: [], handle: undefined };
+      this.#tracks.set(name, state);
+    }
+    const handle = new TrackHandle(name, state, this.#live);
+    this.#sessionOf.set(handle, sub);
+    state.handle = handle;
+    return handle;
   }
 }

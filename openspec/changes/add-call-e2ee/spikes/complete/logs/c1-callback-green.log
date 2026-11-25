@@ -1,0 +1,85 @@
+# green: callback identity round (C01–C12 + 63 migrated rows)
+$ bun test clients/call-crypto/reader-policy.test.ts
+ 75 pass
+ 0 fail
+Ran 75 tests across 1 file. [118.00ms]
+$ node --test --test-reporter=tap clients/call-crypto/reader-policy.test.ts
+ok 1 - I01 announcement alone cannot move mark
+ok 2 - I02 candidates tried greatest first
+ok 3 - I03 forged greater authentication failure falls through
+ok 4 - I04 re-served older instance does not roll back
+ok 5 - I05 plaintext wrong label and wrong opaque refused
+ok 6 - I06 timeout retries after 3 seconds and counts budget
+ok 7 - I07 successive timeout doubles backoff
+ok 8 - I08 probing timeout or authentication failure keeps accepted playback
+ok 9 - I09 twelve attempt rolling budget
+ok 10 - I10 authentication bars candidate for sixty seconds
+ok 11 - I11 noncanonical epochs rejected
+ok 12 - I12 ended selected instance keeps mark
+ok 13 - I13 second device supersedes publisher only after authentication
+ok 14 - I14 reload new page loses credential and mark
+ok 15 - I15 fast clock blocks honest lower until explicit page reset
+ok 16 - I16 recorded greater manifest supersedes after each resume
+ok 17 - I17 track failure keeps instance generation mark and mirror
+ok 18 - I18 six resubscriptions then unavailable
+ok 19 - I19 resubscription budget recovers after rolling minute
+ok 20 - I20 resubscription budget is per track
+ok 21 - I21 only manifest accepts instance
+ok 22 - I22 late frame after probe timeout cannot accept
+ok 23 - I23 timeout starts at subscription not announcement
+ok 24 - I24 invalid and backward policy clocks refused
+ok 25 - I25 immutable credential scope validation
+ok 26 - I26 accepted failure is not candidate rejection
+ok 27 - I27 withdrawal reannouncement cannot clear refusal or backoff
+ok 28 - I28 announcement flood has bounded candidate memory
+ok 29 - I29 retracting announcement does not stop accepted media
+ok 30 - I30 stale retired subscription failure cannot consume new epoch budget
+ok 31 - G01 authentic first frame advances pair
+ok 32 - G02 higher authenticated group advances pair
+ok 33 - G03 equal group continues strictly above saved index
+ok 34 - G04 frame replay cannot reopen
+ok 35 - G05 manifest catalog zero window rejects older group
+ok 36 - G06 forged high frame never advances mark
+ok 37 - G07 media accepts unseen older start within 120ms
+ok 38 - G08 window boundary inclusive and older refused
+ok 39 - G09 late group frame index remembered independently
+ok 40 - G10 caller mirror is attached at creation and lives as long as the mark
+ok 41 - G11 frame gap resumes at authenticated transport index
+ok 42 - G12 group identities keep uint64 precision
+ok 43 - G13 invalid nonce identities refused
+ok 44 - G14 dense starts have bounded replay memory
+ok 45 - G15 per instance and track marks do not mix
+ok 46 - G16 changing window keeps the first window and mark
+ok 47 - I31 same-epoch re-acceptance keeps group/frame marks and mirror (bounce then replay)
+ok 48 - I32 same-epoch re-acceptance keeps the resubscribe budget
+ok 49 - I33 accepting a greater epoch releases the older epoch's trackers and budgets
+ok 50 - I34 probe ended by the transport backs off like a timeout, never retracts
+ok 51 - I35 transport end of the accepted instance does not retract its announcement
+ok 52 - I36 distinct track names per instance are capped; unknown names keep no counters
+ok 53 - I37 budget exhaustion beside an accepted stream keeps playback and supersession facts
+ok 54 - I38 older_stream_only only when no candidate at or above the mark remains
+ok 55 - I39 authenticated reports first acceptance, refresh and re-acceptance
+ok 56 - I40 resume below the accepted epoch stays superseded without waiting for a manifest
+ok 57 - I41 timeout backoff is capped at sixty seconds
+ok 58 - I42 authentication failure reported after the deadline still bars sixty seconds
+ok 59 - I43 announce distinguishes invalid from full and frees retracted records unclocked
+ok 60 - I44 malformed epoch never authenticates
+ok 61 - I45 exhausted track resubscription reports when it may retry
+ok 62 - I46 manifest at exactly 1500 ms after subscription is late
+ok 63 - G17 start pruned by the window stays refused
+ok 64 - C01 (S1 fresh lookup) a retired session cannot register a track or deliver through the current one
+ok 65 - C02 (S1 cached) a handle cached before retirement returns stale and moves nothing
+ok 66 - C03 (S2 pre-acceptance) an expired attempt's close or late manifest cannot act on its replacement
+ok 67 - C04 (S2 post-acceptance) a retired session's close and callbacks cannot touch the replacement
+ok 68 - C05 (S3a) a rejection with no issued probe behind it bars nothing
+ok 69 - C06 (S3b) a late rejection of a withdrawn probe bars identically with or without a tick
+ok 70 - C07 (S3 lifetime) a report is honored for 60 s from its probe's start and never ends a replacement
+ok 71 - C08 (S4) rapid closes of the accepted epoch are paced and cannot lock out a greater epoch
+ok 72 - C09 (S4) one honest reconnect is immediate; a session that lasted 10 s resets the pacing
+ok 73 - C10 (S5) budget exhaustion is reported beside a live probe and playback
+ok 74 - C11 (S6) a full table of below-mark records admits an epoch at or above the mark
+ok 75 - C12 (S6) an unadmitted announcement makes the view incomplete, so older-only is not claimed
+# pass 75
+# fail 0
+$ tsc --noEmit --strict --target ES2022 --module esnext clients/call-crypto/reader-policy.ts  (typescript 6.0.3)
+exit 0

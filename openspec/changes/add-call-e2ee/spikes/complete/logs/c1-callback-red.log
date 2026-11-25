@@ -1,0 +1,29 @@
+# red: S1–S6 inputs against d4333b2 (HEAD 63e7ff5); file clients/call-crypto/callback-red.test.ts, not kept
+$ node --test --test-reporter=tap clients/call-crypto/callback-red.test.ts
+not ok 1 - S1 fresh lookup: a retired E1 callback cannot deliver through the E2 tracker
+  expected: 'deliver'
+  actual: 'deliver'
+not ok 2 - S1 cached: a tracker cached before retirement cannot deliver after it
+  expected: 'deliver'
+  actual: 'deliver'
+not ok 3 - S2 pre-acceptance: an expired attempt's close cannot cancel its replacement
+  expected: false
+  actual: true
+not ok 4 - S2 post-acceptance: a retired session's close cannot unaccept the replacement
+  expected: '00000001-0000-7000-8000-000000000000'
+not ok 5 - S3a a rejection with no probe behind it bars nothing
+  expected: false
+  actual: true
+ok 6 - S3b late rejection of a withdrawn probe bars the same way (tick at 1500: false)
+not ok 7 - S3b late rejection of a withdrawn probe bars the same way (tick at 1500: true)
+  expected: true
+  actual: false
+not ok 8 - S4 rapid closes of the accepted epoch cannot lock out a greater epoch
+  expected: '00000002-0000-7000-8000-000000000000'
+not ok 9 - S5 budget exhaustion is visible while the last probe is live
+  expected: true
+not ok 10 - S6 a full table of below-mark records admits a greater epoch
+  expected: 'ok'
+  actual: 'full'
+# pass 1
+# fail 9
