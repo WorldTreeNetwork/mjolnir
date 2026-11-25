@@ -117,7 +117,11 @@ capture = fn tap, file ->
   port =
     Port.open(
       {:spawn_executable, System.find_executable("tcpdump")},
-      [:binary, :stderr_to_stdout, args: ["-i", tap, "-U", "-n", "-w", file, "udp"]]
+      [
+        :binary,
+        :stderr_to_stdout,
+        args: ["-i", tap, "--immediate-mode", "-U", "-n", "-w", file, "udp"]
+      ]
     )
 
   {:os_pid, pid} = Port.info(port, :os_pid)
@@ -432,13 +436,21 @@ try do
   # ── The first-flight pool full: Mjolnir's client must answer a Retry. ──
   # A second address of this host floods the guest with new first flights
   # (homoiconic quic-client `flood`, key on no list), as check-quic.sh does.
-  # It is on `lo`, not the TAP: an address on the TAP would become the
-  # source of every datagram routed to the guest, Mjolnir's client too. It is
-  # outside 10/8 (TEST-NET-2) so the kernel keeps choosing the host's own
-  # address for Mjolnir's client; the check below confirms it. The flooder
-  # binds it; the guest's replies reach it by proxy ARP.
+  # The TAP has no address, so Linux picks the source of a datagram to the
+  # guest from another interface, and an added address (on the TAP or on lo)
+  # becomes the source of Mjolnir's datagrams too. So the source Mjolnir's
+  # client has now is pinned on the guest's /32 route first, the flooding
+  # address is added on lo (TEST-NET-2), and the flooder binds it; the
+  # guest's replies reach it by proxy ARP. The route is put back in
+  # Mjolnir's own form afterwards. The capture below checks the two apart.
   other_ip = "198.51.100.254"
   tap = vm.net_config.tap_name
+  guest_ip = vm.net_config.guest_ip
+  {route_now, 0} = System.cmd("ip", ["-o", "route", "get", guest_ip])
+  [_, mj_src] = Regex.run(~r/ src (\S+)/, route_now)
+  IO.puts("     Mjolnir's source address for the guest: #{mj_src}")
+  {_, 0} = System.cmd("ip", ["route", "replace", "#{guest_ip}/32", "dev", tap, "src", mj_src])
+  Process.put(:restore_route, {guest_ip, tap})
   {_, 0} = System.cmd("ip", ["addr", "add", "#{other_ip}/32", "dev", "lo"])
   Process.put(:other_ip, other_ip)
   empty = Path.join(root, "kept-empty.bin")
@@ -488,7 +500,11 @@ try do
     datagrams.(flood_pcap)
     |> Enum.filter(&(&1.src == vm.net_config.guest_ip and &1.dst != other_ip))
 
-  check.(from_guest != [], "Mjolnir's client used an address other than the flooding one")
+  check.(
+    from_guest != [] and Enum.all?(from_guest, &(&1.dst == mj_src)),
+    "Mjolnir's client used its own address (#{mj_src}), not the flooding one"
+  )
+
   mj_retries = Enum.filter(from_guest, retry?)
   mj_ports = mj_retries |> Enum.map(& &1.dport) |> Enum.uniq()
 
@@ -536,9 +552,12 @@ try do
 
   {_, 0} = System.cmd("ip", ["addr", "del", "#{other_ip}/32", "dev", "lo"])
   Process.delete(:other_ip)
+  {_, 0} = System.cmd("ip", ["route", "replace", "#{guest_ip}/32", "dev", tap])
+  Process.delete(:restore_route)
 
   # Four stalled handshakes (key on no list) hold the first-flight pool.
   Process.sleep(3000)
+  stall_t0 = System.monotonic_time(:millisecond)
 
   stalls =
     for _ <- 1..4 do
@@ -561,13 +580,14 @@ try do
 
   old_late =
     Task.async(fn ->
-      timed.(fn ->
+      {_, status} =
         System.cmd(
           old_client,
           [vm.net_config.guest_ip, qport, "100000000", fact_path, key3, name1],
           stderr_to_stdout: true
         )
-      end)
+
+      {System.monotonic_time(:millisecond) - stall_t0, status}
     end)
 
   {ms, result} = timed.(fn -> VM.unikernel_message(id, fact) end)
@@ -592,12 +612,17 @@ try do
     "served within a second behind stalled handshakes"
   )
 
-  {old_ms, {_, old_status}} = Task.await(old_late, 30_000)
-  IO.puts("     the e9a4c86 client: exit #{old_status} after #{old_ms} ms")
+  {old_ms, old_status} = Task.await(old_late, 30_000)
 
+  IO.puts(
+    "     the e9a4c86 client: exit #{old_status}, served #{old_ms} ms after the stalls began"
+  )
+
+  # It needs a first-flight slot, and the first stall's frees at the 2 s cap
+  # counted from that stall's first Initial.
   check.(
-    old_status == 0 and old_ms >= 1500 and old_ms <= 6000,
-    "the client that ignores a Retry waits for the 2 s cap (control)"
+    old_status == 0 and old_ms >= 1800 and old_ms <= 6500,
+    "the client that ignores a Retry is served only once the 2 s cap frees a slot (control)"
   )
 
   for t <- stalls, do: {_, 0} = Task.await(t, 30_000)
@@ -655,7 +680,18 @@ try do
   check.(entity2 == name2 and entity2 != entity, "two keys, two guest names")
   {:ok, second_vm} = VM.get(second)
   {:ok, second_record} = StateStore.get(second)
-  {info_json, _} = command_err.(["info", "--json", second])
+  # The record `mj info --json` prints, read on the operator socket.
+  {info_json, 0} =
+    System.cmd("curl", [
+      "-sS",
+      "--unix-socket",
+      socket,
+      "-H",
+      "X-Owner-Id: #{owner}",
+      "http://localhost/api/vms/#{second}"
+    ])
+
+  IO.puts("INFO #{second} space #{inspect(Jason.decode!(info_json)["space"])}")
 
   check.(
     String.ends_with?(second_vm.config.boot_args, " reflect.space=100000") and
@@ -791,6 +827,10 @@ try do
   IO.puts("ALL UNIKERNEL HARDWARE CHECKS PASSED")
 after
   if ip = Process.get(:other_ip), do: System.cmd("ip", ["addr", "del", "#{ip}/32", "dev", "lo"])
+
+  with {guest_ip, tap} <- Process.get(:restore_route),
+       do: System.cmd("ip", ["route", "replace", "#{guest_ip}/32", "dev", tap])
+
   for vm <- VM.list(), do: VM.stop(vm.id)
   Supervisor.stop(sup)
   File.rm(socket)
