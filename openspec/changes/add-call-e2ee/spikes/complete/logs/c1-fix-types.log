@@ -1,0 +1,2 @@
+Command: npx -p typescript@6 tsc --noEmit --strict --target ES2022 --module esnext clients/call-crypto/reader-policy.ts (TypeScript 6.0.3)
+exit=0; no diagnostics

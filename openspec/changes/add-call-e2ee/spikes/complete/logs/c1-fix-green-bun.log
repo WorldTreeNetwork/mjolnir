@@ -1,0 +1,6 @@
+# Command: bun test clients/call-crypto/reader-policy.test.ts (Bun 1.3.14) after the fix
+bun test v1.3.14 (0d9b296a)
+
+ 63 pass
+ 0 fail
+Ran 63 tests across 1 file. [245.00ms]

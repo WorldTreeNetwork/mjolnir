@@ -1,0 +1,213 @@
+# Command: node --test c1-adversarial.test.ts (reviewer scratch A01-A14, copied unchanged) against reader-policy.ts at 450c69e
+   OBSERVED: same tracker object: false | replay of group 0 -> deliver | mark: { group: 0n, index: 0 }
+   OBSERVED: after bounce at t=7ms: resubscribe,resubscribe,resubscribe,resubscribe,resubscribe,resubscribe,unavailable_retryable
+   OBSERVED: forged-candidate probes in 12 ms with ONE announcement: 12 | state: unavailable_retryable | real candidate reachable now: undefined
+   OBSERVED: attempts: 12 | state before the poll: superseded_by_another_instance
+   OBSERVED: accepted still E2: true | state after 11 forged probes + one poll: unavailable_retryable
+   OBSERVED: after next manifest refresh: superseded_by_another_instance | after next poll: unavailable_retryable
+   OBSERVED: state right after end: older_stream_only | next candidate: E3 | state: older_stream_only
+   OBSERVED: 200000 distinct track names kept; first tracker still cached: true | heap +164 MB
+   OBSERVED: backoff seconds after each successive timeout: 3, 6, 12, 24, 48, 96, 192, 384 | elapsed min: 12.9
+   OBSERVED: window 0: delivered 239, delivered twice 0, max remembered 1
+   OBSERVED: window 120: delivered 812, delivered twice 0, max remembered 107
+   OBSERVED: window 5000: delivered 1371, delivered twice 0, max remembered 128
+   OBSERVED: window 1000000000000: delivered 1550, delivered twice 0, max remembered 128
+   OBSERVED: second frame in the same manifest group -> deliver
+   OBSERVED: garbage at 1600 ms -> barred without tick: true | barred after tick: false | retry at (no tick): barred | retry at (tick): E1 at 4.5 s
+   OBSERVED: real while full: false | malformed: false | after relay withdraws all, before any clock call: false | after a clock call: true | count: 1
+   OBSERVED: authenticated(undefined) -> true | state: ready | accepted: undefined
+   OBSERVED: mark: true | accepted: undefined | state: older_stream_only
+   OBSERVED: I8 model  80 ms retransmit, 2%, 50 ms jitter, window 120: 9000/9000 (max remembered 7)
+   OBSERVED: I8 model  80 ms retransmit, window 0: 7194/9000 (max remembered 1)
+   OBSERVED: retransmit 100 ms, window 120: 8995/9000 (max remembered 7)
+   OBSERVED: retransmit 150 ms, window 120: 8873/9000 (max remembered 7)
+   OBSERVED: retransmit 250 ms (mobile PTO), window 120: 8821/9000 (max remembered 7)
+   OBSERVED: retransmit 80 ms, jitter 100 ms, window 120: 8986/9000 (max remembered 7)
+   OBSERVED: retransmit 80 ms, 5% loss, window 120: 9000/9000 (max remembered 7)
+✖ A01 same epoch re-accepted after a transport end keeps the group/frame marks (replay) (2.466417ms)
+✖ A02 same-epoch bounce resets the 6-per-track resubscribe budget (0.37925ms)
+✖ A03 a probe ended by the transport (not timeout, not auth) gets no backoff (0.212209ms)
+✖ A04 budget exhaustion must not report the accepted stream as unavailable (0.257167ms)
+✖ A05 older_stream_only only when ONLY older instances remain (0.134166ms)
+✖ A06 track state is bounded per instance (386.339125ms)
+✖ A07 timeout backoff is capped so state does not outlast the interference (7.997333ms)
+✔ A08 GroupTracker never delivers one (group,index) twice under random replay (81.729791ms)
+✔ A09 zero-window tracker and the one-frame-per-manifest-group rule (0.137959ms)
+✔ A10 the 60 s bar depends on call order at the deadline (0.543958ms)
+✔ A11 candidate cap: real instance refused, indistinguishable from malformed, slow to recover (0.84225ms)
+✖ A12 untyped caller: undefined epoch reports ready with nothing accepted (0.185584ms)
+✔ A13 older real instance that authenticates cannot roll back (the row I04 does not exercise) (0.141333ms)
+✔ A14 C1 GroupTracker under the I8 delivery model, and under slower retransmission (30.278584ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 6
+ℹ fail 8
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 634.092417
+
+✖ failing tests:
+
+test at c1-adversarial.test.ts:21:1
+✖ A01 same epoch re-accepted after a transport end keeps the group/frame marks (replay) (2.466417ms)
+  AssertionError [ERR_ASSERTION]: tracker (mark+mirror) must survive re-acceptance of the SAME epoch
+  
+  GroupTracker {
+    mirror: {},
+    window: 120n
+  }
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:41:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { window: 120n, mirror: {} },
+    expected: { window: 120n, mirror: {} },
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:45:1
+✖ A02 same-epoch bounce resets the 6-per-track resubscribe budget (0.37925ms)
+  AssertionError [ERR_ASSERTION]: budget must still be spent inside the minute
+  + actual - expected
+  
+  + 'resubscribe'
+  - 'unavailable_retryable'
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:60:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'resubscribe',
+    expected: 'unavailable_retryable',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:63:1
+✖ A03 a probe ended by the transport (not timeout, not auth) gets no backoff (0.212209ms)
+  AssertionError [ERR_ASSERTION]: a non-authenticating probe end must back off like a timeout
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:76:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:79:1
+✖ A04 budget exhaustion must not report the accepted stream as unavailable (0.257167ms)
+  AssertionError [ERR_ASSERTION]: label state lost while E2 still plays
+  + actual - expected
+  
+  + 'unavailable_retryable'
+  - 'superseded_by_another_instance'
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:100:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'unavailable_retryable',
+    expected: 'superseded_by_another_instance',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:103:1
+✖ A05 older_stream_only only when ONLY older instances remain (0.134166ms)
+  AssertionError [ERR_ASSERTION]: Expected "actual" to be strictly unequal to:
+  
+  'older_stream_only'
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:114:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'older_stream_only',
+    expected: 'older_stream_only',
+    operator: 'notStrictEqual',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:118:1
+✖ A06 track state is bounded per instance (386.339125ms)
+  AssertionError [ERR_ASSERTION]: per-instance track/resubscribe maps have no bound
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:135:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:138:1
+✖ A07 timeout backoff is capped so state does not outlast the interference (7.997333ms)
+  AssertionError [ERR_ASSERTION]: uncapped doubling
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:154:3)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at c1-adversarial.test.ts:219:1
+✖ A12 untyped caller: undefined epoch reports ready with nothing accepted (0.185584ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///private/tmp/claude-501/-Users-dukejones-work-IdentiKey-mjolnir/91ccda2d-1ce1-4d12-8b21-881f60d70948/scratchpad/c1-adversarial.test.ts:223:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

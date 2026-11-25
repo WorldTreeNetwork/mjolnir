@@ -1,0 +1,589 @@
+# Command: node --test clients/call-crypto/reader-policy.test.ts (fix-round rows) against reader-policy.ts at 450c69e (unchanged)
+✔ I01 announcement alone cannot move mark (0.930083ms)
+✔ I02 candidates tried greatest first (0.232959ms)
+✔ I03 forged greater authentication failure falls through (0.184917ms)
+✔ I04 re-served older instance does not roll back (0.159542ms)
+✖ I05 plaintext wrong label and wrong opaque refused (0.5375ms)
+✔ I06 timeout retries after 3 seconds and counts budget (0.123292ms)
+✔ I07 successive timeout doubles backoff (0.086541ms)
+✖ I08 probing timeout or authentication failure keeps accepted playback (0.11ms)
+✖ I09 twelve attempt rolling budget (0.177542ms)
+✔ I10 authentication bars candidate for sixty seconds (0.119625ms)
+✖ I11 noncanonical epochs rejected (0.137375ms)
+✖ I12 ended selected instance keeps mark (0.073667ms)
+✖ I13 second device supersedes publisher only after authentication (0.057ms)
+✖ I14 reload new page loses credential and mark (0.078083ms)
+✖ I15 fast clock blocks honest lower until explicit page reset (0.082542ms)
+✖ I16 recorded greater manifest supersedes after each resume (0.153417ms)
+✔ I17 track failure keeps instance generation mark and mirror (0.529084ms)
+✔ I18 six resubscriptions then unavailable (0.080584ms)
+✔ I19 resubscription budget recovers after rolling minute (0.081333ms)
+✔ I20 resubscription budget is per track (0.057625ms)
+✔ I21 only manifest accepts instance (0.03725ms)
+✔ I22 late frame after probe timeout cannot accept (0.033459ms)
+✔ I23 timeout starts at subscription not announcement (0.033833ms)
+✔ I24 invalid and backward policy clocks refused (0.184375ms)
+✖ I25 immutable credential scope validation (0.123417ms)
+✔ I26 accepted failure is not candidate rejection (0.041292ms)
+✔ I27 withdrawal reannouncement cannot clear refusal or backoff (0.053625ms)
+✖ I28 announcement flood has bounded candidate memory (0.083917ms)
+✔ I29 retracting announcement does not stop accepted media (0.033167ms)
+✔ I30 stale retired subscription failure cannot consume new epoch budget (0.058833ms)
+✔ G01 authentic first frame advances pair (0.041917ms)
+✔ G02 higher authenticated group advances pair (0.034958ms)
+✔ G03 equal group continues strictly above saved index (0.035458ms)
+✔ G04 frame replay cannot reopen (0.048958ms)
+✔ G05 manifest catalog zero window rejects older group (0.039ms)
+✔ G06 forged high frame never advances mark (0.058084ms)
+✔ G07 media accepts unseen older start within 120ms (0.045292ms)
+✔ G08 window boundary inclusive and older refused (0.032708ms)
+✔ G09 late group frame index remembered independently (0.04225ms)
+✖ G10 caller mirror is attached at creation and lives as long as the mark (0.250209ms)
+✔ G11 frame gap resumes at authenticated transport index (0.056166ms)
+✔ G12 group identities keep uint64 precision (0.04225ms)
+✔ G13 invalid nonce identities refused (0.151875ms)
+✔ G14 dense starts have bounded replay memory (1.299541ms)
+✔ G15 per instance and track marks do not mix (0.125458ms)
+✖ G16 changing window keeps the first window and mark (0.073167ms)
+✖ I31 same-epoch re-acceptance keeps group/frame marks and mirror (bounce then replay) (0.26875ms)
+✖ I32 same-epoch re-acceptance keeps the resubscribe budget (0.118584ms)
+✖ I33 accepting a greater epoch releases the older epoch's trackers and budgets (0.114458ms)
+✖ I34 probe ended by the transport backs off like a timeout, never retracts (0.108166ms)
+✖ I35 transport end of the accepted instance does not retract its announcement (0.106042ms)
+✖ I36 distinct track names per instance are capped; unknown names keep no counters (0.37275ms)
+✖ I37 budget exhaustion beside an accepted stream keeps playback and supersession facts (0.0925ms)
+✖ I38 older_stream_only only when no candidate at or above the mark remains (0.069166ms)
+✖ I39 authenticated reports first acceptance, refresh and re-acceptance (0.071416ms)
+✖ I40 resume below the accepted epoch stays superseded without waiting for a manifest (0.055ms)
+✖ I41 timeout backoff is capped at sixty seconds (0.094291ms)
+✖ I42 authentication failure reported after the deadline still bars sixty seconds (0.063167ms)
+✖ I43 announce distinguishes invalid from full and frees retracted records unclocked (0.064208ms)
+✖ I44 malformed epoch never authenticates (0.05375ms)
+✖ I45 exhausted track resubscription reports when it may retry (0.112917ms)
+✔ I46 manifest at exactly 1500 ms after subscription is late (0.039334ms)
+✔ G17 start pruned by the window stays refused (0.032416ms)
+ℹ tests 63
+ℹ suites 0
+ℹ pass 35
+ℹ fail 28
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.314959
+
+✖ failing tests:
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I05 plaintext wrong label and wrong opaque refused (0.5375ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== 'invalid'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:93:16)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: 'invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I08 probing timeout or authentication failure keeps accepted playback (0.11ms)
+  TypeError: Cannot read properties of undefined (reading 'playback')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:136:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I09 twelve attempt rolling budget (0.177542ms)
+  TypeError: Cannot read properties of undefined (reading 'probing')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:150:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I11 noncanonical epochs rejected (0.137375ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== 'invalid'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:175:16)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: 'invalid',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I12 ended selected instance keeps mark (0.073667ms)
+  TypeError: Cannot read properties of undefined (reading 'olderStreamOnly')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:188:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I13 second device supersedes publisher only after authentication (0.057ms)
+  TypeError: Cannot read properties of undefined (reading 'superseded')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:197:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I14 reload new page loses credential and mark (0.078083ms)
+  TypeError: Cannot read properties of undefined (reading 'inviteNeeded')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:212:33)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I15 fast clock blocks honest lower until explicit page reset (0.082542ms)
+  TypeError: Cannot read properties of undefined (reading 'olderStreamOnly')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:230:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I16 recorded greater manifest supersedes after each resume (0.153417ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + true
+  - 'refreshed'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:244:16)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: 'refreshed',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I25 immutable credential scope validation (0.123417ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== 'ok'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:354:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I28 announcement flood has bounded candidate memory (0.083917ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== 'ok'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:390:45)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ G10 caller mirror is attached at creation and lives as long as the mark (0.250209ms)
+  AssertionError [ERR_ASSERTION]: Values have same structure but are not reference-equal:
+  
+  {}
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:506:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: {},
+    expected: {},
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ G16 changing window keeps the first window and mark (0.073167ms)
+  TypeError: cannot change a live mark window
+      at InstancePolicy.track (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.ts:297:45)
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:576:23)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I31 same-epoch re-acceptance keeps group/frame marks and mirror (bounce then replay) (0.26875ms)
+  AssertionError [ERR_ASSERTION]: Values have same structure but are not reference-equal:
+  
+  GroupTracker {
+    mirror: {},
+    window: 120n
+  }
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:596:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { window: 120n, mirror: {} },
+    expected: { window: 120n, mirror: {} },
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I32 same-epoch re-acceptance keeps the resubscribe budget (0.118584ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'resubscribe'
+  - 'unavailable_retryable'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:613:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'resubscribe',
+    expected: 'unavailable_retryable',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I33 accepting a greater epoch releases the older epoch's trackers and budgets (0.114458ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  undefined !== 2
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:625:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I34 probe ended by the transport backs off like a timeout, never retracts (0.108166ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + '00000001-0000-7000-8000-000000000000'
+  - undefined
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:641:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '00000001-0000-7000-8000-000000000000',
+    expected: undefined,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I35 transport end of the accepted instance does not retract its announcement (0.106042ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - '00000001-0000-7000-8000-000000000000'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:668:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '00000001-0000-7000-8000-000000000000',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I36 distinct track names per instance are capped; unknown names keep no counters (0.37275ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + GroupTracker {
+  +   mirror: {},
+  +   window: 120n
+  - {
+  -   kind: 'unavailable_retryable',
+  -   reason: 'track_limit',
+  -   track: 't128'
+    }
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:687:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { window: 120n, mirror: {} },
+    expected: { kind: 'unavailable_retryable', track: 't128', reason: 'track_limit' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I37 budget exhaustion beside an accepted stream keeps playback and supersession facts (0.0925ms)
+  TypeError: Cannot read properties of undefined (reading 'superseded')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:704:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I38 older_stream_only only when no candidate at or above the mark remains (0.069166ms)
+  TypeError: Cannot read properties of undefined (reading 'olderStreamOnly')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:736:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I39 authenticated reports first acceptance, refresh and re-acceptance (0.071416ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== 'accepted'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:755:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: 'accepted',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I40 resume below the accepted epoch stays superseded without waiting for a manifest (0.055ms)
+  TypeError: Cannot read properties of undefined (reading 'superseded')
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:769:29)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I41 timeout backoff is capped at sixty seconds (0.094291ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - '00000001-0000-7000-8000-000000000000'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:789:16)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: '00000001-0000-7000-8000-000000000000',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I42 authentication failure reported after the deadline still bars sixty seconds (0.063167ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:800:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I43 announce distinguishes invalid from full and frees retracted records unclocked (0.064208ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== 'ok'
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:811:44)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: 'ok',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I44 malformed epoch never authenticates (0.05375ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:823:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at clients/call-crypto/reader-policy.test.ts:869:33
+✖ I45 exhausted track resubscription reports when it may retry (0.112917ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+      kind: 'unavailable_retryable',
+  -   retryAt: 60002,
+  -   track: 'audio'
+    }
+  
+      at TestContext.<anonymous> (file:///Users/dukejones/work/IdentiKey/mjolnir/clients/call-crypto/reader-policy.test.ts:836:14)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { kind: 'unavailable_retryable' },
+    expected: { kind: 'unavailable_retryable', track: 'audio', retryAt: 60002 },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
