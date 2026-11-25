@@ -38,7 +38,8 @@ defmodule Mjolnir.API.Views do
     %{
       kind: :unikernel,
       entity: Map.get(config, :entity),
-      allow: Map.get(config, :allow, [])
+      allow: Map.get(config, :allow, []),
+      space: Map.get(config, :space)
     }
   end
 

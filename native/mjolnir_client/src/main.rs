@@ -15,8 +15,8 @@
 mod api;
 mod auth;
 mod cert;
-mod config;
 mod compute;
+mod config;
 mod connect;
 mod deploy;
 mod dev_manifest;
@@ -105,6 +105,10 @@ enum Command {
         /// for example through a published port. Repeatable, at most 7.
         #[arg(long = "allow", value_name = "NAME")]
         allow: Vec<String>,
+        /// Unikernel only: the cells each run on the guest may make. Default
+        /// 4000000 (the host's limit). A run past it answers `81 07`.
+        #[arg(long, value_name = "CELLS")]
+        space: Option<u64>,
         /// Publish a host UDP port to the guest (kernel DNAT), repeatable:
         /// HOST, HOST:GUEST, or HOST:quic for a unikernel's QUIC port. The
         /// host must allow the port (`published_port_range`).
@@ -985,6 +989,7 @@ async fn main() {
             kernel,
             entity_key_file,
             allow,
+            space,
             publish_udp,
         } => {
             api::cmd_spawn(
@@ -1003,6 +1008,7 @@ async fn main() {
                 kernel.as_deref(),
                 entity_key_file.as_deref(),
                 &allow,
+                space,
                 &publish_udp,
             )
             .await

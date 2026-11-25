@@ -60,3 +60,8 @@ __pycache__/
 .spawns/
 .omx/
 groups/*/inventory.json
+
+# Unikernel helpers, built by scripts/build-reflect-quic.sh
+/priv/reflect-quic-client
+/priv/reflect-entity
+/priv/*.tmp

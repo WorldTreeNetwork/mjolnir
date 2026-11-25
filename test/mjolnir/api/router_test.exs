@@ -813,6 +813,67 @@ defmodule Mjolnir.API.RouterTest do
     end
   end
 
+  describe "POST /api/vms unikernel" do
+    test "an entity key leaves the request when the body is parsed" do
+      key = Mjolnir.Base58.encode(:binary.copy(<<0x11>>, 32))
+
+      conn =
+        conn(:post, "/api/vms", Jason.encode!(%{kind: "unikernel", entity_key: key}))
+        |> put_req_header("content-type", "application/json")
+        |> Plug.Parsers.call(Plug.Parsers.init(parsers: [:json], json_decoder: Jason))
+        |> Router.scrub_entity_key()
+
+      refute inspect(conn, limit: :infinity, printable_limit: :infinity) =~ key
+      refute Map.has_key?(conn.body_params, "entity_key")
+      refute Map.has_key?(conn.params, "entity_key")
+      assert conn.private.entity_key.() == :binary.copy(<<0x11>>, 32)
+
+      bad =
+        conn(:post, "/api/vms", Jason.encode!(%{entity_key: 7}))
+        |> put_req_header("content-type", "application/json")
+        |> Plug.Parsers.call(Plug.Parsers.init(parsers: [:json], json_decoder: Jason))
+        |> Router.scrub_entity_key()
+
+      assert bad.private.entity_key == :invalid
+    end
+
+    test "400 invalid_space and 400 entity_key_invalid before a VM is created" do
+      old = Application.get_env(:mjolnir, :unikernel_kernel_prefixes)
+      Application.put_env(:mjolnir, :unikernel_kernel_prefixes, ["/tmp"])
+
+      on_exit(fn ->
+        if old,
+          do: Application.put_env(:mjolnir, :unikernel_kernel_prefixes, old),
+          else: Application.delete_env(:mjolnir, :unikernel_kernel_prefixes)
+      end)
+
+      key = Mjolnir.Base58.encode(:binary.copy(<<0x11>>, 32))
+      before = Registry.count(Mjolnir.VMRegistry)
+
+      for {body, error} <- [
+            {%{kind: "unikernel", kernel: "/tmp/r.elf", entity_key: key, space: 0},
+             "invalid_space"},
+            {%{kind: "unikernel", kernel: "/tmp/r.elf", entity_key: key, space: "big"},
+             "invalid_space"},
+            {%{kind: "unikernel", kernel: "/tmp/r.elf", entity_key: "short"},
+             "entity_key_invalid"}
+          ] do
+        conn =
+          conn(:post, "/api/vms", Jason.encode!(body))
+          |> Map.put(:remote_ip, {127, 0, 0, 1})
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("x-owner-id", @deploy_owner)
+          |> Router.call(@opts)
+
+        assert conn.status == 400, inspect(body)
+        assert Jason.decode!(conn.resp_body)["error"] == error
+        refute conn.resp_body =~ "short"
+      end
+
+      assert Registry.count(Mjolnir.VMRegistry) == before
+    end
+  end
+
   describe "POST /api/vms published_ports" do
     defp spawn_publishing(ports) do
       conn(:post, "/api/vms", Jason.encode!(%{published_ports: ports}))

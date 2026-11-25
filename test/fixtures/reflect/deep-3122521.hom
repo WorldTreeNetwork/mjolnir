@@ -1,0 +1,2 @@
+def deep x = [x, ...deep x]
+deep 0

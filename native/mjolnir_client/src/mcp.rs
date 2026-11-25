@@ -55,6 +55,10 @@ pub struct SpawnVmParams {
     )]
     pub allow: Option<Vec<String>>,
     #[schemars(
+        description = "Unikernel only: the cells each run on the guest may make. Default 4000000, at most the host's unikernel_space_max. A run past it is answered with the reply 81 07 (outcome space)."
+    )]
+    pub space: Option<u64>,
+    #[schemars(
         description = "UDP ports of the host to publish to the guest by kernel DNAT, e.g. [{\"host_port\": 20001, \"guest_port\": 4433}]. guest_port defaults to host_port. The host must allow the port (published_port_range)."
     )]
     pub published_ports: Option<Vec<PublishedPortParam>>,
@@ -385,6 +389,9 @@ impl MjolnirMcpService {
         if let Some(names) = p.allow.filter(|names| !names.is_empty()) {
             body.insert("allow".into(), serde_json::json!(names));
         }
+        if let Some(space) = p.space {
+            body.insert("space".into(), serde_json::json!(space));
+        }
         if let Some(ports) = p.published_ports.filter(|ports| !ports.is_empty()) {
             let ports: Vec<serde_json::Value> = ports
                 .iter()
@@ -496,7 +503,7 @@ impl MjolnirMcpService {
 
     #[tool(
         name = "deliver_message",
-        description = "Send a message to a VM for inter-VM communication or coroutine wake-up. Pass `id` for retry-safe producer identity."
+        description = "Send a message to a VM for inter-VM communication or coroutine wake-up. Pass `id` for retry-safe producer identity. For a unikernel the reply is {ok, transport_status, reply_b64, outcome}; outcome names the run's end: value, budget (81 01), space (81 07), refused, unbound, wrong, fault, unrepresentable or unknown. budget and space are program outcomes, not transport errors."
     )]
     async fn deliver_message(
         &self,

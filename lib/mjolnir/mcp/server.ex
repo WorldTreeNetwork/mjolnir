@@ -39,6 +39,12 @@ defmodule Mjolnir.MCP.Server do
           description:
             "Unikernel only: up to 7 entity names (base58, 32 bytes) that may also call the guest."
         },
+        space: %{
+          type: "integer",
+          minimum: 1,
+          description:
+            "Unikernel only: the cells each run on the guest may make; default 4000000, at most the host's unikernel_space_max. A run past it is answered with the reply 81 07 (outcome space)."
+        },
         base_image: %{
           type: "string",
           description: "Base rootfs image name (e.g. 'ubuntu-24.04')."
@@ -185,7 +191,10 @@ defmodule Mjolnir.MCP.Server do
 
   tool "deliver_message" do
     title("Deliver Message")
-    description("Send a message to a VM for inter-VM communication or coroutine wake-up.")
+
+    description(
+      "Send a message to a VM for inter-VM communication or coroutine wake-up. For a unikernel, the reply is {ok, transport_status, reply_b64, outcome}; outcome names the run's end: value, budget (81 01), space (81 07), refused, unbound, wrong, fault, unrepresentable or unknown. budget and space are program outcomes, not transport errors."
+    )
 
     input_schema(%{
       type: "object",
@@ -423,16 +432,8 @@ defmodule Mjolnir.MCP.Server do
       end
 
     case result do
-      {:ok, status, payload} ->
-        body = %{ok: true, transport_status: status, reply_b64: Base.encode64(payload)}
-
-        body =
-          case status do
-            2 -> Map.put(body, :error, "reply_too_large")
-            3 -> Map.put(body, :error, "invalid_budget")
-            _ -> body
-          end
-
+      {:ok, status, payload} when status in [0, 2, 3] ->
+        body = Mjolnir.Unikernel.reply_body(status, payload)
         {:ok, %{content: [text(Jason.encode!(body))]}, state}
 
       {:error, reason} ->
@@ -575,7 +576,7 @@ defmodule Mjolnir.MCP.Server do
 
   # ── Helpers ────────────────────────────────────────────
 
-  @spawn_keys ~w(kind kernel entity_key allow base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
+  @spawn_keys ~w(kind kernel entity_key allow space base_image memory_mb vcpus ssh_public_key snapshot enable_iroh)
 
   defp args_to_spawn_opts(args) do
     args

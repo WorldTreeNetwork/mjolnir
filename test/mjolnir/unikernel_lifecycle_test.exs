@@ -137,7 +137,9 @@ defmodule Mjolnir.UnikernelLifecycleTest do
     assert {:ok, %{content: [%{"text" => text}]}, %{}} =
              Mjolnir.MCP.Server.handle_tool_call("deliver_message", args, %{})
 
-    assert %{"transport_status" => 0, "reply_b64" => "gQE="} = Jason.decode!(text)
+    assert %{"transport_status" => 0, "reply_b64" => "gQE=", "outcome" => "budget"} =
+             Jason.decode!(text)
+
     assert_receive {:job, %{program: <<0, 255>>, budget: 5000, correlation_id: <<7::64>>}}
 
     assert {:ok, %{isError: true}, %{}} =
@@ -148,6 +150,35 @@ defmodule Mjolnir.UnikernelLifecycleTest do
              )
 
     refute_receive {:job, _}
+  end
+
+  test "HTTP names the reply's outcome; a space reply is a status-0 answer", %{id: id} do
+    import Plug.Test
+    import Plug.Conn
+    StateStore.put(Record.new(id, :running, spawn_config: %{"kind" => "unikernel"}))
+    auth = Application.get_env(:mjolnir, :auth, [])
+    Application.put_env(:mjolnir, :auth, bypass_localhost: true)
+    on_exit(fn -> Application.put_env(:mjolnir, :auth, auth) end)
+
+    post = fn reply ->
+      Application.put_env(:mjolnir, :unikernel_exchange, fn _ -> reply end)
+
+      conn(:post, "/api/vms/#{id}/messages", Jason.encode!(%{program_b64: "AP8=", budget: 9}))
+      |> Map.put(:remote_ip, {127, 0, 0, 1})
+      |> put_req_header("content-type", "application/json")
+      |> Mjolnir.API.Router.call(Mjolnir.API.Router.init([]))
+    end
+
+    conn = post.({:ok, 0, <<0x81, 7>>})
+    assert conn.status == 200
+
+    assert Jason.decode!(conn.resp_body) ==
+             %{"ok" => true, "transport_status" => 0, "reply_b64" => "gQc=", "outcome" => "space"}
+
+    conn = post.({:ok, 2, ""})
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert body["error"] == "reply_too_large" and not Map.has_key?(body, "outcome")
   end
 
   test "MCP rejects missing programs and invalid budgets before transport", %{id: id} do

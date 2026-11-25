@@ -39,6 +39,7 @@ pub async fn cmd_spawn(
     kernel: Option<&str>,
     entity_key_file: Option<&str>,
     allow: &[String],
+    space: Option<u64>,
     publish_udp: &[PublishUdp],
 ) -> Result<()> {
     if target.is_some() && !publish_udp.is_empty() {
@@ -88,8 +89,10 @@ pub async fn cmd_spawn(
     if kind == Some("unikernel") && connect {
         anyhow::bail!("--connect is not available for a unikernel guest");
     }
-    if kind != Some("unikernel") && (entity_key_file.is_some() || !allow.is_empty()) {
-        anyhow::bail!("--entity-key-file and --allow are for --kind unikernel");
+    if kind != Some("unikernel")
+        && (entity_key_file.is_some() || !allow.is_empty() || space.is_some())
+    {
+        anyhow::bail!("--entity-key-file, --allow and --space are for --kind unikernel");
     }
     if kind == Some("unikernel") && entity_key_file.is_none() {
         anyhow::bail!(
@@ -112,6 +115,7 @@ pub async fn cmd_spawn(
         kernel: kernel.map(str::to_string),
         entity_key,
         allow: allow.to_vec(),
+        space,
         published_ports: publish_udp.to_vec(),
         ..SpawnOptions::default()
     };
@@ -135,6 +139,9 @@ pub async fn cmd_spawn(
     eprintln!("\x1b[1;32mVM:\x1b[0m           {}", resp.id);
     if let Some(entity) = &resp.entity {
         eprintln!("Entity:       {entity}");
+    }
+    if let Some(space) = resp.space {
+        eprintln!("Space:        {space} cells");
     }
     for p in publish_udp {
         match p.guest_port {
@@ -1286,6 +1293,9 @@ fn spawn_body(opts: &SpawnOptions) -> serde_json::Value {
     if !opts.allow.is_empty() {
         body["allow"] = serde_json::json!(opts.allow);
     }
+    if let Some(space) = opts.space {
+        body["space"] = serde_json::json!(space);
+    }
     if !opts.published_ports.is_empty() {
         body["published_ports"] = published_ports_json(&opts.published_ports);
     }
@@ -1583,8 +1593,8 @@ async fn cmd_unikernel_message(
     budget: u64,
     json: bool,
 ) -> Result<()> {
-    let bytes = std::fs::read(program_path)
-        .with_context(|| format!("read program {}", program_path))?;
+    let bytes =
+        std::fs::read(program_path).with_context(|| format!("read program {}", program_path))?;
     let client = api_client(token).await;
     let api = crate::config::resolve_api(api_flag, profile);
     let base = api.trim_end_matches('/');
@@ -1604,10 +1614,16 @@ async fn cmd_unikernel_message(
     )
     .await?;
     let parsed: serde_json::Value = serde_json::from_str(&body).context("message response")?;
-    if parsed.get("error").is_some() && parsed.get("transport_status").and_then(|v| v.as_i64()) != Some(0)
+    if parsed.get("error").is_some()
+        && parsed.get("transport_status").and_then(|v| v.as_i64()) != Some(0)
         && parsed.get("ok").and_then(|v| v.as_bool()) != Some(true)
     {
-        anyhow::bail!("{}", parsed["error"].as_str().unwrap_or("unikernel message failed"));
+        anyhow::bail!(
+            "{}",
+            parsed["error"]
+                .as_str()
+                .unwrap_or("unikernel message failed")
+        );
     }
     let reply = parsed
         .get("reply_b64")
@@ -1619,8 +1635,20 @@ async fn cmd_unikernel_message(
         println!("{}", body);
     } else {
         std::io::Write::write_all(&mut std::io::stdout(), &raw)?;
+        if let Some(line) = outcome_line(&parsed) {
+            eprintln!("{line}");
+        }
     }
     Ok(())
+}
+
+/// The stderr line for a reply that did not end in a value: the run's
+/// outcome by name (`budget`, `space`, ...). Stdout keeps only the bytes.
+fn outcome_line(parsed: &serde_json::Value) -> Option<String> {
+    match parsed.get("outcome").and_then(|v| v.as_str()) {
+        Some("value") | None => None,
+        Some(name) => Some(format!("mj: outcome {name}")),
+    }
 }
 
 async fn cmd_unikernel_message_operator(
@@ -1635,8 +1663,8 @@ async fn cmd_unikernel_message_operator(
     let owner_id = owner.as_deref().context(
         "operator message requires --owner (canonical base58 XID). The operator principal is not an account",
     )?;
-    let bytes = std::fs::read(program_path)
-        .with_context(|| format!("read program {}", program_path))?;
+    let bytes =
+        std::fs::read(program_path).with_context(|| format!("read program {}", program_path))?;
     let mut req_body = serde_json::json!({
         "program_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes),
         "budget": budget,
@@ -1659,7 +1687,9 @@ async fn cmd_unikernel_message_operator(
     {
         anyhow::bail!(
             "{}",
-            parsed["error"].as_str().unwrap_or("unikernel message failed")
+            parsed["error"]
+                .as_str()
+                .unwrap_or("unikernel message failed")
         );
     }
     let reply = parsed
@@ -1672,6 +1702,9 @@ async fn cmd_unikernel_message_operator(
         println!("{}", body);
     } else {
         std::io::Write::write_all(&mut std::io::stdout(), &raw)?;
+        if let Some(line) = outcome_line(&parsed) {
+            eprintln!("{line}");
+        }
     }
     Ok(())
 }
@@ -1889,6 +1922,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
             &[],
         )
         .await;
@@ -1897,6 +1931,34 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn outcome_line_names_every_outcome_but_value() {
+        let o = |v: serde_json::Value| super::outcome_line(&v);
+        assert_eq!(o(serde_json::json!({"outcome": "value"})), None);
+        assert_eq!(o(serde_json::json!({})), None);
+        assert_eq!(
+            o(serde_json::json!({"outcome": "space"})).as_deref(),
+            Some("mj: outcome space")
+        );
+        assert_eq!(
+            o(serde_json::json!({"outcome": "budget"})).as_deref(),
+            Some("mj: outcome budget")
+        );
+    }
+
+    #[test]
+    fn spawn_body_carries_space() {
+        let opts = super::SpawnOptions {
+            kind: Some("unikernel".into()),
+            space: Some(100_000),
+            ..super::SpawnOptions::default()
+        };
+        assert_eq!(super::spawn_body(&opts)["space"], 100_000);
+        assert!(super::spawn_body(&super::SpawnOptions::default())
+            .get("space")
+            .is_none());
     }
 
     #[test]

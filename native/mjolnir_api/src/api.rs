@@ -20,6 +20,9 @@ pub struct SpawnResponse {
     /// A unikernel guest's entity name (base58). Its key is never returned.
     #[serde(default)]
     pub entity: Option<String>,
+    /// A unikernel guest's space: the cells each run may make.
+    #[serde(default)]
+    pub space: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -522,6 +525,9 @@ pub struct SpawnOptions {
     pub entity_key: Option<String>,
     /// Up to 7 more entity names (base58) the unikernel guest will accept.
     pub allow: Vec<String>,
+    /// A unikernel's space: the cells each run may make. `None` is the
+    /// host's default (4000000).
+    pub space: Option<u64>,
     /// UDP ports of the host to DNAT to the guest. Empty sends no field.
     pub published_ports: Vec<PublishUdp>,
 }
@@ -565,6 +571,9 @@ pub async fn spawn_vm(
     }
     if !opts.allow.is_empty() {
         body["allow"] = serde_json::json!(opts.allow);
+    }
+    if let Some(space) = opts.space {
+        body["space"] = serde_json::json!(space);
     }
     if !opts.published_ports.is_empty() {
         body["published_ports"] = published_ports_json(&opts.published_ports);

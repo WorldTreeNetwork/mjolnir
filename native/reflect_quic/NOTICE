@@ -1,15 +1,18 @@
 quic.zig, entity.zig and entity-tool.zig are the Reflect QUIC stack, the
 entity key and name code, and the `entity name <key-file>` tool from
-WorldTreeNetwork/homoiconic commit e9a4c86a80c80c6c2672f1d65d4478c3bc85ea02
+WorldTreeNetwork/homoiconic commit 3122521938cc8c953b0915eb0a52740af8a836f3
 (unikernel/quic.zig, unikernel/entity.zig, unikernel/entity-tool.zig),
-copied unmodified.
+copied unmodified. quic.zig at that commit answers a Retry (homoiconic
+add-quic-admission, 695ce77); entity.zig and entity-tool.zig are unchanged
+since e9a4c86.
 host.zig is the Mjolnir host client written against that stack, after
-homoiconic's unikernel/quic-client.zig at the same commit.
+homoiconic's unikernel/quic-client.zig. It needs no change for a Retry:
+Conn.recv takes it.
 The homoiconic tree is not modified.
 
-Build (Zig 0.16), from the repository root, on the Linux host:
+Build (Zig 0.16.0, Linux), from the repository root:
 
-  zig build-exe native/reflect_quic/host.zig -lc -O ReleaseFast \
-    -femit-bin=priv/reflect-quic-client
-  zig build-exe native/reflect_quic/entity-tool.zig -lc -O ReleaseFast \
-    -femit-bin=priv/reflect-entity
+  bash scripts/build-reflect-quic.sh
+
+which writes priv/reflect-quic-client and priv/reflect-entity. Deploy runs
+it from scripts/build-release.sh before `mix release`.

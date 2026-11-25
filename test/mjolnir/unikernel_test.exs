@@ -121,16 +121,91 @@ defmodule Mjolnir.UnikernelTest do
     end
   end
 
-  test "command line is exactly four reflect words, Mjolnir's name first" do
-    line = Unikernel.cmdline("10.200.1.2", 20001, 30001, [name(0), name(1), name(2)])
+  test "command line is exactly five reflect words, Mjolnir's name first, space last" do
+    line = Unikernel.cmdline("10.200.1.2", 20001, 30001, [name(0), name(1), name(2)], 4_000_000)
 
     assert line ==
              "reflect.ip=10.200.1.2 reflect.port=20001 reflect.quic_port=30001 " <>
-               "reflect.allow=#{name(0)},#{name(1)},#{name(2)}"
+               "reflect.allow=#{name(0)},#{name(1)},#{name(2)} reflect.space=4000000"
 
-    assert length(String.split(line, " ")) == 4
+    assert length(String.split(line, " ")) == 5
     # A name the caller also listed is not repeated: the guest refuses a list with one twice.
-    assert Unikernel.cmdline("10.0.0.2", 1, 2, [name(0), name(0)]) =~ ~r/allow=[^,]+$/
+    assert Unikernel.cmdline("10.0.0.2", 1, 2, [name(0), name(0)], 9) =~
+             ~r/allow=[^, ]+ reflect.space=9$/
+  end
+
+  describe "space" do
+    setup do
+      old = Application.get_env(:mjolnir, :unikernel_space_max)
+      Application.put_env(:mjolnir, :unikernel_kernel_prefixes, ["/tmp"])
+
+      on_exit(fn ->
+        if old,
+          do: Application.put_env(:mjolnir, :unikernel_space_max, old),
+          else: Application.delete_env(:mjolnir, :unikernel_space_max)
+      end)
+
+      :ok
+    end
+
+    test "defaults to 4000000 and is bounded by 1 and the host's maximum" do
+      Application.delete_env(:mjolnir, :unikernel_space_max)
+      assert {:ok, %{space: 4_000_000}} = Unikernel.prepare_spawn(unikernel(%{}))
+      assert {:ok, %{space: 1}} = Unikernel.prepare_spawn(unikernel(%{space: 1}))
+
+      assert {:ok, %{space: 4_000_000}} =
+               Unikernel.prepare_spawn(unikernel(%{"space" => "4000000"}))
+
+      for bad <- [0, -1, 4_000_001, 1.5, "lots", "12x", [1], true] do
+        assert {:error, :invalid_space} = Unikernel.prepare_spawn(unikernel(%{space: bad})),
+               "accepted #{inspect(bad)}"
+      end
+    end
+
+    test "the operator may raise the maximum, never to 2^64" do
+      Application.put_env(:mjolnir, :unikernel_space_max, 18_446_744_073_709_551_615)
+
+      assert {:ok, %{space: 18_446_744_073_709_551_615}} =
+               Unikernel.prepare_spawn(unikernel(%{space: 18_446_744_073_709_551_615}))
+
+      Application.put_env(:mjolnir, :unikernel_space_max, 18_446_744_073_709_551_616)
+
+      assert {:error, :invalid_space} =
+               Unikernel.prepare_spawn(unikernel(%{space: 18_446_744_073_709_551_616}))
+    end
+
+    test "a linux spawn drops it" do
+      assert {:ok, opts} = Unikernel.prepare_spawn(%{"space" => 5, :space => 5})
+      refute Map.has_key?(opts, :space)
+      refute Map.has_key?(opts, "space")
+    end
+  end
+
+  test "a reply's outcome is named from its envelope's tag, and its value is not read" do
+    for {bytes, outcome} <- [
+          {Base.decode16!("82008200C24E0D13F6370F96865DF5DD54000000"), "value"},
+          {<<0x81, 1>>, "budget"},
+          {<<0x81, 2>>, "refused"},
+          {<<0x82, 3, 0>>, "unbound"},
+          {<<0x81, 4>>, "wrong"},
+          {<<0x81, 5>>, "fault"},
+          {<<0x81, 6>>, "unrepresentable"},
+          {<<0x81, 7>>, "space"},
+          {<<0x81, 8>>, "unknown"},
+          {<<0x81, 7, 0>>, "unknown"},
+          {<<0x81, 0>>, "unknown"},
+          {<<0x82, 7, 0>>, "unknown"},
+          {<<>>, "unknown"},
+          {"not cbor", "unknown"}
+        ] do
+      assert Unikernel.reply_outcome(bytes) == outcome, inspect(bytes)
+    end
+
+    assert Unikernel.reply_body(0, <<0x81, 7>>) ==
+             %{ok: true, transport_status: 0, reply_b64: "gQc=", outcome: "space"}
+
+    refute Map.has_key?(Unikernel.reply_body(2, ""), :outcome)
+    refute Map.has_key?(Unikernel.reply_body(3, ""), :outcome)
   end
 
   test "program over 1176 bytes is rejected before an exchange" do
@@ -258,7 +333,7 @@ defmodule Mjolnir.UnikernelTest do
           kernel_path: "/tmp/reflect.elf",
           rootfs_path: "",
           guest_kind: :unikernel,
-          boot_args: Unikernel.cmdline("10.0.0.2", 1, 2, [name(0)]),
+          boot_args: Unikernel.cmdline("10.0.0.2", 1, 2, [name(0)], 4_000_000),
           serial_log: "/tmp/vm-1_serial.log",
           initramfs_path: "/tmp/vm-1.entity-key",
           network_interface: %{
@@ -272,7 +347,10 @@ defmodule Mjolnir.UnikernelTest do
 
     assert payload["cpus"] == %{"boot_vcpus" => 1, "max_vcpus" => 1}
     assert payload["memory"]["size"] == 512 * 1024 * 1024
-    assert payload["payload"]["cmdline"] =~ "reflect.quic_port=2 reflect.allow=#{name(0)}"
+
+    assert payload["payload"]["cmdline"] =~
+             "reflect.quic_port=2 reflect.allow=#{name(0)} reflect.space=4000000"
+
     assert payload["payload"]["initramfs"] == "/tmp/vm-1.entity-key"
     refute Map.has_key?(payload, "fs")
     refute Map.has_key?(payload, "vsock")

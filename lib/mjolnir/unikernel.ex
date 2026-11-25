@@ -3,7 +3,16 @@ defmodule Mjolnir.Unikernel do
   Guest kind `unikernel`: a Reflect ELF with no rootfs and no agent.
 
   The host BEAM opens QUIC. `mj` only calls the API. The command line is
-  exactly four `reflect.*` words. One vCPU, 512 MiB.
+  exactly five `reflect.*` words. One vCPU, 512 MiB.
+
+  ## Space
+
+  Each run on the guest may make at most `space` cells (homoiconic
+  `add-space-budget`). A run past it is answered `81 07`, outcome `space`,
+  and the guest goes on. The owner sets it at spawn, from 1 to
+  `:unikernel_space_max` (default #{4_000_000}); it is always written as
+  `reflect.space=<cells>` so the recorded limit is the one the guest runs
+  under. 4000000 is the image's default for 512 MiB.
 
   ## Entity keys
 
@@ -28,6 +37,7 @@ defmodule Mjolnir.Unikernel do
   @program_max 1176
   @boot_deadline_ms 90_000
   @allow_max 7
+  @space_default 4_000_000
 
   def boot_deadline_ms, do: @boot_deadline_ms
   def program_max, do: @program_max
@@ -38,21 +48,81 @@ defmodule Mjolnir.Unikernel do
     kind = normalize_kind(Map.get(opts, :kind) || Map.get(opts, "kind"))
 
     if kind == :linux do
-      {:ok, opts |> drop_key_fields() |> Map.delete(:allow) |> Map.put(:kind, :linux)}
+      {:ok,
+       opts
+       |> drop_key_fields()
+       |> Map.drop([:allow, :space, "space"])
+       |> Map.put(:kind, :linux)}
     else
       prepare_unikernel(opts)
     end
   end
 
   @doc """
-  The guest's command line: exactly four words. `allow` is the list of names
-  the guest finishes a handshake with, Mjolnir's client name first.
+  The guest's command line: exactly five words. `allow` is the list of names
+  the guest finishes a handshake with, Mjolnir's client name first; `space`
+  is the cells each run may make.
   """
-  def cmdline(guest_ip, udp_port, quic_port, [_ | _] = allow)
-      when is_binary(guest_ip) and is_integer(udp_port) and is_integer(quic_port) do
+  def cmdline(guest_ip, udp_port, quic_port, [_ | _] = allow, space)
+      when is_binary(guest_ip) and is_integer(udp_port) and is_integer(quic_port) and
+             is_integer(space) and space >= 1 do
     "reflect.ip=#{guest_ip} reflect.port=#{udp_port} reflect.quic_port=#{quic_port} " <>
-      "reflect.allow=#{Enum.join(Enum.uniq(allow), ",")}"
+      "reflect.allow=#{Enum.join(Enum.uniq(allow), ",")} reflect.space=#{space}"
   end
+
+  def space_default, do: @space_default
+
+  @doc "The host's largest `space` (`:unikernel_space_max`, default #{@space_default})."
+  def space_max, do: Application.get_env(:mjolnir, :unikernel_space_max, @space_default)
+
+  @doc "A spawn's `space`: `nil` is the default; otherwise an integer in 1..space_max/0."
+  def normalize_space(nil), do: {:ok, @space_default}
+
+  def normalize_space(n) when is_integer(n) do
+    if n >= 1 and n <= space_max() and n < 18_446_744_073_709_551_616,
+      do: {:ok, n},
+      else: {:error, :invalid_space}
+  end
+
+  def normalize_space(n) when is_binary(n) do
+    case Integer.parse(n) do
+      {i, ""} -> normalize_space(i)
+      _ -> {:error, :invalid_space}
+    end
+  end
+
+  def normalize_space(_), do: {:error, :invalid_space}
+
+  @doc """
+  The name of a reply's outcome, from the tag of its envelope (homoiconic
+  `wire-bytes`, "A bounded run reply has a byte form"). Only the first two
+  bytes are read: a CBOR array of one or two items and its first item, a
+  tag from 0 to 7. The value of `[0, v]` is not decoded.
+  """
+  def reply_outcome(<<0x82, 0, _::binary>>), do: "value"
+  def reply_outcome(<<0x82, 3, _::binary>>), do: "unbound"
+  def reply_outcome(<<0x81, 1>>), do: "budget"
+  def reply_outcome(<<0x81, 2>>), do: "refused"
+  def reply_outcome(<<0x81, 4>>), do: "wrong"
+  def reply_outcome(<<0x81, 5>>), do: "fault"
+  def reply_outcome(<<0x81, 6>>), do: "unrepresentable"
+  def reply_outcome(<<0x81, 7>>), do: "space"
+  def reply_outcome(_), do: "unknown"
+
+  @doc "The JSON body of a message reply, for HTTP and MCP alike."
+  def reply_body(0, payload),
+    do: %{
+      ok: true,
+      transport_status: 0,
+      reply_b64: Base.encode64(payload),
+      outcome: reply_outcome(payload)
+    }
+
+  def reply_body(2, _payload),
+    do: %{ok: true, error: "reply_too_large", transport_status: 2, reply_b64: ""}
+
+  def reply_body(3, _payload),
+    do: %{ok: true, error: "invalid_budget", transport_status: 3, reply_b64: ""}
 
   def ports(vm_id) when is_binary(vm_id) do
     n = :erlang.phash2(vm_id, 10_000)
@@ -338,6 +408,7 @@ defmodule Mjolnir.Unikernel do
     kernel = Map.get(opts, :kernel) || Map.get(opts, "kernel")
     key = Map.get(opts, :entity_key) || Map.get(opts, "entity_key")
     allow = Map.get(opts, :allow, Map.get(opts, "allow"))
+    space = Map.get(opts, :space, Map.get(opts, "space"))
 
     cond do
       Map.get(opts, :snapshot) || Map.get(opts, "snapshot") ->
@@ -361,8 +432,12 @@ defmodule Mjolnir.Unikernel do
       parse_allow(allow) == :error ->
         {:error, :allow_invalid}
 
+      normalize_space(space) == {:error, :invalid_space} ->
+        {:error, :invalid_space}
+
       true ->
         {:ok, allow} = parse_allow(allow)
+        {:ok, space} = normalize_space(space)
 
         {:ok,
          opts
@@ -371,6 +446,8 @@ defmodule Mjolnir.Unikernel do
          |> Map.put(:kernel, Path.expand(kernel))
          |> Map.put(:entity_key, wrap_key(key))
          |> Map.put(:allow, allow)
+         |> Map.put(:space, space)
+         |> Map.delete("space")
          |> Map.put(:memory_mb, 512)
          |> Map.put(:vcpus, 1)
          |> Map.put(:restart_policy, :never)

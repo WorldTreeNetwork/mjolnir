@@ -97,6 +97,10 @@ clean:
 build-client:
     ./scripts/build-client.sh
 
+# Unikernel helpers into priv/ (reflect-quic-client, reflect-entity); Zig 0.16.0, Linux
+build-reflect:
+    bash scripts/build-reflect-quic.sh
+
 # tar.gz whose member is an executable named mj. On macOS this Developer ID
 # signs and notarizes (profile mjolnir) before writing dist/, then uploads
 # that archive to the public GitHub Release. MJOLNIR_CLI_GITHUB=0 skips the upload.

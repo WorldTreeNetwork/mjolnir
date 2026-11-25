@@ -27,5 +27,7 @@ if not audit.get('runs') or any(run.get('results') for run in audit['runs']):
 PY
 # The staged _build is a copy of the active one. --overwrite keeps old lib/<app>-<vsn>
 # directories, and cutover verification checks every directory against the running node.
+# A unikernel spawn needs both Zig helpers in priv/ (mjolnir-0wm4); mix release copies priv.
+bash scripts/build-reflect-quic.sh
 rm -rf _build/prod/rel/mjolnir
 mise exec -- mix release mjolnir --overwrite

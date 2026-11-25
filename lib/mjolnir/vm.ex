@@ -2410,6 +2410,9 @@ defmodule Mjolnir.VM do
       # The guest keeps running, so its published ports stay. The next BEAM
       # adopts the VM and re-checks them.
       Mjolnir.VmmScope.detach(state.hypervisor_port)
+      # A unikernel detached in the middle of its boot leaves its key file:
+      # Cloud Hypervisor has read it at boot, or the boot will not happen.
+      remove_unikernel_key_file(state)
       :ok
     else
       # By tag, so a rule written with an older public address goes too.
@@ -2420,6 +2423,15 @@ defmodule Mjolnir.VM do
 
       terminate_owned(reason, state)
     end
+  end
+
+  defp remove_unikernel_key_file(state) do
+    if Map.get(state.config || %{}, :guest_kind) == :unikernel do
+      socket_dir = Application.get_env(:mjolnir, :socket_dir)
+      if socket_dir, do: File.rm(Mjolnir.Unikernel.key_file_path(socket_dir, state.id))
+    end
+
+    :ok
   end
 
   defp terminate_owned(reason, state) do
@@ -2435,10 +2447,7 @@ defmodule Mjolnir.VM do
     preserve = preserve_rootfs?(reason, state)
 
     # Normally gone once the guest was ready; a boot cut short may leave it.
-    if Map.get(state.config || %{}, :guest_kind) == :unikernel do
-      socket_dir = Application.get_env(:mjolnir, :socket_dir)
-      if socket_dir, do: File.rm(Mjolnir.Unikernel.key_file_path(socket_dir, state.id))
-    end
+    remove_unikernel_key_file(state)
 
     Logger.warning("[vm-terminate] #{state.id} preserve=#{preserve} → calling cleanup")
 
@@ -2507,6 +2516,7 @@ defmodule Mjolnir.VM do
                 "kernel" => state.config.kernel_path,
                 "entity" => Map.get(state.config, :entity),
                 "allow" => Map.get(state.config, :allow, []),
+                "space" => Map.get(state.config, :space),
                 "restart_policy" => "never"
               },
               runtime: %{"reason" => "guest_exit"}
@@ -2612,6 +2622,7 @@ defmodule Mjolnir.VM do
       # and the guest's name, set during boot.
       entity_key: if(kind == :unikernel, do: opts[:entity_key]),
       allow: if(kind == :unikernel, do: opts[:allow] || [], else: []),
+      space: if(kind == :unikernel, do: opts[:space] || Mjolnir.Unikernel.space_default()),
       entity: nil,
       # Set during boot
       rootfs_path: "",
@@ -2663,7 +2674,13 @@ defmodule Mjolnir.VM do
          _ = boot_partial_put(:hv_port, hv_port),
          :ok <- wait_for_socket(socket_path),
          boot_args =
-           Mjolnir.Unikernel.cmdline(net_config.guest_ip, udp, quic, [client_name | allow]),
+           Mjolnir.Unikernel.cmdline(
+             net_config.guest_ip,
+             udp,
+             quic,
+             [client_name | allow],
+             Map.get(state.config, :space) || Mjolnir.Unikernel.space_default()
+           ),
          config =
            state.config
            |> Map.delete(:entity_key)
@@ -4438,6 +4455,7 @@ defmodule Mjolnir.VM do
           "kernel" => state.config.kernel_path,
           "entity" => Map.get(state.config, :entity),
           "allow" => Map.get(state.config, :allow, []),
+          "space" => Map.get(state.config, :space),
           "quic_port" => Map.get(state.config, :quic_port),
           "reflect_port" => Map.get(state.config, :udp_port),
           "guest_ip" => if(state.net_config, do: state.net_config.guest_ip)

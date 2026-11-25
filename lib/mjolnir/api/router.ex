@@ -329,11 +329,27 @@ defmodule Mjolnir.API.Router do
 
       # The entity key is the caller's: it is checked and carried to the boot,
       # and never echoed in an error, a log or the response.
+      # Taken out of the body at parse time (scrub_entity_key/1).
       opts =
-        case conn.body_params["entity_key"] do
+        case {conn.private[:entity_key], Keyword.get(opts, :kind)} do
+          {nil, _} ->
+            opts
+
+          {:invalid, :unikernel} ->
+            Keyword.put(opts, :_validation_error, "entity_key_invalid")
+
+          # A Linux spawn ignores an entity key, as before.
+          {:invalid, _} ->
+            opts
+
+          {fun, _} when is_function(fun, 0) ->
+            Keyword.put(opts, :entity_key, fun)
+        end
+
+      opts =
+        case conn.body_params["space"] do
           nil -> opts
-          key when is_binary(key) -> Keyword.put(opts, :entity_key, key)
-          _ -> Keyword.put(opts, :_validation_error, "entity_key_invalid")
+          space -> Keyword.put(opts, :space, space)
         end
 
       opts =
@@ -2175,7 +2191,31 @@ defmodule Mjolnir.API.Router do
   # /api/deploy carries a raw gzipped-tar body — bypass the JSON parser so the
   # bytes arrive intact for erl_tar to decompress+extract.
   defp maybe_parse_body(%{path_info: ["api", "deploy"]} = conn, _opts), do: conn
-  defp maybe_parse_body(conn, _opts), do: Plug.Parsers.call(conn, @parsers_opts)
+
+  defp maybe_parse_body(conn, _opts),
+    do: conn |> Plug.Parsers.call(@parsers_opts) |> scrub_entity_key()
+
+  # An entity key leaves the request as soon as it is parsed. A crash report
+  # can print the conn (Bandit formats a FunctionClauseError with its
+  # arguments), so the key text must not be in body_params or params. It is
+  # held in conn.private as a closure, as spawn options hold it.
+  @doc false
+  def scrub_entity_key(%Plug.Conn{body_params: %{"entity_key" => key}} = conn) do
+    held =
+      case Mjolnir.Unikernel.parse_key(key) do
+        {:ok, bytes} -> Mjolnir.Unikernel.entity_key_fun(bytes)
+        :error -> :invalid
+      end
+
+    %{
+      conn
+      | body_params: Map.delete(conn.body_params, "entity_key"),
+        params: Map.delete(conn.params, "entity_key")
+    }
+    |> Plug.Conn.put_private(:entity_key, held)
+  end
+
+  def scrub_entity_key(conn), do: conn
 
   # A vsock ping miss used to collapse into a bare spawn_failed, which
   # looks like a host crash. Name the agent (mjolnir-igi9).
@@ -2199,24 +2239,8 @@ defmodule Mjolnir.API.Router do
     case program do
       {:ok, bytes} ->
         case Mjolnir.VM.unikernel_message(id, bytes, budget, correlation) do
-          {:ok, 0, payload} ->
-            json(conn, 200, %{ok: true, transport_status: 0, reply_b64: Base.encode64(payload)})
-
-          {:ok, 2, _} ->
-            json(conn, 200, %{
-              ok: true,
-              error: "reply_too_large",
-              transport_status: 2,
-              reply_b64: ""
-            })
-
-          {:ok, 3, _} ->
-            json(conn, 200, %{
-              ok: true,
-              error: "invalid_budget",
-              transport_status: 3,
-              reply_b64: ""
-            })
+          {:ok, status, payload} when status in [0, 2, 3] ->
+            json(conn, 200, Mjolnir.Unikernel.reply_body(status, payload))
 
           {:error, reason} when is_atom(reason) ->
             status = if reason == :unikernel_busy, do: 409, else: 400
@@ -2251,6 +2275,7 @@ defmodule Mjolnir.API.Router do
               :entity_key_required,
               :entity_key_invalid,
               :allow_invalid,
+              :invalid_space,
               :kernel_required,
               :unikernel_unsupported
             ] do

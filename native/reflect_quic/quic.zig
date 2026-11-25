@@ -33,17 +33,35 @@ const max_shift: u8 = 6;
 /// Before a server has validated the client's address it sends at most this
 /// many times the bytes it has received (RFC 9000 section 8.1).
 pub const amplification: u64 = 3;
+/// A Retry token is taken for this long after it was made (RFC 9000 8.1.2).
+pub const token_life: u64 = 10_000_000_000;
+/// The longest token a client keeps from a Retry.
+pub const max_token: usize = 64;
 
 /// Whether a datagram has the shape of a client's first flight for a
 /// connection other than `current`: at least 1200 bytes, a version 1 Initial,
 /// 8-byte connection IDs, and a destination ID that is not `current`. Whether
 /// it opens is for `recv` on a fresh server connection to say.
 pub fn newInitial(dgram: []const u8, current: *const [8]u8) bool {
+    return firstShape(dgram) and !std.mem.eql(u8, dgram[6..14], current);
+}
+
+/// Whether a datagram has the shape of a client's first flight: at least
+/// 1200 bytes, a version 1 Initial first, 8-byte connection IDs.
+pub fn firstShape(dgram: []const u8) bool {
     if (dgram.len < min_initial) return false;
     if (dgram[0] & 0xf0 != 0xc0) return false;
     if (std.mem.readInt(u32, dgram[1..5], .big) != 1) return false;
-    if (dgram[5] != 8 or dgram[14] != 8) return false;
-    return !std.mem.eql(u8, dgram[6..14], current);
+    return dgram[5] == 8 and dgram[14] == 8;
+}
+
+/// The destination connection ID a datagram's first packet names: bytes
+/// 6..14 of a long header with 8-byte IDs, 1..9 of a short one.
+pub fn dcidOf(dgram: []const u8) ?*const [8]u8 {
+    if (dgram.len < 1 + 8) return null;
+    if (dgram[0] & 0x80 == 0) return dgram[1..9];
+    if (dgram.len < 15 or dgram[5] != 8) return null;
+    return dgram[6..14];
 }
 
 const Keys = struct { key: [16]u8 = .{0} ** 16, iv: [12]u8 = .{0} ** 12, hp: [16]u8 = .{0} ** 16, on: bool = false, pn: u32 = 0 };
@@ -85,8 +103,11 @@ pub const Conn = struct {
     plain: [1400]u8 = undefined,
     init_rx: Holey = .{},
     pend: [3]Pend = .{ .{}, .{}, .{} },
-    rx_pn: [3]u64 = .{0} ** 3, // bit i set => pn (base+i) seen; base in rx_base
-    rx_base: [3]u32 = .{0} ** 3,
+    /// The largest packet number opened in each space, and which of the 63
+    /// below it opened: bit i is `rx_top - i`. A number seen, or 64 or more
+    /// below the largest, is a duplicate (RFC 9000 section 12.3).
+    rx_top: [3]u32 = .{0} ** 3,
+    rx_win: [3]u64 = .{0} ** 3,
     rx_any: [3]bool = .{ false, false, false },
     /// A packet that asks for an acknowledgement (one with a frame other than
     /// ACK and PADDING) opened in this space and no packet sent since has
@@ -114,6 +135,18 @@ pub const Conn = struct {
     /// to its address. Until then `tx_bytes` stays within `amplification`
     /// times `rx_bytes`, the bytes of the datagrams that opened.
     validated: bool = false,
+    /// A server opened a Handshake packet: its Initial space is finished
+    /// (RFC 9001 section 4.9.1). Apart from `validated`, which a Retry
+    /// token sets before any Handshake packet.
+    hs_opened: bool = false,
+    /// A server admitted with a Retry token: `tp_odcid` is the client's
+    /// first destination ID, from the token, and `orig_dcid` the Retry's
+    /// source ID. A client that took a Retry: `retry_scid` and `token`.
+    retried: bool = false,
+    tp_odcid: [8]u8 = .{0} ** 8,
+    retry_scid: [8]u8 = .{0} ** 8,
+    token: [max_token]u8 = undefined,
+    token_len: usize = 0,
     rx_bytes: u64 = 0,
     tx_bytes: u64 = 0,
     rand: *const fn () u64,
@@ -233,6 +266,11 @@ pub const Conn = struct {
         return false;
     }
 
+    /// Whether a flight of this end's is on in `space`, to be sent or resent.
+    pub fn flightOn(c: *const Conn, space: usize) bool {
+        return c.pend[space].on;
+    }
+
     /// The peer's stream once it has ended, on an accepted connection only.
     pub fn readApp(c: *Conn) []const u8 {
         if (!c.accepted or !c.peer_fin) return "";
@@ -282,6 +320,11 @@ pub const Conn = struct {
         const scid = pkt[15..23];
         var o: usize = 23;
         const kind = (pkt[0] & 0x30) >> 4;
+        // A Retry has no Length: it is the rest of the datagram.
+        if (kind == 3) {
+            if (!c.server) c.onRetry(pkt, dcid[0..8], scid[0..8]);
+            return pkt.len;
+        }
         if (kind == 0) {
             const tok = getVar(pkt[o..]) orelse return null;
             o += tok.len + @as(usize, @intCast(tok.v));
@@ -313,6 +356,14 @@ pub const Conn = struct {
             return total;
         }
         const plain = opened.?;
+        // A packet number opened before is a replay: not opened.
+        if (c.dup(space, plain.pn)) {
+            if (first) {
+                c.initial.on = false;
+                c.open_initial.on = false;
+            }
+            return total;
+        }
         c.opens += 1;
         // The peer's connection ID is taken from a packet that opened.
         if (space == 0 and (first or !c.server)) @memcpy(&c.peer_cid, scid);
@@ -321,7 +372,8 @@ pub const Conn = struct {
         // to its address: the address is validated (RFC 9000 section 8.1) and
         // the Initial space is finished, its flight and its opening keys
         // (RFC 9001 section 4.9.1).
-        if (space == 1 and c.server and !c.validated) {
+        if (space == 1 and c.server and !c.hs_opened) {
+            c.hs_opened = true;
             c.validated = true;
             c.pend[0].on = false;
             c.ack_due[0] = false;
@@ -337,37 +389,15 @@ pub const Conn = struct {
         const total = pkt.len;
         const plain = c.open(2, pkt[0..total], 1 + 8) orelse return null;
         if (!c.allowed(2, plain.data)) return null;
+        if (c.dup(2, plain.pn)) return null;
         c.opens += 1;
         c.mark(2, plain.pn);
         c.takeFrames(2, plain.data, now);
         return total;
     }
 
-    const Plain = struct { pn: u32, data: []const u8 };
     fn open(c: *Conn, space: usize, pkt: []const u8, pn_at: usize) ?Plain {
-        const k = c.openKeys(space);
-        if (!k.on or pn_at + 4 + 16 > pkt.len or pkt.len > c.scratch.len) return null;
-        const buf = &c.scratch;
-        @memcpy(buf[0..pkt.len], pkt);
-        var sample: [16]u8 = undefined;
-        @memcpy(&sample, buf[pn_at + 4 .. pn_at + 20]);
-        const mask = hpMask(&k.hp, &sample);
-        const long = buf[0] & 0x80 != 0;
-        const keep: u8 = if (long) 0x0f else 0x1f;
-        buf[0] ^= mask[0] & keep;
-        var i: usize = 0;
-        while (i < 4) : (i += 1) buf[pn_at + i] ^= mask[1 + i];
-        const pn = std.mem.readInt(u32, buf[pn_at..][0..4], .big);
-        const body = pn_at + 4;
-        const tag_at = pkt.len - 16;
-        if (tag_at < body) return null;
-        var tag: [16]u8 = undefined;
-        @memcpy(&tag, buf[tag_at..pkt.len]);
-        var nonce: [12]u8 = k.iv;
-        var s: usize = 0;
-        while (s < 4) : (s += 1) nonce[8 + s] ^= buf[pn_at + s];
-        Aes128Gcm.decrypt(c.plain[0 .. tag_at - body], buf[body..tag_at], tag, buf[0..body], nonce, k.key) catch return null;
-        return .{ .pn = pn, .data = c.plain[0 .. tag_at - body] };
+        return openWith(c.openKeys(space), pkt, pn_at, &c.scratch, &c.plain);
     }
 
     /// The bytes of a packet in `space` with `n` bytes of frames, padded
@@ -376,12 +406,12 @@ pub const Conn = struct {
     /// its shortest form; a padded packet has a Length of at least 64, two
     /// bytes, so it may come out a little over `pad_to`.
     const Size = struct { total: usize, h: usize, len: usize };
-    fn size(space: usize, n: usize, pad_to: usize) Size {
+    fn size(space: usize, n: usize, pad_to: usize, tok: usize) Size {
         if (space == 2) {
             const total = 9 + 4 + n + 16;
             return .{ .total = @max(total, pad_to), .h = 9, .len = 0 };
         }
-        const h0: usize = if (space == 0) 23 + 1 else 23;
+        const h0: usize = if (space == 0) 23 + tok else 23;
         const body = 4 + n + 16;
         const plain = h0 + varLen(body) + body;
         if (plain >= pad_to) return .{ .total = plain, .h = h0 + varLen(body), .len = varLen(body) };
@@ -394,7 +424,7 @@ pub const Conn = struct {
         var frame: [32]u8 = undefined;
         var n = ackFrame(&frame, c, space);
         if (flight) n += c.pend[space].len;
-        return size(space, n, pad_to).total;
+        return size(space, n, pad_to, 1 + c.token_len).total;
     }
 
     /// Seal one packet in `space` into `out`: the flight when `flight`, else
@@ -414,7 +444,7 @@ pub const Conn = struct {
         }
         const pn = k.pn;
         const long = space < 2;
-        var hdr: [64]u8 = undefined;
+        var hdr: [128]u8 = undefined;
         const dcid = c.peer_cid;
         const scid = c.local_cid;
         if (long) {
@@ -425,7 +455,12 @@ pub const Conn = struct {
             @memcpy(hdr[6..14], &dcid);
             hdr[14] = 8;
             @memcpy(hdr[15..23], &scid);
-            if (space == 0) hdr[23] = 0; // no token
+            if (space == 0) {
+                // The token a Retry gave, or none. It is under 64 bytes, so
+                // its length is one byte.
+                hdr[23] = @intCast(c.token_len);
+                @memcpy(hdr[24..][0..c.token_len], c.token[0..c.token_len]);
+            }
         } else {
             hdr[0] = 0x40 | 0x03;
             @memcpy(hdr[1..9], &dcid);
@@ -434,7 +469,7 @@ pub const Conn = struct {
         // or more; a server's Initial flight is padded so its datagram is
         // (`send`).
         const want = if (space == 0 and !c.server) @max(pad_to, min_initial) else pad_to;
-        const sz = size(space, n, want);
+        const sz = size(space, n, want, 1 + c.token_len);
         const pad = sz.total;
         const h = sz.h;
         if (pad > out.len or pad > 1400) return null;
@@ -623,6 +658,7 @@ pub const Conn = struct {
         const through_fin = o;
         if (o != flight.len) return c.refuse(); // bytes after Finished
         if (!rawKeysChosen(ee)) return c.refuse();
+        if (!c.paramsNamed(ee)) return c.refuse();
         if (!std.mem.eql(u8, cr[4..], &cert_request)) return c.refuse();
         // The server's name is on this end's list, or nothing more is said.
         const key = certKey(certm) orelse return c.refuse();
@@ -754,39 +790,8 @@ pub const Conn = struct {
     /// Handshake, STREAM in 1-RTT only (RFC 9000 section 12.4; the CRYPTO
     /// rule is stricter than the RFC). Nothing is changed.
     fn allowed(c: *Conn, space: usize, data: []const u8) bool {
-        var i: usize = 0;
-        while (i < data.len) {
-            const t = data[i];
-            if (t == 0) {
-                i += 1;
-            } else if (t == 0x02) {
-                i = c.ack(space, data, i, false) orelse return false;
-            } else if (t == 0x06) {
-                if (space == 2) return false;
-                const off = getVar(data[i + 1 ..]) orelse return false;
-                const o1 = i + 1 + off.len;
-                const ln = getVar(data[o1..]) orelse return false;
-                const o2 = o1 + ln.len;
-                if (ln.v > data.len or o2 + ln.v > data.len) return false;
-                i = o2 + @as(usize, @intCast(ln.v));
-            } else if (t >= 0x08 and t <= 0x0f) {
-                if (space != 2) return false;
-                var o = i + 1;
-                const id = getVar(data[o..]) orelse return false;
-                o += id.len;
-                if (t & 0x04 != 0) {
-                    const v = getVar(data[o..]) orelse return false;
-                    o += v.len;
-                }
-                if (t & 0x02 != 0) {
-                    const v = getVar(data[o..]) orelse return false;
-                    o += v.len;
-                    if (v.v > data.len or o + v.v > data.len) return false;
-                    i = o + @as(usize, @intCast(v.v));
-                } else i = data.len;
-            } else return false;
-        }
-        return true;
+        _ = c;
+        return framesOk(space, data);
     }
 
     /// Step over an ACK frame, applying its ranges when `apply`.
@@ -842,12 +847,107 @@ pub const Conn = struct {
 
     fn mark(c: *Conn, space: usize, pn: u32) void {
         if (!c.rx_any[space]) {
-            c.rx_base[space] = pn;
+            c.rx_top[space] = pn;
+            c.rx_win[space] = 1;
             c.rx_any[space] = true;
+            return;
         }
-        if (pn < c.rx_base[space]) return;
-        const d = pn - c.rx_base[space];
-        if (d < 64) c.rx_pn[space] |= @as(u64, 1) << @intCast(d);
+        const top = c.rx_top[space];
+        if (pn > top) {
+            const shift = pn - top;
+            c.rx_win[space] = if (shift >= 64) 0 else c.rx_win[space] << @intCast(shift);
+            c.rx_win[space] |= 1;
+            c.rx_top[space] = pn;
+        } else if (top - pn < 64) {
+            c.rx_win[space] |= @as(u64, 1) << @intCast(top - pn);
+        }
+    }
+
+    /// Whether packet number `pn` in `space` opened before, or is too far
+    /// below the largest to tell: either way it is not opened again.
+    fn dup(c: *const Conn, space: usize, pn: u32) bool {
+        if (!c.rx_any[space]) return false;
+        const top = c.rx_top[space];
+        if (pn > top) return false;
+        if (top - pn >= 64) return true;
+        return c.rx_win[space] & (@as(u64, 1) << @intCast(top - pn)) != 0;
+    }
+
+    /// A Retry, on a client (RFC 9000 section 17.2.5.2): taken once, before
+    /// any Initial opened, when it names this end's source ID, does not name
+    /// the first destination ID as its source, carries a token of 1 to 64
+    /// bytes, and its integrity tag checks with the first destination ID
+    /// (RFC 9001 section 5.8). The ClientHello goes again at once with the
+    /// token, under Initial keys from the Retry's source ID; packet numbers
+    /// go on, and the transcript is unchanged.
+    fn onRetry(c: *Conn, pkt: []const u8, dcid: *const [8]u8, scid: *const [8]u8) void {
+        if (c.retried or c.rx_any[0]) return;
+        if (!std.mem.eql(u8, dcid, &c.local_cid)) return;
+        if (std.mem.eql(u8, scid, &c.orig_dcid)) return;
+        if (pkt.len < 23 + 1 + 16) return;
+        const tok = pkt[23 .. pkt.len - 16];
+        if (tok.len > max_token) return;
+        const tag = retryTag(&c.orig_dcid, pkt[0 .. pkt.len - 16]);
+        if (!std.crypto.timing_safe.eql([16]u8, tag, pkt[pkt.len - 16 ..][0..16].*)) return;
+        c.retried = true;
+        c.retry_scid = scid.*;
+        @memcpy(c.token[0..tok.len], tok);
+        c.token_len = tok.len;
+        c.peer_cid = scid.*;
+        const pn = c.initial.pn;
+        installPair(&c.initial, &c.open_initial, &c.peer_cid, false);
+        c.initial.pn = pn;
+        const p = &c.pend[0];
+        p.on = true;
+        p.spent = false;
+        p.tries = 0;
+        c.opens += 1;
+    }
+
+    /// The server's transport parameters, on a client: the first
+    /// destination ID, the source ID of the server's Initial, and the
+    /// Retry's source ID exactly when a Retry was taken (RFC 9000 7.3).
+    fn paramsNamed(c: *const Conn, ee: []const u8) bool {
+        const tp = findExt(ee, 0x0039) orelse return false;
+        var odcid: ?[]const u8 = null;
+        var iscid: ?[]const u8 = null;
+        var rscid: ?[]const u8 = null;
+        var o: usize = 0;
+        while (o < tp.len) {
+            const id = getVar(tp[o..]) orelse return false;
+            o += id.len;
+            const ln = getVar(tp[o..]) orelse return false;
+            o += ln.len;
+            if (ln.v > tp.len or o + ln.v > tp.len) return false;
+            const v = tp[o .. o + @as(usize, @intCast(ln.v))];
+            o += v.len;
+            switch (id.v) {
+                0x00 => odcid = v,
+                0x0f => iscid = v,
+                0x10 => rscid = v,
+                else => {},
+            }
+        }
+        const od = odcid orelse return false;
+        const is = iscid orelse return false;
+        if (!std.mem.eql(u8, od, &c.orig_dcid)) return false;
+        if (!std.mem.eql(u8, is, &c.peer_cid)) return false;
+        if (c.retried) {
+            const rs = rscid orelse return false;
+            return std.mem.eql(u8, rs, &c.retry_scid);
+        }
+        return rscid == null;
+    }
+
+    /// Arm a flight of one empty CRYPTO frame in `space`, when none is on.
+    /// A test seam: a client that stalls its handshake keeps sending
+    /// packets that open (`quic-client ... stall`, `quic-self`).
+    pub fn poke(c: *Conn, space: usize) bool {
+        if (c.pend[space].on or !c.spaceKeys(space).on) return false;
+        var f: [8]u8 = undefined;
+        const n = cryptoFrame(&f, "");
+        arm(c, space, f[0..n], 0);
+        return true;
     }
 };
 
@@ -1020,19 +1120,11 @@ fn contiguous(h: *const Holey, n: usize) bool {
 
 fn ackFrame(out: []u8, c: *Conn, space: usize) usize {
     if (!c.rx_any[space]) return 0;
-    var largest: u32 = c.rx_base[space];
-    var i: u32 = 0;
-    while (i < 64) : (i += 1) {
-        if (c.rx_pn[space] & (@as(u64, 1) << @intCast(i)) != 0) largest = c.rx_base[space] + i;
-    }
+    const largest: u32 = c.rx_top[space];
+    // The run of numbers that opened just below the largest.
     var first: u32 = 0;
-    var p = largest;
-    while (p > c.rx_base[space]) {
-        const d = p - c.rx_base[space];
-        if (d >= 64 or c.rx_pn[space] & (@as(u64, 1) << @intCast(d)) == 0) break;
-        first += 1;
-        p -= 1;
-    }
+    while (first + 1 < 64 and first + 1 <= largest and
+        c.rx_win[space] & (@as(u64, 1) << @intCast(first + 1)) != 0) first += 1;
     out[0] = 0x02;
     var n: usize = 1;
     n += putVar(out[n..], largest);
@@ -1213,7 +1305,7 @@ fn buildClientHello(out: []u8, random: *const [32]u8, share: *const [32]u8, scid
     @memcpy(ks[6..38], share);
     n += extOne(&ext, n, 0x0033, ks[0..38]);
     var tp: [64]u8 = undefined;
-    const tn = params(&tp, scid, null);
+    const tn = params(&tp, scid, null, null);
     n += extOne(&ext, n, 0x0039, tp[0..tn]);
     var body: [512]u8 = undefined;
     var b: usize = 0;
@@ -1275,7 +1367,9 @@ fn buildServerFlight(c: *Conn, out: []u8, ch: []const u8, shared: *const [32]u8)
     // EncryptedExtensions: transport parameters, and raw public keys for
     // both ends (RFC 7250).
     var tp: [64]u8 = undefined;
-    const tn = params(&tp, &c.local_cid, &c.orig_dcid);
+    // After a Retry the first destination ID is the token's, and the
+    // Retry's source ID is named too (RFC 9000 section 7.3).
+    const tn = if (c.retried) params(&tp, &c.local_cid, &c.tp_odcid, &c.orig_dcid) else params(&tp, &c.local_cid, &c.orig_dcid, null);
     var ee: [100]u8 = undefined;
     var en = extOne(&ee, 0, 0x0039, tp[0..tn]);
     en += extOne(&ee, en, 0x0013, &[_]u8{0x02});
@@ -1317,7 +1411,7 @@ fn buildServerFlight(c: *Conn, out: []u8, ch: []const u8, shared: *const [32]u8)
     return f;
 }
 
-fn params(out: []u8, scid: *const [8]u8, orig: ?*const [8]u8) usize {
+fn params(out: []u8, scid: *const [8]u8, orig: ?*const [8]u8, retry: ?*const [8]u8) usize {
     var n: usize = 0;
     if (orig) |o| n += putTp(out, n, 0x00, o);
     n += tpVar(out, n, 0x04, 16000);
@@ -1325,6 +1419,7 @@ fn params(out: []u8, scid: *const [8]u8, orig: ?*const [8]u8) usize {
     n += tpVar(out, n, 0x06, 16000);
     n += tpVar(out, n, 0x08, 1);
     n += putTp(out, n, 0x0f, scid);
+    if (retry) |r| n += putTp(out, n, 0x10, r);
     return n;
 }
 fn putTp(out: []u8, at: usize, id: u64, v: []const u8) usize {
@@ -1352,6 +1447,216 @@ fn wrap(out: []u8, kind: u8, body: []const u8) usize {
     out[3] = @truncate(body.len);
     @memcpy(out[4..][0..body.len], body);
     return 4 + body.len;
+}
+
+const Plain = struct { pn: u32, data: []const u8 };
+/// Remove header protection and open one packet under `k`, in `scratch`,
+/// the plaintext into `plain`.
+fn openWith(k: *const Keys, pkt: []const u8, pn_at: usize, scratch: *[1400]u8, plain: *[1400]u8) ?Plain {
+    if (!k.on or pn_at + 4 + 16 > pkt.len or pkt.len > scratch.len) return null;
+    const buf = scratch;
+    @memcpy(buf[0..pkt.len], pkt);
+    var sample: [16]u8 = undefined;
+    @memcpy(&sample, buf[pn_at + 4 .. pn_at + 20]);
+    const mask = hpMask(&k.hp, &sample);
+    const long = buf[0] & 0x80 != 0;
+    const keep: u8 = if (long) 0x0f else 0x1f;
+    buf[0] ^= mask[0] & keep;
+    var i: usize = 0;
+    while (i < 4) : (i += 1) buf[pn_at + i] ^= mask[1 + i];
+    const pn = std.mem.readInt(u32, buf[pn_at..][0..4], .big);
+    const body = pn_at + 4;
+    const tag_at = pkt.len - 16;
+    if (tag_at < body) return null;
+    var tag: [16]u8 = undefined;
+    @memcpy(&tag, buf[tag_at..pkt.len]);
+    var nonce: [12]u8 = k.iv;
+    var s: usize = 0;
+    while (s < 4) : (s += 1) nonce[8 + s] ^= buf[pn_at + s];
+    Aes128Gcm.decrypt(plain[0 .. tag_at - body], buf[body..tag_at], tag, buf[0..body], nonce, k.key) catch return null;
+    return .{ .pn = pn, .data = plain[0 .. tag_at - body] };
+}
+
+fn framesOk(space: usize, data: []const u8) bool {
+    var i: usize = 0;
+    while (i < data.len) {
+        const t = data[i];
+        if (t == 0) {
+            i += 1;
+        } else if (t == 0x02) {
+            i = skipAck(data, i) orelse return false;
+        } else if (t == 0x06) {
+            if (space == 2) return false;
+            const off = getVar(data[i + 1 ..]) orelse return false;
+            const o1 = i + 1 + off.len;
+            const ln = getVar(data[o1..]) orelse return false;
+            const o2 = o1 + ln.len;
+            if (ln.v > data.len or o2 + ln.v > data.len) return false;
+            i = o2 + @as(usize, @intCast(ln.v));
+        } else if (t >= 0x08 and t <= 0x0f) {
+            if (space != 2) return false;
+            var o = i + 1;
+            const id = getVar(data[o..]) orelse return false;
+            o += id.len;
+            if (t & 0x04 != 0) {
+                const v = getVar(data[o..]) orelse return false;
+                o += v.len;
+            }
+            if (t & 0x02 != 0) {
+                const v = getVar(data[o..]) orelse return false;
+                o += v.len;
+                if (v.v > data.len or o + v.v > data.len) return false;
+                i = o + @as(usize, @intCast(v.v));
+            } else i = data.len;
+        } else return false;
+    }
+    return true;
+}
+
+
+/// Step over an ACK frame without applying it.
+fn skipAck(data: []const u8, at: usize) ?usize {
+    var o = at + 1;
+    const largest = getVar(data[o..]) orelse return null;
+    o += largest.len;
+    const delay = getVar(data[o..]) orelse return null;
+    o += delay.len;
+    const count = getVar(data[o..]) orelse return null;
+    o += count.len;
+    const first = getVar(data[o..]) orelse return null;
+    o += first.len;
+    if (first.v > largest.v) return null;
+    var lo = largest.v - first.v;
+    var n: u64 = 0;
+    while (n < count.v) : (n += 1) {
+        const gap = getVar(data[o..]) orelse return null;
+        o += gap.len;
+        const ln = getVar(data[o..]) orelse return null;
+        o += ln.len;
+        if (gap.v + 2 > lo or ln.v > lo - gap.v - 2) return null;
+        lo = lo - gap.v - 2 - ln.v;
+    }
+    return o;
+}
+
+/// The value of extension `id` in an EncryptedExtensions message.
+fn findExt(m: []const u8, id: u16) ?[]const u8 {
+    if (m.len < 6) return null;
+    const body = m[4..];
+    const total: usize = (@as(usize, body[0]) << 8) | body[1];
+    if (2 + total != body.len) return null;
+    var o: usize = 2;
+    while (o + 4 <= body.len) {
+        const e = std.mem.readInt(u16, body[o..][0..2], .big);
+        const ln: usize = std.mem.readInt(u16, body[o + 2 ..][0..2], .big);
+        o += 4;
+        if (o + ln > body.len) return null;
+        if (e == id) return body[o .. o + ln];
+        o += ln;
+    }
+    return null;
+}
+
+/// The integrity tag of a Retry (RFC 9001 section 5.8): AES-128-GCM under
+/// a fixed key and nonce, no plaintext, over the client's first destination
+/// ID (its length and bytes) and the Retry up to its tag. IDs of any length.
+pub fn retryTag(odcid: []const u8, retry: []const u8) [16]u8 {
+    const key = [16]u8{ 0xbe, 0x0c, 0x69, 0x0b, 0x9f, 0x66, 0x57, 0x5a, 0x1d, 0x76, 0x6b, 0x54, 0xe3, 0x68, 0xc8, 0x4e };
+    const nonce = [12]u8{ 0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb };
+    var ad: [1 + 20 + 256]u8 = undefined;
+    var n: usize = 0;
+    ad[0] = @intCast(odcid.len);
+    n = 1;
+    @memcpy(ad[n..][0..odcid.len], odcid);
+    n += odcid.len;
+    const m = @min(retry.len, ad.len - n);
+    @memcpy(ad[n..][0..m], retry[0..m]);
+    n += m;
+    var tag: [16]u8 = undefined;
+    Aes128Gcm.encrypt(&.{}, &tag, &.{}, ad[0..n], nonce, key);
+    return tag;
+}
+
+/// The bytes a Retry token is made of: when it was made, the client's
+/// first destination ID, and a MAC over the client's address and port, the
+/// Retry's source ID, the time and that ID.
+pub const token_len: usize = 32;
+fn tokenMac(key: *const [32]u8, ip: *const [4]u8, port: u16, rscid: *const [8]u8, made: *const [8]u8, odcid: *const [8]u8) [16]u8 {
+    var m: [4 + 2 + 8 + 8 + 8]u8 = undefined;
+    @memcpy(m[0..4], ip);
+    std.mem.writeInt(u16, m[4..6], port, .big);
+    @memcpy(m[6..14], rscid);
+    @memcpy(m[14..22], made);
+    @memcpy(m[22..30], odcid);
+    var full: [32]u8 = undefined;
+    HmacSha256.create(&full, &m, key);
+    return full[0..16].*;
+}
+
+/// Whether the first packet of a client's first flight opens under the
+/// Initial keys of its own destination ID, with frames an Initial may have.
+/// Nothing is kept.
+pub fn initialOpens(dgram: []const u8) bool {
+    if (!firstShape(dgram)) return false;
+    var o: usize = 23;
+    const tok = getVar(dgram[o..]) orelse return false;
+    o += tok.len;
+    if (tok.v > dgram.len or o + tok.v > dgram.len) return false;
+    o += @intCast(tok.v);
+    const ln = getVar(dgram[o..]) orelse return false;
+    o += ln.len;
+    if (ln.v > dgram.len or o + ln.v > dgram.len) return false;
+    const total = o + @as(usize, @intCast(ln.v));
+    var seal_k: Keys = .{};
+    var open_k: Keys = .{};
+    installPair(&seal_k, &open_k, dgram[6..14], true);
+    var scratch: [1400]u8 = undefined;
+    var plain: [1400]u8 = undefined;
+    const got = openWith(&open_k, dgram[0..total], o, &scratch, &plain) orelse return false;
+    return framesOk(0, got.data);
+}
+
+/// A Retry for a first flight that opened, from `ip`:`port`, at `now`:
+/// 71 bytes into `out`. Nothing is kept.
+pub fn makeRetry(out: *[71]u8, dgram: []const u8, key: *const [32]u8, ip: *const [4]u8, port: u16, now: u64, rand: *const fn () u64) usize {
+    const odcid = dgram[6..14];
+    const cscid = dgram[15..23];
+    var rscid: [8]u8 = undefined;
+    fill(&rscid, rand);
+    var made: [8]u8 = undefined;
+    std.mem.writeInt(u64, &made, now, .big);
+    out[0] = 0xf0 | @as(u8, @truncate(rand() & 0x0f));
+    std.mem.writeInt(u32, out[1..5], 1, .big);
+    out[5] = 8;
+    @memcpy(out[6..14], cscid);
+    out[14] = 8;
+    @memcpy(out[15..23], &rscid);
+    @memcpy(out[23..31], &made);
+    @memcpy(out[31..39], odcid);
+    const mac = tokenMac(key, ip, port, &rscid, &made, odcid[0..8]);
+    @memcpy(out[39..55], &mac);
+    const tag = retryTag(odcid, out[0..55]);
+    @memcpy(out[55..71], &tag);
+    return 71;
+}
+
+/// The client's first destination ID, when a first flight from `ip`:`port`
+/// carries a token this key made for it and for its destination ID, at
+/// most `token_life` ago. Any other token is no token.
+pub fn tokenCheck(dgram: []const u8, key: *const [32]u8, ip: *const [4]u8, port: u16, now: u64) ?[8]u8 {
+    if (!firstShape(dgram) or dgram.len < 24 + token_len) return null;
+    if (dgram[23] != token_len) return null;
+    const t = dgram[24..][0..token_len];
+    const made = std.mem.readInt(u64, t[0..8], .big);
+    if (made > now or now - made > token_life) return null;
+    const mac = tokenMac(key, ip, port, dgram[6..14], t[0..8], t[8..16]);
+    if (!std.crypto.timing_safe.eql([16]u8, mac, t[16..32].*)) return null;
+    return t[8..16].*;
+}
+
+/// Whether a first flight carries a token of any kind.
+pub fn hasToken(dgram: []const u8) bool {
+    return dgram.len > 23 and dgram[23] != 0;
 }
 
 pub fn rfcInitialKey() bool {
