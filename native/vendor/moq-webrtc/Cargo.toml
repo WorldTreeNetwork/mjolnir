@@ -1,0 +1,45 @@
+# Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+# Packaging only: workspace dependencies rewritten to the pin, workspace-hack and
+# workspace lints removed, empty [workspace] added so this crate tests on its own.
+# Upstream: rs/moq-webrtc at 4a6f522483168ace392718d68b58a402533c897d.
+[workspace]
+
+[package]
+name = "moq-webrtc"
+description = "Media over QUIC - WebRTC: the WHIP/WHEP gateway"
+authors = ["Luke Curley <kixelated@gmail.com>"]
+repository = "https://github.com/moq-dev/moq"
+license = "MIT OR Apache-2.0"
+version = "0.3.12"
+edition = "2024"
+rust-version = "1.91"
+keywords = ["webrtc", "whip", "whep", "moq", "media"]
+categories = ["multimedia", "network-programming", "web-programming"]
+
+[features]
+default = ["server"]
+server = ["dep:axum"]
+
+[dependencies]
+axum = { version = "0.8", optional = true, default-features = false, features = ["form", "http1", "json", "matched-path", "original-uri", "query", "tokio", "tracing"] }
+bytes = "1"
+hang = { version = "0.21.11", git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+kio = { version = "0.6.2", git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["runtime"] }
+moq-crypto = { version = "0.0.11", git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false, features = ["provider"] }
+moq-mux = { version = "0.10.11", git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-net = { version = "0.3.10", git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+moq-tokio = { version = "0.19.23", git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rind-str0m = "0.25.2"
+str0m = { version = "0.25", default-features = false }
+thiserror = "2"
+tokio = { version = "1.48", features = ["full"] }
+tracing = "0.1"
+url = "2"
+uuid = { version = "1.26", features = ["v4"] }
+
+[dev-dependencies]
+moq-tokio = { version = "0.19.23", git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+rind = { version = "0.3.1", features = ["wipe"] }
+tokio = { version = "1.48", features = ["test-util"] }
+tracing-test = "0.2"

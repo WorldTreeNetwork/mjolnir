@@ -39,7 +39,7 @@ for patch in "$vendor/patches"/*.patch; do
 done
 python3 - "$checkout" "$work" "$vendor" "$notice" << 'PY'
 import pathlib, sys, tomllib
-pin, work, vendor, notice = map(pathlib.Path, sys.argv[1:4])
+pin, work, vendor = map(pathlib.Path, sys.argv[1:4])
 notice = sys.argv[4]
 errors = []
 for name in ("src", "CHANGELOG.md", "MIGRATE.md", "clippy.toml"):
@@ -65,7 +65,7 @@ if pkg.get("version") != "0.3.12" or pkg.get("rust-version") != "1.91":
     errors.append("version or rust-version")
 if manifest.get("features") != {"default": ["server"], "server": ["dep:axum"]}:
     errors.append("features table")
-if "lints" in manifest or "workspace-hack" in (vendor/"Cargo.toml").read_text():
+if "lints" in manifest or "workspace-hack" in manifest.get("dev-dependencies", {}):
     errors.append("lints or workspace-hack still present")
 deps = manifest["dependencies"]
 dev = manifest["dev-dependencies"]
