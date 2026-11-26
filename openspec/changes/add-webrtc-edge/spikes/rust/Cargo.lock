@@ -873,7 +873,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2916,6 +2916,22 @@ dependencies = [
  "rind-rustls",
  "rustls",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "moq-e2ee"
+version = "0.0.26"
+source = "git+https://github.com/moq-dev/moq?rev=4a6f52248#4a6f522483168ace392718d68b58a402533c897d"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "kio",
+ "moq-crypto",
+ "moq-net",
+ "rind",
+ "thiserror 2.0.21",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -6077,6 +6093,7 @@ dependencies = [
  "kio",
  "mjolnir-relay",
  "moq-auth",
+ "moq-e2ee",
  "moq-mux",
  "moq-net",
  "moq-relay",

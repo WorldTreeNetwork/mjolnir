@@ -1,0 +1,25 @@
+# claim6 protected refusal 2026-11-26T02:02:35Z
+## A. protected publisher
+protected publish path=alice/<opaque> tracks=["catalog.json", "0.mp4-v", "1.mp4-a"]
+## A1. WHEP play of alice/<opaque> in Chromium (erin, valid room token)
+{"step":"play","broadcast":"alice/<opaque>","vcodec":"-","browser":"chromium 158.0.8127.18","error":"whep alice/<opaque>: HTTP 422 Whep alice/<opaque>: mux error: moq: not found","status":422}
+exit=0
+## A2. the same request with curl, timed
+status=400
+real 0.01
+## A3. plain MoQ subscriber without the credential (erin) on alice/<opaque>
+Error: moq: not found
+## B. bob publishes plaintext over WHIP (bob/cam); a credential holder discovers and forces decryption
+{"step":"publish","who":"bob","broadcast":"bob/cam","vcodec":"VP8","browser":"chromium 158.0.8127.18","location":"/session/c4cac811-cb76-46c2-b492-3ade7c26ae95","postMs":24,"connectMs":250,"answerCodecs":["VP8","opus"]}
+protected-read discovery: announced=["alice/<opaque>", "bob/cam"] qualifying_for_label=[]
+protected-read forced path=bob/cam semantic=catalog.json -> Ok(Err(not found))
+protected-read forced path=bob/cam semantic=0.vp8 -> Ok(Err(not found))
+protected-read forced path=bob/cam semantic=0.avc3 -> Ok(Err(not found))
+protected-read forced path=bob/cam semantic=1.opus -> Ok(Err(not found))
+## B2. control: the plaintext WHIP broadcast is readable without any credential
+raw path=bob/cam video track=0.vp8 codec=VP8 frames=230 audio track=1.opus packets=199
+{"files": ["c6-bobplain.ivf", "c6-bobplain.opus"], "streams": [{"codec_name": "vp8", "codec_type": "video", "width": 640, "height": 360}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 230, "video_frames_matching": 230, "video_decode_errors": 3, "video_mean_left": [228, 138, 18], "video_mean_right": [40, 60, 199], "audio_seconds": 3.97, "audio_peak_hz": 600.0, "audio_rms": 0.088, "verdict": "content-ok"}
+## edge log
+2026-11-26T02:02:38.784564Z  WARN edge: refused status=422 Unprocessable Entity why=Whep alice/<opaque>: mux error: moq: not found
+2026-11-26T02:02:38.817782Z  WARN edge: refused status=400 Bad Request why=Whep alice/<opaque>: invalid SDP: SDP parse: Parse error at PointerOffset(0x79ed04c22f)
+2026-11-26T02:02:39.566452Z  INFO edge: session accepted kind=Whip room=r1 broadcast=bob/cam id=c4cac811-cb76-46c2-b492-3ade7c26ae95 ttl_ms=595433 setup_ms=15

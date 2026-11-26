@@ -17,6 +17,7 @@ hang = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
 kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
 mjolnir-relay = { path = "../../../../../native/mjolnir_relay" }
 moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-e2ee = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-mux = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }

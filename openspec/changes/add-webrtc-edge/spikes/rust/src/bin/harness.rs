@@ -313,6 +313,116 @@ fn ogg_opus(packets: &[bytes::Bytes], channels: u8) -> Vec<u8> {
     out
 }
 
+/// The add-call-e2ee room credential, with the spike's dummy secret (32 x 0x11, kid 1).
+fn credential(owner_byte: u8) -> moq_e2ee::Credential {
+    let owner = bs58::encode([owner_byte; 32]).into_string();
+    moq_e2ee::Credential::new(moq_e2ee::credential::Config {
+        context: format!("mjolnir-call/v1/{owner}/r1").into(),
+        kid: 1,
+        secret: [0x11; 32],
+    })
+    .unwrap()
+}
+
+/// S7 publisher: real media (fMP4 on stdin) imported into a local plaintext hang broadcast, then
+/// every track bridged frame by frame into a moq-e2ee protected broadcast at `<label>/<credential
+/// path>`, as the add-call-e2ee page does. Writes the token-relative path to <priv>/protected-path.txt.
+async fn protected_pub(dir: &Path, url: url::Url, label: String) -> anyhow::Result<()> {
+    let local = moq_tokio::origin::spawn();
+    let src = local.route("src", moq_net::origin::RouteOptions::default())?;
+    let mut plain = src.broadcast().clone();
+    let catalog = moq_mux::catalog::Producer::new(&mut plain, moq_mux::catalog::Config::default())?;
+    let mut import = moq_mux::container::fmp4::Import::new(plain.clone(), catalog.timebase().reserve());
+    let cred = credential(9);
+    let path = format!("{label}/{}", cred.path("call")?);
+    std::fs::write(dir.join("protected-path.txt"), &path)?;
+    let generation = cred.produce();
+    let remote = moq_tokio::origin::spawn();
+    let options = moq_net::origin::RouteOptions::hidden().with_instance(generation.epoch().instance(), 0);
+    let route = remote.route(path.as_str(), options)?;
+    let protected = moq_e2ee::broadcast::Producer::new(route.broadcast().clone(), generation.clone());
+    let session = client().with_publisher(remote.consume()).connect(url).established().await?;
+    let feeder = tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let mut buf = vec![0u8; 64 * 1024];
+        while let Ok(n) = stdin.read(&mut buf).await {
+            if n == 0 || import.decode(&buf[..n]).is_err() { break; }
+        }
+    });
+    let mut names = vec![hang::Catalog::DEFAULT_NAME.to_string()];
+    for _ in 0..100 {
+        let snap = catalog.snapshot();
+        if !snap.video.renditions.is_empty() && !snap.audio.renditions.is_empty() {
+            names.extend(snap.video.renditions.keys().cloned());
+            names.extend(snap.audio.renditions.keys().cloned());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let consumer = plain.consume();
+    let mut bridges = Vec::new();
+    for name in &names {
+        let mut reader = consumer.track(name.as_str())?.subscribe(None).await?;
+        let mut writer = protected.create_track(name, timed())?;
+        bridges.push(tokio::spawn(async move {
+            let mut frames = 0u64;
+            while let Ok(Some(mut group)) = reader.recv_group().await {
+                let Ok(mut out) = writer.append_group(now()) else { break };
+                while let Ok(Some(frame)) = group.read_frame().await {
+                    if out.write_frame(now(), &frame.payload).is_err() { break; }
+                    frames += 1;
+                }
+                let _ = out.finish();
+            }
+            frames
+        }));
+    }
+    route.announce()?;
+    println!("protected publish path={path} tracks={names:?}");
+    let _ = feeder.await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for (name, b) in names.iter().zip(bridges) {
+        b.abort();
+        let _ = name;
+    }
+    drop(session);
+    Ok(())
+}
+
+/// S7 protected reader (credential holder): discover as the design does (only `<label>/<credential
+/// path>` qualifies), then force-open `path` anyway and try to decrypt its tracks.
+async fn protected_read(url: url::Url, label: String, path: String, seconds: u64) -> anyhow::Result<()> {
+    let cred = credential(9);
+    let expected = format!("{label}/{}", cred.path("call")?);
+    let origin = moq_tokio::origin::spawn();
+    let mut announced = origin.consume().announced();
+    let session = client().with_subscriber(origin.clone()).connect(url).established().await?;
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while let Ok(Some(event)) = tokio::time::timeout_at(deadline, announced.next()).await {
+        if let moq_net::announce::Event::Present(a) = event { seen.push(a.prefix.to_string()); }
+    }
+    let qualifying: Vec<_> = seen.iter().filter(|p| **p == expected).collect();
+    println!("protected-read discovery: announced={seen:?} qualifying_for_label={qualifying:?}");
+    let remote = tokio::time::timeout(Duration::from_secs(5), origin.consume().follow(path.as_str(), None)?.available())
+        .await??
+        .ok_or_else(|| anyhow::anyhow!("offline"))?;
+    // Any epoch: the plaintext route carries none, and a protected reader has only its own.
+    let reader = moq_e2ee::broadcast::Consumer::new(remote.clone(), cred.consume(cred.produce().epoch().clone()));
+    for semantic in [hang::Catalog::DEFAULT_NAME, "0.vp8", "0.avc3", "1.opus"] {
+        let attempt = tokio::time::timeout(Duration::from_secs(seconds), async {
+            let mut track = reader.subscribe(semantic, None)?.await?;
+            let mut group = track.recv_group().await?.ok_or_else(|| anyhow::anyhow!("track ended"))?;
+            let frame = group.read_frame().await?;
+            Ok::<_, anyhow::Error>(frame.map(|f| f.plaintext.len()))
+        })
+        .await;
+        println!("protected-read forced path={path} semantic={semantic} -> {attempt:?}");
+    }
+    drop(session);
+    Ok(())
+}
+
 async fn frames(url: url::Url, path: String, track: String, seconds: u64) -> anyhow::Result<()> {
     let (session, _origin, source) = resolve(url, &path).await?;
     let mut reader = source.broadcast().track(track.as_str())?.subscribe(None).await?;
@@ -363,8 +473,18 @@ async fn main() -> anyhow::Result<()> {
         "publish" => publish(args[1].parse()?, args[2].clone()).await,
         "export" => export(args[1].parse()?, args[2].clone(), args[3].parse()?, args[4].clone().into()).await,
         "raw" => raw(args[1].parse()?, args[2].clone(), args[3].parse()?, args[4].clone().into()).await,
+        "protected-pub" => protected_pub(Path::new(&args[1]), args[2].parse()?, args[3].clone()).await,
+        "protected-read" => protected_read(args[1].parse()?, args[2].clone(), args[3].clone(), args[4].parse()?).await,
         "frames" => frames(args[1].parse()?, args[2].clone(), args[3].clone(), args[4].parse()?).await,
         "catalog" => print_catalog(args[1].parse()?, args[2].clone()).await,
         other => anyhow::bail!("unknown command {other}"),
     }
+}
+
+fn timed() -> moq_net::track::Info {
+    moq_net::track::Info::default().with_timescale(moq_net::Timescale::MILLI)
+}
+
+fn now() -> moq_net::Timestamp {
+    moq_net::Timestamp::from(moq_net::time::Instant::now())
 }
