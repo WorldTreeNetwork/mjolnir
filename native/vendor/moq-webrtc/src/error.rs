@@ -1,4 +1,8 @@
 /// Errors produced by the WebRTC <-> MoQ gateway.
+///
+/// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+/// Added `InvalidKeyframes`. Upstream: rs/moq-webrtc/src/error.rs at
+/// 4a6f522483168ace392718d68b58a402533c897d.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -70,6 +74,10 @@ pub enum Error {
 	/// An internal video bridge could not be initialized.
 	#[error("video bridge initialization failed")]
 	BridgeFailed,
+
+	/// An enabled keyframe policy has a zero floor or a zero period.
+	#[error("invalid keyframe policy")]
+	InvalidKeyframes,
 
 	/// This CPU lacks a feature rind, the crypto under DTLS, SRTP, and HTTPS, requires.
 	#[error(transparent)]

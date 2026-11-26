@@ -1,6 +1,10 @@
 //! WebRTC for MoQ: a WHIP/WHEP gateway.
 //!
 //! The gateway bridges WHIP (RFC 9725) and WHEP between WebRTC peers and
+//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+//! The ingest keyframe gate is opt-in on `whip::Request`. Upstream:
+//! rs/moq-webrtc/src/lib.rs at 4a6f522483168ace392718d68b58a402533c897d.
+//!
 //! [`moq_net`] broadcasts. The crate is split along two orthogonal axes
 //! so all four combinations can land independently:
 //!
@@ -57,6 +61,7 @@ mod egress;
 mod error;
 mod ice;
 mod ingest;
+mod keyframe;
 mod sdp;
 mod session;
 

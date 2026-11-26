@@ -1,3 +1,4 @@
+// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
 //! `server publish`: WHIP server (RFC 9725).
 //!
 //! `POST /<broadcast-path>` accepts an SDP offer (`Content-Type: application/sdp`)
@@ -104,6 +105,8 @@ pub struct Request<'a> {
 	/// How the ingested broadcast is published, including the [cap](moq_mux::Ingest::rate)
 	/// on the session's media (see [`accept`]).
 	pub ingest: moq_mux::Ingest,
+	/// Ingest keyframe policy. Off unless the caller enables it.
+	pub keyframes: crate::keyframe::Keyframes,
 }
 
 impl<'a> Request<'a> {
@@ -115,6 +118,7 @@ impl<'a> Request<'a> {
 			broadcast: broadcast.into(),
 			offer,
 			ingest: moq_mux::Ingest::default(),
+			keyframes: crate::keyframe::Keyframes::default(),
 		}
 	}
 }
@@ -160,14 +164,20 @@ pub async fn accept(server: &Server, request: Request<'_>) -> Result<Response> {
 		broadcast,
 		offer,
 		mut ingest,
+		keyframes,
 	} = request;
+	keyframes.validate().map_err(|_| Error::InvalidKeyframes)?;
 	let (offer, refused) = sdp::parse_offer(offer)?;
 
 	// Create the broadcast hidden up front, so an out-of-scope offer is refused before
 	// any mux work. It announces only once negotiation succeeds (below).
 	// The session's sink holds the route, so it stays announced until the session ends.
 	let route = publisher.route(&broadcast, moq_net::origin::RouteOptions::hidden())?;
-	let sink = Box::new(IngestSink::routed(route.clone(), ingest.catalog())?);
+	let mut sink = IngestSink::routed(route.clone(), ingest.catalog())?;
+	if keyframes.enabled {
+		sink.set_video_refresh(Some(keyframes.ratio));
+	}
+	let sink = Box::new(sink);
 
 	// Register a session on the shared media mux: known ICE credentials (so the
 	// demux routes this peer's STUN by ufrag), an inbox to read datagrams from,
@@ -195,6 +205,9 @@ pub async fn accept(server: &Server, request: Request<'_>) -> Result<Response> {
 	let resource_id = sdp::new_resource_id();
 	let socket = crate::ice::Socket::new(mux.socket(), mux.candidates().to_vec(), inbound)?;
 	let mut session = session::Session::ingest(rtc, socket, sink)?;
+	if keyframes.enabled {
+		session = session.with_keyframes(keyframes);
+	}
 	let mut cap = None;
 	if let Some(mut rate) = ingest.rate.take() {
 		cap = rate.get();
@@ -237,7 +250,7 @@ fn is_sdp(headers: &HeaderMap) -> bool {
 #[cfg(feature = "server")]
 fn status_for(err: &Error) -> StatusCode {
 	match err {
-		Error::InvalidSdp(_) | Error::InvalidPath(_) => StatusCode::BAD_REQUEST,
+		Error::InvalidSdp(_) | Error::InvalidPath(_) | Error::InvalidKeyframes => StatusCode::BAD_REQUEST,
 		Error::UnsupportedCodec(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
 		Error::Moq(moq_net::Error::Unauthorized) => StatusCode::UNAUTHORIZED,
 		_ => StatusCode::INTERNAL_SERVER_ERROR,

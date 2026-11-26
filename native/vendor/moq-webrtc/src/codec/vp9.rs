@@ -1,3 +1,4 @@
+// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
 //! VP9 bridge.
 //!
 //! str0m hands us complete VP9 frames, which is exactly the raw shape that
@@ -14,7 +15,16 @@ pub struct Bridge {
 impl Bridge {
 	/// Publish a `.vp9` track on `broadcast`, adding the catalog rendition once config is known.
 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
-		let import = codec::DeferredVideo::new(broadcast, catalog, ".vp9")?;
+		Self::opening(broadcast, catalog, None)
+	}
+
+	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
+	pub fn opening(
+		broadcast: moq_net::broadcast::Producer,
+		catalog: moq_mux::catalog::Producer,
+		refresh: Option<u32>,
+	) -> Result<Self> {
+		let import = codec::DeferredVideo::opening(broadcast, catalog, ".vp9", refresh)?;
 		Ok(Self { import })
 	}
 }
@@ -35,5 +45,9 @@ impl codec::Bridge for Bridge {
 
 	fn abort(self: Box<Self>, err: moq_net::Error) {
 		self.import.abort(err);
+	}
+
+	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
+		Some(self.import.join_sample())
 	}
 }

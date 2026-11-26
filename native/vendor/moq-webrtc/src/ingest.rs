@@ -1,3 +1,4 @@
+// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
 //! Per-broadcast [`MediaSink`](crate::session::MediaSink) used by every
 //! RTP-in flow (`server publish` / WHIP server, `client subscribe` / WHEP
 //! client).
@@ -15,6 +16,8 @@ pub struct IngestSink {
 	/// The route announcing the broadcast, when the sink owns it: held for the session's
 	/// life, linger included, and retracted when the session drops it.
 	_route: Option<moq_net::origin::Route>,
+	/// Set on video tracks when the ingest keyframe policy is enabled.
+	video_refresh: Option<u32>,
 }
 
 impl IngestSink {
@@ -25,7 +28,13 @@ impl IngestSink {
 			catalog,
 			bridges: session::Bridges::new(),
 			_route: None,
+			video_refresh: None,
 		}
+	}
+
+	/// Video tracks opened after this carry `refresh` on their info.
+	pub fn set_video_refresh(&mut self, refresh: Option<u32>) {
+		self.video_refresh = refresh;
 	}
 
 	/// Fill `route`'s broadcast under a catalog minted from `config`, keeping the route for
@@ -65,21 +74,31 @@ impl session::MediaSink for IngestSink {
 					channels,
 				)?)
 			}
-			str0m::format::Codec::H264 => {
-				Box::new(codec::h264::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
-			}
-			str0m::format::Codec::H265 => {
-				Box::new(codec::h265::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
-			}
-			str0m::format::Codec::Vp8 => {
-				Box::new(codec::vp8::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
-			}
-			str0m::format::Codec::Vp9 => {
-				Box::new(codec::vp9::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
-			}
-			str0m::format::Codec::Av1 => {
-				Box::new(codec::av1::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
-			}
+			str0m::format::Codec::H264 => Box::new(codec::h264::Bridge::opening(
+				self.broadcast.clone(),
+				self.catalog.clone(),
+				self.video_refresh,
+			)?),
+			str0m::format::Codec::H265 => Box::new(codec::h265::Bridge::opening(
+				self.broadcast.clone(),
+				self.catalog.clone(),
+				self.video_refresh,
+			)?),
+			str0m::format::Codec::Vp8 => Box::new(codec::vp8::Bridge::opening(
+				self.broadcast.clone(),
+				self.catalog.clone(),
+				self.video_refresh,
+			)?),
+			str0m::format::Codec::Vp9 => Box::new(codec::vp9::Bridge::opening(
+				self.broadcast.clone(),
+				self.catalog.clone(),
+				self.video_refresh,
+			)?),
+			str0m::format::Codec::Av1 => Box::new(codec::av1::Bridge::opening(
+				self.broadcast.clone(),
+				self.catalog.clone(),
+				self.video_refresh,
+			)?),
 			other => return Err(Error::UnsupportedCodec(format!("{other:?}"))),
 		};
 		self.bridges.insert(mid, bridge);
@@ -92,6 +111,10 @@ impl session::MediaSink for IngestSink {
 
 	fn on_frame(&mut self, mid: str0m::media::Mid, frame: codec::Frame) -> Result<()> {
 		self.bridges.push(mid, frame)
+	}
+
+	fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
+		self.bridges.join_samples()
 	}
 
 	fn abort(&mut self, err: moq_net::Error) {

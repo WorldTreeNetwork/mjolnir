@@ -1,3 +1,4 @@
+// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
 //! Per-codec bridges between moq-mux and str0m.
 //!
 //! Two directions:
@@ -57,6 +58,11 @@ pub trait Bridge: Send {
 	///
 	/// Consumes the bridge: the track is dead afterwards.
 	fn abort(self: Box<Self>, err: moq_net::Error);
+
+	/// Wanted group and largest written group, when this bridge publishes a video track.
+	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
+		None
+	}
 }
 
 /// A bridge's finished track, held so a finished broadcast keeps serving it.
@@ -139,6 +145,8 @@ enum DeferredState<I> {
 /// Defers a video importer's catalog reservation until its first frame.
 pub(crate) struct DeferredVideo<I> {
 	state: DeferredState<I>,
+	track: moq_net::track::Producer,
+	demand: moq_net::track::Demand,
 }
 
 impl<I: DeferredImport> DeferredVideo<I> {
@@ -148,10 +156,33 @@ impl<I: DeferredImport> DeferredVideo<I> {
 		catalog: moq_mux::catalog::Producer,
 		suffix: &str,
 	) -> Result<Self> {
-		let track = broadcast.unique_track(suffix, catalog.track_info(hang::catalog::PRIORITY.video))?;
+		Self::opening(broadcast, catalog, suffix, None)
+	}
+
+	/// As [`new`](Self::new), with `refresh` on the video track info when set.
+	pub fn opening(
+		broadcast: moq_net::broadcast::Producer,
+		catalog: moq_mux::catalog::Producer,
+		suffix: &str,
+		refresh: Option<u32>,
+	) -> Result<Self> {
+		let mut info = catalog.track_info(hang::catalog::PRIORITY.video);
+		if let Some(ratio) = refresh {
+			info = info.with_refresh(Some(ratio));
+		}
+		let track = broadcast.unique_track(suffix, info)?;
+		let demand = track.demand();
 		Ok(Self {
-			state: DeferredState::Pending(Box::new(PendingVideo { track, catalog })),
+			state: DeferredState::Pending(Box::new(PendingVideo { track: track.clone(), catalog })),
+			track,
+			demand,
 		})
+	}
+
+	/// The group consumers want, and the largest group written.
+	pub fn join_sample(&self) -> (Option<u64>, Option<u64>) {
+		let largest = self.track.largest().map(|position| position.group);
+		(self.demand.wanted(), largest)
 	}
 
 	/// Decode a frame, creating the importer on first use.

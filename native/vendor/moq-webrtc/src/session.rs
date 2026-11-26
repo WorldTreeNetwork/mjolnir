@@ -1,3 +1,4 @@
+// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
 //! str0m session driver shared by every HTTP role / media direction.
 //!
 //! [`crate::ice::Agent`] drives the sans-IO [`str0m::Rtc`] over UDP;
@@ -64,6 +65,11 @@ pub trait MediaSink: Send {
 	/// `Error::Dropped`.
 	fn abort(&mut self, err: moq_net::Error);
 
+	/// Wanted group and largest written group for each video line, when the sink knows them.
+	fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
+		Vec::new()
+	}
+
 	/// Called once when the peer ends the session cleanly after its final media: finish
 	/// every track and return the broadcast. The finished tracks stay servable while the sink
 	/// is held.
@@ -122,6 +128,10 @@ pub struct Session {
 	rate: Option<IngestRate>,
 	/// Which ingested frames may reach the sink. Unused by egress sessions.
 	ingest_order: IngestOrder,
+	/// Ingest keyframe policy. `None` keeps the pinned PLI paths.
+	keyframes: Option<crate::keyframe::Keyframes>,
+	gates: HashMap<str0m::media::Mid, crate::keyframe::Gate>,
+	joins: HashMap<str0m::media::Mid, crate::keyframe::JoinWatch>,
 }
 
 impl Session {
@@ -138,6 +148,9 @@ impl Session {
 			egress_clock: EgressClock::default(),
 			rate: None,
 			ingest_order: IngestOrder::default(),
+			keyframes: None,
+			gates: HashMap::new(),
+			joins: HashMap::new(),
 		})
 	}
 
@@ -156,7 +169,16 @@ impl Session {
 			egress_clock: EgressClock::default(),
 			rate: None,
 			ingest_order: IngestOrder::default(),
+			keyframes: None,
+			gates: HashMap::new(),
+			joins: HashMap::new(),
 		})
+	}
+
+	/// Enable the ingest keyframe gate. The pinned paths stay when this is not called.
+	pub(crate) fn with_keyframes(mut self, policy: crate::keyframe::Keyframes) -> Self {
+		self.keyframes = Some(policy);
+		self
 	}
 
 	/// Meter an ingest against `limit`'s cap, following its updates, and steer the
@@ -211,6 +233,7 @@ impl Session {
 	async fn run_loop(&mut self) -> Result<()> {
 		loop {
 			let remb_at = self.rate.as_ref().and_then(IngestRate::remb_at);
+			let gate_at = self.gate_deadline();
 			tokio::select! {
 				// Egress writes get drained promptly; `Agent::next` is cancel safe.
 				biased;
@@ -256,11 +279,17 @@ impl Session {
 				}
 
 				_ = async {
-					match remb_at {
+					match crate::keyframe::earliest_deadline([remb_at, gate_at]) {
 						Some(at) => kio::clock::sleep_until(at).await,
 						None => std::future::pending().await,
 					}
-				} => self.send_remb(),
+				} => {
+					let now = Instant::now();
+					if self.rate.as_ref().and_then(IngestRate::remb_at).is_some_and(|at| now >= at) {
+						self.send_remb();
+					}
+					self.fire_gates();
+				}
 
 				event = self.agent.next() => match event {
 					Ok(event) => self.handle_event(event)?,
@@ -279,6 +308,10 @@ impl Session {
 			}
 			Event::MediaAdded(added) => self.handle_media(added.mid)?,
 			Event::MediaData(data) => {
+				if self.keyframes.is_some() {
+					self.ingest_gated(data)?;
+					return Ok(());
+				}
 				// `ingest_clock` and `role` are disjoint fields, so the borrow checker lets
 				// us rebase the (random, per-track) RTP base and feed the sink in one
 				// block; egress sessions never get here so the clock stays untouched.
@@ -395,6 +428,10 @@ impl Session {
 				let video = kind == str0m::media::MediaKind::Video;
 				let pli = negotiated.iter().any(|params| params.fb_pli());
 				self.ingest_order.open(mid, video, pli, Instant::now());
+				if video && self.keyframes.is_some() {
+					self.gates.insert(mid, crate::keyframe::Gate::new(pli));
+					self.joins.insert(mid, crate::keyframe::JoinWatch::default());
+				}
 				// REMB only where the publisher negotiated it; str0m offers it on video alone.
 				if let Some(rate) = &mut self.rate
 					&& negotiated.iter().any(|params| params.fb_remb())
@@ -415,6 +452,135 @@ impl Session {
 					.collect();
 				source.on_track(mid, formats)?;
 			}
+		}
+		Ok(())
+	}
+
+	fn gate_deadline(&self) -> Option<Instant> {
+		crate::keyframe::earliest_deadline(self.gates.values().map(|gate| gate.deadline()))
+	}
+
+	fn fire_gates(&mut self) {
+		let Some(policy) = self.keyframes else {
+			return;
+		};
+		let now = Instant::now();
+		let mids: Vec<_> = self.gates.keys().copied().collect();
+		for mid in mids {
+			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
+			if due.is_some() {
+				if let Some(gate) = self.gates.get_mut(&mid) {
+					gate.note(crate::keyframe::Cause::Period, now);
+				}
+			}
+			self.flush_gate(policy, mid, None);
+		}
+		self.observe_joins(policy);
+	}
+
+	fn observe_joins(&mut self, policy: crate::keyframe::Keyframes) {
+		let samples = match &mut self.role {
+			MediaRole::Ingest(sink) => sink.join_samples(),
+			MediaRole::Egress(_) => return,
+		};
+		for (mid, wanted, largest) in samples {
+			let request = self
+				.joins
+				.entry(mid)
+				.or_default()
+				.observe(&policy, wanted, largest);
+			if request {
+				if let Some(gate) = self.gates.get_mut(&mid) {
+					gate.note(crate::keyframe::Cause::Join, Instant::now());
+				}
+				self.flush_gate(policy, mid, None);
+			}
+		}
+	}
+
+	fn flush_gate(&mut self, policy: crate::keyframe::Keyframes, mid: str0m::media::Mid, rid: Option<str0m::media::Rid>) {
+		let now = Instant::now();
+		let Some(gate) = self.gates.get(&mid) else {
+			return;
+		};
+		if !gate.ready(&policy, now) {
+			return;
+		}
+		let accepted = pli_accepted(&mut self.agent, mid, rid);
+		let Some(gate) = self.gates.get_mut(&mid) else {
+			return;
+		};
+		if let Some(send) = gate.poll_send(&policy, now, accepted) {
+			let (causes, sent) = match send {
+				crate::keyframe::Send::Sent { causes } => (causes, true),
+				crate::keyframe::Send::Held { causes } => (causes, false),
+			};
+			tracing::info!(
+				?mid,
+				causes = ?crate::keyframe::cause_names(causes),
+				sent,
+				"ingest keyframe gate"
+			);
+		}
+	}
+
+	fn ingest_gated(&mut self, data: str0m::media::MediaData) -> Result<()> {
+		if !matches!(self.role, MediaRole::Ingest(_)) {
+			return Ok(());
+		}
+		let policy = self.keyframes.expect("gated ingest has a policy");
+		let arrival = Instant::from_std(data.network_time);
+		if let Some(rate) = &mut self.rate
+			&& let Err(cap) = rate.meter.charge(data.data.len(), arrival, Instant::now())
+		{
+			tracing::warn!(cap = cap.rate.as_bps(), "ingest exceeded its cap plus burst; closing");
+			return Err(Error::RateLimited { cap: cap.rate });
+		}
+		let now = Instant::now();
+		let media_us = media_time_to_micros(&data.time);
+		let keyframe = data.is_keyframe();
+		if keyframe {
+			if let Some(gate) = self.gates.get_mut(&data.mid) {
+				gate.on_keyframe(&policy, now);
+			}
+		}
+		if policy.on_loss && !data.contiguous && !keyframe {
+			if let Some(gate) = self.gates.get_mut(&data.mid) {
+				gate.note(crate::keyframe::Cause::Loss, now);
+			}
+		}
+		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
+		match decision {
+			Admit::Forward => {}
+			Admit::Drop => {
+				self.flush_gate(policy, data.mid, data.rid);
+				return Ok(());
+			}
+			Admit::Request => {
+				if let Some(gate) = self.gates.get_mut(&data.mid) {
+					gate.note(crate::keyframe::Cause::Startup, now);
+				}
+				self.flush_gate(policy, data.mid, data.rid);
+				return Ok(());
+			}
+		}
+		let opens_group = keyframe || self.ingest_order.is_audio(data.mid);
+		let mapped = self.ingest_clock.normalize(data.mid, arrival, media_us, opens_group);
+		if mapped.deferred {
+			if let Some(gate) = self.gates.get_mut(&data.mid) {
+				gate.note(crate::keyframe::Cause::Step, now);
+			}
+		}
+		let stepped = mapped.stepped;
+		let timestamp_us = mapped.timestamp_us;
+		let mid = data.mid;
+		let payload = bytes::Bytes::from_owner(data.data);
+		self.flush_gate(policy, mid, data.rid);
+		if let MediaRole::Ingest(sink) = &mut self.role {
+			if stepped {
+				sink.on_discontinuity(mid)?;
+			}
+			sink.on_frame(mid, codec::Frame { timestamp_us, payload })?;
 		}
 		Ok(())
 	}
@@ -471,6 +637,21 @@ impl IngestRate {
 }
 
 /// Ask the publisher of `mid` for a keyframe with PLI.
+fn pli_accepted(agent: &mut crate::ice::Agent, mid: str0m::media::Mid, rid: Option<str0m::media::Rid>) -> bool {
+	let mut rtc = agent.rtc_mut();
+	let Some(mut writer) = rtc.writer(mid) else {
+		return false;
+	};
+	match writer.request_keyframe(rid, str0m::media::KeyframeRequestKind::Pli) {
+		Ok(()) => true,
+		Err(str0m::RtcError::NoReceiverSource(_)) | Err(str0m::RtcError::NotReceivingDirection) => false,
+		Err(err) => {
+			tracing::debug!(?err, "keyframe request refused");
+			false
+		}
+	}
+}
+
 fn request_keyframe(
 	agent: &mut crate::ice::Agent,
 	mid: str0m::media::Mid,
@@ -808,7 +989,14 @@ impl Bridges {
 		Ok(())
 	}
 
-	/// Mark a break in `mid`'s track before its next frame.
+	/// Wanted group and largest written group for each video bridge.
+	pub fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
+		self.inner
+			.iter()
+			.filter_map(|(&mid, bridge)| bridge.join_sample().map(|(wanted, largest)| (mid, wanted, largest)))
+			.collect()
+	}
+
 	pub fn discontinuity(&mut self, mid: str0m::media::Mid) -> Result<()> {
 		if let Some(bridge) = self.inner.get_mut(&mid) {
 			bridge.discontinuity()?;
