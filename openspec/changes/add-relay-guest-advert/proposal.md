@@ -16,6 +16,7 @@ Guests have no relay locator, and signed-in `mj` users have to construct the roo
 
 - Capabilities modified by added requirements: `edge-relay` and `relay-room-auth`.
 - ADRs: none.
+- Production activation is owner-gated. This changes the relay binary, and production guests will see no relay fields until the owner runs `deploy.sh --relay` and a normal app deploy, then the guests boot or resume. The relay deploy restarts the relay and drains live sessions. The guest agent is unchanged and needs no `--agent` rebuild. The implementer runs neither deploy.
 
 ## User journey & surfaces
 
@@ -25,10 +26,11 @@ Guests have no relay locator, and signed-in `mj` users have to construct the roo
 
 ## Preparation
 
-Node `mjolnir-rurh.6` was activated on 2026-11-25 under the campaign authority on `mjolnir-rurh`. The folded edge relay (`ca61ceb`) and room mint (`3755123`) supply the listener, Iroh identity and authenticated POST. The current release sources still expose those prerequisites. The design records the source observations for this contract. This handoff stops at the pushed contract for independent review before implementation.
+Node `mjolnir-rurh.6` was activated on 2026-11-25 under the campaign authority on `mjolnir-rurh`. The folded edge relay (`ca61ceb`) and room mint (`3755123`) supply the listener, Iroh identity and authenticated POST. The current release sources still expose those prerequisites. The independent [advise review](reviews/2026-11-25-advise.md) accepted the contract with the production gate and stale-locator guidance recorded here and in the tasks.
 
 ## Out of scope
 
 - Changes to the mint, route shape, claims, principal handling, or signing keys. Open-room behavior is owned by `mjolnir-rurh.11`.
 - Live refresh of guest metadata between guest setups.
+- The `--ttl` and `--kind` command options, pending the owner's follow-up decision.
 - Relay deployment, firewall changes and production verification.

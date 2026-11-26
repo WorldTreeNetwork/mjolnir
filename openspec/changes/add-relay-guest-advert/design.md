@@ -10,11 +10,15 @@ In `lib/mjolnir/vm.ex`, assemble the pair in `complete_guest_setup/1` beside the
 
 Extend the explicit `configure_identity` locator allowlist in `lib/mjolnir/vsock/protocol.ex`. Send the approved pair inside the existing `locators` map. The guest agent already flattens that map into a newly built document and replaces the file. Boot and resume re-read the host inputs and replace old relay fields, including fields restored from a snapshot. An already-running guest retains its last identity write until its next boot or resume. Discovery is a snapshot at successful guest identity setup. Existing guest identity write errors surface through the existing boot diagnostic. The host sends only the two public strings for this feature.
 
+Make both resolver file paths configurable for tests. The catalog and runbook explain that after a disable, hostname rename or Iroh identity reset, running guests retain the snapshot until resume or reboot. After a reset caused by compromise, the operator restarts affected guests. For WebTransport, guest apps prefer the mint response's `relay_host` if it disagrees with `vm.json`.
+
 ## Room-token command
 
 `mj relay token <room> <participant> [--api <url>] [--json]` uses the existing profile/API resolution and the saved or refreshed user session. Validate both positional arguments against the existing room path segment rule, `[A-Za-z0-9_-]{1,64}` over the entire argument, before building the URL. Send one JSON POST with `{}` to `/api/relay/rooms/:room/participants/:participant/token` on the resolved controller API. The server chooses the default TTL and enforces the verified caller and scope. Keep this command independent of guest discovery and use the API's default room behavior.
 
 Treat a successful JSON object with a nonempty one-line string field `token` as success. Default output is that token followed by one newline. With `--json`, emit the original successful body bytes, including additional fields the API may return. Mint only on explicit invocation of the token command. Token-bearing responses are written only to the requested stdout. Keep request credentials and all response bodies out of diagnostics, logs and persistence. Reuse the client's authenticated request setup, while handling the response locally because the shared `send_text` helper includes error bodies in its diagnostics. On an HTTP error, report the status without the body. On transport or malformed-response errors, report fixed diagnostic text. In all failure cases before output, stdout is empty.
+
+The 401 hint directs the user to `mj login`. The 403 hint says a user session with `relay:join` is required. The 503 hint says the relay is unavailable and may be unconfigured on this host. Leave `--ttl` and `--kind` to the follow-up.
 
 ## Captured observations
 
