@@ -2,7 +2,7 @@
 
 Fresh advise of this text, then a green local `.13` slice, then the named-peer work. `.14` still blocks closing the node. The build grant is already recorded. Do not deploy.
 
-- [ ] Fresh advise.
+- [x] Fresh advise. Accepted a1be084f by independent reader in `reviews/2026-11-26-advise-3.md`.
 - [ ] Module tests with a fake configured origin: bad status, real gateway `unexpected_root`, `room_not_open`, and comparator `kind_mismatch`, no `getUserMedia` before success. Invitation paths that are absolute URLs or contain `..` never fetch.
 - [ ] Partial renew rolls back only the new generation. A late `getUserMedia` from the old generation does not attach. The old timer does not close the new PeerConnection. `teardown` DELETEs with the admitting bearer.
 - [ ] One Chromium page against the local gateway: notice before the prompt, coloured frames and tone on one named peer, `not_started` retries, `403` on WHIP leaves no camera running.
@@ -22,5 +22,5 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 
 ## Reconciliation after second review
 
-- [ ] Fresh independent review of corrected admission/setup/lifecycle contract.
+- [x] Fresh independent review of corrected admission/setup/lifecycle contract. Accepted a1be084f in `reviews/2026-11-26-advise-3.md`.
 - [ ] Implement and exercise every boundary/race regression added to design D5; report real media results separately from contract acceptance.

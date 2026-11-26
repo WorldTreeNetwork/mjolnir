@@ -26,3 +26,9 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 
 - [ ] Fresh independent review of corrected admission/setup/lifecycle contract.
 - [ ] Implement and exercise every boundary/race regression added to design D8; report real media results separately from contract acceptance.
+
+## Third review: remaining G2 consistency
+
+Send-back: `reviews/2026-11-26-advise-3.md` (a1be084f).
+
+- [ ] Reconcile proposal expiry journey and original expiry task with whole-token expiry; qualify catalog timeout by pre-expiry and apply D8 precedence throughout D2/D3/spec. Fresh gateway gates remain open.
