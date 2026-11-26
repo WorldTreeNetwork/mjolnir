@@ -1,0 +1,46 @@
+5 active TURN sessions:
+
+-- TURN session of 1795656214:c1.DummyOwner111111111111.room1.part1 --
+          Client: 127.0.0.1:47017 (UDP)
+           Relay: 192.0.2.10:61008 (UDP)
+   Permission(s): none
+         Peer(s): none
+            Sent: 0 KiB (0 packets)
+        Received: 0 KiB (0 packets)
+     Running for: 9 seconds
+
+-- TURN session of 1795656214:g1.DummyOwner111111111111.label --
+          Client: 127.0.0.1:56525 (UDP)
+           Relay: 192.0.2.10:61017 (UDP)
+   Permission(s): none
+         Peer(s): none
+            Sent: 0 KiB (0 packets)
+        Received: 0 KiB (0 packets)
+     Running for: 9 seconds
+
+-- TURN session of 1795655920:c1.DummyOwner111111111111.room1.part1 --
+          Client: 127.0.0.1:56410 (UDP)
+           Relay: 192.0.2.10:61016 (UDP)
+   Permission(s): none
+         Peer(s): none
+            Sent: 0 KiB (0 packets)
+        Received: 0 KiB (0 packets)
+     Running for: 9 seconds
+
+-- TURN session of 1795656223:c1.DummyOwner111111111111.room1.part1 --
+          Client: 127.0.0.1:49057 (UDP)
+           Relay: 192.0.2.10:61005 (UDP)
+   Permission(s): none
+         Peer(s): none
+            Sent: 0 KiB (0 packets)
+        Received: 0 KiB (0 packets)
+     Running for: 1 seconds
+
+-- TURN session of 1795656223:c1.DummyOwner111111111111.room1.part1 --
+          Client: 127.0.0.1:46035 (UDP)
+           Relay: 192.0.2.10:61003 (UDP)
+   Permission(s): 1.1.1.1 (UDP)
+         Peer(s): none
+            Sent: 0 KiB (1 packets)
+        Received: 0 KiB (0 packets)
+     Running for: 1 seconds

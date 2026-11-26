@@ -1,0 +1,4 @@
+username=1795656223:c1.DummyOwner111111111111.room1.part1
+password-sha256=bc965a24f0a6 (not the secret)
+allocate-1 0x0113 401 Unauthorized
+allocate-2 0x0113 442 Unsupported Transport Protocol software=b'eturnal'

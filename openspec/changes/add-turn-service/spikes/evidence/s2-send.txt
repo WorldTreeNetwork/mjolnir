@@ -1,0 +1,17 @@
+username=1795656370:g1.DummyOwner111111111111.label
+password-sha256=82cb60ff16bc (not the secret)
+allocate-1 0x0113 401 Unauthorized
+allocate-2 0x0103 no-error-attr software=b'eturnal'
+relayed-raw 0001cf47e112a648
+permission 10.200.0.1 0x0108 no-error-attr
+send-indication 10.200.0.1:9 29 bytes
+permission 127.0.0.1 0x0108 no-error-attr
+send-indication 127.0.0.1:9 28 bytes
+permission 169.254.1.1 0x0108 no-error-attr
+send-indication 169.254.1.1:9 30 bytes
+permission 10.1.2.3 0x0108 no-error-attr
+send-indication 10.1.2.3:9 27 bytes
+permission 192.168.0.164 0x0108 no-error-attr
+send-indication 192.168.0.164:9 32 bytes
+permission 1.1.1.1 0x0108 no-error-attr
+send-indication 1.1.1.1:9 26 bytes

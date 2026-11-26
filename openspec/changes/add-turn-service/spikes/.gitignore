@@ -1,0 +1,2 @@
+# Root .gitignore ignores *.log. The eturnal transcript is evidence.
+!evidence/*.log

@@ -1,0 +1,10 @@
+username=1795656124:c1.DummyOwner111111111111.room1.part1
+password-sha256=e82865075eaf (not the secret)
+allocate-1 0x0113 401 Unauthorized
+allocate-2 0x0103 no-error-attr software=b'eturnal'
+relayed-raw 0001cf59e112a648
+permission 1.1.1.1 0x0108 no-error-attr
+send-indication 1.1.1.1:9 13 bytes
+sleeping 8s on the same allocation
+send-indication 1.1.1.1:9 12 bytes
+refresh 0x0114 401 Unauthorized

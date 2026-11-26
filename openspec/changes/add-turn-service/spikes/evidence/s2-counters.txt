@@ -1,0 +1,10 @@
+Chain MJOLNIR_TURN_SPIKE (1 references)
+    pkts      bytes target     prot opt in     out     source               destination         
+       2      112 DROP       all  --  *      *       0.0.0.0/0            10.0.0.0/8           owner UID match 948 /* mjolnir-turn */
+       1       56 DROP       all  --  *      *       0.0.0.0/0            127.0.0.0/8          owner UID match 948 /* mjolnir-turn */
+       1       58 DROP       all  --  *      *       0.0.0.0/0            169.254.0.0/16       owner UID match 948 /* mjolnir-turn */
+       0        0 DROP       all  --  *      *       0.0.0.0/0            172.16.0.0/12        owner UID match 948 /* mjolnir-turn */
+       1       60 DROP       all  --  *      *       0.0.0.0/0            192.168.0.0/16       owner UID match 948 /* mjolnir-turn */
+       0        0 DROP       all  --  *      *       0.0.0.0/0            100.64.0.0/10        owner UID match 948 /* mjolnir-turn */
+       0        0 DROP       all  --  *      *       0.0.0.0/0            224.0.0.0/4          owner UID match 948 /* mjolnir-turn */
+       1       54 RETURN     all  --  *      *       0.0.0.0/0            1.1.1.1              owner UID match 948 /* mjolnir-turn */

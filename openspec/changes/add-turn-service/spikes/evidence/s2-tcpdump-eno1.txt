@@ -1,0 +1,7 @@
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on eno1, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+19:21:11.991391 IP 192.0.2.10.61013 > 1.1.1.1.9: UDP, length 26
+
+1 packet captured
+1 packet received by filter
+0 packets dropped by kernel

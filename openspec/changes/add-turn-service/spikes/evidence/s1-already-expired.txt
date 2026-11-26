@@ -1,0 +1,4 @@
+username=1795655893:c1.DummyOwner111111111111.room1.part1
+password-sha256=c92151997dec (not the secret)
+allocate-1 0x0113 401 Unauthorized
+allocate-2 0x0113 401 Unauthorized software=b'eturnal'

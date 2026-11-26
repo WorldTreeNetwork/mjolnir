@@ -1,0 +1,72 @@
+run.sh: Start init script ...
+run.sh: Container runs eturnal vsn 1.12.3 ...
+run.sh: Documentation on https://eturnal.net ...
+run.sh: Source code on https://github.com/processone/eturnal ...
+run.sh: Read secrets defined as "Docker secrets" - if any ...
+Cannot query stun.conversations.im:3478: network is unreachable
+Exec: /opt/eturnal/erts-17.1/bin/erlexec -noinput +Bd -boot /opt/eturnal/releases/1.12.3/start -mode embedded -boot_var SYSTEM_LIB_DIR /opt/eturnal/lib -config /opt/eturnal/releases/1.12.3/sys.config -args_file /opt/eturnal/releases/1.12.3/vm.args -erl_epmd_port 3470 -start_epmd false -- foreground
+Root: /opt/eturnal
+/opt/eturnal
+2026-11-26 01:18:34.774651+00:00 [notice] Starting eturnal 1.12.3 on Erlang/OTP 29 (ERTS 17.1)
+2026-11-26 01:18:34.774750+00:00 [info] Got no NOTIFY_SOCKET, notifications disabled
+2026-11-26 01:18:34.774796+00:00 [info] Relay IPv4 address: 192.0.2.10 (port range: 61000-61020)
+2026-11-26 01:18:34.774820+00:00 [info] Relay IPv6 address not configured
+2026-11-26 01:18:34.774850+00:00 [info] Listening on 127.0.0.1:3470 (tcp) (Erlang protocol version 5)
+2026-11-26 01:18:34.774918+00:00 [info] Started mod_log_stun
+2026-11-26 01:18:34.775086+00:00 [info] Listening on 127.0.0.1:3478 (udp) (STUN/TURN)
+2026-11-26 01:18:34.775206+00:00 [info] Listening on 127.0.0.1:3478 (tcp) (STUN/TURN)
+2026-11-26 01:18:34.877742+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session r5ihj5shjshe, user 1795656214:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:47017]
+2026-11-26 01:18:34.878038+00:00 [notice] Creating TURN allocation (lifetime: 600 seconds) [UDP, session r5ihj5shjshe, user 1795656214:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:47017, relay 192.0.2.10:61008]
+2026-11-26 01:18:34.932140+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session sjnat5f1ygth, user 1795656214:g1.DummyOwner111111111111.label, client 127.0.0.1:56525]
+2026-11-26 01:18:34.932528+00:00 [notice] Creating TURN allocation (lifetime: 600 seconds) [UDP, session sjnat5f1ygth, user 1795656214:g1.DummyOwner111111111111.label, client 127.0.0.1:56525, relay 192.0.2.10:61017]
+2026-11-26 01:18:34.987869+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session d38uahhzgown, user 1795655920:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:56410]
+2026-11-26 01:18:34.988243+00:00 [notice] Creating TURN allocation (lifetime: 600 seconds) [UDP, session d38uahhzgown, user 1795655920:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:56410, relay 192.0.2.10:61016]
+2026-11-26 01:18:42.988897+00:00 [info] Credentials expired: 1795655920:c1.DummyOwner111111111111.room1.part1 [UDP, session xzxf3fzvlbiw, user 1795655920:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:56410]
+2026-11-26 01:18:42.989003+00:00 [notice] Failed long-term STUN/TURN authentication [UDP, session xzxf3fzvlbiw, user 1795655920:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:56410]
+2026-11-26 01:18:43.043638+00:00 [info] Credentials expired: 1795655893:c1.DummyOwner111111111111.room1.part1 [UDP, session 4mgd0gfololk, user 1795655893:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:45419]
+2026-11-26 01:18:43.043749+00:00 [notice] Failed long-term STUN/TURN authentication [UDP, session 4mgd0gfololk, user 1795655893:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:45419]
+2026-11-26 01:18:43.099089+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.099434+00:00 [notice] Creating TURN allocation (lifetime: 600 seconds) [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.099755+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 3sn99pcyx6ue, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.099832+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.100048+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session l9d0yc1vt3v0, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.100079+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.100274+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 53mu0w3vdrt5, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.100315+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.100517+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session ikzu2x2my4ah, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.100568+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.100769+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session jyhesdmq6iz4, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.100809+00:00 [notice] Rejecting permission creation request: Peer Address Family Mismatch [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.100985+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 1br59sisjk43, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.101017+00:00 [notice] Rejecting channel binding request: Peer Address Family Mismatch [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.101194+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session dk58g15vkjhe, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.101247+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.101475+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session dic60bi32byx, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.101509+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.101766+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session enl8mlcvvf7x, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.101810+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.102042+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session nmgx4trgp754, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.102074+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.102280+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session kbpa81cozr0b, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.102320+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.102482+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 7883prn7grbn, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.102519+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.102690+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 245lghgb9lul, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.102726+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.102876+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session wlmng6u09n81, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.102903+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.103047+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session wtdezvd52j48, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.103096+00:00 [notice] Rejecting permission creation request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.103253+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session si2xld7ymxq3, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.103292+00:00 [notice] Rejecting channel binding request: Forbidden [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.103449+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 56zhox3dpa96, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.103474+00:00 [notice] Rejecting permission creation request: Peer Address Family Mismatch [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.103636+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session 9wigs435ym0u, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057]
+2026-11-26 01:18:43.103662+00:00 [notice] Rejecting channel binding request: Peer Address Family Mismatch [UDP, session rskkgk164oyj, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:49057, relay 192.0.2.10:61005]
+2026-11-26 01:18:43.161975+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session y2ia0ohw4j30, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:40604]
+2026-11-26 01:18:43.162107+00:00 [notice] Rejecting allocation request: unsupported transport [UDP, session y2ia0ohw4j30, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:40604]
+2026-11-26 01:18:43.162179+00:00 [notice] Relayed 0 KiB (in 0 B / 0 packets, out 0 B / 0 packets), duration: 0 seconds [UDP, session y2ia0ohw4j30, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:40604]
+2026-11-26 01:18:43.221074+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session uyzyytoroq3y, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:46035]
+2026-11-26 01:18:43.221320+00:00 [notice] Creating TURN allocation (lifetime: 600 seconds) [UDP, session uyzyytoroq3y, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:46035, relay 192.0.2.10:61003]
+2026-11-26 01:18:43.221718+00:00 [info] Accepting long-term STUN/TURN authentication [UDP, session bi8w85wiuik3, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:46035]
+2026-11-26 01:18:43.221787+00:00 [info] Creating TURN permission for 1.1.1.1 [UDP, session uyzyytoroq3y, user 1795656223:c1.DummyOwner111111111111.room1.part1, client 127.0.0.1:46035, relay 192.0.2.10:61003]

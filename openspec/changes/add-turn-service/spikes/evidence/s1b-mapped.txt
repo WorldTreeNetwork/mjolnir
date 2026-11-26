@@ -1,0 +1,15 @@
+username=1795656175:c1.DummyOwner111111111111.room1.part1
+password-sha256=2e4600b7e08c (not the secret)
+allocate-1 0x0113 401 Unauthorized
+allocate-2 0x0103 no-error-attr software=b'eturnal'
+relayed-raw 0001cf5ae112a648
+permission ::ffff:10.200.0.1 0x0118 443 Peer Address Family Mismatch
+channelbind ::ffff:10.200.0.1 0x0119 443 Peer Address Family Mismatch
+permission ::1 0x0118 443 Peer Address Family Mismatch
+channelbind ::1 0x0119 443 Peer Address Family Mismatch
+permission fe80::1 0x0118 443 Peer Address Family Mismatch
+channelbind fe80::1 0x0119 443 Peer Address Family Mismatch
+permission 2001:db8::1 0x0118 443 Peer Address Family Mismatch
+channelbind 2001:db8::1 0x0119 443 Peer Address Family Mismatch
+permission ::ffff:127.0.0.1 0x0118 443 Peer Address Family Mismatch
+channelbind ::ffff:127.0.0.1 0x0119 443 Peer Address Family Mismatch
