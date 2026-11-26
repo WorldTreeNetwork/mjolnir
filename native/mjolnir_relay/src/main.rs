@@ -70,6 +70,26 @@ fn write_active(path: &Path, text: &str) {
     let _ = std::fs::write(path, text);
 }
 
+fn publish_locator(path: &Path, host: &str, endpoint_id: iroh::EndpointId) -> anyhow::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("no locator directory"))?;
+    let file = tempfile::NamedTempFile::new_in(dir)?;
+    serde_json::to_writer(
+        file.as_file(),
+        &serde_json::json!({"host": host, "endpoint_id": endpoint_id.to_string()}),
+    )?;
+    file.persist(path)?;
+    Ok(())
+}
+
+fn clear_locator(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 fn check_cert(settings: &Settings) -> anyhow::Result<()> {
     let pem = std::fs::read_to_string(&settings.cert)
         .map_err(|err| anyhow::anyhow!("{}: {err}", settings.cert.display()))?;
@@ -144,6 +164,10 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     tracing_subscriber_lite();
+    let locator = std::env::var_os("MJOLNIR_RELAY_LOCATOR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/run/mjolnir-relay/locator.json"));
+    clear_locator(&locator)?;
     let settings = settings()?;
     key_file_trusted(&settings.keys)?;
     let keys = load_verify_keys(&settings.keys).map_err(|err| {
@@ -191,23 +215,33 @@ async fn main() -> anyhow::Result<()> {
         max_ttl: settings.max_ttl,
     };
     let iroh_router = mount_iroh(&relay, policy, &settings.state_dir).await?;
+
+    // Register the signals before notifying systemd that it can stop this process.
+    let mut term = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    if let Err(err) = publish_locator(&locator, &settings.host, iroh_router.endpoint().id()) {
+        tracing::warn!(%err, "could not publish the guest relay locator");
+    }
     // Cert, keys, and the UDP listener are ready. Type=notify waits for this
     // before ExecStartPost opens the firewall rule.
     notify_ready();
 
     let drain = settings.drain;
     let draining_signal = draining.clone();
+    let drain_locator = locator.clone();
     tokio::spawn(async move {
-        let mut term = signal(SignalKind::terminate()).expect("sigterm");
-        let mut interrupt = signal(SignalKind::interrupt()).expect("sigint");
         tokio::select! {
             _ = term.recv() => {}
             _ = interrupt.recv() => {}
         }
-        drain_then_stop(draining_signal, net_admission, trigger, drain).await;
+        drain_then_stop(draining_signal, net_admission, trigger, drain, &drain_locator).await;
     });
 
-    relay.run().await?;
+    let result = relay.run().await;
+    if let Err(err) = clear_locator(&locator) {
+        tracing::warn!(%err, "could not clear the guest relay locator at exit");
+    }
+    result?;
     let _ = iroh_router.shutdown().await;
     Ok(())
 }
@@ -257,9 +291,13 @@ async fn drain_then_stop(
     admission: moq_net::server::Admission,
     trigger: Trigger,
     drain: Duration,
+    locator: &Path,
 ) {
     draining.store(true, Ordering::SeqCst);
     admission.drain();
+    if let Err(err) = clear_locator(locator) {
+        tracing::warn!(%err, "could not withdraw the guest relay locator");
+    }
     tokio::time::sleep(drain).await;
     trigger.start();
 }

@@ -20,15 +20,13 @@ you had to compose next to the VM. Spawn a VM, read the locator,
 talk HTTP or Postgres. Credentials for B2 and the BEAM's Unix-socket
 catalog never enter the guest.
 
-The edge relay is not one of those guest locators. It listens on the
-host's public UDP 443 for browsers and Iroh clients. It stays off
-until `MJOLNIR_RELAY_ENABLED=true` and `MJOLNIR_RELAY_HOST` is set,
-and only `deploy.sh --relay` installs it. See
-[`docs/runbooks/edge-relay.md`](../runbooks/edge-relay.md).
+The edge relay also advertises guest locators. Its WebTransport listener uses
+the host's public UDP 443. It stays off until `MJOLNIR_RELAY_ENABLED=true`
+and `MJOLNIR_RELAY_HOST` is set, and only `deploy.sh --relay` installs it.
 
 ## How a guest finds them
 
-On every boot the host injects `/etc/mjolnir/vm.json`:
+On boot or resume the host injects `/etc/mjolnir/vm.json`:
 
 ```json
 {
@@ -56,6 +54,7 @@ rule for that port is missing.
 | **Postgres** (declared tenant DBs) | `10.200.0.1:5432` (scram) | App VMs with a provisioned tenant | `DATABASE_URL` in deploy secrets — **not** in `vm.json` |
 | **Redis** (sessions / cache / queues) | `10.200.0.1:6379` (AUTH) | App VMs with a provisioned secret | `REDIS_URL` in deploy secrets — **not** in `vm.json` |
 | **AIE compute** (NPU jobs by overlay RPC)¹ | `http://10.200.0.1:7422` | VMs holding an execute right on a signed offer | `aie_url` in `vm.json`; omitted when off |
+| **Edge relay** (media) | Public UDP 443 for WebTransport, public endpoint ID for Iroh | VMs on hosts with an enabled relay and a current locator | `relay_url` and `relay_iroh_endpoint_id` in `vm.json`; omitted together when unavailable |
 
 ¹ Built. Unit `mjolnir-aie` (user `mjolnir-aie`, not root) on dummy-mjolnir
 `:7422`, INPUT, catalog design ids only. BEAM admit is
@@ -142,6 +141,26 @@ ADR: [`0007`](../decisions/0007-host-sidecar-redis.md).
 `api_url` is how in-guest helpers (snapshot trigger, etc.) call back
 to Mjolnir. There is no address-based auth bypass on TCP, so a guest
 needs a token like any other API client.
+
+---
+
+## Edge relay
+
+`relay_url` is the WebTransport base URL. `relay_iroh_endpoint_id` is
+the public Iroh endpoint ID. Both are a snapshot taken at boot or resume.
+After a disable, hostname rename or Iroh identity reset, running guests
+keep their old values until resume or reboot. After a reset caused by
+compromise, the operator restarts affected guests.
+
+Here, resume means the boot path that reuses the guest's disk. A memory
+snapshot thaw restores the captured `vm.json`. Reboot the guest to refresh it.
+
+A signed-in user can request credentials with
+`mj relay token <room> <participant>`. With `--json`, the command returns
+the full mint response. For WebTransport, prefer the mint response's
+`relay_host` over `vm.json` when the two disagree.
+
+Operator instructions are in the [edge relay runbook](../runbooks/edge-relay.md).
 
 ---
 

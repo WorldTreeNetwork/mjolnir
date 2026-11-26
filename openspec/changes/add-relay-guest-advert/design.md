@@ -12,6 +12,8 @@ Extend the explicit `configure_identity` locator allowlist in `lib/mjolnir/vsock
 
 Make both resolver file paths configurable for tests. The catalog and runbook explain that after a disable, hostname rename or Iroh identity reset, running guests retain the snapshot until resume or reboot. After a reset caused by compromise, the operator restarts affected guests. For WebTransport, guest apps prefer the mint response's `relay_host` if it disagrees with `vm.json`.
 
+Resume refers to the disk-backed boot path through `complete_guest_setup/1`. The separate memory snapshot thaw uses `attach_thawed/3` and restores the captured file. A thawed guest refreshes its locators when rebooted.
+
 ## Room-token command
 
 `mj relay token <room> <participant> [--api <url>] [--json]` uses the existing profile/API resolution and the saved or refreshed user session. Validate both positional arguments against the existing room path segment rule, `[A-Za-z0-9_-]{1,64}` over the entire argument, before building the URL. Send one JSON POST with `{}` to `/api/relay/rooms/:room/participants/:participant/token` on the resolved controller API. The server chooses the default TTL and enforces the verified caller and scope. Keep this command independent of guest discovery and use the API's default room behavior.

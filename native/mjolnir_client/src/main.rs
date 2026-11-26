@@ -25,6 +25,7 @@ mod entity;
 mod forge;
 mod forge_tui;
 mod mcp;
+mod relay;
 mod secrets;
 mod server;
 mod sites;
@@ -372,6 +373,11 @@ enum Command {
     Ticket {
         #[command(subcommand)]
         action: TicketAction,
+    },
+    /// Request room credentials for the edge relay
+    Relay {
+        #[command(subcommand)]
+        action: RelayAction,
     },
     /// Unikernel entity keys (`mj entity name <key-file>`)
     Entity {
@@ -803,6 +809,20 @@ enum EntityAction {
     Name {
         /// The key file: exactly 32 bytes, an Ed25519 seed
         key_file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RelayAction {
+    /// Mint a room token using the saved user session
+    Token {
+        /// Room name
+        room: String,
+        /// Participant label
+        participant: String,
+        /// Mjolnir API base URL
+        #[arg(long)]
+        api: Option<String>,
     },
 }
 
@@ -1352,6 +1372,14 @@ async fn main() {
                 config::show();
                 Ok(())
             }
+        },
+
+        Command::Relay { action } => match action {
+            RelayAction::Token {
+                room,
+                participant,
+                api,
+            } => relay::mint_token(&profile, &api, &room, &participant, json).await,
         },
 
         // --- Ticket ---

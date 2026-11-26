@@ -290,6 +290,32 @@ defmodule Mjolnir.Vsock.ProtocolTest do
       assert request["aie_url"] == "http://10.200.0.1:7422"
     end
 
+    test "configure_identity allows only the public relay pair in the locators map" do
+      relay = %{
+        "relay_url" => "https://relay.example/",
+        "relay_iroh_endpoint_id" => String.duplicate("ab", 32)
+      }
+
+      blob = %{"blob_door_url" => "http://10.200.0.1:7222"}
+
+      request =
+        Protocol.configure_identity_request(
+          "vm-123",
+          "http://10.200.0.1:4000",
+          Map.merge(blob, Map.put(relay, "irrelevant_field", "ignored"))
+        )
+
+      assert request["locators"] == Map.merge(blob, relay)
+      refute Map.has_key?(request, "relay_url")
+      refute Map.has_key?(request, "relay_iroh_endpoint_id")
+
+      for key <- Map.keys(relay) do
+        partial = Map.put(blob, key, relay[key])
+        request = Protocol.configure_identity_request("vm-123", "http://10.200.0.1:4000", partial)
+        assert request["locators"] == blob
+      end
+    end
+
     test "configure_identity omits aie_url when off" do
       request =
         Protocol.configure_identity_request(

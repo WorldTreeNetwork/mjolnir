@@ -136,13 +136,32 @@ cargo build --release --examples
 - `iroh-subscribe read <relay-id> <token> <absolute-path> <seconds>` prints frames and bytes. `iroh-subscribe listen` prints announcements.
 - `wt-session publish` and `wt-session read` do the same over WebTransport. The URL carries `?jwt=`. The path is relative to the token root, so an absolute `t/<owner>/a/b` is read as `a/b`. `wt-session refuse` expects the session to be refused.
 
-Install the `SET` line as `/etc/mjolnir-relay/relay-keys.json` before using the tokens. The relay endpoint id is the `iroh endpoint:` line in the journal.
+Install the `SET` line as `/etc/mjolnir-relay/relay-keys.json` before using the tokens. The relay publishes its public hostname and endpoint ID in `/run/mjolnir-relay/locator.json` and prints the ID in the startup journal.
+
+## Guest discovery
+
+On guest boot or resume, `/etc/mjolnir/vm.json` receives `relay_url` and
+`relay_iroh_endpoint_id` when the host has an enabled relay and a matching
+runtime locator. Otherwise both fields are absent. The locators are a
+snapshot taken at boot or resume. After a disable, hostname rename or Iroh
+identity reset, running guests keep their old values until resume or reboot.
+After a reset caused by compromise, restart affected guests.
+
+Here, resume means the boot path that reuses the guest's disk. A memory
+snapshot thaw restores the captured `vm.json`. Reboot a thawed guest to
+refresh its locators before it reconnects after a compromise reset.
+
+For WebTransport, prefer the mint response's `relay_host` over `vm.json`
+when the two disagree.
 
 ## Room tokens
 
 The controller mints a room token at
 
 `POST /api/relay/rooms/:room/participants/:participant/token`
+
+A signed-in user can run `mj relay token <room> <participant>` to print
+the token, or use `--json` to get the full mint response.
 
 The caller is a user principal with `relay:join`. The owner is that
 caller's `sub`. The private key is `/var/lib/mjolnir/relay-mint/current.jwk`

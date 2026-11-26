@@ -183,6 +183,7 @@ defmodule Mjolnir.Vsock.Protocol do
 
   Locators are a map. `blob_door_url` stays (top-level and in the map) so
   older guests still persist it. `aie_url` is present only when supplied.
+  The relay locators travel together in the map.
   """
   def configure_identity_request(vm_id, api_url, locators \\ %{}, request_id \\ nil)
 
@@ -194,6 +195,7 @@ defmodule Mjolnir.Vsock.Protocol do
       %{}
       |> maybe_put_locator("blob_door_url", blob)
       |> maybe_put_locator("aie_url", aie)
+      |> maybe_put_relay_locators(locators)
 
     %{
       "type" => "configure_identity",
@@ -215,6 +217,16 @@ defmodule Mjolnir.Vsock.Protocol do
       end
 
     configure_identity_request(vm_id, api_url, locators, request_id)
+  end
+
+  defp maybe_put_relay_locators(wire, locators) do
+    with url when is_binary(url) <- locator_value(locators, "relay_url"),
+         endpoint_id when is_binary(endpoint_id) <-
+           locator_value(locators, "relay_iroh_endpoint_id") do
+      Map.merge(wire, %{"relay_url" => url, "relay_iroh_endpoint_id" => endpoint_id})
+    else
+      _ -> wire
+    end
   end
 
   defp locator_value(locators, key) do

@@ -2878,7 +2878,7 @@ defmodule Mjolnir.VM do
       api_url = "http://#{host_ip}:#{api_port}"
       blob_door_url = "http://#{host_ip}:7222"
 
-      locators = %{"blob_door_url" => blob_door_url}
+      locators = Map.put(Mjolnir.Relay.Locator.read(), "blob_door_url", blob_door_url)
 
       locators =
         case Mjolnir.AIE.Sidecar.locator_url() do
