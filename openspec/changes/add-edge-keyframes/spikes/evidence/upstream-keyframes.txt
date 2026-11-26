@@ -1,0 +1,125 @@
+# upstream-keyframes raw evidence, captured 2026-11-26T02:55:36Z
+
+## upstream main read
+$ git clone --depth 1 --filter=blob:none https://github.com/moq-dev/moq.git <scratch>
+HEAD 9901b7112b443e04c5f7ef811008c5fc4f4a75d0  committed 2026-11-26T02:29:03Z  ci(rs): the gate builds moq-net's fuzz feature on its own (#9665)
+moq-webrtc version on main: version = "0.3.12"
+
+## keyframe-related code in rs/moq-webrtc/src on main
+$ grep -rn 'KeyframeRequest\|request_keyframe\|refresh\|demand()' rs/moq-webrtc/src | grep -v test
+src/session.rs:333:							request_keyframe(&mut self.agent, data.mid, data.rid)?;
+src/session.rs:342:						request_keyframe(&mut self.agent, data.mid, data.rid)?;
+src/session.rs:367:			Event::KeyframeRequest(req) => {
+src/session.rs:514:fn request_keyframe(
+src/session.rs:521:			.request_keyframe(rid, str0m::media::KeyframeRequestKind::Pli)
+
+## main's egress handler for a viewer's PLI/FIR (rs/moq-webrtc/src/session.rs)
+367:			Event::KeyframeRequest(req) => {
+368-				// PLI / FIR from the egress peer. For v1 we just log and
+369-				// rely on the next natural keyframe from the MoQ source.
+370-				tracing::debug!(?req, "keyframe request from peer");
+371-			}
+372-			_ => {}
+
+## the pin's handler (4a6f522, session.rs)
+337:			Event::KeyframeRequest(req) => {
+338-				// PLI / FIR from the egress peer. For v1 we just log and
+339-				// rely on the next natural keyframe from the MoQ source.
+340-				tracing::debug!(?req, "keyframe request from peer");
+341-			}
+342-			_ => {}
+
+## where main asks a WHIP publisher for a keyframe: only Admit::Request (keyless line) and a deferred timeline step
+					let media_us = media_time_to_micros(&data.time);
+					match self
+						.ingest_order
+						.admit(data.mid, data.is_keyframe(), media_us, Instant::now())
+					{
+						Admit::Forward => {}
+						Admit::Drop => return Ok(()),
+						Admit::Request => {
+							request_keyframe(&mut self.agent, data.mid, data.rid)?;
+							return Ok(());
+						}
+					}
+					let opens_group = data.is_keyframe() || self.ingest_order.is_audio(data.mid);
+					let mapped = self.ingest_clock.normalize(data.mid, arrival, media_us, opens_group);
+					// A video step waits for a keyframe, which a publisher that sends one only
+					// when asked never volunteers.
+					if mapped.deferred && self.ingest_order.keyframe_due(data.mid, Instant::now()) {
+						request_keyframe(&mut self.agent, data.mid, data.rid)?;
+					}
+					if mapped.stepped {
+						sink.on_discontinuity(data.mid)?;
+
+## Ingest/whip::Request option surface on main (no keyframe option)
+16:	pub max_age: Option<Duration>,
+21:	pub bandwidth: moq_net::bandwidth::Allocator,
+26:	pub linger: Duration,
+33:	pub rate: Option<moq_net::bandwidth::Limit>,
+97:pub struct Request<'a> {
+99-	pub publisher: &'a moq_net::origin::Producer,
+101-	pub broadcast: moq_net::Path,
+103-	pub offer: &'a str,
+106-	pub ingest: moq_mux::Ingest,
+
+## moq-net refresh / Demand (the mechanism maintainers point to), main
+363:	pub(crate) fn has_refresh(self) -> bool {
+364-		!matches!(
+365-			self,
+366-			Self::Lite01 | Self::Lite02 | Self::Lite03 | Self::Lite04 | Self::Lite05 | Self::Lite06
+367-		)
+368-	}
+26:	/// still work-in-progress, so it is advertised over ALPN as `moq-lite-07-wip` and
+425:			Self::Lite07 => write!(f, "moq-lite-07-wip"),
+
+## GitHub search, moq-dev/moq, issues and PRs, all states
+$ gh search issues --repo moq-dev/moq "keyframe"
+  #9611 [open] pr=false moq-rtsp: a session fails when the server replays frames from before its announced rtptime
+  #9507 [open] pr=false moq-rtsp: `sync.clock` puts every frame 10 s or more before it was captured
+  #9081 [closed] pr=false export ts drops about a fifth of a field-coded feed's pictures since #8638
+  #5951 [closed] pr=false export ts: keyframe parameter sets are written ahead of the access unit delimiter
+  #6270 [closed] pr=false moq-net: opt-in join at the next group, and subscriber counts on track::Producer
+  #3731 [open] pr=false The media-aware TS lane and MSFTS ES-level carriage are not the same mode: six decisions
+  #7326 [closed] pr=false moq-gst moqsrc: fixed 1 s consumer latency and frames lost at the first frame of a GOP
+  #4770 [closed] pr=false moq export fmp4: a video + audio export starts at the first video keyframe; audio published before it is not written
+  #4366 [closed] pr=false moq-gst: moqsink fails the pad on TimestampRewind / MissingKeyframe, which moq-mux documents as recoverable
+  #8557 [closed] pr=false export ts: after #8449, a padded export under a sustained slow reader keeps about a quarter of the video an unpadded one keeps
+  #7744 [closed] pr=false After an import's own republish, the new instance is announced 1.2 s late, so `export ts --stitch --follow` starts at its newest group and loses a GOP on a short-GOP feed
+  #9085 [closed] pr=false `export ts` repeats PAT, PMT and SDT at TR 101 290's limits, so a DVB analyser flags them continually
+  #5565 [closed] pr=false flaky: `just test ts` loses most of the first video group when it is evicted as `Old` just after subscribing (4 of 51 CI runs)
+  #2284 [closed] pr=false moq-net: keyframe request (PLI equivalent) for fast tune-in
+  #4951 [closed] pr=false hang: a consumer whose first group dies empty parks its cursor on a group that never comes
+$ gh search issues --repo moq-dev/moq "PLI"
+  #2284 [closed] pr=false moq-net: keyframe request (PLI equivalent) for fast tune-in
+  #3608 [closed] pr=false Proposal: a standard convention for subscriber-reported health telemetry, mirroring `--stats-enabled`
+  #2735 [closed] pr=false hang: opt-in viewer feedback broadcasts (sampled per-viewer QoS)
+  #2635 [closed] pr=false Subscriber churn stalls the publisher's video encoder for tens of seconds: the demand gate rebuilds the whole encode pipeline on every resubscribe
+$ gh search issues --repo moq-dev/moq "FIR"
+$ gh search issues --repo moq-dev/moq "keyframe request"
+  #2284 [closed] pr=false moq-net: keyframe request (PLI equivalent) for fast tune-in
+  #6270 [closed] pr=false moq-net: opt-in join at the next group, and subscriber counts on track::Producer
+  #2635 [closed] pr=false Subscriber churn stalls the publisher's video encoder for tens of seconds: the demand gate rebuilds the whole encode pipeline on every resubscribe
+$ gh search issues --repo moq-dev/moq "webrtc keyframe"
+$ gh search issues --repo moq-dev/moq "WHEP PLI"
+$ gh pr list --repo moq-dev/moq --state open --search webrtc
+  #9633 feat(mux)!: foreign-timeline ingests shift onto the catalog clock with Timebase::shift
+  #8432 fix!: build against rind 0.4 and its corrected adapters
+  #9561 feat(audio): audio groups span 100 ms by default
+
+## the three related threads
+#2284 CLOSED closed 2026-10-08T04:38:24Z moq-net: keyframe request (PLI equivalent) for fast tune-in
+#3256 MERGED merged 2026-08-31T23:13:51Z chore(quest): replace the keyframe request with a GOP overhead verdict
+#6270 CLOSED closed 2026-10-22T05:53:49Z moq-net: opt-in join at the next group, and subscriber counts on track::Producer
+#6270 maintainer reply (excerpt):
+  > Thanks for the detailed write-up. Main has moved on since 0.3.10 and already covers the use case a different way, so we're declining both additions.
+  > 
+  > - **Keyframe on join:** a track sets `track::Info::refresh`, a byte ratio advertised in TRACK_INFO and relayed hop by hop. When a subscriber joins at the live edge and the current group's deltas exceed that ratio, `Demand::wanted` moves past the newest group and the publisher opens a fresh one (moq-video forces a keyframe on it). That replaces the out-of-band request and the `subscriptions_opened` poll. It also works across relays, which a per-process counter can't.
+  > - **`join_next_group`:** every public `track::Info` field is on the wire, and a
+
+## upstream quests mentioning WebRTC keyframes
+m2/ingest-clock.md
+m3/rtc-pacing.md
+m3/error-matches.md
+m3/audit-perf.md
+(m3/rtc-pacing.md mentions PLIs only as a pacing symptom)
