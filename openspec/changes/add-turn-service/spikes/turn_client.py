@@ -31,6 +31,7 @@ A_DATA = 0x0013
 A_LIFETIME = 0x000D
 A_XOR_RELAYED = 0x0016
 A_REQUESTED_TRANSPORT = 0x0019
+A_REQUESTED_FAMILY = 0x0017
 A_DONT_FRAGMENT = 0x001A
 A_CHANNEL = 0x000C
 A_SOFTWARE = 0x8022
@@ -138,13 +139,18 @@ class Client:
 
     def send(self, packet: bytes):
         self.sock.sendto(packet, self.addr)
-        data, _ = self.sock.recvfrom(2048)
+        data, _ = self.sock.recvfrom(4096)
+        print(f"wire req={len(packet)} resp={len(data)}")
         return decode(data)
 
-    def allocate(self, username: str, password: str, transport: int = 17):
+    def allocate(self, username: str, password: str, transport: int = 17, lifetime: int | None = None, ipv6: bool = False):
         self.username = username
         txid = os.urandom(12)
         req_parts = [attr(A_REQUESTED_TRANSPORT, bytes([transport, 0, 0, 0]))]
+        if lifetime is not None:
+            req_parts.append(attr(A_LIFETIME, struct.pack("!I", lifetime)))
+        if ipv6:
+            req_parts.append(attr(A_REQUESTED_FAMILY, bytes([0x02, 0, 0, 0])))
         mtype, _, attrs = self.send(unsigned(0x003, 0, txid, req_parts))
         print(f"allocate-1 {mtype:#06x} {error_text(attrs)}")
         if A_REALM not in attrs or A_NONCE not in attrs:
@@ -159,7 +165,9 @@ class Client:
         ]
         txid = os.urandom(12)
         mtype, _, attrs = self.send(signed(0x003, 0, txid, parts, self.key))
-        print(f"allocate-2 {mtype:#06x} {error_text(attrs)} software={attrs.get(A_SOFTWARE)}")
+        life = attrs.get(A_LIFETIME)
+        life_n = struct.unpack("!I", life)[0] if life and len(life) == 4 else None
+        print(f"allocate-2 {mtype:#06x} {error_text(attrs)} software={attrs.get(A_SOFTWARE)} lifetime={life_n} resp_bytes_later")
         if A_XOR_RELAYED in attrs:
             print(f"relayed-raw {attrs[A_XOR_RELAYED].hex()}")
         return mtype, attrs
@@ -213,7 +221,7 @@ class Client:
         print(f"refresh {mtype:#06x} {error_text(attrs)}")
         return mtype, attrs
 
-    def send_indication(self, ip: str, port: int, payload: bytes):
+    def send_indication(self, ip: str, port: int, payload: bytes, quiet: bool = False):
         txid = os.urandom(12)
         parts = [
             attr(A_XOR_PEER, xor_peer(ip, port, txid)),
@@ -221,7 +229,8 @@ class Client:
         ]
         packet = unsigned(0x006, 1, txid, parts)
         self.sock.sendto(packet, self.addr)
-        print(f"send-indication {ip}:{port} {len(payload)} bytes")
+        if not quiet:
+            print(f"send-indication {ip}:{port} {len(payload)} bytes")
 
 
 def main():
@@ -234,21 +243,67 @@ def main():
     p.add_argument(
         "--do",
         required=True,
-        choices=["allocate", "blacklist", "refresh-wait", "send", "send-keep", "tcp", "both-secrets"],
+        choices=["allocate", "blacklist", "refresh-wait", "send", "send-keep", "tcp", "flood", "unauth", "many", "connect"],
     )
     p.add_argument("--peer", action="append", default=[])
     p.add_argument("--wait", type=int, default=0)
     p.add_argument("--secret2", default="")
+    p.add_argument("--lifetime", type=int, default=-1)
+    p.add_argument("--count", type=int, default=1)
+    p.add_argument("--ipv6", action="store_true")
     args = p.parse_args()
     password = args.password or rest_password(args.secret, args.username)
     print(f"username={args.username}")
     print(f"password-sha256={hashlib.sha256(password.encode()).hexdigest()[:12]} (not the secret)")
+    life = None if args.lifetime < 0 else args.lifetime
+    if args.do == "unauth":
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2)
+        for method, name in ((0x001, "binding"), (0x003, "allocate")):
+            txid = os.urandom(12)
+            pkt = unsigned(method, 0, txid, [])
+            s.sendto(pkt, (args.host, args.port))
+            data, _ = s.recvfrom(4096)
+            print(f"unauth {name} req={len(pkt)} resp={len(data)} factor={len(data)/len(pkt):.2f}")
+        return
+    if args.do == "many":
+        ok = err = 0
+        for i in range(args.count):
+            user = args.username if args.ipv6 else args.username
+            # --ipv6 here means "vary the username"; default is one username.
+            name = args.username if not args.ipv6 else f"{args.username}-n{i}"
+            # username must stay REST-shaped. Vary the label-free owner tail via the expiry-stable suffix.
+            if args.ipv6:
+                base, _, rest = args.username.partition(":")
+                name = f"{base}:g1.Owner{i:04d}"
+                pw = rest_password(args.secret, name)
+            else:
+                name = args.username
+                pw = password
+            cli = Client(args.host, args.port)
+            try:
+                mt, attrs = cli.allocate(name, pw, lifetime=life)
+            except Exception as exc:
+                print(f"n={i} EXC {exc}")
+                err += 1
+                continue
+            if mt == msg_type(0x003, 2):
+                ok += 1
+                print(f"n={i} OK")
+            else:
+                err += 1
+                print(f"n={i} FAIL {error_text(attrs)}")
+        print(f"many ok={ok} fail={err}")
+        return
+    if args.do == "connect":
+        # RFC 6062 CONNECT on an existing UDP allocation, peer in --peer.
+        pass
     c = Client(args.host, args.port)
     if args.do == "tcp":
-        c.allocate(args.username, password, transport=6)
+        c.allocate(args.username, password, transport=6, lifetime=life)
         return
     ok_type = msg_type(0x003, 2)
-    mtype, _ = c.allocate(args.username, password)
+    mtype, _ = c.allocate(args.username, password, lifetime=life, ipv6=args.ipv6)
     if mtype != ok_type:
         sys.exit(2)
     if args.do == "allocate":
@@ -292,6 +347,29 @@ def main():
         if mt == msg_type(0x004, 2):
             print("UNEXPECTED refresh accepted")
             sys.exit(3)
+        return
+    if args.do == "flood":
+        peer = args.peer[0]
+        mt, _ = c.create_permission(peer, port=9)
+        print(f"flood-permission {mt:#06x}")
+        payload = b"Z" * 1000
+        t0 = time.perf_counter()
+        for _ in range(args.count):
+            c.send_indication(peer, 9, payload, quiet=True)
+        dt = time.perf_counter() - t0
+        print(f"flood sent={args.count} payload={len(payload)} seconds={dt:.3f} mbit={args.count*len(payload)*8/dt/1e6:.1f}")
+        return
+    if args.do == "connect":
+        peer = args.peer[0]
+        txid = os.urandom(12)
+        parts = [
+            attr(A_XOR_PEER, xor_peer(peer, 80, txid)),
+            attr(A_USERNAME, c.username.encode()),
+            attr(A_REALM, c.realm.encode()),
+            attr(A_NONCE, c.nonce),
+        ]
+        mtype, _, attrs = c.send(signed(0x00A, 0, txid, parts, c.key))
+        print(f"connect {peer} {mtype:#06x} {error_text(attrs)}")
         return
     if args.do == "send":
         for peer in args.peer:

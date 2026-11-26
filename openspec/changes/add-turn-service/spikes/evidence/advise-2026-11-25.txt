@@ -1,0 +1,135 @@
+# Advise spikes, morphie, 2026-11-25
+
+Host: morphie, 192.168.0.164, eno1, dummy-mjolnir 10.200.0.1/32.
+Not production. Dummy secrets only: dummy-turn-secret-not-a-real-key and dummy-turn-secret-old-overlap.
+
+Artefact: https://eturnal.net/download/linux/eturnal-1.12.3-linux-glibc-x64.tar.gz
+SHA-256: 4a16e00592802777163efbfaf3c05efc1ab9e61d85b6f16cac8921e234425c8c
+Unpacked: /var/tmp/eturnal-spike/unpack/eturnal
+Version line: eturnal 1.12.3 on Erlang/OTP 29 (ERTS 17.1)
+Exec: erts-17.1/bin/erlexec ... -erl_epmd_port 3470 -start_epmd false -- foreground
+
+Lab user mjolnir-turn-spike uid 948. A --system --no-create-home account crashes
+before bind: Failed to create cookie file '/home/mjolnir-turn-spike/.erlang.cookie': enoent.
+Home set to /var/lib/mjolnir-turn-spike. Cookie mode 400, owner that user, size 33,
+sha256 prefix 78892df918a0. Cookie value not recorded.
+eturnalctl defaults to user eturnal. ETURNAL_USER=mjolnir-turn-spike is required
+or it prints: su: user eturnal does not exist.
+
+Relay address in the lab YAML: 192.0.2.10. Log: port range 49152-65535 (the
+default; not 61000-65535). relay_ipv6_addr: none. Listen 0.0.0.0:3478 udp and tcp.
+Erlang distribution: Listening on 127.0.0.1:3470 (tcp). ss for that beam pid:
+udp 0.0.0.0:3478, tcp 0.0.0.0:3478, tcp 127.0.0.1:3470. No other listeners.
+Host epmd on 0.0.0.0:4369 and [::]:4369 was already there and is not this pid.
+modules: {} . Startup log has no module listeners and no STUN lookup.
+tcpdump on any for udp/3478 excluding the host,  during start: 0 packets captured.
+The glibc tarball does not query stun.conversations.im. That line in the earlier
+docker run came from the image wrapper.
+
+## Spike 1 — allocation and lifetime
+
+One username, max_allocations unset, 12 Allocate attempts: many ok=12 fail=0.
+The 11th (n=10) and 12th (n=11) both returned success, software eturnal,
+lifetime 600. eturnalctl sessions: "12 active TURN sessions", same username,
+distinct client ports, relay 192.0.2.10 ports inside 49152-65535.
+eturnalctl disconnect <username>: "Disconnected 12 TURN session(s)".
+Afterwards: "No active TURN sessions".
+eturnalctl disconnect with no username: "Usage: eturnal disconnect Username".
+It does not close every session.
+
+24 distinct usernames (same source 192.168.0.164): many ok=24 fail=0.
+sessions then listed 25 lines of session headers before the next test's allocate
+(24 new plus one lifetime allocate that followed in the same script). No
+per-source refusal at 24.
+
+After writing max_allocations: 2 and restarting, 4 allocates on one username:
+many ok=4 fail=0. 4 further distinct usernames: many ok=4 fail=0.
+The key is in the yval schema (eturnal_yaml) and is mapped to
+turn_max_allocations. It did not enforce 2.
+
+Lifetime granted, all software=eturnal:
+- attribute omitted: 600
+- requested 60: 600
+- requested 3600: 600
+- requested 4294967295: 600
+Reload with max_lifetime: 30:
+"Invalid value of parameter 'eturnal': Unknown parameter: max_lifetime. Did you mean 'max_allocations'?"
+Listener stayed up. Schema has no lifetime ceiling key. The granted lifetime
+stays 600.
+
+## Spike 2 — reload and rotation
+
+Adding a second secret and reloading, then allocating with the new secret:
+allocate-2 success, lifetime 600.
+Removing the first secret and reloading, then allocating with the removed secret:
+allocate-2 401 Unauthorized.
+A held allocation (username OwnerHold, relay 192.0.2.10:55092, permission 9.9.9.9)
+was still listed after that reload. sessions: Sent: 0 KiB (2 packets). Both
+Send indications were accepted by the server, one before the reload and one
+after. tcpdump on eno1 captured the earlier one:
+192.0.2.10.55092 > 9.9.9.9.9: UDP, length 11.
+Refresh on that socket after the secret was removed returned 438 Stale Nonce.
+It was not retried with the new nonce, so a retried Refresh is not proven to fail.
+
+Malformed YAML on reload:
+"Malformed YAML: Syntax error on line 2 at position 1: did not find expected node content"
+ss still showed 0.0.0.0:3478. The process stayed up.
+Malformed YAML on start:
+"[critical] Failed to load configuration from /var/tmp/turn-spike/eturnal.yml"
+3478 was not listening. The process did not stay up.
+
+## Spike 4 — IPv6
+
+First Allocate with REQUESTED-ADDRESS-FAMILY during a reload window:
+"Failed long-term STUN/TURN authentication" (not a family result).
+Second try, server idle: allocate-2 440 Address Family not Supported.
+Log: "Rejecting allocation request: IPv6 not supported".
+No IPv6 relay address in the log ("Relay IPv6 address not configured").
+The beam's sockets were IPv4 only (ss above).
+
+## Spike 6 — blacklist classes and TCP
+
+blacklist_peers: [recommended, "1.1.1.1"]
+CreatePermission:
+- 172.16.9.9 403 Forbidden
+- 240.0.1.1 403 Forbidden
+- 0.1.2.3 403 Forbidden
+- 1.1.1.1 403 Forbidden
+- 9.9.9.9 success (control, outside recommended and not listed)
+ChannelBind 9.9.9.9 success.
+CONNECT (method 0x000A) to 9.9.9.9:80: 405 Method not allowed.
+Log: "Rejecting request: Method not allowed".
+
+TCP 3478: a 2-byte RFC 4571 length prefix got EOF (0 bytes) after the server
+logged "Accepting connection". The same Allocate with the raw STUN bytes and
+no length prefix: tcp-raw-1 401, tcp-raw-2 success, software eturnal.
+
+## Spike 3 — not run
+
+nft table inet mjolnir_turn was rejected:
+"syntax error, unexpected ip" on `tcp ip daddr` (the qualifiers were in the wrong order).
+The table was never installed. No counters, no exemption run, no systemd
+ExecStartPre cycle, no restart cycle. Reboot was not attempted.
+ufw was not installed. This run installed it (`pacman -S ufw`) and
+`ufw --force enable`. `ufw status verbose` came back as:
+Status: active. Default: deny (incoming), allow (outgoing), deny (routed).
+The printed status did not list an allow rule. The next SSH from the Mac
+timed out on port 22. Ping still answers. Spike 7 did not start.
+
+Recovery at the morphie console, then this lab can be finished:
+  sudo ufw disable
+  sudo ufw status
+Do not leave ufw active on this host. It was not the host firewall before this run.
+
+## Spike 7 — not run
+
+No 25 Mbit/s measurement. No unauthenticated amplification capture in this round.
+The cap rule was never inserted.
+
+## Left on the host
+
+Process may still be the lab beam on 3478. User mjolnir-turn-spike, home and
+cookie, tarball under /var/tmp/eturnal-spike, notes under /tmp/turn-advise-out2.
+192.0.2.10/32 may still be on dummy-mjolnir. veth-turn / netns turnspike and
+veth-priv / netns turnpriv may exist. nft table mjolnir_turn was not created.
+ufw is active until the console command above.

@@ -50,3 +50,21 @@ iptables chain `MJOLNIR_TURN_SPIKE`, jumped from `OUTPUT` with comment `mjolnir-
 Counters after one send each: `10/8` 2 packets, `127/8` 1, `169.254/16` 1, `192.168/16` 1, `1.1.1.1` 1. `tcpdump` on `dummy-mjolnir` and `lo` captured 0 packets. `tcpdump` on `eno1` captured `192.0.2.10.61013 > 1.1.1.1.9`.
 
 A first attempt that also dropped uid traffic to `127.0.0.0/8` while the client was on `127.0.0.1:3478` timed out: the DROP ate the server's replies, and the `127/8` counter moved. The uid rule is not only a peer filter. It filters every destination of that user, including STUN replies to a client who sits in a dropped range. The successful run put the client at `203.0.113.50` in a netns, outside every drop. See the design for the consequence: match the relay source-port range, not every packet the user sends.
+
+## Advise round, 2026-11-25 — glibc tarball
+
+Evidence: `spikes/evidence/advise-2026-11-25.txt`. Owner decisions that day are on bead `mjolnir-rurh.10`. This round does not amend the contract. The binary is the official glibc build `eturnal-1.12.3-linux-glibc-x64.tar.gz`, SHA-256 `4a16e00592802777163efbfaf3c05efc1ab9e61d85b6f16cac8921e234425c8c`, not the Docker image.
+
+| Spike | Verdict |
+|---|---|
+| 1 Allocation and lifetime | Proven, and the cap does not hold. 12/12 allocates on one username with the key unset (the 11th succeeded). 24/24 distinct usernames from one source. `max_allocations: 2` still allowed 4 on one username and 4 more usernames. Every lifetime request (omit, 60, 3600, 4294967295) was granted 600. `max_lifetime` is an unknown parameter; reload kept the old config and the listener. `disconnect <username>` removed 12 sessions. `disconnect` with no username is a usage error. |
+| 2 Reload and rotation | Proven. New secret allocates after reload. Removed secret: new Allocate is 401. Held allocation stayed up and `sessions` counted 2 sent packets, one of them after the secret was removed. Refresh after removal returned 438 Stale Nonce and was not retried. Malformed YAML on reload keeps 3478 listening. Malformed YAML on start does not listen. |
+| 3 Kernel filter, no 3478 exemption | Not run. The nft table was rejected on a syntax error and never installed. No exemption recording run. No systemd restart cycle. Reboot not run. |
+| 4 IPv6 refusal | Proven. Allocate with REQUESTED-ADDRESS-FAMILY returned 440 Address Family not Supported. Log: `IPv6 not supported`. No IPv6 socket on the beam. |
+| 5 Artefact, STUN, distribution, modules | Proven. Tarball above. Startup tcpdump of udp/3478 excluding the host: 0 packets. No `stun.conversations.im` line. Listens on `0.0.0.0:3478` udp and tcp, and `127.0.0.1:3470` for Erlang distribution. `-start_epmd false`. Host epmd on 4369 is not this process. `modules: {}` added no listener. The binary crashes before bind if it cannot create `$HOME/.erlang.cookie`. |
+| 6 Blacklist classes and TCP | Proven. `recommended` plus explicit `1.1.1.1`: CreatePermission 403 for `172.16.9.9`, `240.0.1.1`, `0.1.2.3`, and `1.1.1.1`. `9.9.9.9` allowed. CONNECT returned 405 Method not allowed. TCP 3478 with raw STUN allocated. A RFC 4571 length prefix got EOF. |
+| 7 Cap at 25 Mbit/s and unauthenticated flood | Not run. |
+
+Decision 3, against these numbers: keep eturnal only with a reaper, and the reaper is not optional. `max_allocations` did not enforce, 24 usernames from one source all allocated, and the lifetime grant is 600 seconds with no config key to lower it. `eturnalctl sessions` plus `eturnalctl disconnect <username>` is the working control. There is no disconnect-all.
+
+Spike 3 and spike 7 stopped because this run installed ufw (it was absent) and `ufw --force enable` left incoming deny with no allow rule in the status output. The next SSH to port 22 timed out. Ping still answers. At the morphie console: `sudo ufw disable`. The lab beam, the cookie home, and `/tmp/turn-advise-out2` may still be there.
