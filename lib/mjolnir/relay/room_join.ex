@@ -3,23 +3,28 @@ defmodule Mjolnir.Relay.RoomJoin do
   Smallest client identity guard for an open or protected room join.
 
   There is no browser call client in this repository (`mjolnir-rurh.15` and
-  `mjolnir-rurh.5` have no landing tree). This module is the check those
-  clients call on join, credential replacement, and renewal. It does not
+  `mjolnir-rurh.5` have no landing tree). This module is a reference identity comparison those
+  clients must implement at an authenticated boundary on join, credential replacement, and renewal. It does not
   open a socket, render a page, or talk to the gateway. Wiring it into a
   page is the integration gate on those nodes.
 
   `expected_root` comes from the invitation, not from the token.
   `asked` is what the person requested: `:open` or `:protected`.
   `response` is the mint JSON, including `token`, `root`, and `kind`
-  when the mint sent one.
+  when the mint sent one. `admission` is a trusted full-admission result
+  containing the original authenticated root and exact token, never remote JSON.
+  Passing a caller-fabricated success does not authenticate anything.
   """
 
-  @spec check(String.t(), :open | :protected, map()) ::
-          {:ok, %{kind: :open | :protected, root: String.t()}}
-          | {:error, atom()}
-  def check(expected_root, asked, response)
+  # This is an identity comparison seam, not a JWT verifier. The trusted caller
+  # must supply successful full admission for this exact credential. No product
+  # admission producer or browser lifecycle is wired to this reference helper yet.
+  @spec check(String.t(), :open | :protected, map(), tuple()) ::
+          {:ok, map()} | {:error, atom()}
+  def check(expected_root, asked, response, admission)
       when is_binary(expected_root) and asked in [:open, :protected] and is_map(response) do
-    with {:ok, token_root} <- token_root(response),
+    with {:ok, token} when is_binary(token) <- field(response, "token", :token),
+         {:ok, token_root} <- admitted_root(admission, token),
          :ok <- roots_agree(expected_root, token_root, response),
          class when class in [:open, :protected] <- Mjolnir.Relay.RoomClass.classify(token_root),
          :ok <- kind_agrees(class, response),
@@ -28,69 +33,47 @@ defmodule Mjolnir.Relay.RoomJoin do
     else
       :invalid -> {:error, :invalid_root}
       {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_response}
     end
   end
 
-  def check(_, _, _), do: {:error, :invalid_response}
+  def check(_, _, _, _), do: {:error, :invalid_response}
 
-  defp token_root(response) when is_map(response) do
-    token_root_value(response["token"] || response[:token])
-  end
+  defp admitted_root({:ok, %{token: token, root: root}}, token) when is_binary(root),
+    do: {:ok, root}
 
-  defp token_root(_), do: {:error, :bad_token}
+  defp admitted_root(_, _), do: {:error, :unauthenticated_identity}
 
-  defp token_root_value(token) when is_binary(token) do
-    case String.split(token, ".") do
-      [_header, payload, _sig] ->
-        with {:ok, json} <- Base.url_decode64(payload, padding: false),
-             {:ok, claims} <- Jason.decode(json),
-             root when is_binary(root) <- claims["root"] do
-          {:ok, root}
-        else
-          _ -> {:error, :bad_token}
-        end
-
-      _ ->
-        {:error, :bad_token}
+  defp field(map, string, atom) do
+    case {Map.fetch(map, string), Map.fetch(map, atom)} do
+      {:error, :error} -> :error
+      {{:ok, value}, :error} -> {:ok, value}
+      {:error, {:ok, value}} -> {:ok, value}
+      {{:ok, value}, {:ok, value}} -> {:ok, value}
+      _ -> {:error, :conflicting_fields}
     end
   end
-
-  defp token_root_value(_), do: {:error, :bad_token}
 
   defp roots_agree(expected, token_root, response) do
-    response_root = response["root"] || response[:root]
+    response_root = field(response, "root", :root)
 
     cond do
       expected != token_root -> {:error, :unexpected_root}
-      response_root != token_root -> {:error, :response_root_mismatch}
+      response_root != {:ok, token_root} -> {:error, :response_root_mismatch}
       true -> :ok
     end
   end
 
   defp kind_agrees(class, response) do
-    case response["kind"] || response[:kind] do
-      nil -> :ok
-      "open" when class == :open -> :ok
-      "protected" when class == :protected -> :ok
-      kind when is_binary(kind) -> {:error, :kind_mismatch}
+    case field(response, "kind", :kind) do
+      :error when class == :protected -> :ok
+      {:ok, "open"} when class == :open -> :ok
+      {:ok, "protected"} when class == :protected -> :ok
       _ -> {:error, :kind_mismatch}
     end
   end
 
-  # An explicit open request fails closed on the old mint, which has no
-  # `kind` and a protected root. A protected request does not accept an
-  # open root as plaintext.
-  defp asked_agrees(:open, :open, %{"kind" => "open"}), do: :ok
-  defp asked_agrees(:open, :open, %{kind: "open"}), do: :ok
+  defp asked_agrees(class, class, _), do: :ok
   defp asked_agrees(:open, _, _), do: {:error, :open_refused}
-
-  defp asked_agrees(:protected, :protected, response) do
-    case response["kind"] || response[:kind] do
-      nil -> :ok
-      "protected" -> :ok
-      _ -> {:error, :protected_refused}
-    end
-  end
-
   defp asked_agrees(:protected, _, _), do: {:error, :protected_refused}
 end
