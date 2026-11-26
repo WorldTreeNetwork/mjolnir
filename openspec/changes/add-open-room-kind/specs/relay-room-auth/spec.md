@@ -82,6 +82,45 @@ The checks run in this order, and the first failure answers: scope `relay:join` 
 - WHEN a user with `relay:join` calls the mint
 - THEN the response is 503 and no token is signed
 
+### Requirement: A room path binds publish to one participant label
+<!-- base: fe562845ecfd16cb45fb2ad13b6f29ec758aeffa openspec/specs/relay-room-auth/spec.md -->
+A protected room path SHALL be `t/<owner id>/<room>/<participant>/<rest>`. An open room path SHALL be `t/<owner id>/~open/<room>/<participant>/<rest>`. `<room>` and `<participant>` SHALL each match the whole string `\A[A-Za-z0-9_-]{1,64}\z`. `~open` SHALL be that one literal segment and SHALL NOT be a room name. The protected token root SHALL be `t/<owner id>/<room>`. The open token root SHALL be `t/<owner id>/~open/<room>`. For either root the publish pattern SHALL be `<participant>/**` and the subscribe pattern SHALL be `**`. Patterns are exact: a name matches only that name, and a subtree is `/**`.
+
+A WebTransport client is rooted at the token root. It publishes the relative names `P/track` and `P`. An Iroh client uses the full-root absolute path: protected `t/<owner>/<room>/P/track` and `t/<owner>/<room>/P`, open `t/<owner>/~open/<room>/P/track` and `t/<owner>/~open/<room>/P`. The relay SHALL admit those publishes and SHALL refuse `Q` and `Q/track` in the spelling of that transport. A session admitted for one canonical root SHALL be refused when it reads or writes a broadcast under the other canonical root of the same owner and room name, and under a different room name, in every spelling that transport can ask with. Its announcements SHALL list nothing from the other root. The two roots are different identities.
+
+A segment that breaks the rule SHALL be refused with 400 before a signature. The refused segments include 65 characters, `%2F`, `%5C`, `*`, `%0A`, a trailing newline, and `~open` as a room or participant segment. The empty segment, `.`, and `..` (including `%2E` and `%2E%2E`) are 404 `not_found` on the HTTP route, because Cowboy and Plug collapse those segments before the mint. The mint module still returns 400 for them. Literal, `%7Eopen`, and `%257Eopen` spellings are different strings to the classifier. An HTTP stack that decodes before the mint records the decoded segment it actually dispatched. That decoding does not change the signed-root rule.
+
+Rooms are not stored and participant labels are not authenticated identities. The owner may mint a second token for a label already in use, and two live sessions may then publish as that label.
+
+#### Scenario: Own track
+- GIVEN a token minted for label P in protected room R, and one minted for label P in the open room of the same name
+- WHEN a WebTransport client publishes relative `P/track` and `P` on each root, and an Iroh client publishes the full-root absolute forms of those names
+- THEN those publishes are admitted on their own root
+- AND a subscribe of that same root on each transport receives them
+- AND neither root's subscriber receives the other root's frames
+
+#### Scenario: Another participant
+- GIVEN a token minted for label P in either canonical root of room R
+- WHEN a WebTransport client publishes relative `Q/track` and `Q`, and an Iroh client publishes that root's absolute `Q/track` and `Q`
+- THEN those publishes are refused
+
+#### Scenario: Sibling root, same session
+- GIVEN a session admitted for one canonical root of room R, on WebTransport and on Iroh
+- WHEN each asks to read or write a broadcast under the other canonical root, in the spellings that transport can use
+- THEN each request is refused
+- AND neither session's announcements list a broadcast from the sibling root
+
+#### Scenario: Another room, same session
+- GIVEN a session admitted for room R on WebTransport, and one admitted on Iroh
+- WHEN each asks for a broadcast under room S in the spellings that transport can use
+- THEN each request is refused
+- AND neither session's announcements list a broadcast from S
+
+#### Scenario: No token
+- GIVEN a client with no token
+- WHEN it opens a session on a room path on WebTransport, and on Iroh
+- THEN both sessions are refused
+
 ## ADDED Requirements
 
 ### Requirement: A verified root classifies as open, protected, or invalid

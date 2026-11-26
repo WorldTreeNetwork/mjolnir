@@ -1,9 +1,9 @@
 # ADR 0019 — Room kind
 
-**Status:** Draft, revision 3 (path trial). Not accepted. Fresh advise of `openspec/changes/add-open-room-kind/` is still owed. Implementation waits on that accept and on the open product boxes in `tasks.md`.
+**Status:** Draft, revision 3 (path trial), amended after send-back `fea6caf6`. Not accepted. A fresh advise of this amendment is still owed. Implementation waits on that accept and on the open product boxes in `tasks.md`.
 **Change:** [`add-open-room-kind`](../../openspec/changes/add-open-room-kind/proposal.md)
 **Argument:** [`design.md`](../../openspec/changes/add-open-room-kind/design.md). Claim facts, kept as history: [`notes/claim-option.md`](../../openspec/changes/add-open-room-kind/notes/claim-option.md).
-**Reviews:** path contract sent back, [`reviews/2026-11-25-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise.md). Claim contract sent back, [`reviews/2026-11-25-advise-2.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise-2.md).
+**Reviews:** path contract sent back, [`reviews/2026-11-25-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise.md) and [`reviews/2026-11-26-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-26-advise.md) (`fea6caf6`). Claim contract sent back, [`reviews/2026-11-25-advise-2.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise-2.md).
 **Spike:** [`spikes/path/finding.md`](../../openspec/changes/add-open-room-kind/spikes/path/finding.md).
 
 ## History
@@ -28,7 +28,7 @@ Revision 3 does not copy revision 1. It answers that review's path findings: ful
 ## Decision under trial
 
 1. The kind is the signed root. Protected stays `t/<owner>/<room>`. Open is `t/<owner>/~open/<room>`. The marker is the literal segment `~open`, which the mint room alphabet cannot express. No `kind` claim is minted or read. moq-auth is not patched.
-2. A classifier returns `open`, `protected`, or `invalid` from that verified string by literal slash, exact arity, canonical owner, and the room alphabet. It does not decode. The relay's own grammar stays broader, so wide roots still span both rooms. The WebRTC edge rejects every class except `open`, including a wide root on an open URL.
+2. A classifier returns `open`, `protected`, or `invalid` from that verified string by literal slash, exact arity, canonical owner, and the room alphabet. It does not decode. The relay's own grammar stays broader, so wide roots still span both rooms. The WebRTC edge rejects every class except `open`, including a wide root on an open URL. Its admission is the relay's full `assess` on one key-set snapshot (verify, profile/time/TTL/root, path containment, grant validation), before relay I/O or SDP, with teardown at expiry. Joins, replacements, and renewals require the authenticated root to equal the root expected by the invitation, for both kinds.
 3. The mint reads `kind` from the JSON body only, under `relay:join` and the owner in `sub`. The response always returns `kind` and `root`. There is no room-kind directory and no issuance switch. Today's relay is the reader.
 4. The edge (`.13`) is the WebRTC gate, with the leg's own token. The relay admits both kinds. A buggy edge with a protected publish token can still publish plaintext into that protected room. Accepted residual.
 5. Deploy is the controller only, after advise accept. Rollback ships the old mint. Explicit-open clients fail closed when `kind` or the `~open` segment is missing. Already-issued open tokens remain valid until `exp`.
@@ -37,7 +37,7 @@ Revision 3 does not copy revision 1. It answers that review's path findings: ful
 
 Eliminated: custom verifier, moq-auth patch, durable `RoomKinds` state, legacy drain, store-loss recovery, relay restart for the feature.
 
-Remaining: two identities per display name; full root in invite, KDF, roster, metering, and TURN; wide grants; edge enforcement that the relay does not repeat; client fail-closed behavior that does not exist until `.15`.
+Remaining: two identities per display name; full root in invite, KDF, roster, metering, and TURN; wide grants; edge enforcement that the relay does not repeat; client fail-closed behavior that does not exist until `.15`. TURN kind split, if built, is class `c2` in the existing `<unix>:<class>.<owner>[.<room>.<participant>]` grammar, not a `~open` segment. Until that TURN task lands, open rooms get no TURN username. Plaintext open does not wait on encrypted-open KDF work.
 
 ## Consequences
 

@@ -1,0 +1,55 @@
+
+21:41:00.396 [info] Running Spike.Http with Bandit 1.14.1 at 127.0.0.1:5891 (http)
+
+21:41:00.632 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice jti=18Edev6XtsWj7yk5WAB0fg exp=1795675260
+sent=/rooms/standup/participants/alice/token http=200 body={"status":200,"root":"t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup","publish":"alice/**","request_path":"/rooms/standup/participants/alice/token","room_param":"standup","response_kind":null,"response_keys":["expires","publish","relay_host","root","subscribe","token"],"claim_names":["exp","iat","jti","publish","root","subscribe"]}
+
+21:41:00.636 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice jti=-zwNm6SOy2F5WvJT8gTi3Q exp=1795675260
+sent=/rooms/standup/participants/alice/token http=200 body={"status":200,"root":"t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup","publish":"alice/**","request_path":"/rooms/standup/participants/alice/token","room_param":"standup","response_kind":null,"response_keys":["expires","publish","relay_host","root","subscribe","token"],"claim_names":["exp","iat","jti","publish","root","subscribe"]}
+
+21:41:00.637 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice jti=nSKFVClHoLX04Sfzg3V86Q exp=1795675260
+sent=/rooms/standup/participants/alice/token http=200 body={"status":200,"root":"t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup","publish":"alice/**","request_path":"/rooms/standup/participants/alice/token","room_param":"standup","response_kind":null,"response_keys":["expires","publish","relay_host","root","subscribe","token"],"claim_names":["exp","iat","jti","publish","root","subscribe"]}
+sent=/rooms/~open/participants/alice/token http=400 body={"error":"bad_segment","status":400,"request_path":"/rooms/~open/participants/alice/token","room_param":"~open"}
+sent=/rooms/%7Eopen/participants/alice/token http=400 body={"error":"bad_segment","status":400,"request_path":"/rooms/~open/participants/alice/token","room_param":"~open"}
+sent=/rooms/%257Eopen/participants/alice/token http=400 body={"error":"bad_segment","status":400,"request_path":"/rooms/%257Eopen/participants/alice/token","room_param":"%257Eopen"}
+    warning: incompatible types given to Map.get/2:
+
+        Map.get(token, :kind)
+
+    the map:
+
+        dynamic(%{
+          expires: float() or integer(),
+          publish: binary(),
+          relay_host: binary(),
+          root: binary(),
+          subscribe: binary(),
+          token: binary()
+        })
+
+    does not have all required keys:
+
+        :kind
+
+    therefore this function will always return nil
+
+    where "token" was given the type:
+
+        # type: dynamic(%{
+          expires: float() or integer(),
+          publish: binary(),
+          relay_host: binary(),
+          root: binary(),
+          subscribe: binary(),
+          token: binary()
+        })
+        # from: openspec/changes/add-open-room-kind/spikes/path/mint_http.exs
+        {:ok, token}
+
+    type warning found at:
+    │
+ 46 │             response_kind: Map.get(token, :kind),
+    │                                ~
+    │
+    └─ openspec/changes/add-open-room-kind/spikes/path/mint_http.exs:46:32: Spike.Http.call/2
+

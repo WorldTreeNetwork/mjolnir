@@ -30,17 +30,15 @@ A header or query `kind` is not read. Two concurrent mints of the two kinds both
 
 Ordinary room tokens are confined by whole segments. A subscribe `**` is under the signed root, so it does not cross from `t/<owner>/<room>` to `t/<owner>/~open/<room>`. The live spike's native WebTransport sessions showed that: each root received its own marker broadcast, and the other root's session was `unauthorized`. Encoded marker paths, sent without prior decoding, were refused. A tenant-wide token rooted at `t/<owner>` was admitted on both URLs. That last fact is the isolation limit. The edge must refuse any verified root the classifier does not call `open`, including a wide root presented with an open-looking URL.
 
-Iroh uses absolute paths. The saved run published on both absolute roots and read one protected frame. One cross-subscribe returned `unroutable`. Other Iroh reads did not return inside the bound. See `spikes/path/finding.md`. That gap is not a reason to invent a relay change in this trial.
+Iroh uses absolute paths. With the publisher ready first, each own-root read received its marker (`PAIR-OPEN`, `PAIR-PROT`). A cross-root `Node::subscribe` did not resolve inside 6 seconds and did not return `unroutable`. See `spikes/path/finding.md`. That wait is not a reason to invent a relay change in this trial.
 
 ## D4 Edge handoff (not built)
 
-`.13` verifies with the existing relay verifier, classifies the verified root, and only then may open a relay session or answer SDP. Requirements for that node:
+`.13` does not stop at `KeySet::verify`. One decision uses one trust snapshot: the key set copied for that call, the same snapshot `TokenPolicy::decide` passes to `assess` (`native/mjolnir_relay/src/lib.rs`). On that snapshot the admission operation is, in order: token present, `KeySet` verification, `profile` (required `iat` and `exp`, TTL against the ceiling, future-`iat` refusal, root present and shaped), session-path containment when the session path is non-empty, and `grant_from` validation. It returns the original authenticated root and the validated grant. A future-`iat` token that verifies and then fails `profile` is a refusal. The pure classifier runs only on that returned root. It is not a second verifier.
 
-- Verified class is `open`.
-- The URL's room segment equals the root's room segment, literally.
-- The grant covers the operation.
-- A wide root, a protected root, and `invalid` are refused. A protected refusal is distinct from a bad token.
-- The leg uses its own token. The edge has no standing relay credential.
+That whole admission finishes before a relay connection, a relay publish or subscribe, or an SDP answer. At grant expiry the leg tears down before any further relay or SDP side effect. The edge has no standing relay credential. The leg uses the token just admitted.
+
+The expected full root comes from the invitation or join context, not from the token being checked. On initial join, credential replacement, and renewal, both kinds require exact equality with the authenticated root. Any response `root` or `kind` is compared with that same authenticated identity. A route that already carries an owner is compared too. A route that has only a room name derives the owner from the admitted root and carries `t/<owner>/~open/<room>` or `t/<owner>/<room>` from then on. Wrong owner, wrong room, the sibling kind, and a response that disagrees with the token are refused before the credential is stored or media starts. The refusal names the effective kind and which check failed. A protected refusal is distinct from a bad token. A wide root, a protected root on an open join, and `invalid` are refused. Verified class for an open WebRTC join is `open`. The URL room segment equals the root's room segment, literally. The grant covers the operation.
 
 Residual, accepted: the relay cannot tell a WebRTC bridge from any other client. With a valid protected publish token it will accept a publish into that protected room. Host-readable subscribers can see that plaintext. Authenticating readers discard it. Independent relay enforcement would need an authenticated edge identity and a relay policy, which this trial does not add.
 
@@ -48,11 +46,13 @@ Residual, accepted: the relay cannot tell a WebRTC bridge from any other client.
 
 The full root is the room identity.
 
-- **Clients (`.15`).** An explicit open join or renewal fails visibly when the response has no `kind: "open"` or the root is not `t/<owner>/~open/<room>`. It does not reconnect or publish. A protected credential is imported and used only when the join's verified class is `protected`, including renewals. No plaintext fallback under a protected invitation.
-- **`call-e2ee`.** Before any encrypted open room, the KDF and the invite bind the full root, not owner plus display name. A protected credential must not open the sibling. Version the context so old invites do not match.
-- **Roster (`.14`).** Membership and labels are keyed by the full root. A sibling room does not appear.
-- **Metering (`.4`).** Attribute usage to the full root so the two rooms are not one quota.
-- **TURN (`add-turn-service`).** If the username is `expiry/class/owner/room/participant`, put the marker in that identity so the siblings do not share a username at equal expiry. A TURN allocation is not MoQ admission.
+These are preparation and release obligations. Their implementation stays on the owning node. Plaintext open MoQ does not wait on an E2EE migration. Encrypted open does not ship on the current owner/name/label context.
+
+- **Clients (`.15`), before the first open issuance.** An explicit open join, replacement, or renewal fails visibly when the response has no `kind: "open"` or the root is not exactly `t/<owner>/~open/<room>`. It does not reconnect, publish, or import the credential. A protected credential is imported only when the join's verified class is `protected`, including renewals. No plaintext fallback under a protected invitation. The release gate includes that check and the rollback case: the old mint's body `{"kind":"open"}` has no response `kind` and root `t/<owner>/<room>`.
+- **`call-e2ee`, before any encrypted open room.** Protected-only E2EE stays on its current context. Encrypted open requires a versioned KDF and invite that bind the full root, refuse an incompatible version, and fail a same-secret cross-kind vector (protected material does not open the sibling, and the reverse). The current call-e2ee owner/name/label invite is not that binding. This trial does not mark it reconciled.
+- **Roster (`.14`), before an open room appears there.** Membership and labels are keyed by the full root. A sibling does not appear. Until that key exists, the roster path does not list open rooms.
+- **Metering (`.4`), before open usage is accounted.** Attribute usage to the full root. Until that ships, open usage is not folded into the protected room's quota.
+- **TURN (`add-turn-service`), before any open-room TURN credential.** The live grammar is `<unix>:<class>.<owner>[.<room>.<participant>]` (`add-turn-service` design, credential section). Room-mint segments cannot contain `.`, and `~open` is outside the room alphabet, so the marker is not a username segment. Protected room mints stay class `c1`. Open room mints use class `c2`: `<unix>:c2.<owner>.<room>.<participant>`, with `<room>` the display name and no tilde. Equal expiry, owner, room, and participant then still differ by class. The owning TURN task adds `c2`, the equal-expiry sibling inequality test, and the collision test before that path ships. Until `c2` is in that contract, this change does not mint a TURN username for an open room and does not hand a `c1` username to one. A TURN allocation may outlive the username expiry; a TURN credential grants no MoQ admission. This is a deferral of kind-separated accounting, not an approval to deploy TURN.
 
 ## D6 Deploy and rollback
 

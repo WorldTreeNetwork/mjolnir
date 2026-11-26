@@ -9,16 +9,26 @@ publish = false
 # Spikes for add-open-room-kind. Not product code. Pins match native/mjolnir_relay:
 # moq 4a6f52248, iroh-live 747b1bd. Cargo.lock starts as a copy of the relay's.
 # jsonwebtoken and rind-jsonwebtoken are the versions moq-auth already uses (route (b) adds no crate).
+[[bin]]
+name = "open-room-kind-spike"
+path = "src/main.rs"
+
+[[bin]]
+name = "iroh-pair"
+path = "src/pair.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
 bs58 = "0.5"
 hex = "0.4"
 iroh = { version = "1.4.1", default-features = false, features = ["tls-aws-lc-rs"] }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
 jsonwebtoken = "11"
 kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["manual"] }
 mjolnir-relay = { path = "../../../../../native/mjolnir_relay" }
 moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
 moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-transport-iroh = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }

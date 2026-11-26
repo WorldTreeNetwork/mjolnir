@@ -1,0 +1,28 @@
+# chromium moq 2026-11-26T05:43:43Z
+cert_sha256=bb6ac1900babbcd54f985aff5001ab57a4186f933a693105c299e11dcee42557 quic=127.0.0.1:63327
+bundle=pinned @moq/net 4a6f522 via bun, page posts /log
+native_publisher:
+held
+published path=open-marker bytes=1501
+released
+## literal
+document.pathname=/literal
+connect.url.raw=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+connect.url.href=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+document.pathname=/literal
+connect.url.raw=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+connect.url.href=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+moq-connected
+received path=open-marker frames=20 bytes=380 first=mjolnir-relay-frame
+## encoded
+document.pathname=/encoded
+connect.url.raw=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup
+connect.url.href=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup?jwt=REDACTED
+## double
+document.pathname=/double
+connect.url.raw=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup
+connect.url.href=https://127.0.0.1:63327/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup?jwt=REDACTED

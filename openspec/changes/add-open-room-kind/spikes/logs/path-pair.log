@@ -1,0 +1,113 @@
+# path pair evidence
+date=2026-11-26T05:36:06Z
+quic=127.0.0.1:50925 iroh_endpoint=c3ade00d8c48ecf489e6c5df1226f5884f3f55ce47d2aa46ca6f77454ea7520b cert_sha256=8f830156691256334c9b6e947f06cec482887db77e9cc3b69e3b126299933345
+pins moq=4a6f52248 iroh-live=747b1bd
+open_root=t/<owner>/~open/standup protected_root=t/<owner>/standup
+iroh-pair=8f6becae2fa053914c87dd069b8aa3e0d77c783a7eb2f4033200248bd42d141c
+spike=b89220fe5b11c21e67751b03968b7ba2327b2db61936c70b7a8f0b1b9b07fc5a
+wt-session=6700320ab0aafeab105cbc22ee4ec53fba858335083d848fff8af4f3b5f538b5
+
+## Iroh own-root positive, publisher ready before subscribe
+open-publisher-ready=no
+
+### iroh own-read open
+client-endpoint=111ad085c3cd3f04d142b72c5af3908cc6a9385d5b65766706664d2096925e9e
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker elapsed_ms=2
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker frames=16 bytes=144 first=PAIR-OPEN
+exit=0
+prot-publisher-ready=yes
+
+### iroh own-read protected
+client-endpoint=12c977843a9a7f559332d814b28681a03ad687c0d82f199119b2e8b0ecab47d3
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker elapsed_ms=3
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker frames=16 bytes=144 first=PAIR-PROT
+exit=0
+
+## Iroh cross-root reads while both publishers are announcing
+
+### iroh cross-read open token on protected absolute path
+client-endpoint=fa48b78891c320fb8af110d13d57c9d84de1cd8a80bcabf349bbdafbf0a0966b
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker bound_s=6 elapsed_ms=6001
+exit=124
+
+### iroh cross-read protected token on open absolute path
+client-endpoint=821c211bf801ea1adb76c27b5023988f0ce0aaa37818c941954eea8f38bf529a
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker bound_s=6 elapsed_ms=6004
+exit=124
+
+## Iroh announcements
+
+### iroh announce open subscribe token
+client-endpoint=9ad0e80f8af757fcad5b107a2bffc1d3dc35ffe8695e19bc998469fa37437cc9
+connected
+announcements=0
+exit=0
+
+### iroh announce protected subscribe token
+client-endpoint=e9e565057a97f868021fbe0954eb0639f284024e90ae60f84e16b086f0f6cad0
+connected
+announcements=0
+exit=0
+
+## Iroh cross write: open token publishes protected absolute path; protected reader asks for it
+stolen-publisher-ready-file=yes
+
+### iroh protected reader of stolen path
+client-endpoint=d846f2cc30392b78545a0a083e5380b7f78a91839d0aa5f0387f428dc235fc2a
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen bound_s=6 elapsed_ms=6002
+exit=124
+### publisher transcripts (no tokens)
+client-endpoint=17f63397da7ff2bca56005fd2d4124bb53038c8c72f5e42490ba6cfc83f40d6f
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker frames=40 bytes=360 payload-len=9
+client-endpoint=cd185ed970ec2a9a7cde3875ef9f58fc5f4bef48c2ec7a9066df483166648c7f
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker frames=40 bytes=360 payload-len=9
+client-endpoint=b9fbddd31c30e264323a0a40d2853437fac18e3099378e008e6d0df481ad23fd
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen frames=30 bytes=330 payload-len=11
+
+## Native WT in-session operation after admission
+
+### wt own-read open-marker
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("db5b637fb53fc4ed8ec4d6931ecb07f4", "minted")), epoch: 0, hops: Hops([Hop { id: 677710681102553 }, Hop { id: 1223216997990327 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=open-marker frames=15 bytes=285
+exit=0
+
+### wt admitted open session asks for sibling name prot-marker
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("76f0b8ab97fb1dcde7afd6390681f57b", "minted")), epoch: 0, hops: Hops([Hop { id: 677710681102553 }, Hop { id: 1223216997990327 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=prot-marker frames=0 bytes=0 no-announcement
+exit=0
+
+### wt admitted open session asks for relative escape
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("59e9c00ac3ef4b3f749a7106e8565786", "minted")), epoch: 0, hops: Hops([Hop { id: 677710681102553 }, Hop { id: 1223216997990327 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=../standup/prot-marker frames=0 bytes=0 no-announcement
+exit=0
+
+### wt publish label q with grant p/** on open root
+held
+published path=q/track bytes=190
+released
+exit=0
+
+### wt publish own label p/track
+held
+published path=p/track bytes=190
+released
+exit=0
+### wt publisher
+held
+published path=open-marker bytes=570
+released
+browser=skipped

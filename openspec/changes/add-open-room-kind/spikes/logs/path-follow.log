@@ -1,0 +1,47 @@
+# follow-up evidence
+date=2026-11-26T05:39:09Z
+quic=127.0.0.1:49747 iroh=89b746dba467f4f585c48e127e7be1db4c0d809579896cdb5f1ad43c48c37b1a cert_sha256=b2995fbae93888bc5f9974ad74ada190cb19caa40ea4aa852b9f0221a097ced4
+chromium=Google Chrome for Testing 159.0.8154.6 
+
+## Iroh announce while open publisher is live
+
+### listen during publish
+client-endpoint=b743b84adab01a20efc99dd83c59e8983170186edc363d54b685b4cae79118e1
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker")]), route: RouteInfo { instance: Some(Instance("8f95f12a4dca054fa775a0d6e2c7e4de", "minted")), epoch: 0, hops: Hops([Hop { id: 4600233908348479 }, Hop { id: 44269496663220 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(44269496663220), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+exit=0
+
+## WT participant confinement
+
+### read own label p/track
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("b0d0d96395cb69a601f3926fba512108", "minted")), epoch: 0, hops: Hops([Hop { id: 4600233908348479 }, Hop { id: 44269496663220 }]), cost: Cost(11), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("p/track"), captures: Some([Pattern("p/track")]), route: RouteInfo { instance: Some(Instance("a142341bacecaa9b2bea321f46afe07b", "minted")), epoch: 0, hops: Hops([Hop { id: 4992270584049959 }, Hop { id: 44269496663220 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=p/track frames=15 bytes=285
+exit=0
+
+### read other label q/track
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("p/track"), captures: Some([Pattern("p/track")]), route: RouteInfo { instance: Some(Instance("9705b2950a0a411fd9d43af558e88b76", "minted")), epoch: 0, hops: Hops([Hop { id: 4992270584049959 }, Hop { id: 44269496663220 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=q/track frames=0 bytes=0 no-announcement
+exit=0
+### publish transcripts
+held
+published path=p/track bytes=570
+released
+held
+published path=q/track bytes=570
+released
+
+## Chromium MoQ (pinned @moq/net 4a6f522, bundle /tmp/moq-sub.js)
+bundle_bytes= 1366686
+### chromium literal
+moq-error TypeError: Cannot read properties of undefined (reading 'get')
+### chromium encoded
+moq-error TypeError: Cannot read properties of undefined (reading 'get')
+### chromium double
+moq-error TypeError: Cannot read properties of undefined (reading 'get')
+### native publisher during browser
+held
+done
