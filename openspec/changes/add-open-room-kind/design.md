@@ -1,100 +1,106 @@
-# Design: add-open-room-kind
+# Design: add-open-room-kind (revision 2, dedicated claim)
 
-Author: design sub-agent (Opus 5.5), 2026-11-25. Reader next: independent advise (Astra per Duke's 2026-11-25 preference recorded on the bead; the ladder would pick Fable for protocol blast).
+Author: design sub-agent (Opus 5.5), 2026-11-25. Supersedes revision 1 (`1552e85`, kind in the root path), which advise sent back (`reviews/2026-11-25-advise.md`). The owner then chose a dedicated signed claim with a relay-first rollout: one room name is one room with one kind. Facts: [`notes/claim-option.md`](notes/claim-option.md). Spike: [`spikes/claim-route.md`](spikes/claim-route.md). Next reader: the same Astra reviewer.
 
 ## Context
 
-- Room tokens are moq-auth JWTs minted by `Mjolnir.Relay.Mint` with exactly `root`, `publish`, `subscribe`, `iat`, `exp`, `jti`. Root `t/<owner>/<room>`, publish `<participant>/**`, subscribe `**`. Owner is the caller's verified `sub` (living `relay-room-auth`).
-- The relay (`native/mjolnir_relay`) verifies with the pinned moq-auth `KeySet::verify`, then `profile` (expiry, issue time, ttl, `root_allowed`), then scopes every path to the root (`path_in_root`, `ext_grant`).
-- `root_allowed` requires `t`, a canonical owner, and any further segments that are not empty, `.` or `..` (`lib.rs:50`). It does not care how many segments follow the owner.
-- The pinned moq-auth wire `Claims` is `#[serde(default, deny_unknown_fields)]` (`rs/moq-auth/src/wire.rs:21`). The comment at `:47` says why: "Every other claim is refused, since an unknown one may narrow the grant." Only `root`, `put`, `get`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti` are read. `iss` and `sub` are read and dropped. The test `test_claims_refuse_mixed_or_unknown_fields` (`claims.rs:594`) pins this behaviour.
-- The spike edge verifies with `mjolnir_relay::assess(token, "", keys, …)`, checks the URL `<room>` against the last root segment, and opens its relay session with the same token (`finding.md`, "The edge").
-- `call-e2ee`: protected clients hold a credential Mjolnir never sees. Their context is `mjolnir-call/v1/<owner>/<room>/<label>`, and "this capability SHALL NOT require a deployed relay change". The controller cannot observe that a room is protected. It can only record what the owner declared.
-- The add-relay-room-auth lesson: the first contract trusted the caller-supplied `x-owner-id`. Here the kind is an authority input of the same class. It must come from the authenticated owner's request body, never from a header or from a participant.
+- Room tokens are moq-auth JWTs minted by `Mjolnir.Relay.Mint` (Elixir, JOSE): `root` `t/<owner>/<room>`, `publish` `<participant>/**`, `subscribe` `**`, `iat`, `exp`, `jti`. Owner is the verified `sub` (living `relay-room-auth`).
+- The relay verifies with `KeySet::verify` (`lib.rs:233`), then `profile`, path scoping and `grant_from`. WebTransport uses it through `spawn_web_decider`, and Iroh through `TokenPolicy` (`lib.rs:340-375`).
+- The pinned moq-auth refuses any claim outside `root`, `put`, `get`, `publish`, `subscribe`, `exp`, `iat`, `nbf`, `jti`, `iss`, `sub` (`wire.rs:21,47`; test `claims.rs:594`). Today's production relay (`ca61ceb`, the same source as HEAD) refuses every token carrying `kind` (spike C1).
+- The controller cannot observe that a room is protected: protected clients hold a credential Mjolnir never sees (ADR 0017). The kind is the owner's declaration.
 
-## D1. Where the kind lives, and why it is the same for every participant
+## D1. How the relay accepts the claim at the pin: route (b)
 
-**Choice: the kind is part of the room's address, carried in the signed `root` claim.** Protected: `t/<owner>/<room>` (unchanged). Open: `t/<owner>/~open/<room>`. No component stores a room's kind.
+Options in order of preference, from source and spike:
 
-Why `~open`:
-- `~` is outside `\A[A-Za-z0-9_-]{1,64}\z`, so `~open` can never be a protected room's name, and no protected root equals or contains `t/<owner>/~open`. Both the relay (`path_in_root`: equal or `root + "/"` prefix) and moq-auth (`strip_prefix`, segment-aligned) match roots by whole segment. So an open root and a protected root never cover each other. A marker drawn from the room alphabet (`open`, `_open`) would collide with a protected room of that name, whose `**` subscribe would then cover the open room.
-- `~` is unreserved in RFC 3986, so a WebTransport URL path carries it without percent-encoding. moq-pattern treats only `*` as special (`moq-pattern/src/pattern.rs:84`). moq-auth `path::validate` refuses only an over-long root, a bad `\` escape and an empty segment. End-to-end proof is H1.
-- Putting the marker under the owner keeps `root_allowed` true, so the relay needs no change (D2). A different top-level prefix (`o/<owner>/<room>`) would be refused by every deployed relay (`parts[0] != "t"`).
-- Protected keeps today's spelling, so the default costs nothing: every live token, every shipped client and the `call-e2ee` context and paths are untouched. Absence of the marker means protected, and this fails closed: a parser that does not recognise the root admits no WebRTC (D3).
+- **(a) Something the pinned decoder already tolerates.** Proven to exist (spike C7): today's verifier admits, and drops, a `sub` or `iss` string and a custom protected-header parameter. **Not chosen.** None is a dedicated claim, which is what the owner chose. `sub` and `iss` are registered claims with other meanings. A header parameter sits outside the claim set every moq verifier models. And an old reader admits such a token while silently ignoring the kind, so nothing forces the readers to be upgraded first.
+- **(b) The relay verifies the JWT itself and hands moq-auth the rest. Chosen.** moq-auth signs and verifies over the exact token bytes, so it cannot be handed a stripped token. It can be handed a stripped payload, because the strict decoder is public: `moq_auth::Claims: Deserialize` goes through the same `deny_unknown_fields` wire struct. The relay's `room_token::verify`:
+  1. decodes the header; requires `kid`; finds the key with `KeySet::find`; requires the header `alg` to equal the key's algorithm (EdDSA or ES256 only, as the loader already enforces); requires the key to permit Verify; refuses a key with a scope (mint keys have none, and refusing is stricter than re-implementing scope);
+  2. verifies the signature with `jsonwebtoken::decode` and the `Validation` moq-auth builds (`key.rs:623-633`: no required spec claims, jsonwebtoken checks no `exp`/`nbf`/`aud`), with the rind provider moq-auth installs (`crypto.rs:5-11`);
+  3. reads the payload as a JSON object, refusing a repeated member (as serde's derive does inside moq-auth) and an array;
+  4. removes `kind` and accepts absent (protected), exactly `"open"`, or exactly `"protected"`, refusing anything else;
+  5. decodes the rest with `moq_auth::Claims`, so any other unknown claim is still refused, then calls `Claims::validate`;
+  6. refuses `exp <= now` and `nbf > now` on `kio::clock::wall()` (moq-auth `validate_times`), then runs the relay's existing `profile`, path check and `grant_from` unchanged.
 
-How the kind stays the same for every participant: there is no per-room record to diverge. "Room `standup`, open" and "room `standup`, protected" are two rooms. The owner mints each token, and each token names exactly one of them.
+  `assess` returns the kind with the grant. `web_grant` and `TokenPolicy` call `assess`, so both transports change at one call site. The edge (`.13`) calls the same function. It lives in `native/mjolnir_relay/src/room_token.rs` and is public; `.13` decides whether to split it into a small crate (the spike finding recommends one).
+  Cost: Mjolnir, not moq-auth, owns signature verification for room tokens. Parity is kept by a differential test. For every token case in moq-auth's shared corpus (`rs/moq-auth/tests/corpus.json`, also replayed by the JS parser) with no `kind`, route (b) and `KeySet::verify` must agree. The one documented exception is that route (b) refuses a token with no `kid` (moq-auth admits one against a single kid-less key, and the relay's key loader already refuses kid-less keys). No crate is added: jsonwebtoken 11.1.0 and rind-jsonwebtoken are already in the relay lockfile through moq-auth (spike C8). The moq pin and moq-auth are untouched, so nothing changes for the E2EE work or the edge's vendored `moq-webrtc`.
+- **(c) A carried moq-auth patch.** It works and is not chosen, because (b) needs no carried code. How it would be carried, and its upstream story: `notes/claim-option.md` (a). In short, `native/vendor/moq-auth` from `4a6f522` with an optional field, its manifest rewritten off `workspace = true`, and `[patch."https://github.com/moq-dev/moq"]` in every graph (relay, edge, any agreeing spike), so that each resolves one moq-auth, moq-relay's own dependency included. It must be carried on every pin move, and the field is too Mjolnir-specific to go upstream.
 
-What an attacker or a confused client can do under this choice:
+If advise finds (b)'s owned verifier riskier than a carried patch, (c) is the fallback. The spike harness already has both decoders' behaviour on record.
 
-| Who | Tries | Result |
-|---|---|---|
-| The owner, or the owner's app by mistake | Mints `open` for alice and `protected` for bob, both in `standup` | Two rooms. Alice cannot read or publish into bob's room, and the reverse. The call is split, visibly (`kind` and `root` in each response). Protected media is not exposed and the protected room takes no plaintext from alice. |
-| A participant who controls the owner's app input (if the app passes `kind` through) | Asks for an open token to inject plaintext or play over WebRTC | Gets a token for the open room only. The protected room is unreachable with it. The same participant could already be denied or admitted by that app. Choosing the kind is the owner app's authority, as choosing the label already is. |
-| Another tenant | Mints an open room under someone else's owner | Impossible as before: the root owner is the caller's verified `sub`. `kind` cannot change the owner. |
-| Anyone | Sends `x-room-kind: open`, `?kind=open`, or a room segment `~open` | Header and query are ignored. The room segment fails the segment rule (400). |
-| A holder of the mint key | Signs any root | Already a living limit (host-wide key). Not widened. |
-| A buggy edge | Parses the root loosely | `room_kind` is strict and returns open only for exactly `t/<canonical owner>/~open/<valid room>`. The edge also presents the leg's own token to the relay, so even a wrong admission cannot publish or read outside that token's root (D3). |
+## D2. The claim
 
-Rejected alternatives:
+- Name `kind`, a top-level JWT claim. Values `"open"` and `"protected"`. Absent means protected.
+- The mint writes `"kind": "open"` in open tokens and **writes no `kind` in protected tokens**. So a protected token is byte-shaped as today's: it verifies on an old relay, it survives a relay rollback, and every token minted before this change already means protected. The verifier accepts an explicit `"protected"` for forward compatibility; the mint never emits it.
+- Authority: the verified owner at mint, from the JSON body field `kind`. A header (including `x-room-kind`), the query string and the path never set it. The router passes `conn.body_params` only (`router.ex:249-253`); Plug keeps query parameters out of `body_params`, and a test owes that observation. A participant never sets the kind. Only the owner's mint authority does, and an owner app that forwards participant input is exercising that authority.
 
-- **The controller remembers each room's kind on first mint** (ETS or Postgres keyed by owner and room, first writer wins). It needs a lifetime (rooms are not stored today, and "room ended" is not observable), it needs restart persistence (`:pg_enabled` is false in tests and best-effort by design contract), and a second controller host needs a shared store. First-mint-wins lets a stale or buggy app mint lock a room to the wrong kind until an unspecified expiry, with no operator surface to clear it. All of that buys protection against the owner contradicting themself, which the address scheme already makes harmless.
-- **A new `kind` claim.** Refused by every deployed relay (D2), needs a moq-auth patch, and still needs the store above.
-- **Overloading `sub` or `iss`** (read and dropped by moq-auth, so accepted today). It is invisible to the relay, so it gives no namespace separation, and it misuses registered claims. It would still need the store.
-- **Inconsistency allowed and made harmless by the edge alone.** If the kind were in a side claim with no namespace split, an open-token holder's plaintext WHIP would land in the same broadcast namespace as protected readers. That is exactly the S7 gap.
+## D3. The durable room-kind record
 
-The owner's decision says "a signed claim in the room token, set by the owner at mint". This design reads `root` as that claim. The bead's assumptions name "a signed token claim or a root segment minted by the controller". Confirming this reading is an ASK.
+- **Where:** `/var/lib/mjolnir/relay-rooms/`, a new directory, root-owned, mode `0700`; files `0600`. The controller (Elixir) runs as root, and the gateway user cannot read it. Not `/var/lib/mjolnir/relay-mint`: that directory is the signing key's alone, under `relay-mint-key.sh` and its flock, and its contract is about key material. Not `/etc/mjolnir-relay`: that is the relay's root-owned configuration, not controller state. Not Postgres: `:pg_enabled` is optional, and by contract Postgres holds only rebuildable indexes, while this record is primary state.
+- **Key and file:** `(owner, room)` → `<dir>/<owner>/<lowercase hex of the room name>.json`. Hex keeps case-distinct room names distinct on a case-insensitive test filesystem. Content: `{"v":1,"owner":…,"room":…,"kind":…,"created":<unix>,"last_exp":<unix>}`.
+- **Process:** `Mjolnir.Relay.RoomKinds`, a GenServer under `Mjolnir.Supervisor`, serialises every decision. Disk is the truth; any in-memory state is a cache. A decision is `claim(owner, room, kind, exp)`:
+  - no record, or (if reuse is allowed, ASK) a record with `last_exp <= now` → write a new record with this kind and `last_exp = exp`;
+  - a live record (`last_exp > now`) of the same kind → write it with `last_exp = max(last_exp, exp)`;
+  - a live record of the other kind → **409 `room_kind_conflict`**, nothing written, no token signed;
+  - a record that cannot be read or parsed, or a write that fails (a full disk, for example) → 503 `relay_unavailable`, no token signed. It fails closed and logs the path, never the token.
+  The write is tmp, fsync, rename, then fsync the directory, as `Mjolnir.StateStore` writes. The decision runs after every other check and **before** signing. A crash after the write and before the signature leaves a record whose life covers a token that was never issued, which is harmless. A crash cannot leave an issued token unrecorded.
+- **Atomicity:** one process per BEAM node serialises concurrent first mints. Exactly one wins, and the other gets 409 if it asked for the other kind or the same record if it asked for the same kind. A hot cutover loads new beams into the same node and never runs two controllers on one host. A restart re-reads disk.
+- **Lifetime and reuse:** a room is live while any token minted for it can still be presented, that is, until its latest `exp` (at most the ceiling after the last mint). After that, no token of the old kind can be presented, so "one name, one kind" holds at every instant even if the name takes the other kind. Reuse is the owner's ASK. Recommended: allow it after `last_exp`. Alternatives: never, or an explicit owner release endpoint. Records past `last_exp` are pruned after a day, or kept forever if reuse is refused.
+- **Second host:** a room is effectively `(relay host, owner, name)`. Each relay host has its own controller and mint key today. A second controller minting for one relay would need a shared store, such as Postgres with a unique key on `(owner, room)` or a lease. That is out of scope and a handoff.
+- **Backup:** the directory joins the existing B2 timer's sources (task). If the store is lost, the exposure lasts at most the ceiling: a name could take the other kind while tokens of the first are live. That is recorded as a limit.
 
-## D2. Claim shape and how each verifier treats it
+## D4. Enforcement
 
-- No new claim. The mint SHALL still set no claim outside the moq-auth set (living text unchanged). The only difference in an open token is the `root` string.
-- **Production relay today:** `KeySet::verify` deserialises the same claim names, so nothing unknown is present. `profile` passes: `t`, a canonical owner, and the segments `~open` and `<room>` are neither empty nor `.`/`..`. `assess` with a request path inside the root passes `path_in_root`. `ext_grant` prefixes the root to `<participant>/**` and `**`. Those parse because only `*` is special. **So the deployed relay accepts open tokens with no deploy.** Evidence owed: H2 (a test against the deployed relay commit's verifier). The relay source under `native/mjolnir_relay/src` has no commit after `4d2e599` (the controller release live on 2026-11-23). The last change to `lib.rs` is `c3d27ae`, 2026-11-22. The deployed binary's commit is still to be confirmed by the orchestrator, who has production access.
-- **A token without the marker** (every token minted before this change, and every new token with `kind` omitted) is protected. Its bytes are shaped exactly as today: same claim names, same root.
-- **Deploy order:** the relay needs nothing, so the only production step is the controller (`deploy.sh --app-only`, hot cutover). Before the controller deploy, an old controller mints only protected tokens, which is correct. After it, a request with no `kind` gets the same token as before, so existing callers and clients see no difference. A new client that asks for `open` gets a root that the live relay already admits. The edge (`.13`) deploys later. Until it does, an open room is just a MoQ room with a different root. Rollback is the controller alone: open tokens already issued stay valid until `exp` (at most the ceiling, 3600 s) and remain harmless, because they name rooms no protected client is in.
-- **Old clients:** a client that builds its connect path from the response `root` works for both kinds. A client that hard-codes `t/<owner>/<room>` (the Iroh examples take the path as an argument) works for protected rooms and is simply never handed an open token unless its operator asks for one.
+- **Relay:** it reads the claim (D1) and refuses what it can tell from the token alone: a malformed `kind`, a repeated member, any other unknown claim, as today. It admits both kinds under the same rules. Nothing in a token or a session tells it whether a publish originates from WebRTC (the edge is an ordinary MoQ client), so it cannot refuse a WebRTC publish into a protected room. It also cannot consult the room record: it holds no controller state and should not.
+- **Edge (owed by `.13`):** before opening any relay session or answering SDP, it verifies the token with `room_token::verify`, requires the verified kind to be open, checks the URL room against the verified root's room segment, and checks the operation against the grant. It reaches the relay only with that leg's own token (the `.13` steer: "the edge holds no authority of its own"). Otherwise it answers 403 `room_not_open`. It refuses a tenant-wide root (`t/<owner>`) even when the kind is open.
+- **Residual exposure with a buggy edge:** a bug that admitted a WHIP with a protected participant's valid token would publish plaintext, within that token's grant, into the protected room. The relay admits it, because the token permits that publish. Authenticating protected readers discard it (ADR 0017 item 2); the host or a plain subscriber can read it (S7 observed both). A WHEP of a protected broadcast fails structurally (no readable catalog). Closing this residual needs an authenticated edge identity and a relay policy ("sessions from the edge must carry `kind: open`"). That is recorded, not built (ASK 6).
 
-## D3. Who enforces what
+## D5. Rollout and rollback
 
-- **The edge** (node `.13`) SHALL admit WHIP and WHEP only when `room_kind(root)` is open, and SHALL answer 403 `room_not_open` before any SDP answer otherwise. That covers protected roots and roots that are not room roots, such as an owner-wide `t/<owner>`, which the relay would accept if a key ever signed one. It SHALL open its relay session for that leg with that leg's own room token (the spike already does this), and SHALL hold no relay credential whose root reaches a protected room. Then the relay's root scoping is a second wall: an edge that admitted wrongly still cannot publish or play outside the open root the token names. The edge also checks the URL `<room>` against the root's room segment, as the spike does.
-- **The relay** enforces nothing new and reads no kind. It cannot tell a WebRTC-origin publish (the edge is a MoQ client) from a native one, and it has no reason to refuse either kind on MoQ. What keeps the kinds apart is its existing root scoping, which this change relies on and tests with an `~open` root. Is anything lost because the relay does not check the kind? Only if some other bridge holds a wide relay credential. The edge rule above forbids that. A future bridge (recording, HLS) must follow the same rule. That is recorded as a requirement, not left to each node.
-- **The mint** enforces only who may choose: the owner, through the body, under `relay:join`.
-- **Clients:** protected readers render only authenticated instances (ADR 0017 item 2). That stays the in-room defence against plaintext over MoQ in a protected room, which no server component can detect.
+Order, each step an owner gate where it touches production:
+1. **Relay**, `deploy.sh --relay` with the route (b) verifier. This restarts `mjolnir-relay` and drains live sessions for `MJOLNIR_RELAY_DRAIN_SECONDS` (default 30). Owner gate. Clients reconnect with today's tokens, which carry no `kind` and verify unchanged.
+2. **Edge** (`.13`) ships with the same verifier from its first release.
+3. **Controller**, `deploy.sh --app-only` (hot cutover): body `kind`, the record store, `kind` in the response. Open issuance stays off.
+4. **Switch:** `MJOLNIR_RELAY_OPEN_ROOMS=true` in `/etc/mjolnir-relay/relay.env` (root-owned, read by the mint on every call, beside `MJOLNIR_RELAY_ENABLED`). It is set only after step 1 is confirmed on that host (the live relay admits an open token). It is absent or anything but `true`: `kind: "open"` → 503 `open_rooms_unavailable`. Protected mints, including explicit `"protected"`, are unaffected and still recorded.
 
-## D4. Can a room change kind?
+What each old reader or writer does:
+- **An old relay given an open token** refuses it (`refused: unauthorized`, spike C1). The switch makes that impossible in normal operation; if it happens, open rooms fail closed and protected rooms are untouched.
+- **Relay rollback with open tokens live:** turn the switch off, wait out the ceiling, then roll back. Otherwise those sessions fail on reconnect.
+- **Controller rollback:** the old mint ignores `kind` and the store. A renewal that asks for open gets a protected, claim-free token for a room recorded open, which breaks "one name, one kind" for the rollback window. Fence: turn the switch off and wait out the ceiling before rolling back. Client rule (D7): a response without `kind`, or with a kind other than the one asked for, fails visibly. The store survives untouched, and its records are valid on roll-forward.
 
-No. The kind is part of the address. To "switch" a room, the owner mints tokens of the other kind, which name another room, and moves participants there (the page re-joins). Tokens for the old room keep working until their `exp`. There is no revocation, as already listed in the living limits. An owner who opened a room by mistake cannot close it early. They can stop minting for it and wait out at most the token life. Protected to open is a deliberate act with a visible new `kind`. Open to protected cannot leak protected media into the old open room, because protected clients never join it.
+## D6. Mint API
 
-## D5. Mint API
+- Request: optional body `kind`, exactly `"open"` or `"protected"`. Omitted means protected. `null`, other strings (compared exactly), numbers, booleans, lists and objects → 400 `bad_kind`.
+- Check order, first failure answers: scope `relay:join` (403 `insufficient_scope`), user principal (403 `forbidden`), segments (400 `bad_segment`), `ttl` type (400 `bad_ttl`), `kind` (400 `bad_kind`), env file, ceiling, enabled and host (503 `relay_unavailable`), open switch when `kind` is open (503 `open_rooms_unavailable`), `ttl` range (400 `bad_ttl`), owner (403 `forbidden`), key mode and key (503 `relay_unavailable`), room record (409 `room_kind_conflict`, or 503 `relay_unavailable` if the store fails), then sign.
+- Response: the existing keys plus `kind`, always present (`"open"` or `"protected"`). `Cache-Control: no-store`. `add-turn-service` adds `ice_servers` separately.
+- Log: the existing line plus `kind=<open|protected>`, the validated value only. Never the raw request value, never the token. A conflict is logged with owner, room, the requested and recorded kinds, and no `jti` (nothing was signed).
+- Scope and principal unchanged. A distinct scope for open rooms is ASK 4.
 
-- Request: optional JSON body field `kind`, a string, exactly `"open"` or `"protected"`. Omitted means `"protected"`. `null`, any other string (case-sensitive, no trimming), a number, a boolean, a list or an object is 400 `bad_kind` before a signature.
-- Refusal order: `kind` is checked right after the `ttl` type, so a malformed body is 400 whether or not the relay is configured, as `ttl` already is: scope, user principal, segments, `ttl` type, **`kind`**, env/ceiling/enabled/host, `ttl` range, owner, key mode and key.
-- Source: the request body only. A header (`x-room-kind` or any other), the query string and the path SHALL NOT set or influence it. The route already builds the body from `conn.body_params`. Plug merges query params into `params`, not `body_params`, and the test owes that observation.
-- Root: `t/<owner>/<room>` for protected, `t/<owner>/~open/<room>` for open. Publish and subscribe patterns are unchanged and relative to the root.
-- Response: the existing keys plus `kind` (`"open"` or `"protected"`, always present). `add-turn-service` separately adds `ice_servers`. The two do not conflict.
-- Log: the existing mint line gains `kind=<kind>` (still no token).
-- Scope and principal: unchanged, `relay:join` and a user principal. Whether opening a room deserves its own scope is an ASK (recommendation: no; it is the owner's own room, and per-kind cost belongs to metering, `.4`).
+## D7. Clients and E2EE (handoffs to `.15`, `.5` and `add-call-e2ee`)
 
-## D6. Honest limits
+- A client that asked for a kind proceeds only if the response's `kind` equals it. A missing `kind` (an old controller) or a different kind is a visible join error, before it connects, publishes, or imports or uses a credential. Renewals check it again on every response.
+- A protected content credential is accepted and used only on a protected join (response `kind: "protected"`). On an open join the client refuses to import or use a protected credential and never falls back to sending plaintext under a protected invitation. That holds for every supported client, including renewals.
+- With one name one kind, two simultaneous rooms can no longer share a credential context. Across time, reuse after expiry (ASK 2) could put an open room where a protected one was. The client rule above prevents a protected credential from being used there. Binding the kind into the `call-e2ee` context (`mjolnir-call/v1/<owner>/<room>/<label>`), with a version bump and cross-kind vectors, is a handoff to `add-call-e2ee` and is not built here.
 
-- `protected` in a token is a declaration of what the owner intends, not proof that clients encrypt. A protected room's MoQ client can still publish plaintext. Protected readers ignore it (ADR 0017 item 2), plain MoQ readers can render it, and the relay cannot tell.
-- `open` is a declaration too. A client in an open room may encrypt, and its media is then unplayable over WHEP (S7 claim 6 behaviour) and still invisible to the host.
-- The `call-e2ee` credential context `mjolnir-call/v1/<owner>/<room>/<label>` does not include the kind. If an owner reuses one credential for "open `standup`" and "protected `standup`", the two rooms derive the same keys and opaque paths. A relay could then move a credential holder's ciphertext between them. That is the same holder's media under the same label, but it is cross-room replay that the context otherwise prevents between distinct room names. Handoff: the browser client should not offer encryption in an open room (ASK), or `call-e2ee` should fold the kind into the context. That is not changed here, because that spec is in flight under its own change.
-- Room names are no longer unique per owner across kinds. Metering, roster and TURN usernames that key on `<room>` alone would merge two rooms. See the handoffs.
-- No revocation, no kick, host-wide mint key: unchanged living limits.
+## D8. Honest limits
 
-## Limits to add to the living spec at fold
-
-- "A room's kind is the owner's declaration. Protected does not prove that clients encrypt, and open does not prevent it."
-- "An open and a protected room of the same name are two rooms. The `call-e2ee` context does not separate them."
+- The kind is the owner's declaration. Protected does not prove that clients encrypt, and open does not stop a client from encrypting (its media is then unplayable over WHEP).
+- A tenant-wide token, rooted at `t/<owner>`, reaches every room of that owner whatever its kind. The mint never issues one; a holder of the mint key can. Isolation by kind is a property of room-mint tokens only.
+- The relay cannot tell WebRTC-origin media, and the edge is the only enforcement point for "no WebRTC in a protected room" (D4 residual).
+- A lost room store exposes at most one token ceiling. A second controller per relay is unsupported.
+- No revocation and no kick, as today.
 
 ## Handoffs (bullets, not owed here)
 
-- `mjolnir-rurh.13` webrtc-edge: use `room_kind`, answer 403 `room_not_open` for WHIP, WHEP and roster on non-open roots, present the leg's own token to the relay, and own the product test of the refusal.
-- `mjolnir-rurh.14` edge-roster: a room is `(owner, kind, room)`, and the room is the last root segment for both kinds.
-- `mjolnir-rurh.4` metering: key rooms by root, not by `<room>` alone.
-- `add-turn-service`: the call credential username `<expiry>:<class>.<owner>.<room>.<participant>` should distinguish an open room from a protected one of the same name (key by root, or add a kind segment; check that `~` is acceptable in a TURN username).
-- `mjolnir-rurh.15` webrtc-room-client and `.5` browser-call-client: build the connect path from the response `root`, show `kind`, and (per ASK) offer no encryption in open rooms.
+- `mjolnir-rurh.13` webrtc-edge: D4 edge rules, the use of `room_token::verify`, 403 `room_not_open` before SDP or a relay session, and the product scenarios "WebRTC into a protected room" and "WebRTC into an open room" (moved out of this delta).
+- `mjolnir-rurh.15` webrtc-room-client and `.5` browser-call-client: the D7 client rules, showing the kind, a specific join error on a kind mismatch or conflict, and the old-controller fixture from tasks.
+- `add-call-e2ee`: a versioned room identity including the kind in the credential context, with refusal of incompatible versions and cross-kind vectors, before any encrypted open-room path is enabled.
+- `mjolnir-rurh.14` roster: membership and visibility keyed by `(relay host, owner, room)` with the kind shown; a roster is never served across kinds.
+- `mjolnir-rurh.4` metering: record the verified kind with each session; quotas and charges keyed by room identity plus kind across reuse.
+- `add-turn-service`: the call credential username needs no kind while one name has one live kind. If reuse is allowed, attribution across reuse should key on the room record's `created` as well as the name, or accept aggregate accounting explicitly.
 
 ## Unverified hypotheses
 
-- **H1** (`tilde-root-transports`): a root `t/<owner>/~open/<room>` works end to end. A native WebTransport client and a Chromium WebTransport page connect at that URL path with `?jwt=`. An Iroh client publishes and subscribes at the absolute path `t/<owner>/~open/<room>/<label>`. `ext_grant` yields non-empty publish and subscribe sets (it silently drops a pattern that fails to parse, which would fail closed, not open). Confidence: high (source reading: only `*` is special, and `~` is URL-unreserved). Verification: the relay unit test in tasks plus a laptop run with `wt-session`, `iroh-publish`/`iroh-subscribe` and the spike's Chromium page, with logs saved under `evidence/`. Synthesis path: if `~` fails anywhere, choose another non-alphabet marker that passes all three (candidates `@open`, `+open`), amend D1 and the deltas, and take fresh advise.
-- **H2** (`deployed-relay-accepts-open-root`): the relay binary running on production admits an open-room token unchanged. Confidence: high (`root_allowed` source; no relay source commit after `4d2e599`). Verification: the orchestrator records the deployed relay's commit, and a test built from `native/mjolnir_relay` at that commit admits an `~open` fixture token on `assess` and `web_grant` and produces a non-empty `ext_grant`. Synthesis path: if it refuses, the deploy order becomes relay first (`deploy.sh --relay`, with drain) and then the controller, recorded in the deploy ASK.
+- **H-parity** (`route-b-corpus-parity`): for every case in moq-auth's `tests/corpus.json` with no `kind`, route (b) and `KeySet::verify` agree, except kid-less tokens. Confidence: medium-high (the spike covered 19 cases, not the corpus). Verification: the differential test in tasks. Synthesis path: each disagreement is fixed in route (b) or listed as an intentional stricter refusal; any looser acceptance blocks act and reopens (c).
+- **H-iroh** (`claim-on-iroh`): an Iroh client admitted with an open token publishes and subscribes, and a production `TokenPolicy` refuses the same token. Confidence: high (same `assess` call site). Verification: a live harness run, with `iroh-publish`/`iroh-subscribe` rebuilt.
+- **H-chromium** (`claim-on-chromium-wt`): a Chromium WebTransport session (`@moq/net` from the pinned JS tree, `serverCertificateHashes`) with an open token transfers data through the route (b) relay, and is refused by the production decider. Confidence: high. Verification: a harness page plus a Playwright driver, with logs under `spikes/`.
