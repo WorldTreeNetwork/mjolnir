@@ -1,0 +1,7 @@
+# red: rows found by the randomized test, before each fix
+$ node --test --test-name-pattern=E01 clients/call-crypto/reader-policy.test.ts
+not ok 1 - E01 (randomized seed 1 step 285) tick is idempotent: an expiring withdrawn probe is purged in that tick
+  expected: '{"now":100000,"incomplete":false,"candidates":[{"epoch":"00000001-0000-7000-8000-000000000000","available":false,"retryAt":4500}],"bars":[],"paceRetryAt":0,"tracks":[]}'
+  actual: '{"now":100000,"incomplete":false,"candidates":[],"bars":[],"paceRetryAt":0,"tracks":[]}'
+# pass 0
+# fail 1

@@ -1,0 +1,29 @@
+# red: diff-check-2 A2–A10 against 3cbd279 (HEAD deb66ba); round3-red.test.ts not kept
+$ node --test --test-reporter=tap clients/call-crypto/round3-red.test.ts
+not ok 1 - A2 a track handle retires on its terminal failure
+  expected: false
+  actual: true
+not ok 2 - A3 a probe's rejection is one-shot and does not extend its bar
+  expected: false
+  actual: true
+not ok 3 - A4 a newer same-epoch acceptance clears and fences an earlier attempt's report (report-then-accept)
+  expected: '00000001-0000-7000-8000-000000000000'
+not ok 4 - A4 a newer same-epoch acceptance clears and fences an earlier attempt's report (accept-then-report)
+  expected: false
+  actual: true
+not ok 5 - A5 overflow keeps the view incomplete after an unrelated admission
+  expected: true
+  actual: false
+not ok 6 - A9 evicting an active record makes the view incomplete
+  expected: true
+  actual: false
+not ok 7 - A10 subscribe(undefined) issues nothing and cannot displace a live probe
+  expected: false
+  actual:
+not ok 8 - A6 a session of exactly 10 s resets the rapid-close streak to zero
+  expected: '00000001-0000-7000-8000-000000000000'
+# pass 0
+# fail 8
+
+$ tsc --strict over module + tests (nodenext, node types)
+errors: 15

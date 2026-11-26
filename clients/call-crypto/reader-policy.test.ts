@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { InstancePolicy, GroupTracker, TrackHandle } from "./reader-policy.ts";
+import type { Subscription } from "./reader-policy.ts";
 const epoch = (n: number) => `${n.toString(16).padStart(8, "0")}-0000-7000-8000-000000000000`;
 const E1 = epoch(1),
   E2 = epoch(2),
@@ -13,7 +14,7 @@ const make = (own?: string) => new InstancePolicy(scope, own);
 function start(p: any, e: string, now = 0): any {
   p.announce(path(e));
   assert.equal(p.nextCandidate(now), e);
-  const s = p.subscribe(e, now);
+  const s = must(p.subscribe(e, now));
   assert(s);
   return s;
 }
@@ -22,6 +23,18 @@ function accept(p: any, e = E1, now = 0): any {
   const s = start(p, e, now);
   assert.equal(p.authenticated(s, "bridge.tracks", now + 1), "accepted");
   return s;
+}
+// A subscribe() result that must have started (narrows `Subscription | false`).
+function must(s: Subscription | false): Subscription {
+  assert(s, "probe did not start");
+  return s;
+}
+// Report `n` terminal failures of `name`, each on its own (replacement) track subscription.
+function failN(p: any, s: any, name: string, n: number, now: number, window = 120n) {
+  for (let i = 0; i < n; i++) {
+    const h = tracker(p, s, name, window);
+    assert.equal(p.trackFailure(h, now).kind, "resubscribe");
+  }
 }
 // A handle-shaped object this policy never issued.
 const forged = (e: string): any => Object.freeze({ epoch: e });
@@ -39,7 +52,7 @@ function bounce(p: any, s: any, e: string, now: number): any {
   assert(p.endInstance(s, now));
   p.announce(path(e));
   assert.equal(p.nextCandidate(now), e);
-  const again = p.subscribe(e, now);
+  const again = must(p.subscribe(e, now));
   assert(again);
   assert.equal(p.authenticated(again, "bridge.tracks", now + 1), "accepted");
   return again;
@@ -73,7 +86,7 @@ const rows: [string, () => void][] = [
       assert(p.rejectCandidate(s2, 1));
       assert.equal(p.mark, undefined);
       assert.equal(p.nextCandidate(2), E1);
-      const s1 = p.subscribe(E1, 2);
+      const s1 = must(p.subscribe(E1, 2));
       assert(s1);
       assert(p.authenticated(s1, "bridge.tracks", 3));
       assert.equal(p.mark, E1);
@@ -140,7 +153,7 @@ const rows: [string, () => void][] = [
       assert.equal(p.acceptedEpoch, E1);
       assert.equal(p.mark, E1);
       p.announce(path(E3));
-      const s3 = p.subscribe(E3, 1520);
+      const s3 = must(p.subscribe(E3, 1520));
       assert(s3);
       assert(p.rejectCandidate(s3, 1521));
       assert.equal(p.acceptedEpoch, E1);
@@ -301,9 +314,11 @@ const rows: [string, () => void][] = [
     () => {
       const p = make();
       const s = accept(p);
-      const h = tracker(p, s, "audio");
-      for (let i = 0; i < 6; i++) p.trackFailure(h, 2);
-      assert.equal(p.trackFailure(h, 3).kind, "unavailable_retryable");
+      failN(p, s, "audio", 6, 2);
+      assert.equal(p.trackFailure(tracker(p, s, "audio"), 3).kind, "unavailable_retryable");
+      assert.equal((p.retryTrack(s, "audio", 60001) as any).reason, "retry_wait");
+      const h = p.retryTrack(s, "audio", 60002);
+      assert(h instanceof TrackHandle);
       assert.equal(p.trackFailure(h, 60002).kind, "resubscribe");
     },
   ],
@@ -343,7 +358,7 @@ const rows: [string, () => void][] = [
       const p = make();
       p.announce(path(E1));
       assert.equal(p.nextCandidate(0), E1);
-      const s = p.subscribe(E1, 10000);
+      const s = must(p.subscribe(E1, 10000));
       assert(s);
       assert(p.authenticated(s, "bridge.tracks", 11499));
     },
@@ -424,9 +439,8 @@ const rows: [string, () => void][] = [
       const old = tracker(p, s1, "audio");
       const s2 = start(p, E2, 5);
       p.authenticated(s2, "bridge.tracks", 6);
-      const h = tracker(p, s2, "audio");
       assert.deepEqual(p.trackFailure(old, 7), { kind: "ignored" });
-      for (let i = 0; i < 6; i++) assert.equal(p.trackFailure(h, 8).kind, "resubscribe");
+      failN(p, s2, "audio", 6, 8);
     },
   ],
   [
@@ -618,12 +632,17 @@ const rows: [string, () => void][] = [
     () => {
       const p = make();
       const s = accept(p, E1);
-      const h = tracker(p, s, "audio");
-      for (let i = 0; i < 6; i++) assert.equal(p.trackFailure(h, 2).kind, "resubscribe");
-      assert.equal(p.trackFailure(h, 3).kind, "unavailable_retryable");
+      failN(p, s, "audio", 6, 2);
+      assert.equal(p.trackFailure(tracker(p, s, "audio"), 3).kind, "unavailable_retryable");
       p.tick(4);
       const s2 = bounce(p, s, E1, 5);
-      assert.equal(p.trackFailure(tracker(p, s2, "audio"), 7).kind, "unavailable_retryable");
+      // The exhausted budget and its retry time survive the bounce.
+      assert.deepEqual(p.track(s2, "audio", 120n), {
+        kind: "unavailable_retryable",
+        track: "audio",
+        reason: "retry_wait",
+        retryAt: 60002,
+      });
     },
   ],
   [
@@ -634,14 +653,14 @@ const rows: [string, () => void][] = [
       const a = tracker(p, s1, "audio");
       tracker(p, s1, "video", 0n);
       frame(a, 20n);
-      for (let i = 0; i < 6; i++) p.trackFailure(a, 2);
+      assert.equal(p.trackFailure(a, 2).kind, "resubscribe");
+      failN(p, s1, "audio", 5, 2);
       assert.equal(p.trackCount, 2);
       const s2 = start(p, E2, 5);
       assert(p.authenticated(s2, "bridge.tracks", 6));
       assert.equal(p.trackCount, 0);
-      const h = tracker(p, s2, "audio");
-      assert.equal(h.mark, undefined);
-      for (let i = 0; i < 6; i++) assert.equal(p.trackFailure(h, 7).kind, "resubscribe");
+      assert.equal(tracker(p, s2, "audio").mark, undefined);
+      failN(p, s2, "audio", 6, 7);
     },
   ],
   [
@@ -663,7 +682,7 @@ const rows: [string, () => void][] = [
       assert(p.probeEnded(p3, 0));
       p.announce(path(E3));
       assert.equal(p.nextCandidate(1), E1);
-      const s1 = p.subscribe(E1, 1);
+      const s1 = must(p.subscribe(E1, 1));
       assert.equal(p.authenticated(s1, "bridge.tracks", 2), "accepted");
       assert.equal(p.nextCandidate(2999), undefined);
       assert.equal(p.nextCandidate(3000), E3);
@@ -719,7 +738,7 @@ const rows: [string, () => void][] = [
       for (let i = 0; i < 11; i++) {
         const e = epoch(100 + i);
         p.announce(path(e));
-        const c = p.subscribe(e, 10 + i);
+        const c = must(p.subscribe(e, 10 + i));
         assert(c);
         p.rejectCandidate(c, 10 + i);
       }
@@ -752,7 +771,7 @@ const rows: [string, () => void][] = [
       p.endInstance(s, 1);
       assert.equal(p.status.olderStreamOnly, false);
       assert.equal(p.nextCandidate(2), E3);
-      const s3 = p.subscribe(E3, 2);
+      const s3 = must(p.subscribe(E3, 2));
       assert(s3);
       assert.equal(p.status.olderStreamOnly, false);
       assert.equal(p.status.probing, "probing");
@@ -774,7 +793,7 @@ const rows: [string, () => void][] = [
       assert.equal(p.authenticated(s, "bridge.tracks", 2), "refreshed");
       p.endInstance(s, 2);
       assert.equal(p.authenticated(s, "bridge.tracks", 3), false);
-      const again = p.subscribe(E1, 4);
+      const again = must(p.subscribe(E1, 4));
       assert(again);
       assert.equal(p.authenticated(again, "bridge.tracks", 5), "accepted");
     },
@@ -850,13 +869,14 @@ const rows: [string, () => void][] = [
     () => {
       const p = make();
       const s = accept(p);
-      const h = tracker(p, s, "audio");
-      for (let i = 0; i < 6; i++) p.trackFailure(h, 2 + i);
-      assert.deepEqual(p.trackFailure(h, 8), {
+      for (let i = 0; i < 6; i++) failN(p, s, "audio", 1, 2 + i);
+      assert.deepEqual(p.trackFailure(tracker(p, s, "audio"), 8), {
         kind: "unavailable_retryable",
         track: "audio",
         retryAt: 60002,
       });
+      const h = p.retryTrack(s, "audio", 60002);
+      assert(h instanceof TrackHandle);
       assert.equal(p.trackFailure(h, 60002).kind, "resubscribe");
     },
   ],
@@ -926,9 +946,9 @@ const rows: [string, () => void][] = [
     () => {
       const p = make();
       p.announce(path(E1));
-      const first = p.subscribe(E1, 0);
+      const first = must(p.subscribe(E1, 0));
       p.tick(1500);
-      const second = p.subscribe(E1, 4500);
+      const second = must(p.subscribe(E1, 4500));
       assert(second);
       assert.notEqual(second, first);
       assert.equal(p.probeEnded(first, 4501), false);
@@ -945,7 +965,7 @@ const rows: [string, () => void][] = [
       const h1 = tracker(p, s1, "audio");
       frame(h1, 20n);
       assert(p.endInstance(s1, 2));
-      const s2 = p.subscribe(E1, 3);
+      const s2 = must(p.subscribe(E1, 3));
       assert.equal(p.authenticated(s2, "bridge.tracks", 4), "accepted");
       assert.equal(p.endInstance(s1, 5), false);
       assert.equal(p.authenticated(s1, "bridge.tracks", 6), false);
@@ -962,7 +982,7 @@ const rows: [string, () => void][] = [
       assert.equal(p.rejectCandidate(forged(E1), 1), false);
       const other = make();
       other.announce(path(E1));
-      const foreign = other.subscribe(E1, 0);
+      const foreign = must(other.subscribe(E1, 0));
       assert.equal(p.rejectCandidate(foreign, 1), false);
       assert.equal(p.nextCandidate(2), E1);
     },
@@ -973,7 +993,7 @@ const rows: [string, () => void][] = [
       for (const ticked of [false, true]) {
         const p = make();
         p.announce(path(E1));
-        const s = p.subscribe(E1, 0);
+        const s = must(p.subscribe(E1, 0));
         p.withdraw(path(E1));
         if (ticked) p.tick(1500);
         assert.equal(p.rejectCandidate(s, 4500), true, `ticked ${ticked}`);
@@ -989,15 +1009,15 @@ const rows: [string, () => void][] = [
     () => {
       const p = make();
       p.announce(path(E1));
-      const first = p.subscribe(E1, 0);
+      const first = must(p.subscribe(E1, 0));
       p.tick(1500);
-      const second = p.subscribe(E1, 4500);
+      const second = must(p.subscribe(E1, 4500));
       assert.equal(p.rejectCandidate(first, 4501), true);
       assert.equal(p.status.probing, "probing");
       assert.equal(p.authenticated(second, "bridge.tracks", 4502), "accepted");
       const q = make();
       q.announce(path(E1));
-      const late = q.subscribe(E1, 0);
+      const late = must(q.subscribe(E1, 0));
       assert.equal(q.rejectCandidate(late, 60000), false);
       assert.equal(q.nextCandidate(60000), E1);
     },
@@ -1009,7 +1029,7 @@ const rows: [string, () => void][] = [
       p.announce(path(E1));
       for (let t = 0; t <= 22; t += 2) {
         if (p.nextCandidate(t) !== E1) continue;
-        const s = p.subscribe(E1, t);
+        const s = must(p.subscribe(E1, t));
         assert.equal(p.authenticated(s, "bridge.tracks", t + 1), "accepted");
         assert(p.endInstance(s, t + 1));
       }
@@ -1026,12 +1046,12 @@ const rows: [string, () => void][] = [
       const s1 = accept(p, E1, 0);
       assert(p.endInstance(s1, 1));
       assert.equal(p.nextCandidate(1), E1);
-      const s2 = p.subscribe(E1, 2);
+      const s2 = must(p.subscribe(E1, 2));
       assert.equal(p.authenticated(s2, "bridge.tracks", 3), "accepted");
       assert(p.endInstance(s2, 4));
       assert.equal(p.nextCandidate(3003), undefined);
       assert.equal(p.nextCandidate(3004), E1);
-      const s3 = p.subscribe(E1, 3004);
+      const s3 = must(p.subscribe(E1, 3004));
       assert.equal(p.authenticated(s3, "bridge.tracks", 3005), "accepted");
       assert(p.endInstance(s3, 13005));
       assert.equal(p.nextCandidate(13005), E1);
@@ -1045,7 +1065,7 @@ const rows: [string, () => void][] = [
       for (let i = 0; i < 10; i++) {
         const e = epoch(0x100 + i);
         p.announce(path(e));
-        const c = p.subscribe(e, 2 + i);
+        const c = must(p.subscribe(e, 2 + i));
         assert(c);
         p.rejectCandidate(c, 2 + i);
       }
@@ -1069,7 +1089,8 @@ const rows: [string, () => void][] = [
       assert.equal(p.announce(path(epoch(1001))), "ok");
       assert.equal(p.announce(path(epoch(1002))), "ok");
       assert.equal(p.status.olderStreamOnly, false);
-      assert.equal(p.status.candidatesIncomplete, false);
+      // E1 and E2 were active when evicted, so the view is incomplete (diff check 2, A9).
+      assert.equal(p.status.candidatesIncomplete, true);
       assert.equal(p.nextCandidate(3), epoch(1002));
     },
   ],
@@ -1087,12 +1108,253 @@ const rows: [string, () => void][] = [
       assert.equal(p.announce(path(epoch(300))), "full");
       assert.equal(p.status.candidatesIncomplete, true);
       assert.equal(p.status.olderStreamOnly, false);
-      // The next admitted record clears it (C2 re-offers the active set after `full`).
+      // An admission is not reconciliation (diff check 2, A5): the view stays incomplete.
       p.withdraw(path(epoch(1)));
       assert.equal(p.announce(path(epoch(300))), "ok");
+      assert.equal(p.status.candidatesIncomplete, true);
+      assert.equal(p.status.olderStreamOnly, false);
+      // The adapter reconciles the authoritative active set; it fits, so the view is complete.
+      const active = [300];
+      for (let i = 2; i <= 256; i++) active.push(i);
+      assert.equal(p.reconcile(active.map((i) => path(epoch(i)))), "complete");
       assert.equal(p.status.candidatesIncomplete, false);
       assert.equal(p.status.olderStreamOnly, true);
       assert.deepEqual(p.states, ["older_stream_only"]);
+    },
+  ],
+  // ---- C1 diff check 2, 2026-11-25 (reviews/2026-11-25-c1-diff-check-2.md), A2–A10 as rows.
+  // Red against 3cbd279: spikes/complete/logs/c1-round3-red.log.
+  [
+    "D01 (A2) a track handle retires on terminal failure; replay state and a clocked retry remain",
+    () => {
+      const p = make();
+      const s = accept(p, E1, 0);
+      const mirror = { m: 1 };
+      const h = tracker(p, s, "audio", 0n, mirror);
+      assert.equal(frame(h, 20n), "deliver");
+      assert.equal(p.trackFailure(h, 2).kind, "resubscribe");
+      // failure -> queued frame -> duplicate failure, all on the retired handle
+      assert.equal(h.current, false);
+      assert.equal(frame(h, 21n), "stale");
+      assert.deepEqual(p.trackFailure(h, 3), { kind: "ignored" });
+      // the replacement owns the same mirror and mark
+      const r = tracker(p, s, "audio", 0n);
+      assert.equal(r.mirror, mirror);
+      assert.deepEqual(r.mark, { group: 20n, index: 0 });
+      assert.equal(frame(r, 21n), "deliver");
+      // five more distinct failed subscriptions spend the six slots; the seventh is exhausted
+      assert.equal(p.trackFailure(r, 4).kind, "resubscribe");
+      failN(p, s, "audio", 4, 5, 0n);
+      const last = tracker(p, s, "audio", 0n);
+      assert.deepEqual(p.trackFailure(last, 6), {
+        kind: "unavailable_retryable",
+        track: "audio",
+        retryAt: 60002,
+      });
+      assert.equal(last.current, false);
+      assert.equal((p.track(s, "audio", 0n) as any).reason, "retry_wait");
+      assert.equal((p.retryTrack(s, "audio", 60001) as any).reason, "retry_wait");
+      const back = p.retryTrack(s, "audio", 60002);
+      assert(back instanceof TrackHandle);
+      assert.equal(back.mirror, mirror);
+      assert.equal(frame(back, 21n), "duplicate");
+      assert.deepEqual(p.retryTrack(s, "never", 60003), { kind: "stale", track: "never" });
+    },
+  ],
+  [
+    "D02 (A3) one rejection per probe; a repeat never extends the bar",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      const s = must(p.subscribe(E1, 0));
+      assert.equal(p.rejectCandidate(s, 1), true);
+      assert.equal(p.rejectCandidate(s, 59999), false);
+      assert.equal(p.nextCandidate(60000), undefined);
+      assert.equal(p.nextCandidate(60001), E1);
+    },
+  ],
+  [
+    "D03 (A4) a newer same-epoch acceptance clears an earlier attempt's bar and fences its report",
+    () => {
+      for (const order of ["report-then-accept", "accept-then-report"]) {
+        const p = make();
+        p.announce(path(E1));
+        const a = must(p.subscribe(E1, 0));
+        p.tick(1500);
+        const b = must(p.subscribe(E1, 4500));
+        if (order === "report-then-accept") {
+          assert.equal(p.rejectCandidate(a, 4501), true, order);
+          assert.equal(p.authenticated(b, "bridge.tracks", 4502), "accepted", order);
+        } else {
+          assert.equal(p.authenticated(b, "bridge.tracks", 4502), "accepted", order);
+          assert.equal(p.rejectCandidate(a, 4503), false, order);
+        }
+        assert(p.endInstance(b, 4504));
+        assert.equal(p.rejectCandidate(a, 4505), false, order);
+        assert.equal(p.nextCandidate(4505), E1, order);
+      }
+    },
+  ],
+  [
+    "D04 (A5) after overflow an unrelated admission does not make the view complete",
+    () => {
+      const p = make();
+      const s = accept(p, epoch(1000), 0);
+      p.endInstance(s, 1);
+      p.withdraw(path(epoch(1000)));
+      p.tick(2);
+      for (let i = 1001; i <= 1256; i++) assert.equal(p.announce(path(epoch(i))), "ok");
+      assert.equal(p.announce(path(epoch(2000))), "full");
+      for (let i = 1001; i <= 1256; i++) p.withdraw(path(epoch(i)));
+      assert.equal(p.announce(path(E1)), "ok");
+      assert.equal(p.status.candidatesIncomplete, true);
+      assert.equal(p.status.olderStreamOnly, false);
+      assert.equal(p.reconcile([path(E1), path(epoch(2000))]), "complete");
+      assert.equal(p.status.olderStreamOnly, false);
+      assert.equal(p.nextCandidate(3), epoch(2000));
+    },
+  ],
+  [
+    "D05 (A9) evicting an active record makes the view incomplete",
+    () => {
+      const p = make();
+      const s = accept(p, epoch(1000), 0);
+      p.endInstance(s, 1);
+      p.withdraw(path(epoch(1000)));
+      p.tick(2);
+      for (let i = 1; i <= 256; i++) p.announce(path(epoch(i)));
+      assert.equal(p.announce(path(epoch(1001))), "ok");
+      for (let i = 2; i <= 256; i++) p.withdraw(path(epoch(i)));
+      p.withdraw(path(epoch(1001)));
+      assert.equal(p.status.candidatesIncomplete, true);
+      assert.equal(p.status.olderStreamOnly, false);
+      assert.equal(p.reconcile([path(E1)]), "complete");
+      assert.equal(p.status.olderStreamOnly, true);
+    },
+  ],
+  [
+    "D06 reconcile: empty set completes, an overflowing set stays incomplete, bad input changes nothing",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      assert.equal(p.reconcile([]), "complete");
+      assert.equal(p.nextCandidate(0), undefined);
+      const big: string[] = [];
+      for (let i = 1; i <= 300; i++) big.push(path(epoch(i)));
+      assert.equal(p.reconcile(big), "incomplete");
+      assert.equal(p.status.candidatesIncomplete, true);
+      assert.equal(p.candidateCount, 256);
+      // the greatest epochs are the ones kept
+      assert.equal(p.nextCandidate(1), epoch(300));
+      const before = JSON.stringify(p.inspect());
+      assert.throws(() => p.reconcile(undefined as any), TypeError);
+      assert.throws(() => p.reconcile(42 as any), TypeError);
+      assert.equal(JSON.stringify(p.inspect()), before);
+      assert.equal(p.reconcile(["bob/x/y", 7 as any, path(epoch(300))]), "complete");
+    },
+  ],
+  [
+    "D07 (A10) subscribe issues nothing without an eligible epoch, and never displaces a live probe",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      const a = must(p.subscribe(E1, 0));
+      for (const bad of [undefined, null, 7, "", E2, E1.toUpperCase()])
+        assert.equal(p.subscribe(bad as any, 1), false);
+      assert.equal(p.attemptCount, 1);
+      assert.equal(p.authenticated(a, "bridge.tracks", 2), "accepted");
+      const q = make();
+      assert.equal(q.subscribe(undefined as any, 0), false);
+      assert.equal(q.subscribe(E1, 0), false);
+      assert.equal(q.attemptCount, 0);
+    },
+  ],
+  [
+    "D08 (A10 audit) malformed, wrong-type and foreign arguments change no state on any method",
+    () => {
+      const p = make(E1);
+      const s = accept(p, E2, 0);
+      const h = tracker(p, s, "audio", 0n);
+      frame(h, 5n);
+      p.announce(path(E3));
+      const other = make();
+      const foreign = accept(other, E2, 0);
+      const snap = () => JSON.stringify({ i: p.inspect(), st: p.status, m: p.mark, a: p.acceptedEpoch, n: p.attemptCount }, (_k, v) => (typeof v === "bigint" ? `${v}n` : v));
+      const before = snap();
+      const junk: any[] = [undefined, null, 0, NaN, "x", {}, [], E2, { epoch: E2 }, foreign, Symbol.iterator];
+      const ok = (f: () => unknown) => {
+        try {
+          f();
+        } catch (e) {
+          assert(e instanceof TypeError || e instanceof RangeError, String(e));
+        }
+        assert.equal(snap(), before);
+      };
+      for (const j of junk) {
+        ok(() => p.announce(j));
+        ok(() => p.withdraw(j));
+        ok(() => p.subscribe(j, 1));
+        ok(() => p.authenticated(j, "bridge.tracks", 1));
+        ok(() => p.authenticated(s, j, 1));
+        ok(() => p.probeEnded(j, 1));
+        ok(() => p.rejectCandidate(j, 1));
+        ok(() => p.endInstance(j, 1));
+        ok(() => p.trackFailure(j, 1));
+        ok(() => p.track(j, "audio", 0n));
+        // any string is a valid track name, so only non-strings are junk in that position
+        if (typeof j !== "string") ok(() => p.track(s, j, 0n));
+        ok(() => p.track(s, "audio", j));
+        ok(() => p.retryTrack(j, "audio", 1));
+        ok(() => p.retryTrack(s, j, 1));
+        if (j !== E2) ok(() => p.resumePublishing(j)); // E2 is a valid, new epoch
+        // [] is a valid (empty) active set; everything else here is not a set of paths
+        if (!Array.isArray(j)) ok(() => p.reconcile(j));
+        if (typeof j !== "number" || !Number.isFinite(j)) {
+          ok(() => p.tick(j));
+          ok(() => p.nextCandidate(j));
+          ok(() => p.endInstance(s, j));
+          ok(() => p.authenticated(s, "bridge.tracks", j));
+          ok(() => p.trackFailure(h, j));
+        }
+      }
+      ok(() => h.frame({ group: -1n, index: 0, authenticated: true }));
+      ok(() => h.frame({ group: 1n, index: 1.5, authenticated: true }));
+    },
+  ],
+  [
+    "D09 (A6) a session of exactly 10 s resets the rapid streak to zero",
+    () => {
+      const p = make();
+      const s1 = accept(p, E1, 0);
+      assert(p.endInstance(s1, 1));
+      const s2 = must(p.subscribe(E1, 2));
+      assert.equal(p.authenticated(s2, "bridge.tracks", 2), "accepted");
+      assert(p.endInstance(s2, 10002));
+      assert.equal(p.nextCandidate(10002), E1);
+      const s3 = must(p.subscribe(E1, 10002));
+      assert.equal(p.authenticated(s3, "bridge.tracks", 10003), "accepted");
+      assert(p.endInstance(s3, 10004));
+      assert.equal(p.nextCandidate(10004), E1);
+      // and the streak builds again from there
+      const s4 = must(p.subscribe(E1, 10004));
+      assert.equal(p.authenticated(s4, "bridge.tracks", 10005), "accepted");
+      assert(p.endInstance(s4, 10006));
+      assert.equal(p.nextCandidate(13005), undefined);
+      assert.equal(p.nextCandidate(13006), E1);
+    },
+  ],
+  [
+    "E01 (randomized seed 1 step 285) tick is idempotent: an expiring withdrawn probe is purged in that tick",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      must(p.subscribe(E1, 0));
+      p.withdraw(path(E1));
+      p.tick(100000); // deadline at 1500, backoff to 4500, both long past
+      const once = JSON.stringify(p.inspect());
+      p.tick(100000);
+      assert.equal(JSON.stringify(p.inspect()), once);
+      assert.equal(p.candidateCount, 0);
     },
   ],
 ];

@@ -1,0 +1,12 @@
+ok 1 - randomized policy invariants (seeds 1-200 x 3000 steps)
+ok 2 - randomized policy invariants (seeds 201-400 x 3000 steps)
+ok 3 - randomized policy invariants (seeds 401-600 x 3000 steps)
+ok 4 - randomized policy invariants (seeds 601-800 x 3000 steps)
+ok 5 - randomized policy invariants (seeds 801-1000 x 3000 steps)
+ok 6 - randomized policy invariants (seeds 1001-1200 x 3000 steps)
+ok 7 - randomized policy invariants (seeds 1201-1400 x 3000 steps)
+ok 8 - randomized policy invariants (seeds 1401-1600 x 3000 steps)
+ok 9 - randomized policy invariants (seeds 1601-1800 x 3000 steps)
+ok 10 - randomized policy invariants (seeds 1801-2000 x 3000 steps)
+# pass 10
+# fail 0

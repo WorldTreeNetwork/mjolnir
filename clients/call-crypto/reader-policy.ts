@@ -23,8 +23,9 @@ export type ReaderState =
  *   (`unavailable_retryable` for candidate probing; it never clears playback or the mark).
  * - `olderStreamOnly`: nothing is accepted, no announced candidate is at or above the mark, at
  *   least one announced candidate is below it, and the candidate table is complete.
- * - `candidatesIncomplete`: an announcement was refused as `full` since the table last admitted a
- *   new record, so the policy may not know every announced epoch. Offer the active set again.
+ * - `candidatesIncomplete`: an announcement was refused as `full`, or an active record was evicted,
+ *   so the policy may not know every announced epoch. Only `reconcile()` with the complete active
+ *   set clears it.
  */
 export type ReaderStatus = Readonly<{
   inviteNeeded: boolean;
@@ -122,14 +123,28 @@ export class GroupTracker {
 }
 
 type Candidate = { retryAt: number; timeouts: number; available: boolean };
-type TrackState = { tracker: GroupTracker; resubs: number[]; handle: TrackHandle | undefined };
-type Sub = { epoch: string; started: number; acceptedAt: number | undefined };
+type TrackState = {
+  tracker: GroupTracker;
+  resubs: number[];
+  handle: TrackHandle | undefined;
+  // After an exhausted terminal failure: no new handle before this time (`retryTrack`).
+  blockedUntil: number;
+};
+type Sub = {
+  epoch: string;
+  seq: number;
+  started: number;
+  acceptedAt: number | undefined;
+  reported: boolean;
+};
+type Bar = { until: number; seq: number };
 /**
  * Opaque identity of ONE manifest (`bridge.tracks`) subscription attempt, returned by `subscribe`.
- * The caller keeps it with that subscription and passes it back on every callback of that
- * subscription: `authenticated`, `probeEnded`, `rejectCandidate`, `endInstance` and `track`. A
- * callback carrying a handle that is not the live probe or the accepted session is refused, so a
- * late event from an earlier attempt of the same epoch cannot act on its replacement.
+ * The caller keeps the returned reference with that subscription and passes it back on every
+ * callback of that subscription: `authenticated`, `probeEnded`, `rejectCandidate`, `endInstance`
+ * and `track`. Only the reference this policy issued carries authority; a copy, a clone or another
+ * policy's handle is refused. A handle that is not the live probe or the accepted session is
+ * refused, so a late event from an earlier attempt of the same epoch cannot act on its replacement.
  */
 export type Subscription = Readonly<{ epoch: string }>;
 export type TrackAction =
@@ -137,19 +152,40 @@ export type TrackAction =
   | { kind: "unavailable_retryable"; track: string; retryAt: number }
   | { kind: "ignored" };
 /** Track-scoped refusal: `track_limit` at `LIMITS.tracksPerInstance` names; `stale` when the
- * session handle is not the accepted session (a callback of a retired subscription). */
+ * session handle is not the accepted session (a callback of a retired subscription); `retry_wait`
+ * while an exhausted track waits for `retryAt`. */
 export type TrackRefusal = Readonly<
   | { kind: "unavailable_retryable"; track: string; reason: "track_limit" }
+  | { kind: "unavailable_retryable"; track: string; reason: "retry_wait"; retryAt: number }
   | { kind: "stale"; track: string }
 >;
 export type FrameResult = "deliver" | "duplicate" | "too_old" | "unauthenticated" | "stale";
+/** Result of `reconcile`: `complete` only when every active announcement fit in the table. */
+export type ReconcileResult = "complete" | "incomplete";
+/** Test and diagnostics view of the bounded internals. Not an API for page logic. */
+export type PolicyInternals = Readonly<{
+  now: number;
+  incomplete: boolean;
+  probe: string | undefined;
+  candidates: readonly Readonly<{ epoch: string; available: boolean; retryAt: number }>[];
+  bars: readonly Readonly<{ epoch: string; until: number }>[];
+  paceRetryAt: number;
+  tracks: readonly Readonly<{
+    name: string;
+    resubs: number;
+    remembered: number;
+    mark: Mark | undefined;
+    blockedUntil: number;
+  }>[];
+}>;
 
 /**
  * One track subscription of the accepted session, returned by `InstancePolicy.track`. The mark,
  * mirror and resubscribe budget belong to the track name for the mark's life; the handle belongs to
- * one subscription. Once the session ends or the name is subscribed again, this handle is stale:
- * `frame` returns `stale` without touching the mark, and the caller must not apply that frame to the
- * mirror. Apply a frame to `mirror` only after `frame` returned `deliver`.
+ * one subscription. Once the session ends, the name is subscribed again, or the subscription has
+ * reported its terminal failure, this handle is stale: `frame` returns `stale` without touching the
+ * mark. Apply a frame to `mirror` only in the same synchronous step as a `deliver` result, or check
+ * `current` again at the mirror if work yielded in between.
  */
 export class TrackHandle {
   readonly name: string;
@@ -160,7 +196,7 @@ export class TrackHandle {
     this.#state = state;
     this.#live = live;
   }
-  /** False once the session retired or the track was subscribed again. */
+  /** False once the session retired, the track was subscribed again, or it failed terminally. */
   get current(): boolean {
     return this.#live(this);
   }
@@ -182,6 +218,8 @@ export class TrackHandle {
   }
 }
 
+const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
 /** One immutable credential/label scope per object; create a new object for rekey or page reload. */
 export class InstancePolicy {
   readonly scope: Scope | undefined;
@@ -189,18 +227,23 @@ export class InstancePolicy {
   #mark: string | undefined;
   #candidates = new Map<string, Candidate>();
   // Authentication bars by epoch, kept apart from the candidate table so that purging a withdrawn
-  // record never shortens a bar. Only issued probes create bars, so this holds at most the probes
-  // of the last two minutes.
-  #bars = new Map<string, number>();
+  // record never shortens a bar. Only issued probes create bars, one report per probe, so this
+  // holds at most the probes of the last two minutes.
+  #bars = new Map<string, Bar>();
   #subs = new WeakMap<Subscription, Sub>();
+  #seq = 0;
   #probe: Subscription | undefined;
   #session: Subscription | undefined;
+  // Sequence of the newest accepted attempt of the mark epoch. A failure report from an earlier
+  // attempt of that epoch is stale: an authenticated acceptance is stronger evidence.
+  #markAcceptSeq = -1;
   #attempts: number[] = [];
   // Group/frame marks, mirrors and resubscribe budgets of the MARK epoch, keyed by track name.
   // They live as long as the mark: released only when a greater epoch is accepted, never when the
   // accepted session ends, so re-accepting the same epoch cannot reopen frames or refill budgets.
   #tracks = new Map<string, TrackState>();
-  // Pacing of re-acceptance of the mark epoch after rapid closes (S4). Reset when the mark moves.
+  #sessionOf = new WeakMap<TrackHandle, Subscription>();
+  // Pacing of re-acceptance of the mark epoch after rapid closes. Reset when the mark moves.
   #pace = { rapid: 0, retryAt: 0 };
   #incomplete = false;
   #now = 0;
@@ -269,6 +312,28 @@ export class InstancePolicy {
   get trackCount(): number {
     return this.#tracks.size;
   }
+  /** Bounded internals for tests and diagnostics. */
+  inspect(): PolicyInternals {
+    return Object.freeze({
+      now: this.#now,
+      incomplete: this.#incomplete,
+      probe: this.#probe && this.#subs.get(this.#probe)!.epoch,
+      candidates: [...this.#candidates].map(([epoch, c]) =>
+        Object.freeze({ epoch, available: c.available, retryAt: c.retryAt }),
+      ),
+      bars: [...this.#bars].map(([epoch, b]) => Object.freeze({ epoch, until: b.until })),
+      paceRetryAt: this.#pace.retryAt,
+      tracks: [...this.#tracks].map(([name, t]) =>
+        Object.freeze({
+          name,
+          resubs: t.resubs.length,
+          remembered: t.tracker.remembered,
+          mark: t.tracker.mark,
+          blockedUntil: t.blockedUntil,
+        }),
+      ),
+    });
+  }
   #olderOnly(): boolean {
     const mark = this.#mark;
     if (mark === undefined) return false;
@@ -280,13 +345,16 @@ export class InstancePolicy {
     }
     return below;
   }
+  /** A subscription reference this policy issued (not a copy, clone or foreign handle). */
+  #issued(sub: unknown): sub is Subscription {
+    return typeof sub === "object" && sub !== null && this.#subs.has(sub as Subscription);
+  }
   #clock(now: number): void {
-    if (!Number.isFinite(now) || now < 0 || now < this.#now)
+    if (!finite(now) || now < 0 || now < this.#now)
       throw new RangeError("policy clock must be monotonic milliseconds");
     this.#now = now;
     this.#attempts = this.#attempts.filter((t) => t > now - WINDOW);
-    for (const [e, until] of this.#bars) if (now >= until) this.#bars.delete(e);
-    this.#purge(now);
+    for (const [e, b] of this.#bars) if (now >= b.until) this.#bars.delete(e);
   }
   /** Forget retracted records whose backoff has expired. Bars live in `#bars` and are not lost. */
   #purge(now: number): void {
@@ -304,7 +372,7 @@ export class InstancePolicy {
     }
     this.#probe = undefined;
   }
-  #parse(path: string): string | undefined {
+  #parse(path: unknown): string | undefined {
     if (typeof path !== "string") return undefined;
     const p = path.split("/");
     return this.scope &&
@@ -315,21 +383,27 @@ export class InstancePolicy {
       ? p[2]
       : undefined;
   }
-  /** Make room for an epoch at or above the mark by forgetting a below-mark record. Below-mark
-   * records are never probed; they only feed the older-only report. */
+  /** Make room for an epoch at or above the mark by forgetting a below-mark record, withdrawn ones
+   * first. Below-mark records are never probed; they only feed the older-only report, so forgetting
+   * an active one makes the view incomplete. */
   #evictBelowMark(): boolean {
     const mark = this.#mark;
     if (mark === undefined) return false;
-    for (const e of this.#candidates.keys())
-      if (e < mark && e !== this.#accepted) {
+    let active: string | undefined;
+    for (const [e, c] of this.#candidates) {
+      if (e >= mark || e === this.#accepted) continue;
+      if (!c.available) {
         this.#candidates.delete(e);
         return true;
       }
-    return false;
+      active ??= e;
+    }
+    if (active === undefined) return false;
+    this.#candidates.delete(active);
+    this.#incomplete = true;
+    return true;
   }
-  announce(path: string): AnnounceResult {
-    const epoch = this.#parse(path);
-    if (epoch === undefined) return "invalid";
+  #admit(epoch: string): AnnounceResult {
     // A duplicate announcement cannot clear a cryptographic refusal or timeout backoff.
     const existing = this.#candidates.get(epoch);
     if (existing) {
@@ -347,12 +421,16 @@ export class InstancePolicy {
       return "full";
     }
     this.#candidates.set(epoch, { retryAt: 0, timeouts: 0, available: true });
-    this.#incomplete = false;
     return "ok";
   }
+  announce(path: string): AnnounceResult {
+    const epoch = this.#parse(path);
+    if (epoch === undefined) return "invalid";
+    return this.#admit(epoch);
+  }
   /** The relay retracted the announcement. Not stream retirement: an existing subscriber can still
-   * read. When the reader's own session drops, withdraw every announcement and offer them again on
-   * reconnect, so nothing is probed during the outage. */
+   * read. When the reader's own session drops, withdraw every announcement and `reconcile` the
+   * active set on reconnect, so nothing is probed during the outage. */
   withdraw(path: string): void {
     const epoch = this.#parse(path);
     if (epoch === undefined) return;
@@ -360,18 +438,46 @@ export class InstancePolicy {
     if (c) c.available = false;
   }
   /**
+   * The adapter's complete, authoritative set of this label's active announcement paths (an empty
+   * set is a valid answer). Records not in it become withdrawn; every path in it is offered. The
+   * view becomes complete only if every active epoch fits; otherwise it stays incomplete. Paths of
+   * another label or opaque are ignored. A non-iterable or a string (an iterable of characters, not
+   * of paths) is refused before any change.
+   */
+  reconcile(active: Iterable<string>): ReconcileResult {
+    if (
+      active === null ||
+      typeof active === "string" ||
+      typeof (active as any)?.[Symbol.iterator] !== "function"
+    )
+      throw new TypeError("reconcile needs the iterable active set");
+    const epochs = new Set<string>();
+    for (const path of active) {
+      const e = this.#parse(path);
+      if (e !== undefined) epochs.add(e);
+    }
+    for (const [e, c] of this.#candidates) if (!epochs.has(e)) c.available = false;
+    // Greatest first, so if the set overflows the epochs that can be selected are the ones kept.
+    let fits = true;
+    for (const e of [...epochs].sort().reverse()) if (this.#admit(e) === "full") fits = false;
+    this.#incomplete = !fits;
+    return fits ? "complete" : "incomplete";
+  }
+  /**
    * The ACCEPTED session's subscription ended (transport close/reset). `sub` must be the accepted
    * session's handle; a close of any earlier attempt is ignored. Not an announcement retract: the
    * epoch stays announced and may be re-accepted, keeping its marks, mirrors and budgets. A close
    * within `LIMITS.rapidCloseMs` of acceptance is rapid: the first allows an immediate reconnect,
    * each further consecutive rapid close delays re-probing this epoch 3 s doubling to 60 s. A
-   * session that lasted `rapidCloseMs` resets the count. Other epochs and the budget are unaffected.
+   * session that lasted `rapidCloseMs` resets the count to zero. Other epochs and the budget are
+   * unaffected by this delay.
    */
   endInstance(sub: Subscription, now: number): boolean {
+    if (!this.#issued(sub) || !finite(now)) return false;
     this.tick(now);
-    if (sub === undefined || sub !== this.#session) return false;
+    if (sub !== this.#session) return false;
     const lived = now - this.#subs.get(sub)!.acceptedAt!;
-    this.#pace.rapid = lived < LIMITS.rapidCloseMs ? this.#pace.rapid + 1 : 1;
+    this.#pace.rapid = lived < LIMITS.rapidCloseMs ? this.#pace.rapid + 1 : 0;
     const r = this.#pace.rapid;
     this.#pace.retryAt =
       now + (r <= 1 ? 0 : Math.min(LIMITS.backoffCapMs, LIMITS.backoffBaseMs * 2 ** (r - 2)));
@@ -380,8 +486,9 @@ export class InstancePolicy {
   }
   /** The live probe's manifest subscription ended before authenticating: the timeout rule applies. */
   probeEnded(sub: Subscription, now: number): boolean {
+    if (!this.#issued(sub) || !finite(now)) return false;
     this.tick(now);
-    if (sub === undefined || sub !== this.#probe) return false;
+    if (sub !== this.#probe) return false;
     this.#backoff(this.#subs.get(sub)!.epoch, now);
     return true;
   }
@@ -391,40 +498,49 @@ export class InstancePolicy {
     const probe = this.#probe && this.#subs.get(this.#probe)!;
     if (probe && now - probe.started >= LIMITS.probeDeadlineMs)
       this.#backoff(probe.epoch, probe.started + LIMITS.probeDeadlineMs);
+    // After the deadline, so a probe that expires in this tick is purged in it (idempotent tick).
+    this.#purge(now);
   }
   nextCandidate(now: number): string | undefined {
     this.tick(now);
     if (!this.scope || this.#probe || this.#attempts.length >= LIMITS.probesPerWindow)
       return undefined;
-    const eligible = [...this.#candidates]
-      .filter(
-        ([e, c]) =>
-          c.available &&
-          e !== this.#accepted &&
-          (this.#mark === undefined || e >= this.#mark) &&
-          (e !== this.#mark || now >= this.#pace.retryAt) &&
-          now >= (this.#bars.get(e) ?? 0) &&
-          now >= c.retryAt,
+    let best: string | undefined;
+    for (const [e, c] of this.#candidates)
+      if (
+        c.available &&
+        e !== this.#accepted &&
+        (this.#mark === undefined || e >= this.#mark) &&
+        (e !== this.#mark || now >= this.#pace.retryAt) &&
+        now >= (this.#bars.get(e)?.until ?? 0) &&
+        now >= c.retryAt &&
+        (best === undefined || e > best)
       )
-      .map(([e]) => e)
-      .sort()
-      .reverse();
-    return eligible[0];
+        best = e;
+    return best;
   }
   /** Call exactly when starting a bridge.tracks subscription: starts the 1500 ms deadline and
-   * returns the handle every callback of that subscription must carry, or `false`. */
+   * returns the handle every callback of that subscription must carry, or `false` when `epoch` is
+   * not the eligible candidate now (no handle is issued and no probe slot is spent). */
   subscribe(epoch: string, now: number): Subscription | false {
+    if (!validEpoch(epoch) || !finite(now)) return false;
     if (this.nextCandidate(now) !== epoch) return false;
     this.#attempts.push(now);
     const sub: Subscription = Object.freeze({ epoch });
-    this.#subs.set(sub, { epoch, started: now, acceptedAt: undefined });
+    this.#subs.set(sub, {
+      epoch,
+      seq: this.#seq++,
+      started: now,
+      acceptedAt: undefined,
+      reported: false,
+    });
     this.#probe = sub;
     return sub;
   }
   /** Only a crypto-authenticated manifest frame may report success; timestamps are not evidence. */
   authenticated(sub: Subscription, semantic: string, now: number): Acceptance {
+    if (semantic !== "bridge.tracks" || !this.#issued(sub) || !finite(now)) return false;
     this.tick(now);
-    if (semantic !== "bridge.tracks" || sub === undefined || sub === null) return false;
     if (sub === this.#session) return "refreshed";
     if (sub !== this.#probe) return false;
     const st = this.#subs.get(sub)!;
@@ -434,9 +550,14 @@ export class InstancePolicy {
     if (epoch !== this.#mark) {
       this.#tracks.clear();
       this.#pace = { rapid: 0, retryAt: 0 };
+      this.#markAcceptSeq = -1;
     }
     this.#mark = epoch;
     st.acceptedAt = now;
+    this.#markAcceptSeq = Math.max(this.#markAcceptSeq, st.seq);
+    // A bar from an earlier attempt of this epoch is superseded by this authenticated open.
+    const bar = this.#bars.get(epoch);
+    if (bar && bar.seq < st.seq) this.#bars.delete(epoch);
     this.#session = sub;
     this.#probe = undefined;
     const c = this.#candidates.get(epoch);
@@ -449,14 +570,22 @@ export class InstancePolicy {
   /**
    * Authentication failed on a probe's manifest. `sub` must be a probe this policy issued that was
    * never accepted, reported within `LIMITS.lateReportMs` of its start, whether or not it is still
-   * live; the bar (60 s from the report) does not depend on tick or purge order. A report from an
-   * earlier attempt bars the epoch but does not end a live replacement probe.
+   * live. One report per probe: a repeated report is refused and never extends the bar. A report
+   * from an attempt older than a later authenticated acceptance of the same epoch is refused. The
+   * bar (60 s from the report) does not depend on tick or purge order, and a report from an earlier
+   * attempt does not end a live replacement probe.
    */
   rejectCandidate(sub: Subscription, now: number): boolean {
+    if (!this.#issued(sub) || !finite(now)) return false;
     this.tick(now);
-    const st = sub && this.#subs.get(sub);
-    if (!st || st.acceptedAt !== undefined || now >= st.started + LIMITS.lateReportMs) return false;
-    this.#bars.set(st.epoch, Math.max(this.#bars.get(st.epoch) ?? 0, now + LIMITS.barMs));
+    const st = this.#subs.get(sub)!;
+    if (st.acceptedAt !== undefined || st.reported || now >= st.started + LIMITS.lateReportMs)
+      return false;
+    if (st.epoch === this.#mark && st.seq < this.#markAcceptSeq) return false;
+    st.reported = true;
+    const prior = this.#bars.get(st.epoch);
+    const until = now + LIMITS.barMs;
+    if (!prior || prior.until < until) this.#bars.set(st.epoch, { until, seq: st.seq });
     if (this.#probe === sub) this.#probe = undefined;
     return true;
   }
@@ -469,15 +598,23 @@ export class InstancePolicy {
     this.#session !== undefined &&
     this.#sessionOf.get(h) === this.#session &&
     this.#tracks.get(h.name)?.handle === h;
-  #sessionOf = new WeakMap<TrackHandle, Subscription>();
-  /** A current track subscription failed. Only a current handle counts; stale ones are ignored. */
+  /**
+   * A current track subscription failed terminally. The handle retires on the first report (both
+   * branches), keeping the name's mark, mirror and budget. `resubscribe`: call `track()` for the
+   * replacement. `unavailable_retryable`: call `retryTrack()` at or after `retryAt`.
+   */
   trackFailure(handle: TrackHandle, now: number): TrackAction {
+    if (!(handle instanceof TrackHandle) || !this.#sessionOf.has(handle) || !finite(now))
+      return { kind: "ignored" };
     this.tick(now);
-    if (!(handle instanceof TrackHandle) || !this.#live(handle)) return { kind: "ignored" };
+    if (!this.#live(handle)) return { kind: "ignored" };
     const t = this.#tracks.get(handle.name)!;
+    t.handle = undefined;
     t.resubs = t.resubs.filter((s) => s > now - WINDOW);
-    if (t.resubs.length >= LIMITS.resubscribesPerTrack)
-      return { kind: "unavailable_retryable", track: handle.name, retryAt: t.resubs[0] + WINDOW };
+    if (t.resubs.length >= LIMITS.resubscribesPerTrack) {
+      t.blockedUntil = t.resubs[0] + WINDOW;
+      return { kind: "unavailable_retryable", track: handle.name, retryAt: t.blockedUntil };
+    }
     t.resubs.push(now);
     return {
       kind: "resubscribe",
@@ -487,22 +624,42 @@ export class InstancePolicy {
       preserveMirror: true,
     };
   }
+  /** The clocked retry after `unavailable_retryable`: a new handle for a known name, keeping its
+   * window, mirror and marks, or `retry_wait` before `retryAt`. An unknown name is `stale`. */
+  retryTrack(sub: Subscription, name: string, now: number): TrackHandle | TrackRefusal {
+    if (typeof name !== "string") throw new TypeError("invalid track name");
+    if (!this.#issued(sub) || !finite(now)) return Object.freeze({ kind: "stale", track: name });
+    this.tick(now);
+    const t = this.#tracks.get(name);
+    if (!t) return Object.freeze({ kind: "stale", track: name });
+    return this.track(sub, name, t.tracker.window);
+  }
   /**
    * Start a track subscription of the accepted session `sub`; call when subscribing the track and
    * again for each resubscription. Returns the handle for that one subscription (any earlier handle
-   * of this name becomes stale) or a refusal: `stale` if `sub` is not the accepted session, or
-   * `track_limit`. `window` and `mirror` are fixed when the name is first seen and kept for the
-   * mark's life; compare `handle.window` to report a `metadata_difference`.
+   * of this name becomes stale) or a refusal: `stale` if `sub` is not the accepted session,
+   * `track_limit`, or `retry_wait` while an exhausted track waits (use `retryTrack`). `window` and
+   * `mirror` are fixed when the name is first seen and kept for the mark's life; compare
+   * `handle.window` to report a `metadata_difference`.
    */
   track(sub: Subscription, name: string, window: bigint, mirror?: unknown): TrackHandle | TrackRefusal {
     if (typeof name !== "string") throw new TypeError("invalid track name");
-    if (sub === undefined || sub !== this.#session) return Object.freeze({ kind: "stale", track: name });
+    if (typeof window !== "bigint" || window < 0n) throw new RangeError("invalid reorder span");
+    if (!this.#issued(sub) || sub !== this.#session)
+      return Object.freeze({ kind: "stale", track: name });
     let state = this.#tracks.get(name);
     if (!state) {
       if (this.#tracks.size >= LIMITS.tracksPerInstance)
         return Object.freeze({ kind: "unavailable_retryable", track: name, reason: "track_limit" });
-      state = { tracker: new GroupTracker(window, mirror), resubs: [], handle: undefined };
+      state = { tracker: new GroupTracker(window, mirror), resubs: [], handle: undefined, blockedUntil: 0 };
       this.#tracks.set(name, state);
+    } else if (this.#now < state.blockedUntil) {
+      return Object.freeze({
+        kind: "unavailable_retryable",
+        track: name,
+        reason: "retry_wait",
+        retryAt: state.blockedUntil,
+      });
     }
     const handle = new TrackHandle(name, state, this.#live);
     this.#sessionOf.set(handle, sub);
