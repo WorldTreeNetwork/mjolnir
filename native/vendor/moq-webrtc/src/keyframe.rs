@@ -200,16 +200,10 @@ where
 }
 
 /// Join against the live demand. The first reading requests nothing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct JoinWatch {
 	seen: bool,
 	fired_at: Option<u64>,
-}
-
-impl Default for JoinWatch {
-	fn default() -> Self {
-		Self { seen: false, fired_at: None }
-	}
 }
 
 impl JoinWatch {

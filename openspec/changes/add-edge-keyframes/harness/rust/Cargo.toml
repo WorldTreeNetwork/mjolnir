@@ -23,6 +23,7 @@ moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features 
 moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-webrtc = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+
 rcgen = "0.13"
 serde_json = "1"
 str0m = { version = "0.25", default-features = false }
@@ -34,3 +35,6 @@ url = "2"
 
 [profile.release]
 debug = false
+
+[patch."https://github.com/moq-dev/moq"]
+moq-webrtc = { path = "../../../../../native/vendor/moq-webrtc" }

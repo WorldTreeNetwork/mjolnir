@@ -3255,7 +3255,6 @@ dependencies = [
 [[package]]
 name = "moq-webrtc"
 version = "0.3.12"
-source = "git+https://github.com/moq-dev/moq?rev=4a6f52248#4a6f522483168ace392718d68b58a402533c897d"
 dependencies = [
  "bytes",
  "hang",

@@ -468,10 +468,10 @@ impl Session {
 		let mids: Vec<_> = self.gates.keys().copied().collect();
 		for mid in mids {
 			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
-			if due.is_some() {
-				if let Some(gate) = self.gates.get_mut(&mid) {
-					gate.note(crate::keyframe::Cause::Period, now);
-				}
+			if due.is_some()
+				&& let Some(gate) = self.gates.get_mut(&mid)
+			{
+				gate.note(crate::keyframe::Cause::Period, now);
 			}
 			self.flush_gate(policy, mid, None);
 		}
@@ -539,15 +539,15 @@ impl Session {
 		let now = Instant::now();
 		let media_us = media_time_to_micros(&data.time);
 		let keyframe = data.is_keyframe();
-		if keyframe {
-			if let Some(gate) = self.gates.get_mut(&data.mid) {
-				gate.on_keyframe(&policy, now);
-			}
+		if keyframe
+			&& let Some(gate) = self.gates.get_mut(&data.mid)
+		{
+			gate.on_keyframe(&policy, now);
 		}
-		if policy.on_loss && !data.contiguous && !keyframe {
-			if let Some(gate) = self.gates.get_mut(&data.mid) {
-				gate.note(crate::keyframe::Cause::Loss, now);
-			}
+		if policy.on_loss && !data.contiguous && !keyframe
+			&& let Some(gate) = self.gates.get_mut(&data.mid)
+		{
+			gate.note(crate::keyframe::Cause::Loss, now);
 		}
 		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
 		match decision {
@@ -566,10 +566,10 @@ impl Session {
 		}
 		let opens_group = keyframe || self.ingest_order.is_audio(data.mid);
 		let mapped = self.ingest_clock.normalize(data.mid, arrival, media_us, opens_group);
-		if mapped.deferred {
-			if let Some(gate) = self.gates.get_mut(&data.mid) {
-				gate.note(crate::keyframe::Cause::Step, now);
-			}
+		if mapped.deferred
+			&& let Some(gate) = self.gates.get_mut(&data.mid)
+		{
+			gate.note(crate::keyframe::Cause::Step, now);
 		}
 		let stepped = mapped.stepped;
 		let timestamp_us = mapped.timestamp_us;

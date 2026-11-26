@@ -151,6 +151,7 @@ pub(crate) struct DeferredVideo<I> {
 
 impl<I: DeferredImport> DeferredVideo<I> {
 	/// Create the media track without gating the initial catalog snapshot.
+	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
 	pub fn new(
 		broadcast: moq_net::broadcast::Producer,
 		catalog: moq_mux::catalog::Producer,

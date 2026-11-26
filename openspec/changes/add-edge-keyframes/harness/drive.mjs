@@ -78,7 +78,8 @@ try {
     const [k, hold] = a.map(Number); const br = await launch('chromium', mode === 'publishers' ? 'busy' : null); browsers.push(br);
     const pages = [];
     for (let i = 0; i < k; i++) {
-      const name = mode === 'publishers' ? 'p' + i : 'erin';
+      const named = process.env.VIEWER_NAMES ? process.env.VIEWER_NAMES.split(',') : null;
+      const name = mode === 'publishers' ? 'p' + i : (named ? named[i] : 'erin');
       const page = await open(br, 'r1', tok(name), name); pages.push(page);
       const r = mode === 'publishers' ? await call(page, 'publish', `p${i}/cam`, 'H264') : await call(page, 'play', 'carol/cam', null);
       if (r.error) { out({ step: 'load-error', i, error: r.error }); process.exit(2); }

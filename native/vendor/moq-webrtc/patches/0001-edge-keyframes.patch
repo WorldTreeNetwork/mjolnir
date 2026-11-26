@@ -1,27 +1,15 @@
-From 91f431168b1ebd9c5fb83a28e63391543ffad7a0 Mon Sep 17 00:00:00 2001
-From: Duke Jones <104690+dukejones@users.noreply.github.com>
-Date: Thu, 26 Nov 2026 15:36:44 -0800
-Subject: [PATCH] Add the ingest keyframe gate on the vendored pin.
+From 91f43116 Mon Sep 17 00:00:00 2001
+From: Mjolnir contributors <mjolnir@worldtree.network>
+Date: Thu, 26 Nov 2026 12:00:00 -0800
+Subject: [PATCH] Add the ingest keyframe gate on the vendored pin
 
-Policy stays off unless whip::Request enables it. When on, startup, step, period, loss, and join share one floor and one PLI. Viewer keyframe requests stay logged and dropped.
+Policy stays off unless whip::Request enables it. When on, startup, step,
+period, loss, and join share one floor and one PLI. Viewer keyframe
+requests stay logged and dropped.
+
 ---
- native/vendor/moq-webrtc/src/codec/av1.rs   |  27 +-
- native/vendor/moq-webrtc/src/codec/h264.rs  |  27 +-
- native/vendor/moq-webrtc/src/codec/h265.rs  |  27 +-
- native/vendor/moq-webrtc/src/codec/mod.rs   |  35 +-
- native/vendor/moq-webrtc/src/codec/vp8.rs   |  16 +-
- native/vendor/moq-webrtc/src/codec/vp9.rs   |  16 +-
- native/vendor/moq-webrtc/src/error.rs       |   8 +
- native/vendor/moq-webrtc/src/ingest.rs      |  53 ++-
- native/vendor/moq-webrtc/src/keyframe.rs    | 392 ++++++++++++++++++++
- native/vendor/moq-webrtc/src/lib.rs         |   5 +
- native/vendor/moq-webrtc/src/server/whip.rs |  17 +-
- native/vendor/moq-webrtc/src/session.rs     | 194 +++++++++-
- 12 files changed, 784 insertions(+), 33 deletions(-)
- create mode 100644 native/vendor/moq-webrtc/src/keyframe.rs
-
 diff --git a/src/codec/av1.rs b/src/codec/av1.rs
-index aa90aa4e..809741e6 100644
+index aa90aa4e..21d22573 100644
 --- a/src/codec/av1.rs
 +++ b/src/codec/av1.rs
 @@ -1,3 +1,4 @@
@@ -29,7 +17,7 @@ index aa90aa4e..809741e6 100644
  //! AV1 bridge.
  //!
  //! str0m hands us complete AV1 temporal units (OBU-framed, with inline sequence
-@@ -10,15 +11,31 @@ use crate::{Result, codec};
+@@ -10,15 +11,32 @@ use crate::{Result, codec};
  pub struct Bridge {
  	split: moq_mux::codec::av1::Split,
  	import: moq_mux::codec::av1::Import,
@@ -39,6 +27,7 @@ index aa90aa4e..809741e6 100644
  
  impl Bridge {
  	/// Publish an `.av1` track on `broadcast`, adding the catalog rendition once config is known.
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
  	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 -		let track = broadcast.unique_track(".av1", catalog.track_info(hang::catalog::PRIORITY.video))?;
 -		let import = moq_mux::codec::av1::Import::new(track, catalog.reserve(), Default::default())?;
@@ -64,7 +53,7 @@ index aa90aa4e..809741e6 100644
  	}
  }
  
-@@ -44,4 +61,8 @@ impl codec::Bridge for Bridge {
+@@ -44,4 +62,8 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -74,7 +63,7 @@ index aa90aa4e..809741e6 100644
 +	}
  }
 diff --git a/src/codec/h264.rs b/src/codec/h264.rs
-index 5c660ee3..0646909d 100644
+index 5c660ee3..f9cf200b 100644
 --- a/src/codec/h264.rs
 +++ b/src/codec/h264.rs
 @@ -1,3 +1,4 @@
@@ -82,7 +71,7 @@ index 5c660ee3..0646909d 100644
  //! H.264 bridge.
  //!
  //! str0m hands us reassembled Annex-B frames (start-code prefixed NALs with
-@@ -10,14 +11,30 @@ use crate::{Result, codec};
+@@ -10,14 +11,31 @@ use crate::{Result, codec};
  pub struct Bridge {
  	split: moq_mux::codec::h264::Split,
  	import: moq_mux::codec::h264::Import,
@@ -91,6 +80,7 @@ index 5c660ee3..0646909d 100644
  }
  
  impl Bridge {
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
  	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 -		let track = broadcast.unique_track(".avc3", catalog.track_info(hang::catalog::PRIORITY.video))?;
 -		let import = moq_mux::codec::h264::Import::new(track, catalog.reserve(), Default::default())?;
@@ -116,7 +106,7 @@ index 5c660ee3..0646909d 100644
  	}
  }
  
-@@ -43,4 +60,8 @@ impl codec::Bridge for Bridge {
+@@ -43,4 +61,8 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -126,7 +116,7 @@ index 5c660ee3..0646909d 100644
 +	}
  }
 diff --git a/src/codec/h265.rs b/src/codec/h265.rs
-index 2dd84798..014b000c 100644
+index 2dd84798..15d96d6b 100644
 --- a/src/codec/h265.rs
 +++ b/src/codec/h265.rs
 @@ -1,3 +1,4 @@
@@ -134,7 +124,7 @@ index 2dd84798..014b000c 100644
  //! H.265 bridge.
  //!
  //! str0m hands us reassembled Annex-B frames (start-code prefixed NALs with
-@@ -11,15 +12,31 @@ use crate::{Result, codec};
+@@ -11,15 +12,32 @@ use crate::{Result, codec};
  pub struct Bridge {
  	split: moq_mux::codec::h265::Split,
  	import: moq_mux::codec::h265::Import,
@@ -144,6 +134,7 @@ index 2dd84798..014b000c 100644
  
  impl Bridge {
  	/// Publish a `.hev1` track on `broadcast`, adding the catalog rendition once config is known.
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
  	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 -		let track = broadcast.unique_track(".hev1", catalog.track_info(hang::catalog::PRIORITY.video))?;
 -		let import = moq_mux::codec::h265::Import::new(track, catalog.reserve(), Default::default())?;
@@ -169,7 +160,7 @@ index 2dd84798..014b000c 100644
  	}
  }
  
-@@ -45,4 +62,8 @@ impl codec::Bridge for Bridge {
+@@ -45,4 +63,8 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -179,7 +170,7 @@ index 2dd84798..014b000c 100644
 +	}
  }
 diff --git a/src/codec/mod.rs b/src/codec/mod.rs
-index bfa5bf11..f53872df 100644
+index bfa5bf11..b83a2ee4 100644
 --- a/src/codec/mod.rs
 +++ b/src/codec/mod.rs
 @@ -1,3 +1,4 @@
@@ -199,7 +190,7 @@ index bfa5bf11..f53872df 100644
  }
  
  /// A bridge's finished track, held so a finished broadcast keeps serving it.
-@@ -139,6 +145,8 @@ enum DeferredState<I> {
+@@ -139,21 +145,47 @@ enum DeferredState<I> {
  /// Defers a video importer's catalog reservation until its first frame.
  pub(crate) struct DeferredVideo<I> {
  	state: DeferredState<I>,
@@ -208,7 +199,10 @@ index bfa5bf11..f53872df 100644
  }
  
  impl<I: DeferredImport> DeferredVideo<I> {
-@@ -148,12 +156,35 @@ impl<I: DeferredImport> DeferredVideo<I> {
+ 	/// Create the media track without gating the initial catalog snapshot.
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
+ 	pub fn new(
+ 		broadcast: moq_net::broadcast::Producer,
  		catalog: moq_mux::catalog::Producer,
  		suffix: &str,
  	) -> Result<Self> {
@@ -247,7 +241,7 @@ index bfa5bf11..f53872df 100644
  	pub fn decode(&mut self, frame: Bytes, pts: moq_net::Timestamp) -> Result<()> {
  		if let DeferredState::Active(import) = &mut self.state {
 diff --git a/src/codec/vp8.rs b/src/codec/vp8.rs
-index 3042b817..0ccf3e76 100644
+index 3042b817..015e9bb0 100644
 --- a/src/codec/vp8.rs
 +++ b/src/codec/vp8.rs
 @@ -1,3 +1,4 @@
@@ -255,9 +249,11 @@ index 3042b817..0ccf3e76 100644
  //! VP8 bridge.
  //!
  //! str0m hands us complete VP8 frames, which is exactly the raw shape that
-@@ -14,7 +15,16 @@ pub struct Bridge {
+@@ -13,8 +14,18 @@ pub struct Bridge {
+ 
  impl Bridge {
  	/// Publish a `.vp8` track on `broadcast`, adding the catalog rendition once config is known.
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
  	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 -		let import = codec::DeferredVideo::new(broadcast, catalog, ".vp8")?;
 +		Self::opening(broadcast, catalog, None)
@@ -273,7 +269,7 @@ index 3042b817..0ccf3e76 100644
  		Ok(Self { import })
  	}
  }
-@@ -36,6 +46,10 @@ impl codec::Bridge for Bridge {
+@@ -36,6 +47,10 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -285,7 +281,7 @@ index 3042b817..0ccf3e76 100644
  
  #[cfg(test)]
 diff --git a/src/codec/vp9.rs b/src/codec/vp9.rs
-index dc08add7..be715485 100644
+index dc08add7..ad0226ca 100644
 --- a/src/codec/vp9.rs
 +++ b/src/codec/vp9.rs
 @@ -1,3 +1,4 @@
@@ -293,9 +289,11 @@ index dc08add7..be715485 100644
  //! VP9 bridge.
  //!
  //! str0m hands us complete VP9 frames, which is exactly the raw shape that
-@@ -14,7 +15,16 @@ pub struct Bridge {
+@@ -13,8 +14,18 @@ pub struct Bridge {
+ 
  impl Bridge {
  	/// Publish a `.vp9` track on `broadcast`, adding the catalog rendition once config is known.
++	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
  	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 -		let import = codec::DeferredVideo::new(broadcast, catalog, ".vp9")?;
 +		Self::opening(broadcast, catalog, None)
@@ -311,7 +309,7 @@ index dc08add7..be715485 100644
  		Ok(Self { import })
  	}
  }
-@@ -36,4 +46,8 @@ impl codec::Bridge for Bridge {
+@@ -36,4 +47,8 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -438,10 +436,10 @@ index f26dfe30..b6b5e761 100644
  		self.bridges.abort(err);
 diff --git a/src/keyframe.rs b/src/keyframe.rs
 new file mode 100644
-index 00000000..94904ae5
+index 00000000..8ed88b03
 --- /dev/null
 +++ b/src/keyframe.rs
-@@ -0,0 +1,392 @@
+@@ -0,0 +1,386 @@
 +//! Ingest keyframe gate. One per video line. There is no viewer cause.
 +//!
 +//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
@@ -644,16 +642,10 @@ index 00000000..94904ae5
 +}
 +
 +/// Join against the live demand. The first reading requests nothing.
-+#[derive(Clone, Debug)]
++#[derive(Clone, Debug, Default)]
 +pub struct JoinWatch {
 +	seen: bool,
 +	fired_at: Option<u64>,
-+}
-+
-+impl Default for JoinWatch {
-+	fn default() -> Self {
-+		Self { seen: false, fired_at: None }
-+	}
 +}
 +
 +impl JoinWatch {
@@ -925,7 +917,7 @@ index 39cda0b2..9a444e38 100644
  		Error::Moq(moq_net::Error::Unauthorized) => StatusCode::UNAUTHORIZED,
  		_ => StatusCode::INTERNAL_SERVER_ERROR,
 diff --git a/src/session.rs b/src/session.rs
-index af0e9816..3bc92daa 100644
+index af0e9816..f4788392 100644
 --- a/src/session.rs
 +++ b/src/session.rs
 @@ -1,3 +1,4 @@
@@ -1051,10 +1043,10 @@ index af0e9816..3bc92daa 100644
 +		let mids: Vec<_> = self.gates.keys().copied().collect();
 +		for mid in mids {
 +			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
-+			if due.is_some() {
-+				if let Some(gate) = self.gates.get_mut(&mid) {
-+					gate.note(crate::keyframe::Cause::Period, now);
-+				}
++			if due.is_some()
++				&& let Some(gate) = self.gates.get_mut(&mid)
++			{
++				gate.note(crate::keyframe::Cause::Period, now);
 +			}
 +			self.flush_gate(policy, mid, None);
 +		}
@@ -1122,15 +1114,15 @@ index af0e9816..3bc92daa 100644
 +		let now = Instant::now();
 +		let media_us = media_time_to_micros(&data.time);
 +		let keyframe = data.is_keyframe();
-+		if keyframe {
-+			if let Some(gate) = self.gates.get_mut(&data.mid) {
-+				gate.on_keyframe(&policy, now);
-+			}
++		if keyframe
++			&& let Some(gate) = self.gates.get_mut(&data.mid)
++		{
++			gate.on_keyframe(&policy, now);
 +		}
-+		if policy.on_loss && !data.contiguous && !keyframe {
-+			if let Some(gate) = self.gates.get_mut(&data.mid) {
-+				gate.note(crate::keyframe::Cause::Loss, now);
-+			}
++		if policy.on_loss && !data.contiguous && !keyframe
++			&& let Some(gate) = self.gates.get_mut(&data.mid)
++		{
++			gate.note(crate::keyframe::Cause::Loss, now);
 +		}
 +		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
 +		match decision {
@@ -1149,10 +1141,10 @@ index af0e9816..3bc92daa 100644
 +		}
 +		let opens_group = keyframe || self.ingest_order.is_audio(data.mid);
 +		let mapped = self.ingest_clock.normalize(data.mid, arrival, media_us, opens_group);
-+		if mapped.deferred {
-+			if let Some(gate) = self.gates.get_mut(&data.mid) {
-+				gate.note(crate::keyframe::Cause::Step, now);
-+			}
++		if mapped.deferred
++			&& let Some(gate) = self.gates.get_mut(&data.mid)
++		{
++			gate.note(crate::keyframe::Cause::Step, now);
 +		}
 +		let stepped = mapped.stepped;
 +		let timestamp_us = mapped.timestamp_us;
@@ -1209,6 +1201,3 @@ index af0e9816..3bc92daa 100644
  	pub fn discontinuity(&mut self, mid: str0m::media::Mid) -> Result<()> {
  		if let Some(bridge) = self.inner.get_mut(&mid) {
  			bridge.discontinuity()?;
--- 
-2.54.0 (Apple Git-157)
-

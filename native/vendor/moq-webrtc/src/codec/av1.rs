@@ -17,6 +17,7 @@ pub struct Bridge {
 
 impl Bridge {
 	/// Publish an `.av1` track on `broadcast`, adding the catalog rendition once config is known.
+	#[allow(dead_code)] // Pin constructor. Ingest calls `opening` so a refresh ratio can be set.
 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
 		Self::opening(broadcast, catalog, None)
 	}
