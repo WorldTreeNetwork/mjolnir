@@ -53,7 +53,10 @@ try {
     const br = await launch(kind, null); browsers.push(br);
     const page = await open(br, 'r1', tok(tn || 'erin'), 'join');
     const r = await call(page, 'play', b, vc === '-' ? null : vc);
-    out({ step: 'join', browser: kind + ' ' + br.version(), broadcast: b, vcodec: vc, ...r });
+    await sleep(400);
+    let picture = null;
+    try { picture = await page.evaluate(name => window.content(name), 'play:' + b); } catch (e) { picture = { error: String(e) }; }
+    out({ step: 'join', browser: kind + ' ' + br.version(), broadcast: b, vcodec: vc, picture, ...r });
     if (r.error) process.exit(2);
   } else if (mode === 'pub') {
     const [who, b, vc, hold, tn] = a; const br = await launch('chromium', who); browsers.push(br);

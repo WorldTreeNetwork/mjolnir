@@ -62,10 +62,16 @@ function watchEnd(name, pc) {
 }
 
 window.publish = async (b, vcodec, tok) => {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { exact: 1280 }, height: { exact: 720 }, frameRate: 30 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
   const pc = new RTCPeerConnection();
   const vt = pc.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly' });
   pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendonly' });
+  const params = vt.sender.getParameters();
+  params.degradationPreference = 'maintain-resolution';
+  if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+  params.encodings[0].maxBitrate = 2500000;
+  params.encodings[0].scaleResolutionDownBy = 1;
+  await vt.sender.setParameters(params);
   prefer(vt, 'video', vcodec, 'send');
   const r = await negotiate('whip', b, pc, tok);
   const connectMs = await connected(pc);

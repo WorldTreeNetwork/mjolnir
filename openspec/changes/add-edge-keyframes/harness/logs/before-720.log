@@ -1,0 +1,69 @@
+# H1 before, unpatched pin. Comparable row for a later after run.
+# Not the same row as harness/logs/before-partial.txt (commit d0fcfc6a): that file is a
+# 1280x360 two-colour fixture, and part of it ran while the edge failed to bind.
+# Host: Framework5070, Arch Linux 7.2.14-arch1-1 x86_64. Not Ubuntu.
+# rustc 1.95.0 (59807616e 2026-04-14). hostname is not installed; address recorded from `ip`.
+# LAN 192.168.0.108/24 on wlp191s0. Tailscale on the same box: 100.121.90.25.
+# Pin moq 4a6f522483168ace392718d68b58a402533c897d (short 4a6f52248). moq-webrtc from git, not vendored. Policy off.
+# Binaries: /tmp/kf-h1/debug/{edge,harness}, built earlier with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_INCREMENTAL=0.
+# Browser: Chromium 156.0.8078.79, /usr/bin/chromium, Playwright 1.65.1 at /tmp/kf-pw, headless.
+# Fixture: ffmpeg testsrc2 1280x720 rate 30, drawtext frame number (NotoSans-Regular), sine 440 Hz.
+# Route: in-process relay on the Framework, edge listen 127.0.0.1:8088, ICE bound 192.168.0.108:40000,
+# advertised 192.168.0.108:40001 when the loss proxy was in front. edge_up=yes on every section below.
+# Boundary: browser firstPresentedMs is WHEP POST (window.lastPostAt) to requestVideoFrameCallback.
+# MoQ rows are harness raw-frame payload bytes, plus ffmpeg decode of an ivf written only when raw runs to its deadline.
+# UDP buffer warning (wanted 8388608, granted 4194304) was logged and left alone. No firewall or sysctl change.
+# Scratch /tmp/kf-h1 and /tmp/kf-before720 kept. /tmp/kf-before (the 360p partial) was not used.
+
+## A — meets the written target on this fixture
+WHEP POST to first presented frame. 10 joins each. Picture on every join: videoWidth 1280, videoHeight 720, audioPeakHz 439 except two VP8 samples at 434.
+H.264 answer codecs were H264 x6 plus opus. firstPresentedMs: 400 345 406 384 376 343 413 413 377 359.
+Sorted 343 345 359 376 377 384 400 406 413 413. Median 380.5 ms. Max 413 ms.
+VP8 answer codecs VP8 plus opus. firstPresentedMs: 564 367 467 428 515 511 448 494 424 164.
+Sorted 164 367 424 428 448 467 494 511 515 564. Median 457.5 ms. Max 564 ms.
+Join 10 connectMs was 4 and firstPresentedMs 164; the picture was still 1280x720 at 439 Hz.
+Both medians are under 2.0 s and both maxima under 2.5 s. The after run still has to show the cause, not treat this as adoption.
+
+## B — first payload is fast; the 10-join lag does not meet 2.2 s
+Publisher is the same 1280x720 VP8 ffmpeg pipe. Ten late subscribes, each killed at the first raw-frame, so those runs wrote no ivf.
+first_raw_s: 0.105 0.120 0.066 0.062 0.101 0.035 0.037 0.077 0.068 0.081. All under 1.0 s.
+The first four were the same payload (group_start=0, 14181 bytes, media=1s). The next six were the same payload (18072 bytes, media=2s).
+The publisher had already been running for about 4 s, so those groups are about 2–4 s behind the live edge. That misses lag ≤ 2.2 s.
+A later hold on a fresh publisher, same binary and fixture, let raw run 3 s so the ivf was written:
+ffprobe b-decode.ivf: vp8 1280x720, 102 frames, duration 3.40 s, about 1549 kb/s.
+First raw-frame of that hold: media=4s wall_ms=2, which matches the 4 s preroll (near live, not the cached 1 s group).
+Decoded frame /tmp/kf-before720/frames/b0.png is 1280x720. The frame-counter box has 618 bright pixels (sample 201,34,54), so the counter is present.
+B's subscribe time meets 1.0 s. B's 10-join lag does not meet 2.2 s. Do not call B a pass.
+
+## C — record only
+export path=carol/cam segments=1 chunks=2 bytes=193418 end=deadline.
+ffprobe c-export.1.mkv: vp8 yuv420p 1280x720, 30 fps, plus opus 48 kHz mono.
+Decoded frame frames/c0.png is 1280x720. Counter box has 263 bright pixels.
+
+## D1 — record only, one join, not a pass gate
+Viewer-side burst of 1.5 s from the first packet, same advertised address via lossy.py, fractional loss 0.
+Chromium join: connectMs 1578, firstPresentedMs 1777, picture 1280x720, audioPeakHz 439 (quieter: peakDb -75, rms 0.0184).
+Proxy: to_edge 46, to_edge_dropped 25, to_client 191, to_client_dropped 0.
+1.2 s is not a pass gate. One phase only.
+
+## D2 — publisher media was actually dropped; loss-cause does not exist on this pin
+WHIP from Chromium, fake capture of an 8 s 1280x720 testsrc2 y4m plus 440 Hz.
+Sender degradationPreference maintain-resolution, maxBitrate 2500000. Without that, Chromium encoded 640x360 under bandwidth pressure. That 640x360 attempt is discarded.
+A burst from the first packet only dropped 25 ICE packets and missed the media. Discarded.
+Recorded run: lossy.py --burst-after 3 --burst 1.5, fractional loss 0.
+Encoded size at t=3,6,9 s: 1280x720. keyFramesEncoded stayed 1. pliCount stayed 0. nackCount went 0 then 4.
+Proxy: to_edge 2793, to_edge_dropped 396, to_client 220, to_client_dropped 9.
+Decoded d2.ivf: vp8 1280x720, 181 frames, 6.03 s, about 2095 kb/s. frames/d2.png is 1280x720, counter box 366 bright pixels.
+Raw media timestamps have a 833 ms gap (2981144 µs to 3814144 µs) during the burst, plus a 134 ms gap earlier.
+rg of the edge log for loss-cause or cause=loss: 0. The unpatched pin has no loss-cause tag. No second keyframe was produced.
+D2's after gate (loss-cause PLI and a post-burst keyframe ≤ 1.2 s) is not met, and cannot be met before the patch.
+
+## F — policy off, probe boundary
+8 s raw of the ffmpeg 1280x720 VP8 publisher (1500k, gop 30).
+groups=3 frames=62 key_bytes=71624 other_bytes=323167 share=0.1814 quality=missing.
+ffprobe f.ivf: vp8 1280x720, 62 frames, duration 2.07 s, about 1530 kb/s.
+No ingest hook exists on this pin, so this is the policy-off cost, not the saturated-hook row.
+
+## Not claimed
+E (viewer storm) was not run. Adoption is not claimed. Ubuntu 24.04 was not this host.
+The two relay-hop traces named on row B were not captured in this pass.
