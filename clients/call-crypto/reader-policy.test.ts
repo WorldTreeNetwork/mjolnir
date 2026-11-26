@@ -602,10 +602,12 @@ const rows: [string, () => void][] = [
       const s = accept(p);
       const a = tracker(p, s, "audio", 120n);
       frame(a, 200n);
-      const again = tracker(p, s, "audio", 0n);
-      assert.equal(again.window, 120n);
-      assert.equal(frame(again, 100n), "deliver");
-      assert.deepEqual(again.mark, { group: 200n, index: 0 });
+      // A second start of a healthy name is refused (`live`), so no uncharged replacement exists;
+      // the window stays the first one.
+      assert.deepEqual(p.track(s, "audio", 0n), { kind: "live", track: "audio" });
+      assert.equal(a.window, 120n);
+      assert.equal(frame(a, 100n), "deliver");
+      assert.deepEqual(a.mark, { group: 200n, index: 0 });
     },
   ],
   [
@@ -659,8 +661,11 @@ const rows: [string, () => void][] = [
       const s2 = start(p, E2, 5);
       assert(p.authenticated(s2, "bridge.tracks", 6));
       assert.equal(p.trackCount, 0);
-      assert.equal(tracker(p, s2, "audio").mark, undefined);
-      failN(p, s2, "audio", 6, 7);
+      const fresh = tracker(p, s2, "audio");
+      assert.equal(fresh.mark, undefined);
+      // The new mark's budget is whole: six charged replacements after the first failure.
+      assert.equal(p.trackFailure(fresh, 7).kind, "resubscribe");
+      failN(p, s2, "audio", 5, 7);
     },
   ],
   [
@@ -726,7 +731,7 @@ const rows: [string, () => void][] = [
       assert.deepEqual(p.trackFailure({ name: "never-listed" } as any, 2), { kind: "ignored" });
       assert.equal(p.trackCount, 128);
       assert.equal(first.current, true);
-      assert.equal(tracker(p, s, "t0").mark?.group, 5n);
+      assert.equal(first.mark?.group, 5n);
     },
   ],
   [
@@ -877,7 +882,13 @@ const rows: [string, () => void][] = [
       });
       const h = p.retryTrack(s, "audio", 60002);
       assert(h instanceof TrackHandle);
-      assert.equal(p.trackFailure(h, 60002).kind, "resubscribe");
+      // The retry is itself a charged start (diff check 3): starts at 3..7 and 60002 fill the six,
+      // so failing it at once is exhausted again, until the stamp at 3 leaves the minute.
+      assert.deepEqual(p.trackFailure(h, 60002), {
+        kind: "unavailable_retryable",
+        track: "audio",
+        retryAt: 60003,
+      });
     },
   ],
   [
@@ -1250,7 +1261,12 @@ const rows: [string, () => void][] = [
       assert.throws(() => p.reconcile(undefined as any), TypeError);
       assert.throws(() => p.reconcile(42 as any), TypeError);
       assert.equal(JSON.stringify(p.inspect()), before);
-      assert.equal(p.reconcile(["bob/x/y", 7 as any, path(epoch(300))]), "complete");
+      // Malformed elements refuse the whole call; a well-formed path of another scope is ignored.
+      for (const bad of [["bob/x/y"], [7], [path(epoch(300)), 42], [`alice/${"A".repeat(22)}/nonsense`]]) {
+        assert.throws(() => p.reconcile(bad as any), TypeError);
+        assert.equal(JSON.stringify(p.inspect()), before);
+      }
+      assert.equal(p.reconcile([`bob/${"B".repeat(22)}/${epoch(1)}`, path(epoch(300))]), "complete");
     },
   ],
   [
@@ -1319,6 +1335,24 @@ const rows: [string, () => void][] = [
       }
       ok(() => h.frame({ group: -1n, index: 0, authenticated: true }));
       ok(() => h.frame({ group: 1n, index: 1.5, authenticated: true }));
+      // Field-level junk inside every object-shaped argument (diff check 3): values that a truthy
+      // or numeric coercion would accept must be refused, not interpreted.
+      const fieldJunk: any[] = ["false", "true", "1", 1, 0, {}, [], null, undefined, Object(true), 20, "20", 1n];
+      for (const v of fieldJunk) {
+        ok(() => h.frame({ group: 30n, index: 0, authenticated: v } as any));
+        if (typeof v !== "bigint") ok(() => h.frame({ group: v, index: 0, authenticated: true } as any));
+        if (typeof v !== "number" || !Number.isInteger(v)) ok(() => h.frame({ group: 30n, index: v, authenticated: true } as any));
+        const legit: Record<string, (x: any) => boolean> = {
+          profile: (x) => x === "moq-e2ee-01-wip",
+          kid: (x) => Number.isSafeInteger(x) && x >= 0,
+          label: (x) => typeof x === "string" && /^[-_A-Za-z0-9]{1,64}$/.test(x),
+          opaque: (x) => typeof x === "string" && /^[-_A-Za-z0-9]{22}$/.test(x),
+        };
+        for (const field of Object.keys(legit))
+          if (!legit[field](v)) assert.throws(() => new InstancePolicy({ ...scope, [field]: v } as any), TypeError);
+      }
+      ok(() => h.frame(null as any));
+      ok(() => h.frame(undefined as any));
     },
   ],
   [
@@ -1355,6 +1389,207 @@ const rows: [string, () => void][] = [
       p.tick(100000);
       assert.equal(JSON.stringify(p.inspect()), once);
       assert.equal(p.candidateCount, 0);
+    },
+  ],
+  // ---- C1 diff check 3, 2026-11-25 (reviews/2026-11-25-c1-diff-check-3.md) as rows.
+  // Red against acdd849: spikes/complete/logs/c1-round4-red.log.
+  [
+    "F01 (high) only a primitive boolean true is an authentication outcome",
+    () => {
+      const p = make();
+      const s = accept(p, E1, 0);
+      const h = tracker(p, s, "audio", 0n);
+      for (const junk of ["false", "true", 1, 0, {}, [], null, undefined, Object(true)]) {
+        assert.throws(() => h.frame({ group: 20n, index: 0, authenticated: junk } as any), TypeError);
+        assert.equal(h.mark, undefined);
+        assert.equal(h.remembered, 0);
+      }
+      assert.equal(frame(h, 20n, 0, false), "unauthenticated");
+      assert.equal(frame(h, 20n), "deliver");
+      const g = new GroupTracker(0n);
+      assert.throws(() => g.frame({ group: 1n, index: 0, authenticated: "false" } as any), TypeError);
+      assert.equal(g.mark, undefined);
+    },
+  ],
+  [
+    "F02 at most six replacement starts per track in a rolling minute, the clocked retry included",
+    () => {
+      const p = make();
+      const s = accept(p, E1, 0);
+      let h = tracker(p, s, "audio", 0n);
+      for (let t = 2; t <= 7; t++) {
+        assert.equal(p.trackFailure(h, t).kind, "resubscribe");
+        h = tracker(p, s, "audio", 0n);
+      }
+      assert.equal((p.trackFailure(h, 8) as any).retryAt, 60002);
+      assert.equal((p.retryTrack(s, "audio", 60001) as any).reason, "retry_wait");
+      const r = p.retryTrack(s, "audio", 60002);
+      assert(r instanceof TrackHandle);
+      assert.equal(p.inspect().tracks[0].resubs, 6);
+      assert.deepEqual(p.trackFailure(r, 60002), { kind: "unavailable_retryable", track: "audio", retryAt: 60003 });
+    },
+  ],
+  [
+    "F03 one charge per replacement: no retry on a healthy track, no duplicate starts, grants survive a reconnect",
+    () => {
+      const p = make();
+      const s = accept(p, E1, 0);
+      const h = tracker(p, s, "audio", 0n);
+      assert.deepEqual(p.retryTrack(s, "audio", 1), { kind: "live", track: "audio" });
+      assert.equal(h.current, true);
+      assert.equal(p.trackFailure(h, 2).kind, "resubscribe");
+      // the resubscribe grant is not a retry
+      assert.deepEqual(p.retryTrack(s, "audio", 3), { kind: "stale", track: "audio" });
+      const r1 = tracker(p, s, "audio", 0n); // consumes the grant, charged once
+      assert.deepEqual(p.track(s, "audio", 0n), { kind: "live", track: "audio" }); // duplicate timer
+      assert.equal(p.inspect().tracks[0].resubs, 1);
+      // a pending grant carried across a same-epoch reconnect is consumed and charged there
+      assert.equal(p.trackFailure(r1, 4).kind, "resubscribe");
+      const s2 = bounce(p, s, E1, 5);
+      tracker(p, s2, "audio", 0n);
+      assert.equal(p.inspect().tracks[0].resubs, 2);
+      // a name with no pending grant starts free in the new session
+      const v = tracker(p, s2, "video", 0n);
+      const s3 = bounce(p, s2, E1, 20000);
+      assert.equal(v.current, false);
+      tracker(p, s3, "video", 0n);
+      assert.equal(p.inspect().tracks.find((t) => t.name === "video")!.resubs, 0);
+    },
+  ],
+  [
+    "F04 a stale endInstance is refused before the clock moves",
+    () => {
+      const p = make();
+      const s1 = accept(p, E1, 0);
+      p.endInstance(s1, 1);
+      p.announce(path(E2));
+      must(p.subscribe(E2, 2));
+      const before = JSON.stringify(p.inspect());
+      assert.equal(p.endInstance(s1, 1502), false);
+      assert.equal(JSON.stringify(p.inspect()), before);
+      assert.equal(p.inspect().probe, E2);
+    },
+  ],
+  [
+    "F05 a stale retryTrack is refused before the clock moves",
+    () => {
+      const p = make();
+      const s1 = accept(p, E1, 0);
+      p.endInstance(s1, 1);
+      p.announce(path(E2));
+      must(p.subscribe(E2, 2));
+      const before = JSON.stringify(p.inspect());
+      assert.equal((p.retryTrack(s1, "never", 1502) as any).kind, "stale");
+      assert.equal((p.retryTrack(s1, "audio", 1502) as any).kind, "stale");
+      assert.equal(JSON.stringify(p.inspect()), before);
+    },
+  ],
+  [
+    "F06 the live probe's own callback at or after its deadline applies the timeout and returns false",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      const s = must(p.subscribe(E1, 0));
+      assert.equal(p.probeEnded(s, 1600), false);
+      assert.equal(p.inspect().now, 1600);
+      assert.equal(p.inspect().probe, undefined);
+      assert.equal(p.nextCandidate(4499), undefined); // backoff from the deadline, 1500 + 3000
+      assert.equal(p.nextCandidate(4500), E1);
+      const q = make();
+      q.announce(path(E1));
+      const t = must(q.subscribe(E1, 0));
+      assert.equal(q.authenticated(t, "bridge.tracks", 1500), false);
+      assert.equal(q.inspect().now, 1500);
+    },
+  ],
+  [
+    "F07 reconcile validates every element before committing; a bad element changes nothing",
+    () => {
+      const p = make();
+      accept(p, E1, 0);
+      p.announce(path(E2));
+      must(p.subscribe(E2, 2));
+      const before = JSON.stringify({ i: p.inspect(), s: p.status });
+      const throwing = {
+        *[Symbol.iterator]() {
+          yield path(E1);
+          throw new RangeError("iterator failed");
+        },
+      };
+      for (const bad of [[42], [path(E1), 42], [path(E1), undefined], [path(E1), "alice/call"]] as any[]) {
+        assert.throws(() => p.reconcile(bad), TypeError);
+        assert.equal(JSON.stringify({ i: p.inspect(), s: p.status }), before);
+      }
+      assert.throws(() => p.reconcile(throwing as any), RangeError);
+      assert.equal(JSON.stringify({ i: p.inspect(), s: p.status }), before);
+    },
+  ],
+  [
+    "F08 reconcile of 65,536 lazy paths with duplicates keeps the greatest 256 in bounded scratch",
+    () => {
+      const p = make();
+      function* many() {
+        for (let i = 1; i <= 65536; i++) {
+          yield path(epoch(i));
+          if (i % 1000 === 0) yield path(epoch(i)); // duplicates
+        }
+      }
+      assert.equal(p.reconcile(many()), "incomplete");
+      assert.equal(p.candidateCount, 256);
+      assert.equal(p.nextCandidate(0), epoch(65536));
+      const kept = p.inspect().candidates.map((c) => c.epoch).sort();
+      assert.equal(kept[0], epoch(65536 - 255));
+      // exactly 256 distinct (with duplicates) fits and completes
+      const q = make();
+      const exact: string[] = [];
+      for (let i = 1; i <= 256; i++) exact.push(path(epoch(i)), path(epoch(i)));
+      assert.equal(q.reconcile(exact), "complete");
+    },
+  ],
+  [
+    "F09 an earlier attempt's failure stays fenced after a greater epoch is accepted",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      const a = must(p.subscribe(E1, 0));
+      p.tick(1500);
+      const b = must(p.subscribe(E1, 4500));
+      assert.equal(p.authenticated(b, "bridge.tracks", 4501), "accepted");
+      p.announce(path(E2));
+      const c = must(p.subscribe(E2, 4502));
+      assert.equal(p.authenticated(c, "bridge.tracks", 4503), "accepted");
+      const before = JSON.stringify(p.inspect());
+      assert.equal(p.rejectCandidate(a, 4504), false);
+      assert.equal(JSON.stringify(p.inspect()), before);
+    },
+  ],
+  [
+    "F10 scope fields must be the declared primitives; absent scope is undefined only",
+    () => {
+      for (const bad of [
+        { ...scope, label: 123 },
+        { ...scope, opaque: ["A".repeat(22)] },
+        { ...scope, kid: "1" },
+        { ...scope, profile: ["moq-e2ee-01-wip"] },
+        null,
+        "scope",
+      ])
+        assert.throws(() => new InstancePolicy(bad as any), TypeError);
+      assert.equal(new InstancePolicy(undefined).status.inviteNeeded, true);
+    },
+  ],
+  [
+    "F11 a valid-shaped but ineligible subscribe changes nothing, not even the clock",
+    () => {
+      const p = make();
+      p.announce(path(E1));
+      must(p.subscribe(E1, 0));
+      p.announce(path(E2));
+      const before = JSON.stringify(p.inspect());
+      assert.equal(p.subscribe(E2, 1499), false); // probe still live
+      assert.equal(p.subscribe(E3, 5000), false); // not announced
+      assert.equal(JSON.stringify(p.inspect()), before);
+      assert.equal(p.subscribe(E2, 1500) !== false, true); // eligible once the deadline passes
     },
   ],
 ];

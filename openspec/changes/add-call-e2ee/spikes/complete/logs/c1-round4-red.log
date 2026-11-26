@@ -1,0 +1,24 @@
+# red: diff-check-3 inputs against acdd849 (HEAD a9c765d); round4-red.test.ts not kept
+$ node --test --test-reporter=tap clients/call-crypto/round4-red.test.ts
+not ok 1 - HIGH authenticated:'false' cannot advance the frame mark
+  expected: 'deliver'
+  actual: 'deliver'
+not ok 2 - retry budget: at most six replacement starts in a rolling minute
+  expected: 'unavailable_retryable'
+  actual: 'resubscribe'
+not ok 3 - retryTrack on a healthy track is refused and keeps the live handle
+  expected: true
+  actual: false
+not ok 4 - a stale endInstance cannot expire a live probe
+  expected: '00000002-0000-7000-8000-000000000000'
+not ok 5 - a stale retryTrack cannot expire a live probe
+  expected: '00000002-0000-7000-8000-000000000000'
+not ok 6 - reconcile([42]) refuses and changes nothing
+  expected: '{"now":2,"incomplete":false,"probe":"00000002-0000-7000-8000-000000000000","candidates":[{"epoch":"00000001-0000-7000-8000-000000000000","available":true,"retryAt":0},{"epoch":"00000002-0000-7000-8000-000000000000","available":true,"retryAt":0}],"bars":[],"paceRetryAt":0,"tracks":[]}'
+  actual: '{"now":2,"incomplete":false,"probe":"00000002-0000-7000-8000-000000000000","candidates":[{"epoch":"00000001-0000-7000-8000-000000000000","available":false,"retryAt":0},{"epoch":"00000002-0000-7000-8000-000000000000","available":false,"retryAt":0}],"bars":[],"paceRetryAt":0,"tracks":[]}'
+not ok 7 - an earlier attempt's failure stays fenced after a greater epoch is accepted
+  expected: false
+  actual: true
+not ok 8 - a numeric scope label is refused
+# pass 0
+# fail 8
