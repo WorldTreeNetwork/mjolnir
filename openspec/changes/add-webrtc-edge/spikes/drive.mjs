@@ -62,6 +62,22 @@ try {
     if (r.error) process.exit(2);
     await sleep(+hold * 1000);
     out({ step: 'stats', ...(await page.evaluate(n => window.stats(n), 'pub:' + b)) });
+  } else if (mode === 'viewers' || mode === 'publishers') {
+    // Load for the cost claim: K WHEP plays of one broadcast, or K WHIP publishes (p0..pK-1), in one browser.
+    const [k, hold] = a.map(Number); const br = await launch('chromium', mode === 'publishers' ? 'busy' : null); browsers.push(br);
+    const pages = [];
+    for (let i = 0; i < k; i++) {
+      const name = mode === 'publishers' ? 'p' + i : 'erin';
+      const page = await open(br, 'r1', tok(name), name); pages.push(page);
+      const r = mode === 'publishers' ? await call(page, 'publish', `p${i}/cam`, 'H264') : await call(page, 'play', 'carol/cam', null);
+      if (r.error) { out({ step: 'load-error', i, error: r.error }); process.exit(2); }
+    }
+    out({ step: 'load-ready', mode, k });
+    await sleep(hold * 1000);
+    const st = await Promise.all(pages.map(p => p.evaluate(() => window.stats(Object.keys(window.pcs)[0]))));
+    out({ step: 'load-done', mode, k, perSession: st.map(x => mode === 'publishers'
+      ? { w: x.videoOut?.frameWidth, enc: x.videoOut?.framesEncoded, kbytes: Math.round((x.videoOut?.bytesSent || 0) / 1024), limit: x.videoOut?.qualityLimitationReason }
+      : { w: x.videoIn?.frameWidth, dec: x.videoIn?.framesDecoded, kbytes: Math.round((x.videoIn?.bytesReceived || 0) / 1024), lost: x.videoIn?.packetsLost, freeze: x.videoIn?.freezeCount }) });
   } else if (mode === 'play') {
     const [kind, b, vc, hold, l, r_, hz, tn] = a; const br = await launch(kind); browsers.push(br);
     const page = await open(br, 'r1', tok(tn || 'erin'), kind);

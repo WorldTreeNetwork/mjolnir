@@ -1,0 +1,24 @@
+# claim7 cost 2026-11-26T02:14:17Z Apple M1 Max 10 cores; load: 4.07 11.17 11.32
+# edge binary: /Users/dukejones/work/IdentiKey/mjolnir/native/mjolnir_relay/target/release/edge (33310464 bytes)
+cpu idle: mean=0% max=.2% rss=9216KiB
+cpu native source only (MoQ in, no WebRTC): mean=0% max=0% rss=9216KiB
+cpu 1 WHEP viewers: mean=3.0% max=3.9% rss=28736KiB
+{"step":"load-done","mode":"viewers","k":1,"perSession":[{"w":1280,"dec":432,"kbytes":3529,"lost":0,"freeze":0}]}
+cpu 4 WHEP viewers: mean=17.0% max=19.4% rss=42528KiB
+{"step":"load-done","mode":"viewers","k":4,"perSession":[{"w":1280,"dec":470,"kbytes":3836,"lost":0,"freeze":0},{"w":1280,"dec":457,"kbytes":3720,"lost":0,"freeze":0},{"w":1280,"dec":443,"kbytes":3615,"lost":0,"freeze":0},{"w":1280,"dec":431,"kbytes":3503,"lost":0,"freeze":0}]}
+cpu 8 WHEP viewers: mean=47.3% max=53.2% rss=68752KiB
+{"step":"load-done","mode":"viewers","k":8,"perSession":[{"w":1280,"dec":535,"kbytes":4344,"lost":0,"freeze":0},{"w":1280,"dec":518,"kbytes":4200,"lost":0,"freeze":0},{"w":1280,"dec":497,"kbytes":4085,"lost":0,"freeze":1},{"w":1280,"dec":483,"kbytes":3926,"lost":0,"freeze":0},{"w":1280,"dec":464,"kbytes":3773,"lost":0,"freeze":0},{"w":1280,"dec":464,"kbytes":3773,"lost":0,"freeze":0},{"w":1280,"dec":445,"kbytes":3606,"lost":0,"freeze":0},{"w":1280,"dec":426,"kbytes":3460,"lost":0,"freeze":0}]}
+cpu 1 WHIP publishers: mean=1.6% max=2.3% rss=73840KiB
+{"step":"load-done","mode":"publishers","k":1,"perSession":[{"w":640,"enc":653,"kbytes":4956,"limit":"bandwidth"}]}
+cpu 4 WHIP publishers: mean=5.7% max=6.3% rss=99808KiB
+{"step":"load-done","mode":"publishers","k":4,"perSession":[{"w":640,"enc":683,"kbytes":5257,"limit":"bandwidth"},{"w":640,"enc":675,"kbytes":5131,"limit":"bandwidth"},{"w":640,"enc":663,"kbytes":5099,"limit":"bandwidth"},{"w":640,"enc":655,"kbytes":4999,"limit":"bandwidth"}]}
+# UDP sockets held by the edge (one shared media port):
+lsof: WARNING: can't stat() smbfs file system /Volumes/.timemachine/MORPHISTNAS._smb._tcp.local./7B29A655-8E03-4F0B-ABF5-706506EED0AF/Time Machine - duke-m1-laptop
+      Output information may be incomplete.
+      assuming "dev=36000017" from mount table
+   1 UDP 127.0.0.1:50327
+   1 UDP 127.0.0.1:54379
+   1 UDP 127.0.0.1:59095
+   1 UDP 127.0.0.1:61069
+   1 UDP 127.0.0.1:61499
+   1 UDP 192.168.0.132:63210

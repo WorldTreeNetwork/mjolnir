@@ -21,7 +21,7 @@ start_relay() {
   echo $! > "$P/relay.pid"; wait_grep "$P/relay.log" "relay up"
 }
 start_edge() {  # extra args, e.g. --no-expiry-timer
-  "$BIN/edge" 127.0.0.1:8088 "$LAN:0" "https://$(cat "$P/relay.txt")/" "$P/verify.json" "$@" > "$P/edge.log" 2>&1 &
+  "${EDGE_BIN:-$BIN/edge}" 127.0.0.1:8088 "$LAN:0" "https://$(cat "$P/relay.txt")/" "$P/verify.json" "$@" > "$P/edge.log" 2>&1 &
   echo $! > "$P/edge.pid"; wait_grep "$P/edge.log" "edge up"
 }
 stop_edge() { [ -f "$P/edge.pid" ] && kill "$(cat "$P/edge.pid")" 2>/dev/null; rm -f "$P/edge.pid"; pause 0.3; }
