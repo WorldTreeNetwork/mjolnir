@@ -1,0 +1,28 @@
+# extra 2026-11-26T04:42:00Z
+quic=127.0.0.1:50846 iroh=7824f03c232b73d0f76c15d5d1451c5f78d79fa0cdf4b4df746e87dbe6a43870
+## simultaneous: open publisher, open reader, protected reader of the open path
+### open reader
+connected
+killed-after-8s
+exit=124
+### protected reader of open path
+connected
+killed-after-8s
+exit=124
+### open publisher
+client-endpoint=dde041236104f127733983eaa9f2bbb770b24552a349c2b2b3cbadec373381a1
+connected
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker bytes=570
+## open token publishes protected absolute path; protected reader listens
+### protected reader of stolen
+connected
+killed-after-8s
+exit=124
+### stolen publisher
+client-endpoint=e7cffb6842307af8cb471b59bcb352d247e28ab3ae39d402ef5d7782225bf280
+connected
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen bytes=570
+## chromium one at a time (WebTransport ready + unidirectional write, not MoQ frames)
+literal ready wrote=20
+encoded ready wrote=20
+double ready wrote=20

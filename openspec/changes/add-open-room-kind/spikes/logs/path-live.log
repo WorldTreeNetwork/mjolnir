@@ -1,0 +1,157 @@
+# path-marker live transport
+date=2026-11-26T04:39:41Z
+quic=127.0.0.1:52765 iroh_endpoint=551868f9a0aa0535fd1a84016e29fe7fe7c87da9ff7266e6e49c8c71acbdd388 cert_sha256=594cc259446be46cade3c0cf8694c34dfd427fc11642047cc66f7224921cf689
+open_root=t/<owner>/~open/standup protected_root=t/<owner>/standup
+relay=production spawn_web_decider + TokenPolicy (no kind claim, no patched verifier)
+spike=Error: usage: kind-spike relay|sign|offline
+
+
+## native WebTransport (wt-session), 4s publish / 3s read
+
+### wt publish open-marker on open root
+
+### wt publish prot-marker on protected root
+
+### wt own-read open-marker
+
+### wt own-read prot-marker
+
+### wt cross-read open token reads prot path via protected URL
+
+### wt cross-read protected token reads open URL
+Error: unauthorized
+Error: unauthorized
+exit=1
+exit=1
+held
+published path=prot-marker bytes=380
+released
+exit=0
+held
+published path=open-marker bytes=380
+released
+exit=0
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("6d2bf10cbbd29b4441c14be3540e5431", "minted")), epoch: 0, hops: Hops([Hop { id: 3584217195432762 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=open-marker frames=14 bytes=266
+exit=0
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("prot-marker"), captures: Some([Pattern("prot-marker")]), route: RouteInfo { instance: Some(Instance("b80c0edb22f4b83187554f35a939645e", "minted")), epoch: 0, hops: Hops([Hop { id: 5334650541201309 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=prot-marker frames=14 bytes=266
+exit=0
+
+## native WebTransport refusals and announcements
+
+### wt encoded marker %7Eopen with open token
+refused: unauthorized
+exit=0
+
+### wt double-encoded %257Eopen with open token
+refused: unauthorized
+exit=0
+
+### wt literal tilde path is the open root (control admit via hold 1s)
+held
+released
+exit=0
+
+### wt subscribe-only token cannot publish
+Error: unauthorized
+exit=1
+
+### wt wide owner token hold on open URL (relay admits; edge must not)
+held
+released
+exit=0
+
+### wt wide owner token hold on protected URL
+held
+released
+exit=0
+
+### wt announce on open root
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("open-marker"), captures: Some([Pattern("open-marker")]), route: RouteInfo { instance: Some(Instance("7f192d4f7d0917e48cd09837df376d92", "minted")), epoch: 0, hops: Hops([Hop { id: 7122417952145436 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+exit=0
+
+### wt announce on protected root
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("prot-marker"), captures: Some([Pattern("prot-marker")]), route: RouteInfo { instance: Some(Instance("2d7a237528e6c787baa93d09792981a5", "minted")), epoch: 0, hops: Hops([Hop { id: 3110134036732354 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: End, announce: Announce { prefix: Path("prot-marker"), captures: Some([Pattern("prot-marker")]), route: RouteInfo { instance: Some(Instance("2d7a237528e6c787baa93d09792981a5", "minted")), epoch: 0, hops: Hops([Hop { id: 3110134036732354 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("prot-marker"), captures: Some([Pattern("prot-marker")]), route: RouteInfo { instance: Some(Instance("dbebaea3b0ab84aeff271fb0b9a1ac94", "minted")), epoch: 0, hops: Hops([Hop { id: 5334650541201309 }, Hop { id: 2026331055166051 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+exit=0
+
+## Iroh (absolute paths)
+
+### iroh publish open-marker
+
+### iroh publish prot-marker
+
+### iroh own-read open
+
+### iroh own-read protected
+
+### iroh cross-read open token on protected path
+
+### iroh cross-read protected token on open path
+connected
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker frames=1 bytes=19
+exit=0
+client-endpoint=fbef8f146d73b5eeab7fff76ee2d420fa1e2c702d78881deb5643e832e33172e
+connected
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker bytes=380
+exit=0
+client-endpoint=ed2ef1a96ebc3acb28c7e13018b9c5be4137ef0f7c35dc1ad5aee20978dee106
+connected
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker bytes=380
+exit=0
+connected
+Error: subscribe: unroutable
+exit=1
+connected
+killed-after-12s
+exit=124
+connected
+killed-after-12s
+exit=124
+
+### iroh announce open token
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/open-marker")]), route: RouteInfo { instance: Some(Instance("1550738d6ea0fd3671f3c554ce9295bf", "minted")), epoch: 0, hops: Hops([Hop { id: 6291562462542453 }, Hop { id: 2026331055166051 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(2026331055166051), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+exit=0
+
+### iroh announce protected token
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker")]), route: RouteInfo { instance: Some(Instance("a7244e0f77223cf668e40b659042a9bc", "minted")), epoch: 0, hops: Hops([Hop { id: 5390741796612505 }, Hop { id: 2026331055166051 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(2026331055166051), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announce: Absent(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/prot-marker")]), route: RouteInfo { instance: Some(Instance("a7244e0f77223cf668e40b659042a9bc", "minted")), epoch: 0, hops: Hops([Hop { id: 5390741796612505 }, Hop { id: 2026331055166051 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(2026331055166051), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=2
+exit=0
+
+### iroh publish open token onto protected absolute path
+client-endpoint=fee5d6cebc424b5f0f040bbe50e3dd4ec92ae45d4fcbfde663c135d523b4a5fd
+connected
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen bytes=190
+exit=0
+
+## Chromium WebTransport (headless, serverCertificateHashes, unidirectional write)
+chromium=
+page_port 55661
+{
+  "encoded": "ready wrote=20 urlpath=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup"
+}
+
+### chrome stderr tails
+-- chrome-double.err
+ay_link_mac.mm:192] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[99520:2404367:1125/204042.327324:ERROR:base/apple/mach_port_rendezvous_mac.cc:256] bootstrap_look_up com.google.chrome.for.testing.MachPortRendezvousServer.1: Permission denied (1100)
+[99520:2404367:1125/204042.327613:ERROR:base/memory/shared_memory_switch.cc:261] No rendezvous client, terminating process (parent died?)
+
+-- chrome-encoded.err
+ay_link_mac.mm:192] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[99517:2404365:1125/204042.323528:ERROR:base/apple/mach_port_rendezvous_mac.cc:256] bootstrap_look_up com.google.chrome.for.testing.MachPortRendezvousServer.1: Permission denied (1100)
+[99517:2404365:1125/204042.323834:ERROR:base/memory/shared_memory_switch.cc:261] No rendezvous client, terminating process (parent died?)
+
+-- chrome-literal.err
+ay_link_mac.mm:192] CVDisplayLinkCreateWithCGDisplay failed. CVReturn: -6670
+[99518:2404366:1125/204042.323233:ERROR:base/apple/mach_port_rendezvous_mac.cc:256] bootstrap_look_up com.google.chrome.for.testing.MachPortRendezvousServer.1: Permission denied (1100)
+[99518:2404366:1125/204042.323563:ERROR:base/memory/shared_memory_switch.cc:261] No rendezvous client, terminating process (parent died?)
+
