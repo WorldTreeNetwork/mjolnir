@@ -123,8 +123,115 @@ defmodule Mjolnir.API.RelayMintRouterTest do
     assert get_resp_header(conn, "cache-control") == ["no-store"]
     body = Jason.decode!(conn.resp_body)
     assert body["root"] == "t/#{ctx.owner}/standup"
+    assert body["kind"] == "protected"
     assert body["publish"] == "alice/**"
     refute body["root"] =~ "not-the-caller"
+  end
+
+  test "the root follows the JSON body, not a header or query kind", ctx do
+    token = user_token(ctx)
+
+    open =
+      authed(ctx, token, "/api/relay/rooms/standup/participants/alice/token?kind=protected", %{
+        "kind" => "open"
+      })
+      |> put_req_header("x-room-kind", "protected")
+      |> Router.call(@opts)
+
+    assert open.status == 200
+    assert get_resp_header(open, "cache-control") == ["no-store"]
+    body = Jason.decode!(open.resp_body)
+    assert body["kind"] == "open"
+    assert body["root"] == "t/#{ctx.owner}/~open/standup"
+
+    header_only =
+      authed(ctx, token, "/api/relay/rooms/standup/participants/alice/token?kind=open", %{})
+      |> put_req_header("x-room-kind", "open")
+      |> Router.call(@opts)
+
+    assert header_only.status == 200
+    ignored = Jason.decode!(header_only.resp_body)
+    assert ignored["kind"] == "protected"
+    assert ignored["root"] == "t/#{ctx.owner}/standup"
+  end
+
+  test "Bandit decodes one percent-escape before the product router", ctx do
+    token = user_token(ctx)
+    parent = self()
+
+    {:ok, server} =
+      Bandit.start_link(
+        plug: {Mjolnir.API.RelayMintRouterTest.Observe, parent},
+        ip: {127, 0, 0, 1},
+        port: 0
+      )
+
+    {:ok, {_addr, port}} = ThousandIsland.listener_info(server)
+
+    on_exit(fn ->
+      if Process.alive?(server), do: Process.exit(server, :shutdown)
+    end)
+
+    for {path, room} <- [
+          {"/api/relay/rooms/~open/participants/alice/token", "~open"},
+          {"/api/relay/rooms/%7Eopen/participants/alice/token", "~open"},
+          {"/api/relay/rooms/%257Eopen/participants/alice/token", "%257Eopen"}
+        ] do
+      {:ok, {{_, 400, _}, _, body}} =
+        :httpc.request(
+          :post,
+          {~c"http://127.0.0.1:#{port}#{path}", [{~c"authorization", ~c"Bearer #{token}"}],
+           ~c"application/json", ~c"{}"},
+          [],
+          []
+        )
+
+      assert Jason.decode!(body)["error"] == "bad_segment"
+
+      assert_receive {:dispatched, _request_path,
+                      ["api", "relay", "rooms", ^room, "participants", "alice", "token"]}
+    end
+  end
+
+  test "marker spellings are bad room segments and do not mint an open root", ctx do
+    token = user_token(ctx)
+
+    for room <- ["~open", "%7Eopen", "%257Eopen"] do
+      conn =
+        authed(ctx, token, "/api/relay/rooms/#{room}/participants/alice/token", %{
+          "kind" => "open"
+        })
+        |> Router.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"] == "bad_segment"
+    end
+  end
+
+  defp user_token(ctx) do
+    {private, public} = issuer_key()
+    opts = JwksStrategy.init_opts(issuer: @issuer, auth_dir: ctx.dir)
+    assert {:ok, _} = JwksCache.persist(%{"keys" => [public]}, opts)
+
+    start_supervised!(
+      {JwksStrategy,
+       opts
+       |> Keyword.put(:time_interval, 60_000)
+       |> Keyword.put(:http_adapter, fn _ -> {:error, :econnrefused} end)}
+    )
+
+    Joken.generate_and_sign!(
+      %{},
+      %{"iss" => @issuer, "sub" => ctx.owner, "exp" => Joken.current_time() + 600},
+      Joken.Signer.create("ES256", elem(JOSE.JWK.to_map(private), 1), %{"kid" => "A"})
+    )
+  end
+
+  defp authed(_ctx, token, path, body) do
+    conn(:post, path, Jason.encode!(body))
+    |> Map.put(:remote_ip, {1, 2, 3, 4})
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("authorization", "Bearer " <> token)
   end
 
   defp issuer_key do
@@ -135,4 +242,17 @@ defmodule Mjolnir.API.RelayMintRouterTest do
 
   defp restore(key, nil), do: Application.delete_env(:mjolnir, key)
   defp restore(key, value), do: Application.put_env(:mjolnir, key, value)
+end
+
+defmodule Mjolnir.API.RelayMintRouterTest.Observe do
+  @behaviour Plug
+
+  @impl true
+  def init(parent), do: parent
+
+  @impl true
+  def call(conn, parent) do
+    send(parent, {:dispatched, conn.request_path, conn.path_info})
+    Mjolnir.API.Router.call(conn, Mjolnir.API.Router.init([]))
+  end
 end

@@ -50,6 +50,7 @@ defmodule Mjolnir.Relay.MintTest do
              )
 
     assert minted.root == "t/#{ctx.owner}/standup"
+    assert minted.kind == "protected"
     assert minted.publish == "alice/**"
     assert minted.subscribe == "**"
     assert minted.relay_host == "relay.test"
@@ -76,6 +77,110 @@ defmodule Mjolnir.Relay.MintTest do
     assert claims["exp"] == minted.expires
     assert String.length(claims["jti"]) == 22
     refute Map.has_key?(claims, "aud")
+  end
+
+  defp claims(token) do
+    [_header, payload, _sig] = String.split(token, ".")
+    Jason.decode!(Base.url_decode64!(payload, padding: false))
+  end
+
+  test "open root", ctx do
+    assert {:ok, minted} =
+             Mjolnir.Relay.Mint.issue(
+               ctx.caller.("relay:join"),
+               "standup",
+               "alice",
+               %{"kind" => "open"},
+               opts(ctx)
+             )
+
+    assert minted.kind == "open"
+    assert minted.root == "t/#{ctx.owner}/~open/standup"
+    claims = claims(minted.token)
+    assert Map.keys(claims) |> Enum.sort() == ~w(exp iat jti publish root subscribe)
+    assert claims["root"] == minted.root
+    refute Map.has_key?(claims, "kind")
+  end
+
+  test "protected root unchanged", ctx do
+    for body <- [%{}, %{"kind" => "protected"}, %{"ttl" => 60}] do
+      assert {:ok, minted} =
+               Mjolnir.Relay.Mint.issue(
+                 ctx.caller.("relay:join"),
+                 "standup",
+                 "alice",
+                 body,
+                 opts(ctx)
+               )
+
+      assert minted.kind == "protected"
+      assert minted.root == "t/#{ctx.owner}/standup"
+
+      assert Map.keys(claims(minted.token)) |> Enum.sort() ==
+               ~w(exp iat jti publish root subscribe)
+    end
+  end
+
+  test "bad kind is 400 with and without the env file", ctx do
+    caller = ctx.caller.("relay:join")
+
+    for body <- [
+          %{"kind" => "Open"},
+          %{"kind" => "open "},
+          %{"kind" => ""},
+          %{"kind" => nil},
+          %{"kind" => 1},
+          %{"kind" => true},
+          %{"kind" => ["open"]},
+          %{"kind" => %{}}
+        ] do
+      assert {:error, 400, "bad_kind"} =
+               Mjolnir.Relay.Mint.issue(caller, "standup", "alice", body, opts(ctx))
+    end
+
+    missing = [env_path: Path.join(ctx.env, "missing.env"), key_path: ctx.key, uid: ctx.uid]
+
+    assert {:error, 400, "bad_kind"} =
+             Mjolnir.Relay.Mint.issue(caller, "standup", "alice", %{"kind" => "Open"}, missing)
+  end
+
+  test "the log records the validated kind and not the token", ctx do
+    level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      log =
+        capture_log(fn ->
+          assert {:ok, _} =
+                   Mjolnir.Relay.Mint.issue(
+                     ctx.caller.("relay:join"),
+                     "standup",
+                     "alice",
+                     %{"kind" => "open"},
+                     opts(ctx)
+                   )
+        end)
+
+      assert log =~ "kind=open"
+      refute log =~ "eyJ"
+
+      rejected =
+        capture_log(fn ->
+          assert {:error, 400, "bad_kind"} =
+                   Mjolnir.Relay.Mint.issue(
+                     ctx.caller.("relay:join"),
+                     "standup",
+                     "alice",
+                     %{"kind" => "Open"},
+                     opts(ctx)
+                   )
+        end)
+
+      refute rejected =~ "Open"
+      refute rejected =~ "kind="
+    after
+      Logger.configure(level: level)
+    end
   end
 
   test "ttl edges are 400", ctx do

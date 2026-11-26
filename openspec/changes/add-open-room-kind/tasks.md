@@ -27,19 +27,19 @@ These are the trial's contract. They are not an advise accept.
 
 ## Mint (after accept)
 
-- [ ] `mint_test.exs` "open root": body `%{"kind" => "open"}` yields root `t/<owner>/~open/<room>`, claim names exactly today's six, response `kind` `open`. Red first.
-- [ ] `mint_test.exs` "protected root unchanged": omitted `kind` and `%{"kind" => "protected"}` yield `t/<owner>/<room>`, today's claim names, response `kind` `protected`. The existing first test gains one `kind` assertion and no claim-name change.
-- [ ] `mint_test.exs` "bad kind": `"Open"`, `"open "`, `""`, `nil`, `1`, `true`, `["open"]`, `%{}` are 400 `bad_kind` with and without the env file. Red first.
-- [ ] `mint_test.exs` log: validated `kind=open` or `kind=protected` only. A rejected raw value is absent. The token is absent.
-- [ ] Router test: body versus `x-room-kind` and `?kind=` . The root follows the body. `Cache-Control: no-store`.
-- [ ] Old-controller fixture, captured before the mint change: body `%{"kind" => "open"}` has no response `kind` and root `t/<owner>/<room>`. `.15` consumes it. Red is not expected; the fixture records today's silence.
-- [ ] Classifier unit corpus: the three-way table in D1, including wide, encoded, double-encoded, case-folded marker, and non-canonical owner. No product relay change.
+- [x] `mint_test.exs` "open root": body `%{"kind" => "open"}` yields root `t/<owner>/~open/<room>`, claim names exactly today's six, response `kind` `open`. Red first.
+- [x] `mint_test.exs` "protected root unchanged": omitted `kind` and `%{"kind" => "protected"}` yield `t/<owner>/<room>`, today's claim names, response `kind` `protected`. The existing first test gains one `kind` assertion and no claim-name change.
+- [x] `mint_test.exs` "bad kind": `"Open"`, `"open "`, `""`, `nil`, `1`, `true`, `["open"]`, `%{}` are 400 `bad_kind` with and without the env file. Red first.
+- [x] `mint_test.exs` log: validated `kind=open` or `kind=protected` only. A rejected raw value is absent. The token is absent.
+- [x] Router test: body versus `x-room-kind` and `?kind=` . The root follows the body. `Cache-Control: no-store`.
+- [x] Old-controller fixture, captured before the mint change: body `%{"kind" => "open"}` has no response `kind` and root `t/<owner>/<room>`. `.15` consumes it. Red is not expected; the fixture records today's silence.
+- [x] Classifier unit corpus: the three-way table in D1, including wide, encoded, double-encoded, case-folded marker, and non-canonical owner. No product relay change.
 
 ## Docs
 
-- [ ] `docs/runbooks/edge-relay.md`: open roots are `t/<owner>/~open/<room>`; no relay deploy and no switch for this mechanism; wide tokens still span both.
-- [ ] `CLAUDE.md` relay line: body `kind`, the two roots, no kind claim.
-- [ ] ADR 0019 marked with the advise verdict when it exists. It stays draft until then.
+- [x] `docs/runbooks/edge-relay.md`: open roots are `t/<owner>/~open/<room>`; no relay deploy and no switch for this mechanism; wide tokens still span both. Controller-only deploy and rollback steps are written there and are not an authorization to run them.
+- [x] `CLAUDE.md` relay line: body `kind`, the two roots, no kind claim. `Agents.md` has no copy of that route sentence, so it was left unchanged.
+- [x] ADR 0019 marked with the advise verdict. It stays draft. Not folded.
 
 ## Production
 
@@ -60,10 +60,10 @@ Review: `reviews/2026-11-26-advise.md`, contract `3a64e421`, send-back. These ar
 
 The historical R1–R4 wording above records the author's amendment. Fresh advise is now checked only at the Gate above. Its independent sustained-publisher check supersedes the weak serial Iroh timing in `path-pair.log`; see `reviews/2026-11-26-advise-2.md` and its adjacent check log.
 
-- [ ] Before product HTTP validation: restore a reproducible build/cache/toolchain. The review reproduced the cached Mix error but compiled current Authz/Auth/AieRouter/Router source successfully in memory. Do not fix nonexistent missing authorization helpers. Run the product route under the intended toolchain; retain actual raw/dispatched spelling observations.
-- [ ] Before implementation acceptance: repeat admission, receipt, bidirectional sibling read/write/announcement isolation and participant confinement on WT/Iroh using actual new-mint participant tokens. Keep publishers live throughout positives and negatives. Rebuild/pin the browser bundle, repeat literal and encoded dials, and record bounds rather than requiring a nonexistent refusal string. Preserve long-call resubscribe-on-announce requirements; no renewal implementation is implied by this trial.
+- [x] Before product HTTP validation: `mix test` on Elixir 1.20.4 / OTP 29 compiled `Mjolnir.API.Router` and the mint tests. No auth helper was edited. `MIX_ENV=dev mix run` still loads stale `_build/dev` beams and reports `authorize_app/4`; that is the cache the review already compiled past, not a source gap. Bandit in `relay_mint_router_test.exs` records path_info: literal `~open` and `%7Eopen` both dispatch `~open`; `%257Eopen` stays `%257Eopen`; all three are 400 `bad_segment`.
+- [ ] Before implementation acceptance: `spikes/logs/path-mint-live.log` uses `Mint.issue` tokens on a disposable local relay. Iroh own-reads: `MINT-OPEN` and `MINT-PROT`, 11 frames / 99 bytes. WT own-reads: 15 frames / 285 bytes on `alice/marker` for each root. WT cross-root is `unauthorized`. Iroh cross-root is exit 124 (`Node::subscribe` timeout), not a refusal string. Publishers were ready for the own-reads; they had finished their 14s before the later bob read, so that timeout is not participant confinement. Bob's WT publish of `alice/marker` printed local bytes and exit 0; no subscriber confirmed delivery. Browser MoQ was not repeated: the pinned JS checkout has no built bundle, and disk was about 3 Gi. Resubscribe-on-announce is unchanged. No renewal implementation.
 - [ ] `.13` preparation and release: reconcile its contract to D4 full admission from one validated key snapshot, original root, expected invitation identity, operation checks before I/O/SDP, and expiry teardown. Test wrong owner/room/kind and response/token mismatches on join/replacement/renewal; retain key-unavailable/drain fail-closed behavior.
-- [ ] Before first open issuance, `.15` client guard: ship and test explicit-open/old-mint rollback refusal plus both-kind exact expected-root and response/token binding on join/replacement/renewal. Stage this minimal guard before release without making the finished `.15` page a prerequisite for implementing `.11`/`.13`.
+- [ ] Before first open issuance, `.15` client guard: `Mjolnir.Relay.RoomJoin.check/3` is the reusable check (join, replacement, and renewal share it). `mjolnir-rurh.15` and `mjolnir-rurh.5` have no landing tree in this repo, so the guard is not wired to a page. That wiring is still this gate. Explicit-open on an old mint response (no `kind`, protected root) returns `:open_refused`. A protected ask does not accept an open root.
 - [ ] Before encrypted open, `add-call-e2ee`: reconcile versioned full-root invite/KDF context, incompatible-version refusal and same-secret cross-kind vectors in both directions. Protected-only E2EE and plaintext open do not wait for this.
 - [ ] Before open roster/accounting, `.14`/`.4`: reconcile full-root membership and usage attribution and test same-owner/name siblings. No sibling mixing; tenant-wide aggregation remains deliberate and must not permit quota evasion.
 - [ ] Before integrating TURN with open issuance, `add-turn-service`: reconcile its current unconditional configured-room `c1` response with D5. Omit open TURN credentials until explicit `c2.<owner>.<room>.<participant>` support lands; then test equal-expiry sibling inequality, delimiter/collision behavior and existing expiry limits. TURN is not MoQ admission and has no deployment grant here.

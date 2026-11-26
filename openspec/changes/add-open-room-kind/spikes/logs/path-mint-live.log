@@ -1,0 +1,83 @@
+# new-mint live evidence
+date=2026-11-26T06:11:11Z
+quic=127.0.0.1:58252 iroh=8f0f43ed4f54c95d447258e6f8662c159454be09cf3f509d318f69a84d1124ba
+open_root=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+protected_root=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup
+source=Mjolnir.Relay.Mint.issue MIX_ENV=test
+browser=not repeated; pinned JS checkout has no built bundle and disk is ~3Gi
+# Publishers were ready for both own-reads. Their 14s lifetime ended during the later Iroh cross/bob reads, so bob's exit 124 is not confinement. Bob's WT publish printed local bytes and exit 0 with no subscriber; that is not a refusal.
+open-ready=yes
+prot-ready=yes
+
+### iroh own open
+client-endpoint=eb1d81a43127d65aba52be381cc456beee9d25e8869ccee4ef891ec91688b762
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker elapsed_ms=4
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker frames=11 bytes=99 first=MINT-OPEN
+exit=0
+
+### iroh own protected
+client-endpoint=8e0cca5cd2ae337f440ac643052b8b84396115f3651bf6513fc9972f792e510e
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker elapsed_ms=3
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker frames=11 bytes=99 first=MINT-PROT
+exit=0
+
+### iroh cross open-on-protected
+client-endpoint=f1399cc1d10608fdad81cf44a3cb9b25f6a2367194c8d860a1f0c20f82e987d9
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker bound_s=6 elapsed_ms=6001
+exit=124
+
+### iroh cross protected-on-open
+client-endpoint=f4820d8e51dc44c1ce0bb43f3553b2de63104a8a0ee55109e0a5c298b94c3f14
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker bound_s=6 elapsed_ms=6002
+exit=124
+
+### iroh bob subscribe alice open
+client-endpoint=8543238033cf32fa588ea3deaf54977d205bc148a1b42d48c08a6f4d7670ee41
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker bound_s=6 elapsed_ms=6002
+exit=124
+open-publisher=exited
+--- pub-o ---
+client-endpoint=983d6de6457c8d1080945374f5ad8f90664becc66c776a8f726fe537901b7a3e
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker frames=70 bytes=630 payload-len=9
+--- pub-p ---
+client-endpoint=e94a17db49d9a1c659138f4c750cb46c1885bf9bbdfb0863a88fd9cc89818a64
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker frames=70 bytes=630 payload-len=9
+
+### wt own open
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("aafa3dce11eb87cb7a0bf0e233a21661", "minted")), epoch: 0, hops: Hops([Hop { id: 2469070066395407 }, Hop { id: 1410388287195855 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=15 bytes=285
+exit=0
+
+### wt own protected
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("ee92504073268dbebdfeb31c16e4e177", "minted")), epoch: 0, hops: Hops([Hop { id: 252323453542303 }, Hop { id: 1410388287195855 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=15 bytes=285
+exit=0
+
+### wt cross open token on protected url
+Error: unauthorized
+exit=1
+
+### wt bob publish on alice path
+held
+published path=alice/marker bytes=285
+released
+exit=0
+--- wt-o ---
+held
+published path=alice/marker bytes=760
+released
+--- wt-p ---
+held
+published path=alice/marker bytes=760
+released

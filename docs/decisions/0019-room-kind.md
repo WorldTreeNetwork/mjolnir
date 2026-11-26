@@ -1,9 +1,9 @@
 # ADR 0019 — Room kind
 
-**Status:** Draft, revision 3 (path trial), amended after send-back `fea6caf6`. Not accepted. A fresh advise of this amendment is still owed. Implementation waits on that accept and on the open product boxes in `tasks.md`.
+**Status:** Draft, revision 3 (path). Independent accept of contract `82078ec7` is `reviews/2026-11-26-advise-2.md` (`07788842`). Activated for implementation 2026-11-26. Not folded. Not a production deploy. Gateway (`.13`) and the call pages (`.15`, `.5`) remain outside this change.
 **Change:** [`add-open-room-kind`](../../openspec/changes/add-open-room-kind/proposal.md)
 **Argument:** [`design.md`](../../openspec/changes/add-open-room-kind/design.md). Claim facts, kept as history: [`notes/claim-option.md`](../../openspec/changes/add-open-room-kind/notes/claim-option.md).
-**Reviews:** path contract sent back, [`reviews/2026-11-25-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise.md) and [`reviews/2026-11-26-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-26-advise.md) (`fea6caf6`). Claim contract sent back, [`reviews/2026-11-25-advise-2.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise-2.md).
+**Reviews:** path contract sent back, [`reviews/2026-11-25-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise.md) and [`reviews/2026-11-26-advise.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-26-advise.md) (`fea6caf6`). Amended contract accepted, [`reviews/2026-11-26-advise-2.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-26-advise-2.md) (`07788842`). Claim contract sent back, [`reviews/2026-11-25-advise-2.md`](../../openspec/changes/add-open-room-kind/reviews/2026-11-25-advise-2.md).
 **Spike:** [`spikes/path/finding.md`](../../openspec/changes/add-open-room-kind/spikes/path/finding.md).
 
 ## History

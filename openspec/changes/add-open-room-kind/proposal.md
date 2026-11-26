@@ -1,10 +1,12 @@
 # add-open-room-kind
 
-> **PENDING**
+> **ACTIVE BUILD**
 
 Node `mjolnir-rurh.11` (open-room-kind), parent `mjolnir-rurh` (platform-calls). Rigor: architecture (auth, token protocol, touches the live mint). Group: human-gate + review-pair. Blocks `mjolnir-rurh.13` (webrtc-edge).
 
-Revision 3, 2026-11-26. Trial of the signed-root marker, authorized by Duke ("ok, try out the path method") after the claim revision was sent back. This trial accepts that an open room and a protected room with the same owner and name are two identities. It does not restore the withdrawn contract at `1552e85`. The claim revision (`f2821aea`, advise `reviews/2026-11-25-advise-2.md`) stays in history. Nothing here is advise-accepted or activated.
+Revision 3, 2026-11-26. Trial of the signed-root marker, authorized by Duke ("ok, try out the path method") after the claim revision was sent back. This trial accepts that an open room and a protected room with the same owner and name are two identities. It does not restore the withdrawn contract at `1552e85`. The claim revision (`f2821aea`, advise `reviews/2026-11-25-advise-2.md`) stays in history.
+
+Activated for implementation 2026-11-26. Independent accept of `82078ec7` is `reviews/2026-11-26-advise-2.md` (`07788842`). Duke said go. This is not a fold and not a production deploy.
 
 ## Why
 

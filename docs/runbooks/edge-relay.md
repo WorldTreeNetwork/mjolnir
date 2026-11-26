@@ -171,6 +171,31 @@ caller's `sub`. The private key is `/var/lib/mjolnir/relay-mint/current.jwk`
 every call. A missing file, enabled other than `true`, or an unset host
 is 503 and no signature. The response sends `Cache-Control: no-store`.
 
+The JSON body may set `kind` to `open` or `protected`. An omitted
+`kind` is `protected`. Any other value is 400 `bad_kind` and is not
+logged. A header or query `kind` is ignored. `open` signs
+`t/<owner>/~open/<room>`. `protected` signs `t/<owner>/<room>`. The
+token claims stay `exp`, `iat`, `jti`, `publish`, `root`, and
+`subscribe`. The response adds `kind` and that `root`. There is no
+relay deploy and no switch for this split. A token rooted at
+`t/<owner>` still spans both roots; the WebRTC edge refuses that wide
+root. `~open` is not a legal room or participant segment.
+
+Open rooms do not receive a TURN username until class `c2` exists.
+This change does not add one.
+
+### Controller deploy and rollback (not authorized by the path trial)
+
+When a later approval names this controller only:
+
+1. Deploy the Elixir app with `./scripts/deploy.sh <host> --app-only`.
+   Do not pass `--relay`, `--gateway`, or `--full`.
+2. Confirm one open mint and one protected mint of the same room name
+   return the two roots above, and that `Cache-Control` is `no-store`.
+3. Rollback is the previous controller release. Outstanding open-root
+   tokens stay valid until their own `exp`. Clients that asked for
+   `open` must fail closed on a response that has no `kind`.
+
 A removed participant who can mint again is back after the next token.
 The default life is the ceiling: `MJOLNIR_RELAY_TOKEN_MAX_TTL`, or 3600
 when that line is absent. A guest who was handed a token keeps it until

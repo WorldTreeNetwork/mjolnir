@@ -11,6 +11,7 @@ defmodule Mjolnir.Relay.Mint do
          :ok <- segment(room),
          :ok <- segment(participant),
          {:ok, asked} <- ttl_field(body),
+         {:ok, kind} <- kind_field(body),
          {:ok, env} <- read_env(opts),
          :ok <- configured(env),
          {:ok, ttl} <- clamp_ttl(asked, env.ceiling),
@@ -20,13 +21,13 @@ defmodule Mjolnir.Relay.Mint do
       now = System.system_time(:second)
       exp = now + ttl
       jti = jti()
-      root = "t/#{owner}/#{room}"
+      root = root_for(owner, room, kind)
       publish = "#{participant}/**"
 
       case sign(jwk, kid, root, publish, now, exp, jti) do
         token when is_binary(token) ->
           Logger.info(
-            "relay mint sub=#{caller.sub} owner=#{owner} room=#{room} participant=#{participant} jti=#{jti} exp=#{exp}"
+            "relay mint sub=#{caller.sub} owner=#{owner} room=#{room} participant=#{participant} kind=#{kind} jti=#{jti} exp=#{exp}"
           )
 
           {:ok,
@@ -36,7 +37,8 @@ defmodule Mjolnir.Relay.Mint do
              root: root,
              publish: publish,
              subscribe: "**",
-             relay_host: env.host
+             relay_host: env.host,
+             kind: Atom.to_string(kind)
            }}
 
         _ ->
@@ -66,6 +68,25 @@ defmodule Mjolnir.Relay.Mint do
   defp ttl_field(%{"ttl" => _}), do: {:error, 400, "bad_ttl"}
 
   defp ttl_field(_), do: {:ok, nil}
+
+  # After segment and ttl type, before the env file. A bad kind is 400
+  # whether or not the relay is configured. Omitted means protected.
+  # Only the JSON body is read. The value is compared exactly.
+  defp kind_field(body) when body == %{} or body == nil, do: {:ok, :protected}
+
+  defp kind_field(body) when is_map(body) do
+    case Map.fetch(body, "kind") do
+      :error -> {:ok, :protected}
+      {:ok, "open"} -> {:ok, :open}
+      {:ok, "protected"} -> {:ok, :protected}
+      {:ok, _} -> {:error, 400, "bad_kind"}
+    end
+  end
+
+  defp kind_field(_), do: {:ok, :protected}
+
+  defp root_for(owner, room, :open), do: "t/#{owner}/~open/#{room}"
+  defp root_for(owner, room, :protected), do: "t/#{owner}/#{room}"
 
   defp clamp_ttl(nil, ceiling) when ceiling < @default_ttl, do: {:ok, ceiling}
   defp clamp_ttl(nil, _), do: {:ok, @default_ttl}
