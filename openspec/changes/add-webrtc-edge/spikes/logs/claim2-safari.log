@@ -1,3 +1,7 @@
-# Safari attempt 2026-11-26T01:54:25Z
-$ safaridriver -p 4446; POST /session {"browserName":"safari"}
-
+# Safari attempt 2026-11-26T01:53Z, macOS 27.0.1, Safari 27.0.1 (22625.1.29.11.28)
+$ /usr/bin/safaridriver -p 4446 &
+$ curl -s http://127.0.0.1:4446/status
+{"value":{"message":"","ready":true}}
+$ curl -s -X POST http://127.0.0.1:4446/session -H 'content-type: application/json' -d '{"capabilities":{"alwaysMatch":{"browserName":"safari"}}}'
+{"value":{"error":"session not created","message":"Could not create a session: You must enable 'Allow remote automation' in the Developer section of Safari Settings to control Safari via WebDriver.","stacktrace":""}}
+# Not changed: enabling it is a user setting (or `safaridriver --enable`, which needs an admin password).
