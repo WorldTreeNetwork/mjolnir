@@ -13,3 +13,7 @@ Contract only until an independent accept. The build also waits on `.13`'s accep
 - Implementing `.13` or `.14` in this change.
 - E2EE, TURN, production hosting.
 - Calling the Elixir `RoomJoin` module from the browser.
+
+## Fresh independent review of 56d1fedf
+
+- [ ] Resolve B1–B4: authentic admission producer, candidate/incumbent lifecycle, invitation/path/HTTP inputs and accepted error precedence. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.

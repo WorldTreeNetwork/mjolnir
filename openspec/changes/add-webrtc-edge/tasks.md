@@ -16,3 +16,7 @@ Contract only until an independent accept. Duke authorized the build on 2026-11-
 - Browser page (`.15`).
 - TURN, firewall, production hostname.
 - Keyframe vendor patch (`.12`), except consuming a relay session the same way the spike does.
+
+## Fresh independent review of 56d1fedf
+
+- [ ] Resolve G1–G4: reconcile per-token steer, bounded setup/delete/expiry, trusted pre-media admission dependency, HTTP/path/errors and accurate Ubuntu evidence. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.

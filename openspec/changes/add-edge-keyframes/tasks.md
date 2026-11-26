@@ -85,3 +85,7 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 - [x] **ASK 3** Carry mechanism. Recommendation was: vendor only `moq-webrtc` with the consumer-local patch and keep the pin. Answered 2026-11-25: "for contract, i agree with those". Reopened only if K1 fails.
 - [x] **ASK 4** Edge defaults and residual cost. Recommendation was: trial 2 s, ratio 4, loss requests on, one 1 s floor per eligible source line; adopt after F and the latency and storm runs; one viewer can sustain that floor, quality may fall under the cap, and cost adds across lines. Answered 2026-11-25: "for contract, i agree with those". The defaults stay provisional until the adopt task above.
 - [x] **ASK 5** Deltas after loss. Recommendation was: keep forwarding usable deltas while the keyframe is awaited (brief corruption possible). Answered 2026-11-25: "for contract, i agree with those".
+
+## Fresh independent review of 56d1fedf
+
+- [ ] Resolve K1–K3: remove active bypass/requester instructions, reconcile tests/measurements, narrow upstream port/drop condition to ingest. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.
