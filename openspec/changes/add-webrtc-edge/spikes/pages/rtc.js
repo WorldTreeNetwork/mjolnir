@@ -29,7 +29,7 @@ async function negotiate(kind, b, pc, tok = token) {
   const headers = { 'content-type': 'application/sdp' };
   if (tok) headers.authorization = 'Bearer ' + tok;
   const t0 = performance.now();
-  const res = await fetch(`${edge}/${kind}/${room}/${b}`, { method: 'POST', headers, body: pc.localDescription.sdp });
+  const res = await fetch(`${edge}/${kind}/${room}/${b}`, { method: 'POST', headers, body: window.stripCandidates ? pc.localDescription.sdp.replace(/a=candidate:[^\r\n]*\r\n/g, '') : pc.localDescription.sdp });
   const text = await res.text();
   if (res.status !== 201) { const e = Error(`${kind} ${b}: HTTP ${res.status} ${text}`); e.status = res.status; throw e; }
   await pc.setRemoteDescription({ type: 'answer', sdp: text });
@@ -73,6 +73,18 @@ window.publish = async (b, vcodec, tok) => {
   return { location: r.location, postMs: r.postMs, connectMs, answerCodecs: codecsIn(r.answer) };
 };
 
+// Three simulcast layers on one video line (rids f/h/q), as a conferencing client would send.
+window.publishSimulcast = async (b, tok) => {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const pc = new RTCPeerConnection();
+  pc.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly', sendEncodings: [{ rid: 'q', scaleResolutionDownBy: 4 }, { rid: 'h', scaleResolutionDownBy: 2 }, { rid: 'f' }] });
+  pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendonly' });
+  const r = await negotiate('whip', b, pc, tok);
+  const connectMs = await connected(pc);
+  window.pcs['pub:' + b] = pc; watchEnd('pub:' + b, pc);
+  return { location: r.location, connectMs, answerSimulcast: (r.answer.match(/a=(simulcast|rid):[^\r\n]*/g) || []) };
+};
+
 window.play = async (b, vcodec, tok) => {
   const pc = new RTCPeerConnection();
   const vt = pc.addTransceiver('video', { direction: 'recvonly' });
@@ -98,7 +110,9 @@ function codecsIn(sdp) {
 window.stats = async name => {
   const pc = window.pcs[name]; const s = await pc.getStats(); const codecs = {}; const out = {};
   s.forEach(x => { if (x.type === 'codec') codecs[x.id] = x.mimeType + (x.sdpFmtpLine ? ' ' + x.sdpFmtpLine : ''); });
+  out.outbound = [];
   s.forEach(x => {
+    if (x.type === 'outbound-rtp' && x.kind === 'video') out.outbound.push({ rid: x.rid, frameWidth: x.frameWidth, framesEncoded: x.framesEncoded, bytesSent: x.bytesSent, active: x.active, qualityLimitationReason: x.qualityLimitationReason });
     if (x.type === 'inbound-rtp') out[x.kind + 'In'] = {
       codec: codecs[x.codecId], framesDecoded: x.framesDecoded, keyFramesDecoded: x.keyFramesDecoded, frameWidth: x.frameWidth, frameHeight: x.frameHeight,
       packetsReceived: x.packetsReceived, packetsLost: x.packetsLost, nackCount: x.nackCount, pliCount: x.pliCount, firCount: x.firCount,

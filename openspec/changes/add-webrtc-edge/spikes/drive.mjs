@@ -31,6 +31,8 @@ async function open(browser, room, token, label) {
   page.on('pageerror', e => console.error(label + ' pageerror: ' + e));
   await page.goto(`${PAGES}/rtc.html?edge=${encodeURIComponent(EDGE)}&room=${room}#t=${token}`);
   await page.waitForFunction(() => window.ready);
+  // Loss runs: withhold host candidates so the edge learns only the lossy proxy's address.
+  if (process.env.STRIP) await page.evaluate(() => { window.stripCandidates = true; });
   return page;
 }
 const call = (page, fn, ...a) => page.evaluate(([fn, a]) => window[fn](...a).catch(e => ({ error: String(e.message || e), status: e.status })), [fn, a]);
@@ -52,6 +54,14 @@ try {
     out({ step: 'publish', who, broadcast: b, vcodec: vc, browser: 'chromium ' + br.version(), ...r });
     if (r.error) process.exit(2);
     for (let t = 0; t < +hold; t += 3) { await sleep(3000); out({ step: 'stats', t: t + 3, ...(await page.evaluate(() => window.stats(Object.keys(window.pcs)[0]))) }); }
+  } else if (mode === 'simulcast') {
+    const [who, b, hold] = a; const br = await launch('chromium', who); browsers.push(br);
+    const page = await open(br, 'r1', tok(who), who);
+    const r = await call(page, 'publishSimulcast', b);
+    out({ step: 'publish-simulcast', who, broadcast: b, ...r });
+    if (r.error) process.exit(2);
+    await sleep(+hold * 1000);
+    out({ step: 'stats', ...(await page.evaluate(n => window.stats(n), 'pub:' + b)) });
   } else if (mode === 'play') {
     const [kind, b, vc, hold, l, r_, hz, tn] = a; const br = await launch(kind); browsers.push(br);
     const page = await open(br, 'r1', tok(tn || 'erin'), kind);

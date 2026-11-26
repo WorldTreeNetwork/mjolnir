@@ -243,7 +243,12 @@ async fn main() -> anyhow::Result<()> {
     let media_addr: SocketAddr = args[2].parse()?;
     let relay: url::Url = args[3].parse()?;
     let keys: KeySet = std::fs::read_to_string(&args[4])?.parse().map_err(|e| anyhow::anyhow!("keys: {e}"))?;
-    let media = moq_webrtc::Server::bind(media_addr, Default::default()).await?;
+    let mut config = moq_webrtc::server::Config::default();
+    // Advertise another address (a NAT, or the spike's lossy proxy) instead of the bound one.
+    if let Ok(addr) = std::env::var("EDGE_ADVERTISE") {
+        config.ice_candidates = vec![addr.parse()?];
+    }
+    let media = moq_webrtc::Server::bind(media_addr, config).await?;
     tracing::info!(media = %media.local_addr(), %listen, "edge up");
     let edge = Edge {
         media,
