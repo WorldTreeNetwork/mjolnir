@@ -1,0 +1,18 @@
+# claim route, live harness relays (WebTransport), 2026-11-26T03:48:40Z; tokens minted by claim/mint_fixtures.exs, host clock, life 300 s
+## route (b) relay: kind=open publisher alice, kind=open reader
+held
+received path=alice frames=25 bytes=475
+published path=alice bytes=570
+released
+## route (b) relay: kind=protected session, no-kind session (today's token shape)
+held
+held
+## production decider (spawn_web_decider, the code running on 45.76.77.97): kind=open, kind=protected, no-kind
+refused: unauthorized
+refused: unauthorized
+held
+## route (b) relay decisions
+admitted path=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup kind=Open
+admitted path=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup kind=Open
+admitted path=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup kind=Protected
+admitted path=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup kind=Protected

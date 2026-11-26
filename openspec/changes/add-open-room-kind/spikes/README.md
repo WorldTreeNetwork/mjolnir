@@ -19,6 +19,15 @@ The owner chose a dedicated signed claim on 2026-11-25. The work below was for t
   the mint HTTP route spellings. A full disk on the Mac (117 MiB free) also stopped the example
   rebuild.
 
-## Claim route
+## Claim route (chosen 2026-11-25)
 
-See `claim-route.md` once written.
+Finding: [`claim-route.md`](claim-route.md). Reproduce:
+
+```bash
+P=<private dir>
+MIX_ENV=test mix run --no-start openspec/changes/add-open-room-kind/spikes/claim/mint_fixtures.exs $P
+(cd openspec/changes/add-open-room-kind/spikes/rust && CARGO_TARGET_DIR=../../../../../native/mjolnir_relay/target cargo build --bin open-room-kind-spike)
+(cd native/mjolnir_relay && cargo build --example wt-session)
+native/mjolnir_relay/target/debug/open-room-kind-spike claim-offline $P   # logs/claim-offline.log
+openspec/changes/add-open-room-kind/spikes/claim/live.sh $P                # logs/claim-live.log (redact tokens)
+```

@@ -8,6 +8,13 @@
 //!       verify.json. Runs until <priv>/stop exists.
 //!   kind-spike sign <priv> <root> <publish|-> <subscribe|-> <seconds>
 //!       One token, signed with <priv>/private.json, root copied byte for byte. Wall clock.
+//!   kind-spike claim-offline <dir>
+//!       Claim route: every case in <dir>/fixtures.json (minted by ../claim/mint_fixtures.exs) through
+//!       the production verifier (`mjolnir_relay::assess`) and route (b) (`claim::assess_room`), under
+//!       the kio Manual clock.
+//!   kind-spike relay-claim <dir> <prod|claim>
+//!       Harness relay (WebTransport only) trusting <dir>/verify.json, deciding with the production
+//!       `spawn_web_decider` or with route (b). Writes <dir>/relay-<mode>.txt. Stops on <dir>/stop.
 //!   kind-spike offline
 //!       Verification table under a kio Manual clock installed on the runtime, so moq-auth's
 //!       `Key::verify` (validate_times) and the relay's `profile` both read the controlled time.
@@ -18,6 +25,8 @@ use std::time::Duration;
 
 use moq_auth::{Algorithm, Claims, Key, KeyId, KeySet, Pattern};
 use sha2::Digest;
+
+mod claim;
 
 const KID: &str = "spike-kind";
 
@@ -201,6 +210,100 @@ fn offline() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn claim_offline(dir: PathBuf) -> anyhow::Result<()> {
+    claim::install_provider();
+    let set: KeySet = std::fs::read_to_string(dir.join("verify.json"))?.parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let fx: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("fixtures.json"))?)?;
+    let root = fx["root"].as_str().unwrap().to_string();
+    let t0 = kio::clock::Wall::UNIX_EPOCH + Duration::from_secs(fx["t0"].as_u64().unwrap());
+    let rt = tokio::runtime::Builder::new_current_thread().enable_time().build()?;
+    let mut manual = kio::clock::Manual::new();
+    manual.step_wall(t0);
+    let installed = manual.install(rt.handle());
+    let ttl = mjolnir_relay::DEFAULT_MAX_TTL;
+    rt.block_on(async {
+        installed.step_wall(t0 + Duration::from_secs(10));
+        println!("# claim route, offline, kio Manual clock at t0+10 (t0={}); path = token root", fx["t0"]);
+        println!("{:<38} | {:<46} | {}", "case", "production verifier (assess)", "route (b) (assess_room)");
+        for case in fx["offline"].as_array().unwrap() {
+            let tok = case["token"].as_str().unwrap();
+            let prod = verdict(&mjolnir_relay::assess(Some(tok), &root, &set, ttl));
+            let b = match claim::assess_room(Some(tok), &root, &set, ttl) {
+                Ok((_, kind)) => format!("ADMIT kind={kind:?}"),
+                Err(e) => format!("refuse({})", e.chars().take(70).collect::<String>()),
+            };
+            println!("{:<38} | {:<46} | {}", case["name"].as_str().unwrap(), prod, b);
+        }
+        let open = fx["offline"].as_array().unwrap().iter().find(|c| c["name"] == "kind=open").unwrap()["token"].as_str().unwrap().to_string();
+        for at in [599u64, 600] {
+            installed.step_wall(t0 + Duration::from_secs(at));
+            println!("kind=open at t0+{at}: route (b) {:?}", claim::assess_room(Some(&open), &root, &set, ttl).map(|(_, k)| k));
+        }
+    });
+    Ok(())
+}
+
+async fn relay_claim(dir: PathBuf, mode: String) -> anyhow::Result<()> {
+    claim::install_provider();
+    let sub = dir.join(format!("relay-{mode}"));
+    std::fs::create_dir_all(&sub)?;
+    let (cert, tls_key, _hash) = cert_pair(&sub)?;
+    let _ = moq_tokio::crypto::install_default();
+    let mut config = moq_relay::Config::default();
+    config.listen.bind = Some("127.0.0.1:0".parse()?);
+    config.listen.tls.cert = vec![cert];
+    config.listen.tls.key = vec![tls_key];
+    config.web.ws = false;
+    let mut relay = moq_relay::Relay::load(config).await?.with_signals(false);
+    let quic = relay.quic_addr().expect("quic addr");
+    let mut admissions = relay.admissions().expect("admissions");
+    let set: KeySet = std::fs::read_to_string(dir.join("verify.json"))?.parse().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let ttl = mjolnir_relay::DEFAULT_MAX_TTL;
+    if mode == "prod" {
+        mjolnir_relay::spawn_web_decider(admissions, Arc::new(Mutex::new(set)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(true)), ttl);
+    } else {
+        // spawn_web_decider's loop (lib.rs:154-200) with assess swapped for route (b).
+        tokio::spawn(async move {
+            while let Some(admission) = admissions.next().await {
+                let path = admission.request.path.clone();
+                let from_setup = admission.request.token.as_ref().and_then(|t| String::from_utf8(t.value.clone()).ok());
+                let from_query = admission.request.query.as_deref().and_then(|q| {
+                    q.split('&').find_map(|pair| pair.split_once('=').filter(|(k, _)| *k == "jwt").map(|(_, v)| v.to_string()))
+                });
+                let token = from_setup.or(from_query);
+                if admission.attached() {
+                    admission.refuse(moq_relay::auth::Error::Forbidden("in-band token".into()));
+                    continue;
+                }
+                match claim::assess_room(token.as_deref(), &path, &set, ttl) {
+                    Ok((grant, kind)) => {
+                        println!("admitted path={path} kind={kind:?}");
+                        match grant.validate() {
+                            Ok(()) => admission.grant(moq_auth::lease::Consumer::fixed(grant)),
+                            Err(err) => admission.refuse(err.into()),
+                        }
+                    }
+                    Err(err) => {
+                        println!("refused path={path} why={err}");
+                        admission.refuse(moq_relay::auth::Error::Forbidden(err));
+                    }
+                }
+            }
+        });
+    }
+    let ready = relay.ready();
+    let join = tokio::spawn(relay.run());
+    ready.wait().await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    std::fs::write(dir.join(format!("relay-{mode}.txt")), quic.to_string())?;
+    println!("relay up mode={mode} quic={quic}");
+    let stop = dir.join("stop");
+    while !stop.exists() && !join.is_finished() {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    println!("relay stopping");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -211,6 +314,11 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", sign(Path::new(&args[1]), &args[2], &args[3], &args[4], seconds)?);
             Ok(())
         }
+        Some("claim-offline") => {
+            let dir: PathBuf = args[1].clone().into();
+            tokio::task::spawn_blocking(move || claim_offline(dir)).await?
+        }
+        Some("relay-claim") => relay_claim(args[1].clone().into(), args[2].clone()).await,
         Some("offline") => tokio::task::spawn_blocking(offline).await?,
         _ => anyhow::bail!("usage: kind-spike relay|sign|offline"),
     }

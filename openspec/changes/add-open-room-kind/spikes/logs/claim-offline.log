@@ -1,0 +1,23 @@
+# claim route, offline, kio Manual clock at t0+10 (t0=1735689600); path = token root
+case                                   | production verifier (assess)                   | route (b) (assess_room)
+no_kind (today's mint)                 | ADMIT                                          | ADMIT kind=Protected
+kind=open                              | refuse(BadToken)                               | ADMIT kind=Open
+kind=protected                         | refuse(BadToken)                               | ADMIT kind=Protected
+kind=OPEN                              | refuse(BadToken)                               | refuse(Kind("\"OPEN\""))
+kind="open "                           | refuse(BadToken)                               | refuse(Kind("\"open \""))
+kind=1                                 | refuse(BadToken)                               | refuse(Kind("1"))
+kind=null                              | refuse(BadToken)                               | refuse(Kind("null"))
+kind=["open"]                          | refuse(BadToken)                               | refuse(Kind("[\"open\"]"))
+foo=bar (other unknown claim)          | refuse(BadToken)                               | refuse(Payload("unknown field `foo`, expected one of `root`, `put`, `get`, `p)
+kind=open + foo=bar                    | refuse(BadToken)                               | refuse(Payload("unknown field `foo`, expected one of `root`, `put`, `get`, `p)
+kind repeated (open, protected)        | refuse(BadToken)                               | refuse(Signature("JSON error: duplicate field `kind` at line 1 column 204"))
+root repeated                          | refuse(BadToken)                               | refuse(Signature("JSON error: duplicate field `root` at line 1 column 232"))
+payload is an array                    | refuse(BadToken)                               | refuse(Signature("JSON error: invalid type: sequence, expected an object at l)
+tampered payload (kind=open)           | refuse(BadToken)                               | refuse(Signature("InvalidSignature"))
+HS256 (kind=open)                      | refuse(Profile("symmetric signature"))         | refuse(Header("alg differs from the key's"))
+(a) sub="room-kind:open"               | ADMIT                                          | ADMIT kind=Protected
+(a) sub={kind:open}                    | refuse(BadToken)                               | refuse(Signature("JSON error: expected `,` or `}` at line 1 column 159"))
+(a) iss="mjolnir-room-kind:open"       | ADMIT                                          | ADMIT kind=Protected
+(a) header param kind=open             | ADMIT                                          | ADMIT kind=Protected
+kind=open at t0+599: route (b) Ok(Open)
+kind=open at t0+600: route (b) Err("Times(\"expired\")")
