@@ -1,46 +1,61 @@
 # add-webrtc-room-client design
 
-Reference comparison: `lib/mjolnir/relay/room_join.ex` (`check/4`). The page reimplements those equalities in TypeScript. It does not load Elixir. Admission is trusted only when this module verified the token. A mint JSON `root` alone is not admission.
+Gateway contract: `add-webrtc-edge` design D2–D4. Comparison order: `lib/mjolnir/relay/room_join.ex`.
 
-## D1. Entrypoints
+## D1. Admission
 
 ```text
-join(input) -> Promise<Session | Refusal>
-replace(session, input) -> Promise<Session | Refusal>
-renew(session, input) -> Promise<Session | Refusal>
-teardown(session, reason) -> void
+admit(mintToken, expectedRoot, operation, broadcast) ->
+  POST {configuredOrigin}/admit
+  Authorization: Bearer mintToken
+  X-Mjolnir-Root: expectedRoot
+  {"operation","broadcast"}
 ```
 
-`input` is `{ expectedRoot: string, asked: "open" | "protected", mint: { token, root, kind? }, jwks }`.
+The fetch is the module's. Its result is trusted because the TLS origin is the configured one, not because the JSON contains `ok`. `Cache-Control: no-store` is required on the response; the page also does not store the body in a URL, a log line, or `localStorage`. The token stays in memory. The fragment is stripped on load and not sent as `Referer` (`Referrer-Policy: no-referrer`).
 
-`join` order:
+Local comparison after a 200, using the returned `root` as the admitted root and refusing if the returned `broadcast` or `operation` differs from the request:
 
-1. Verify `mint.token` with `jwks` (EdDSA, `exp`, `iat`, root shape). Failure: `{ error: "unauthenticated_identity" }`. The verified root and the verified token bytes are the admission. A caller-supplied `{ ok: true }` is not accepted.
-2. Compare as `RoomJoin` does: expected root, asked kind, mint `root` and `kind`, admission root and token. Same error atoms (`unexpected_root`, `open_refused`, `kind_mismatch`, `response_root_mismatch`, `invalid_root`).
-3. If asked is `open` and the class is open, render the host-readable notice. If the check failed, render the refusal and return. Do not call `getUserMedia`.
-4. `getUserMedia` only after step 2 succeeds.
-5. POST WHIP with `Authorization` and `X-Mjolnir-Root: expectedRoot`. On a non-201, `teardown` and return the status. Do not attach the local stream to a PeerConnection that has no answer.
-6. For each invitation path other than self, POST WHEP the same way. `409 not_started` leaves that tile empty and retries on the invitation's interval until `exp`. It does not fail the whole join.
-7. Arm a timer at `exp` that calls `teardown`.
+1. Expected root ≠ admitted root → `unexpected_root`.
+2. Mint `root` ≠ admitted root → `response_root_mismatch`.
+3. Open root and mint `kind` omitted or not `open` → `kind_mismatch`.
+4. Protected root and mint `kind` omitted → allowed for kind (the helper treats omission as protected).
+5. Asked `open` and class `protected` → `open_refused`.
+6. Asked `protected` and class `open` → `protected_refused`.
 
-`replace` and `renew` run steps 1–6 with the new mint. They DELETE the previous session ids only after every new POST that this call needs has returned 201. A refusal at step 1 or 2 does not DELETE and does not stop tracks.
+This page's ask is `open`. Step 1 fires before step 5. An invitation for `t/<owner>/~open/<room>` and an old mint rooted at `t/<owner>/<room>` is `unexpected_root`, not `open_refused`.
 
-`teardown` stops every track, closes every PeerConnection, and clears the timer. It is safe to call twice.
+Non-200 from `/admit` is `unauthenticated_identity` for 401/403 and `setup_failed` for a network error. No camera.
 
-This page's `asked` is `open`. A protected invitation is `open_refused` here; the encrypted client is `.5`.
+WHIP and WHEP repeat the bearer and header. They do not resend the `/admit` JSON as a credential.
 
-## D2. Copy
+## D2. Candidate
 
-One sentence, visible before the camera prompt: "This room is open. The host can read the media." No padlock. No "end-to-end" wording.
+```text
+generation: number
+abort: AbortController
+tracks: MediaStreamTrack[]  // owned; a shared device track is refcounted
+pcs: RTCPeerConnection[]
+sessionIds: string[]
+timer: exp timer bound to this generation
+```
 
-## D3. First slice versus done
+Arm `exp` and abort before `getUserMedia`. After every await, if generation ≠ current, or `now >= exp`, or abort fired, drop this candidate only.
 
-Done for this node is three people on different networks, one of them Safari on a phone, each seeing and hearing the others, plus a MoQ participant in the same open room. The first build after accept is D1 against a local `.13`: one Chromium page, one named peer path, coloured-frame check, and the refusal tests. That slice is not node completion. `.14` still owns the live roster. Eight PeerConnections and Safari stay unchecked spikes (`peerconnections-8`, `safari-whep`).
+WHIP failure before commit: drop candidate, incumbent unchanged.
+Commit: WHIP `201`, `setRemoteDescription` ok, and the exp check passed. Peer WHEP `409 not_started` does not roll back. Peer `403` or `codec_unavailable` marks that path failed and does not retry. Peer transport errors and `not_started` retry at `retryMs` with exponential backoff capped at 30 s, at most one in flight per path.
+ICE not `connected` within 10 s: close that PC, DELETE that id, retry if the error class is retryable.
 
-## D4. Shell to reuse
+`renew` / `replace` build a new generation. DELETE old ids only after the new WHIP has committed. On failure, abort the new generation and leave the old timer and PCs. The new generation's timer is the only one that closes the new PCs. Stop a track only when its refcount hits zero.
 
-`spikes/pages/rtc.js` in `add-webrtc-edge` already posts WHIP and samples frames. Lift the POST and the frame sampler. Add D1 in front of them. Do not copy the spike's permissive "any room segment" assumption.
+Explicit leave aborts every generation and DELETEs every id still owned.
 
-## D5. Licence
+When a named-peer PC fires `connectionstatechange` to `failed` or `disconnected` past the ICE timeout, retry that path until `exp`. Document in the UI if the retry does not restore the picture: "the other side must publish again." Do not claim publisher replacement is followed automatically.
 
-The page and module are MIT, same as `native/mjolnir_client`. They do not import the AGPL host.
+## D3. Slice versus done
+
+First green slice: one Chromium, notice before the camera prompt, one WHIP, one invitation path, colours and tone, the refusal cases, partial renew, stale generation, old timer, DELETE. Not done: `.14`, Safari phone, three networks, eight PCs.
+
+## D4. Licence
+
+MIT page and module. No import from the AGPL host tree.

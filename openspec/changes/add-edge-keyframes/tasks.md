@@ -14,7 +14,7 @@ No product code in this pass. Checked items are observations already captured or
 
 ## Order
 
-K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2 → K3 → K4 (harness switched to the vendored crate) → P1–P9 → H2 (patch-only self-test) → D3a–D3e → A–F → adopt → U1–U4. A box is not started before the boxes it follows are checked.
+K0 → K1a/K1b → H0 → H1 (baseline on git `moq-webrtc`) → K2 → K3 → K4 → P1–P9 → H2 → D3 negative control → A, B, C, D1, D2, E, F → adopt (A, B, D2, E, F) → U1–U4. D3a–D3e are not in this order. A box is not started before the boxes it follows are checked.
 
 ## Feasibility first (before any harness or patch work)
 
@@ -27,7 +27,7 @@ K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2
 
 ## Harness and the "before" (unpatched pin; the harness still uses git `moq-webrtc`)
 
-- [ ] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add the **common observations** of design D9 only: the in-process measurement probe (per-frame track, group start, payload bytes, media time, wall time; the one byte-counting boundary), browser RTCP stats every second on both pages, the moving 720p fixture with a burned-in frame counter, the first-presented-frame callback with counter, decoding `harness raw` with subscribe / first-decodable / media-time lines, `lossy.py --burst` on the edge's clock, and the str0m storm client (one or several). First observation: `harness/logs/selftest-common.log` shows each common field once against the unpatched edge. Patch-only fields (gate PLI log, requester results, `Ignored(Unbound)`, pairing events) are listed there as unavailable on this build.
+- [ ] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build.
 - [ ] H1. Before numbers for D9 rows A, B, C, D1, D2 and F (policy off) on the unpatched pin, from common observations only: `harness/logs/before-*.log`. Captured before K4 switches the harness. A baseline that already meets its target is recorded as a result; the after run must then still show the cause working (D9).
 
 ## Vendor and switch
@@ -44,14 +44,14 @@ K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2
 - [ ] P2. Unanswered request: with period 2 s and an ignored PLI at 2 s, the next period deadline is 4 s; a deadline already in the past is never returned twice.
 - [ ] P3. No receiver or refused writer: a send attempted before the line has a receive stream, with no writer, or refused by str0m (`NoReceiverSource`, `NotReceivingDirection`) leaves the request held, does not move `last_sent`, does not end the session, and is counted. With a paused clock, 10 s elapse with no RTP and the line's timer fires once, then stays disarmed. A first delta then releases one PLI at once; in another run a first keyframe cancels it. A strictly future deadline from another cause re-arms it. A line without negotiated PLI never sends.
 - [ ] P4. Join (H1): `Info::refresh == Some(4)` on video tracks when set, `None` by default; an in-process join over the ratio requests once; first and later joins under the ratio request nothing; an empty track's group-0 demand requests nothing; the observer's first reading requests nothing.
-- [ ] P5. Loss: a usable discontinuous delta (after the line's last keyframe) requests and is forwarded; an ineligible one (on a line with no keyframe yet, and one older than the last keyframe) requests and is dropped by the pinned admission; with `on_loss` off neither requests and forwarding is unchanged.
+- [ ] P5. Loss: a usable discontinuous delta (after the line's last keyframe) requests and is forwarded; an ineligible one requests and is dropped by the pinned admission. With `on_loss` off neither case adds a loss-cause request; a startup request on a line with no keyframe still fires. Forwarding is unchanged.
 Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress binding, D3a–D3e pairing table, and the `.13` handoff that said a paired WHEP plays in process. Do not implement them.
 
 - [ ] P6. The patch does not add `Response::keyframes`, a WHEP requester, or `whep::Request::source`. A unit test sends a viewer PLI into pinned egress and observes it dropped, as at the pin.
-- [ ] P7. Disabled policy: every upstream test at the pin passes; a new test drives startup, a step, non-contiguous frames and a requester call with `Request::new` and observes exactly the pinned PLIs and the pinned forwarding. Total test count is K1b's plus the new ones (`harness/logs/p7-tests.txt`).
+- [ ] P7. Disabled policy: every upstream test at the pin passes; a new test drives startup, a step, and non-contiguous frames with `Request::new` and observes exactly the pinned PLIs and the pinned forwarding. A viewer PLI is logged and does not call the gate. No requester API is compiled. Total test count is K1b's plus the new ones (`harness/logs/p7-tests.txt`).
 - [ ] P8. Session wiring: one `select!` arm whose deadline is the earliest armed deadline (REMB, period, gate; a disarmed line contributes none); a paused-clock test of that function.
 - [ ] P9. Commit the patch on its own, with the modification notice on every changed file; export `patches/0001-edge-keyframes.patch` with `git format-patch`; K2 passes; clippy at the crate's own level shows no new warnings.
-- [ ] H2. Patch-only self-test, on the switched harness: `harness/logs/selftest-patch.log` shows the gate PLI log (cause tags, send result), requester results, an `Ignored(Unbound)` and each pairing event once.
+- [ ] H2. Patch-only self-test: `harness/logs/selftest-patch.log` shows the gate PLI log (ingest cause tags and send result) once each for startup, step, period, loss, and join. It shows a viewer PLI with no gate send. It does not mention a requester or a pairing event.
 
 ## Harness pairing (embedder side, in the harness edge)
 
@@ -64,17 +64,17 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 - [ ] C. Exporter late join (VP8 uncapped, VP9, AV1): recorded in `after-C.log`. If not content-ok, a bead under `mjolnir-rurh.13` (H3).
 - [ ] D1. Viewer-side 1.5 s blackout at varied phase, same relayed WHEP route as the before run: record time to the first presented frame with a post-burst counter. A viewer-cause PLI is not required. The 1.2 s figure is an observation against the ingest cadence, not a pass gate. `after-D1.log`.
 - [ ] D2. Publisher-side 1.5 s blackout: the MoQ reader's first post-burst keyframe ≤ 1.2 s after the burst end; a loss-cause PLI in the edge log. `after-D2.log`.
-- [ ] E. Storm, one viewer then four, 20 s at 2.5 Mbit/s cap: every gap between sent PLIs ≥ 1 s on the monotonic clock; held requests ≤ 1 per line; `Requested` results counted; natural keyframes, resolution changes and `RateLimited` recorded separately. `after-E.log`.
-- [ ] F. Cost on identical moving input and cap, all three runs counted at the same probe boundary (MoQ frame payload bytes as the ingest published them): policy off, period 2 s, saturated 1 s feedback. Report separately (a) keyframe byte share, mean keyframe and delta sizes, codec, fps, resolution; (b) the bitrate difference against policy off over equal steady-state windows; (c) the quality difference: PSNR (and SSIM if available) aligned by frame counter, or "quality difference missing" stated explicitly. `RateLimited` per run. Compare the keyframe/delta size ratio with H2. `after-F.log`.
+- [ ] E. Viewer storm, one then four, 20 s: zero viewer-cause sends. This is a negative control, not the saturation run. `after-E.log`.
+- [ ] F. Cost on identical moving input, cap, and relayed route. Three runs at the probe boundary: policy off, period 2 s, and saturated 1 s requests from a named ingest-cause test hook (not from viewer PLIs). Report keyframe byte share, bitrate difference, and quality difference or "quality difference missing". `after-F.log`.
 - [ ] F-PR. Turn F into `upstream/cost.md` for the upstream PR body: method, fixture (how it is generated, resolution, frame rate, content), encoder and browser versions, cap, the counting boundary, the numbers for each run (bitrate and quality differences separately), any missing result named as missing, and the commands to reproduce from a clean checkout. It is written so it can be pasted into the PR without editing.
-- [ ] Adopt or revise the trial defaults. Depends on F, E, A, B, D1 and D2 all being checked (ASK 4: adopt after measurement). Record the decision and the numbers on the bead. Only then hand the defaults to `.13`.
+- [ ] Adopt or revise the trial defaults. Depends on A, B, D2, E, and F. D1 is recorded and does not block. Record the numbers on the bead. Only then hand the defaults to `.13`.
 - [ ] `harness/finding.md`: before/after table with numbers and links to every log.
 
 ## Upstream (local preparation only)
 
-- [ ] U1. Port to upstream `main` per design D8 parts 1 and 2, as a patch series against a named `main` commit, kept in this repository under `upstream/` (`git format-patch` output plus the base commit id), with the `just ci` log. Retrievable from this repository alone. No push, no PR.
+- [ ] U1. Port the ingest policy only (period, loss, eligible join) to upstream `main` as a patch series against a named commit, under `upstream/`, with the `just ci` log. No WHEP refresh and no requester. No push, no PR.
 - [ ] U2. `upstream/pr-draft.md` (Problem, Approach, Impact, Alternatives, Follow-ups), with `upstream/cost.md` included as its cost section. Depends on F-PR and U1; not started before both are checked.
-- [ ] U3. Tracking bead (child of `mjolnir-rurh`) with the drop condition from design D8, the rule that the behaviour tests run again at the pin move before the carry is removed, and the rule that only Duke or his named submitter pushes to the `WorldTreeNetwork/moq` fork or opens the PR. Linked from `VENDOR.md`.
+- [ ] U3. Tracking bead (child of `mjolnir-rurh`) with design D5's drop condition (ingest behaviour on the pin, not viewer refresh), the rule that the ingest tests run again at the pin move, and the rule that only Duke or his named submitter pushes or opens the PR. Linked from `VENDOR.md`.
 - [ ] U4. `NOTICE` gains a "Vendored third-party code" section (path, `MIT OR Apache-2.0`, Copyright (c) 2023 Luke Curley and the moq authors). `CLAUDE.md` gets one line pointing at `native/vendor/moq-webrtc/VENDOR.md`.
 - [ ] Handoff note on `mjolnir-rurh.13`: the `[patch]` line; WHEP stays on the viewer's relay token; no pairing table and no in-process play; adopted defaults with F's numbers.
 

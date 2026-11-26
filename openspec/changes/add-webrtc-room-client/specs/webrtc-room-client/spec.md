@@ -1,48 +1,53 @@
 ## ADDED Requirements
 
-### Requirement: The client checks admission before media
-The client SHALL verify the mint token with the relay JWKS and SHALL compare the invitation's expected full root, the asked kind, the mint `root` and `kind`, and that verified root before it calls `getUserMedia`, creates an `RTCPeerConnection`, imports a media key, or POSTs WHIP or WHEP. The comparison SHALL follow `Mjolnir.Relay.RoomJoin`: the expected root, the response root, and the verified root are equal byte for byte; an explicit open ask SHALL fail when the root is protected or the mint omits `kind` on a non-open root. A failed check SHALL tear nothing down that it did not start, and SHALL NOT start the camera.
+### Requirement: Admission comes from the configured gateway
+The client SHALL send the bearer and the invitation's expected root to `POST /admit` on its configured gateway origin, and SHALL NOT take that origin from the invitation, a query parameter, or `relay_host`. It SHALL compare the expected root, the mint root and kind, and the admitted root in `RoomJoin` order. It SHALL NOT treat caller-supplied JSON as admission. It SHALL NOT call `getUserMedia`, construct an `RTCPeerConnection`, import a content key, or POST WHIP or WHEP until that check succeeds. An open expected root with a protected admitted root SHALL be `unexpected_root`. A protected expected root with ask `open` SHALL be `open_refused`. An open admitted root whose mint omits `kind` SHALL be `kind_mismatch`.
 
 #### Scenario: Old mint
-- GIVEN an invitation whose expected root is `t/<owner>/~open/<room>` and a mint body whose root is `t/<owner>/<room>` and whose kind is absent
+- GIVEN expected root `t/<owner>/~open/<room>` and an admitted root `t/<owner>/<room>`
 - WHEN `join` runs
-- THEN the result is `open_refused` and `getUserMedia` was not called
+- THEN the result is `unexpected_root` and `getUserMedia` was not called
 
-#### Scenario: Mismatched invitation
-- GIVEN a verified open root and an expected root that is not equal to it
+#### Scenario: Protected invitation
+- GIVEN expected root and admitted root are the same protected root and the ask is `open`
 - WHEN `join` runs
-- THEN the result is `unexpected_root` and no WHIP request is sent
+- THEN the result is `open_refused` and no WHIP request is sent
 
-#### Scenario: Matching open token
-- GIVEN expected root, mint root, mint kind `open`, and the verified root are the same open root
+#### Scenario: Open root missing kind
+- GIVEN the admitted root is open and the mint body has no `kind`
 - WHEN `join` runs
-- THEN the host-readable notice is shown and only then is the camera requested
+- THEN the result is `kind_mismatch`
 
-### Requirement: Replacement and renewal use the same check
-`replace` and `renew` SHALL run the same verification and comparison on the new credential. On failure they SHALL leave existing PeerConnections running. On success they SHALL establish the new WHIP and WHEP sessions before deleting the previous session ids. The client SHALL call `teardown` at token `exp`, stopping tracks and closing every PeerConnection.
+### Requirement: A candidate failure does not destroy the incumbent
+`replace` and `renew` SHALL build a new generation. They SHALL DELETE previous session ids only after the new WHIP has committed. If the new WHIP fails, they SHALL drop only the new generation's tracks, PeerConnections, and timers. An expiry timer SHALL close only the generation that armed it. `teardown` SHALL DELETE each owned session id with the bearer that admitted it, then close that generation's PeerConnections and stop tracks whose refcount is zero. A callback from an older generation SHALL NOT attach media or DELETE a newer id. `renew` SHALL NOT mint a token.
 
-#### Scenario: Bad renewal
-- GIVEN a live session and a renewal mint that fails verification
-- WHEN `renew` returns
-- THEN the previous PeerConnections are still open
+#### Scenario: Partial renewal
+- GIVEN a live generation and a renewal whose WHIP returns `403`
+- WHEN `renew` finishes
+- THEN the live generation's PeerConnections are open and the new generation has no session id
 
-#### Scenario: Expiry
-- GIVEN a live session
-- WHEN `exp` is reached
-- THEN tracks are stopped and every PeerConnection is closed
+#### Scenario: Stale camera
+- GIVEN generation 1's `getUserMedia` resolves after generation 2 has committed
+- WHEN the resolution is delivered
+- THEN generation 2's PeerConnections are unchanged and generation 1's tracks are stopped
 
-### Requirement: The open room is described as host-readable
-Before media starts, the page SHALL show that the room is open and that the host can read the media. The page SHALL NOT describe the room as end-to-end encrypted.
+### Requirement: Named peers retry without a roster
+The page SHALL play only paths on the invitation, at most seven, each a relative broadcast path. `409 not_started` SHALL leave that tile empty and retry under the invitation's minimum one-second backoff. `codec_unavailable` and `403` on that peer SHALL NOT retry. WHIP `201` and a successful remote description SHALL commit the join even while a peer is still `not_started`. If a playing peer's connection ends before expiry, the page SHALL retry that path and SHALL NOT claim the relay follows a replaced publisher. The host-readable notice SHALL be visible before the camera prompt. The page SHALL NOT say the room is end-to-end encrypted.
+
+#### Scenario: Peer not started
+- GIVEN WHIP committed and the named peer returns `409 not_started`
+- WHEN the join returns
+- THEN the local preview is up, the peer tile is empty, and a retry is scheduled no sooner than `retryMs`
 
 #### Scenario: Notice
-- GIVEN a successful open join
+- GIVEN a successful `/admit` for an open room
 - WHEN the camera prompt is shown
 - THEN the host-readable notice is already visible
 
-### Requirement: A roster is not claimed here
-Until `mjolnir-rurh.14` lands, the page SHALL play only broadcast paths named by the invitation. It SHALL NOT present a live roster. Shipping self-view alone SHALL NOT satisfy this node's acceptance.
+### Requirement: This slice does not finish the node
+A passing named-peer slice SHALL NOT close `mjolnir-rurh.15`. Roster, Safari-on-phone, three-network, and eight-PeerConnection proofs remain open.
 
-#### Scenario: No named peer
-- GIVEN an invitation with no other broadcast path
-- WHEN join succeeds
-- THEN the page shows the local preview and no other participant
+#### Scenario: Self-view only
+- GIVEN an invitation with no peer path and a green local WHIP
+- WHEN the slice is recorded
+- THEN the bead stays open

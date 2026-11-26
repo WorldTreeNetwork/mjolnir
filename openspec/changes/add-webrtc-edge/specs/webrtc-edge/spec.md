@@ -1,53 +1,61 @@
 ## ADDED Requirements
 
-### Requirement: WebRTC admission uses one relay assess and an open root
-The gateway SHALL verify the bearer with the relay's `assess` on one key-set snapshot before it dials the relay or writes an SDP answer. It SHALL admit only a root that classifies as open, `t/<owner>/~open/<room>`. It SHALL reject a protected root, a root with no `~open` marker, and a wide `t/<owner>` root with `403 room_not_open`. It SHALL reject a failed assess with `403 bad_token`. It SHALL require `X-Mjolnir-Root` to equal the assessed root byte for byte, and SHALL reject a mismatch with `403 unexpected_root` and a missing header with `400`. It SHALL require the WHIP broadcast to match the publish grant and the WHEP broadcast to match the subscribe grant. The URL room segment SHALL equal the assessed root's room segment and SHALL NOT be used to build a MoQ path.
+### Requirement: One relay connection per exact token
+The gateway SHALL keep at most one relay connection for a given bearer byte string. It SHALL NOT share that connection with any other bearer. Each WHIP, WHEP, and admission request SHALL run `assess` on the current key snapshot even when the connection already exists. A refused assessment SHALL NOT open a connection and SHALL NOT use an existing one. The last session to release the connection SHALL close it. Token expiry or relay closure SHALL close that connection and every WebRTC session bound to it, and SHALL NOT close another token's sessions.
 
-#### Scenario: Open token is admitted
-- GIVEN a bearer whose assessed root is `t/<owner>/~open/<room>`, a matching `X-Mjolnir-Root`, and a broadcast inside the publish grant
+#### Scenario: Two legs, one connection
+- GIVEN an admitted WHIP session for a token
+- WHEN WHEP is admitted for the same token bytes
+- THEN both legs use one relay connection, and a second token's WHEP uses a different connection
+
+#### Scenario: Existing connection is not a waiver
+- GIVEN a live connection for a token
+- WHEN a new request for that token fails `assess` because admissions are closed
+- THEN the status is `403` and no new session id is registered
+
+### Requirement: Admission finishes before relay I/O or SDP
+The gateway SHALL authenticate the bearer with `assess` using `load_verify_keys` constraints and the configured max TTL, then require an open root `t/<owner>/~open/<room>`, a URL room segment equal to that root, a byte-exact `X-Mjolnir-Root`, and a grant match for the parsed broadcast. It SHALL reject a wide `t/<owner>` root. `POST /admit` SHALL run this sequence, return `Cache-Control: no-store`, and SHALL NOT dial the relay. WHIP and WHEP SHALL run it again and SHALL NOT trust a previous `/admit` body. The relay TLS certificate SHALL be verified. Setup SHALL be bounded by token expiry and five seconds, SHALL be raced against relay closure, and SHALL recheck expiry immediately before `201`. Any refusal, timeout, or answer-delivery failure SHALL drop the unrun response and release only that attempt's hold.
+
+#### Scenario: Preflight does not dial
+- GIVEN a valid open token and a matching `X-Mjolnir-Root`
+- WHEN the client POSTs `/admit`
+- THEN the status is 200, the body names that root, and the relay dial counter is unchanged
+
+#### Scenario: Expiry during catalog wait
+- GIVEN a WHEP setup whose catalog wait outlasts `exp`
+- WHEN the wait ends
+- THEN the status is not 201, no session id remains, and another leg of the same token is still running
+
+#### Scenario: Protected root
+- GIVEN a bearer whose assessed root has no `~open` segment
 - WHEN the client POSTs WHIP
-- THEN the gateway opens a relay session with that bearer and returns an SDP answer
+- THEN the status is `403` with `error` `room_not_open` and the dial counter is unchanged
 
-#### Scenario: Protected and old mint are refused
-- GIVEN a bearer whose assessed root is `t/<owner>/<room>` with no `~open` segment
-- WHEN the client POSTs WHIP or WHEP
-- THEN the status is `403 room_not_open` and no relay session is opened
+### Requirement: DELETE and errors are token-scoped
+`DELETE /session/<id>` SHALL succeed with `204` only for the bearer that admitted that id, including a repeat after the id is gone. Another bearer SHALL receive `403` and SHALL NOT change the session. An unknown id SHALL receive `404`. The gateway SHALL NOT drop a different session id as part of that DELETE. Error responses SHALL use the codes in the design table. The broadcast path SHALL be parsed once, rejecting encoded slashes and dot segments, and that parsed string SHALL be the path matched to the grant and passed to moq.
 
-#### Scenario: Wide root
-- GIVEN a bearer whose assessed root is `t/<owner>` and a URL that contains `~open`
-- WHEN the client POSTs WHEP
-- THEN the status is `403 room_not_open`
+#### Scenario: Repeat DELETE
+- GIVEN a session id admitted by token T
+- WHEN T DELETEs it twice
+- THEN both responses are `204` and a different token's DELETE of that id was `403` while it existed
 
-#### Scenario: Expected root
-- GIVEN an assessed open root and an `X-Mjolnir-Root` that differs by one character
-- WHEN the client POSTs WHIP
-- THEN the status is `403 unexpected_root` and no SDP answer is written
+#### Scenario: Encoded slash
+- GIVEN a broadcast path containing `%2f`
+- WHEN the request is admitted or refused
+- THEN the path compared to the grant does not contain a slash that came from that escape
 
-### Requirement: Each WebRTC leg uses its own relay session
-The gateway SHALL attach WHIP and WHEP only to a relay session opened with the bearer that just passed admission. It SHALL NOT attach WHEP to an in-process publisher origin. It SHALL close the WebRTC task when that relay session closes or when the token's `exp` is reached. It SHALL NOT answer a request whose `exp` has already passed. A replacement POST SHALL leave the previous session running until the new request returns `201`.
-
-#### Scenario: Expiry
-- GIVEN an admitted session whose token expires
-- WHEN `exp` is reached
-- THEN the DTLS association is closed
-
-#### Scenario: Failed renewal
-- GIVEN a live session and a renewal POST that assesses as `bad_token`
-- WHEN the response is sent
-- THEN the live session is still running
-
-### Requirement: A video offer is not answered as silent audio
-If the offer contains a video m-line and the catalog's video codecs do not overlap the offer, the gateway SHALL return `409 codec_unavailable` and SHALL NOT start a session. If WHEP finds no catalog, it SHALL return `409 not_started` and SHALL NOT start a session.
+### Requirement: A video offer is not left running as silent audio
+If the offer contains video and the built answer contains no video m-line, the gateway SHALL drop the unrun response and return `409` `codec_unavailable`. If WHEP cannot obtain a catalog or a rendition before the setup deadline, it SHALL drop the unrun response and return `409` `not_started`. WHIP SHALL NOT require a pre-existing catalog.
 
 #### Scenario: Codec miss
-- GIVEN a catalog whose only video codec the browser did not offer
-- WHEN WHEP answers
-- THEN the status is `409 codec_unavailable` and no PeerConnection is established
+- GIVEN an offer with video and an answer the pin would have returned with video rejected
+- WHEN WHEP handles it
+- THEN the status is `409`, no session id is registered, and `run` was not called
 
-### Requirement: The unit is off until a deploy flag installs it
-`mjolnir-rtc` SHALL NOT be installed or started by a normal relay deploy. Its media UDP port SHALL be listed in the published-port reserved set when the unit is installed. This requirement does not authorize that install.
+### Requirement: The unit stays off until a separate deploy approval
+A relay deploy without the rtc flag SHALL NOT install `mjolnir-rtc`. This requirement does not authorize that flag.
 
 #### Scenario: Default deploy
 - GIVEN a relay deploy without the rtc flag
 - WHEN the host is inspected
-- THEN `mjolnir-rtc` is not running and its port is not reserved
+- THEN `mjolnir-rtc` is not running

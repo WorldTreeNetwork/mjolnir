@@ -1,64 +1,88 @@
 # add-webrtc-edge design
 
-Pin: moq `4a6f522483168ace392718d68b58a402533c897d`, `moq-webrtc` 0.3.12. Spike: `spikes/finding.md`. Relay assess: `native/mjolnir_relay/src/lib.rs` (`assess` returns `Result<Grant, Refuse>`). Open root: `t/<owner>/~open/<room>`. Protected root: `t/<owner>/<room>`.
+Pin `4a6f522483168ace392718d68b58a402533c897d`. `assess` is `lib.rs:215`: token, path, `&KeySet`, `max_ttl` → `Result<Grant, Refuse>`. It does not load keys and does not read a drain flag. `Grant.root` is the authenticated root string (`grant_from`, `lib.rs:133`). `load_verify_keys` (`lib.rs:61`) rejects a private key, a missing or duplicate `kid`, a disallowed algorithm, and an empty set.
 
-## D1. Process
+`moq_webrtc::server` exposes `Response` with the answer, an id, and `run`. Drop unregisters. There is no public method that sends a DTLS `close_notify`. Catalog resolve inside WHEP waits up to five seconds (`server/whep.rs`). That wait needs a relay connection. "No session" means the `Response` was dropped before `run`, and the registry has no id.
 
-`mjolnir-rtc` is its own binary and systemd unit, user distinct from the relay. It reads the relay's public verify set. It holds no mint key. Default off. Installing or removing it is the same class of flag as `deploy.sh --relay`. This contract does not run that flag.
+## D1. Snapshot
 
-One UDP media port is added to `:published_port_reserved` so a VM cannot publish it. The port number is configuration, not a new token claim.
+Configuration: verify-set path, `max_ttl` equal to the relay's token ceiling, relay URL, page origins, media UDP port.
+
+Reload the verify set at least every five seconds. The request snapshot is that set plus a bool `admissions_open`. `admissions_open` is false when the last reload failed or the process was told to drain. A failed reload does not install the bad file. New admissions then fail `403 bad_token`. Sessions already admitted keep running until `exp` or until their relay connection closes. Emergency drain closes relay connections; each leg's `run` ends because that connection ended. There is no per-user kick.
+
+`assess` is called with the configured `max_ttl` and the snapshot's keys. The path argument is empty at this step. Path confinement is the separate grant match below, on the broadcast path the handler parsed. The original `grant.root` is what later steps compare. Nothing reparses the JWT.
 
 ## D2. HTTP
 
-- `POST /whip/<room>/<broadcast…>` publish.
-- `POST /whep/<room>/<broadcast…>` play.
-- `DELETE /session/<id>` drop a session this token admitted.
-- `Authorization: Bearer` is the room token. `X-Mjolnir-Root` is the invitation's expected full root, exact bytes.
-- CORS allows `Authorization` and `X-Mjolnir-Root` on those routes. No other origin privilege.
+Origins: the configured list. If the list is empty, same-origin only. `Access-Control-Allow-Origin` echoes a listed origin, never `*` when `Authorization` is allowed. Methods: `POST`, `DELETE`, `OPTIONS`. Allowed request headers: `Content-Type`, `Authorization`, `X-Mjolnir-Root`. Exposed response header: `Location`. Preflight max-age 600. No `30x` that carries the bearer.
 
-`<broadcast>` is relative to the token root (`alice/cam`). `<room>` is compared to the root's room segment. The owner is not in the URL. The URL is never concatenated into a MoQ path.
+| Status | `error` | When |
+|---|---|---|
+| 401 | `no_token` | missing or empty bearer |
+| 400 | `bad_request` | missing root header, bad JSON, bad path |
+| 403 | `bad_token` | `assess` refused, expired, admissions closed |
+| 403 | `room_not_open` | not the open shape, or wide `t/<owner>`, or URL room segment differs |
+| 403 | `unexpected_root` | header present and not byte-equal to `grant.root` |
+| 403 | `forbidden` | grant does not match the operation's broadcast |
+| 409 | `not_started` | WHEP catalog timeout, absent broadcast, or no rendition |
+| 409 | `codec_unavailable` | offer had video and the built answer has no video m-line |
+| 503 | `setup_failed` | relay dial failed, setup timeout, or the answer could not be written |
+| 204 |  | DELETE owned by this bearer |
+| 404 | `not_found` | DELETE unknown id |
+| 403 | `forbidden` | DELETE with a different bearer |
+
+Bodies are `{"error":"<code>"}` except `201` (SDP body, `Content-Type: application/sdp`, `Location: /session/<id>`) and `204`.
+
+Path: take the broadcast remainder, reject a backslash, reject `%2f` / `%2F` before decoding, percent-decode once, reject empty, `.`, `..`, a second slash-escape, or any segment that is empty. The string passed to `grant.publish` or `grant.subscribe` is that decoded relative path. Tests cover encoded slash, `%252f`, and backslash, and assert the moq path equals the decoded form.
 
 ## D3. Order
 
-Stop at the first failure. No relay dial and no SDP answer before step 7 succeeds.
+One function for `/admit`, WHIP, and WHEP. `/admit` stops after step 6 and returns `200 {"root","exp","operation","broadcast"}` with `Cache-Control: no-store`. It does not dial.
 
-1. Bearer missing or not a token: `401`.
-2. `assess` on one key-set snapshot: failure `403 bad_token`. Log the reason class, never the token.
-3. Classify the assessed root. Only literal `t/<owner>/~open/<room>` is open. Protected, a missing `~open` marker, and any other shape: `403 room_not_open`.
-4. Wide root `t/<owner>` (no room segment): `403 room_not_open`, even if the URL contains `~open`.
-5. URL room segment ≠ root room segment: `403 room_not_open`.
-6. `X-Mjolnir-Root` missing: `400`. Present but not byte-equal to the assessed root: `403 unexpected_root`. No case-folding, no percent-decoding of the header.
-7. WHIP requires the publish grant to match the broadcast. WHEP requires the subscribe grant. Else `403 forbidden`.
-8. `exp` already past: `403 bad_token`.
-9. Open the relay session with this token. WHEP has no catalog: close it and return `409 not_started`.
-10. Build the answer. Video offered but no overlapping catalog video codec: close and return `409 codec_unavailable`.
-11. Return `201` with the answer and a session id. Drive the WebRTC task until the PC ends, the relay session ends, or `exp`.
+1. Bearer or `401`.
+2. Snapshot. If not `admissions_open`, `403 bad_token`.
+3. `assess`. Map `Refuse` to `403 bad_token`. Keep `grant.root` and `grant.expires`.
+4. Classify. Open is only `t/<owner>/~open/<room>` with a canonical owner and no empty, `.`, or `..` segment. Else `403 room_not_open`. A root of exactly two segments (`t/<owner>`) is wide: `403 room_not_open`.
+5. URL room segment equals the root's room segment. Else `403 room_not_open`.
+6. `X-Mjolnir-Root` missing → `400`. Else byte-compare to `grant.root`. Mismatch → `403 unexpected_root`. No decoding.
+7. WHIP: `grant.publish` matches the parsed broadcast. WHEP: `grant.subscribe` matches it. Else `403 forbidden`. The relay session's subscribe scope is what stops a later catalog sibling outside the grant. This contract does not add a second authorizer.
+8. If `now >= exp`, `403 bad_token`.
 
-Replacement and renewal repeat 1–11 with the new bearer. `DELETE` of the old id happens only after `201`. A failed new POST leaves the old session.
+Then, WHIP and WHEP only:
 
-`assess` failure handling matches the relay: a bad or draining key set fails closed for new admissions. This unit reloads the verify set on the relay's interval (at most five seconds) and uses the snapshot taken at step 2 for that request. Emergency revoke remains the relay's drain, which closes the relay session and therefore this task.
+9. Take or dial the connection for these exact token bytes. Dial uses verified TLS (webpki roots). Failure → `503 setup_failed` and no hold left behind.
+10. Increment the refcount. The setup deadline is `min(exp, now+5s)`. Race relay closure and that deadline against catalog resolve and answer build.
+11. WHEP: catalog timeout, missing broadcast, or no rendition → drop the unrun `Response`, decrement, `409 not_started`.
+12. If the offer contains video and the answer has no video m-line, drop the unrun `Response`, decrement, `409 codec_unavailable`. WHIP does not look for a source catalog.
+13. If `now >= exp` or the relay connection closed or the deadline fired, drop, decrement, `403 bad_token` or `503 setup_failed`.
+14. Insert `{id, token_bytes, response}` and return `201`. `run` starts only after the `201` is queued. If the write to the client fails, drop and decrement as if step 13 failed.
 
-## D4. What this is not
+A refusal never deletes another id. Decrement to zero closes the connection. `exp` on the connection closes it even if a refcount is non-zero, and every id on that token is dropped. That is the whole-token close. It does not run for a different token.
 
-`Mjolnir.Relay.RoomJoin.check/4` compares an invitation, an asked kind, a mint body, and a trusted admission tuple inside Elixir tests. The gateway does not call it. The browser does not call it. Both must enforce the same equalities at their own boundary. The gateway's trusted root is only the root `assess` returned for this bearer.
+## D4. DELETE and replacement
 
-## D5. Media path
+`DELETE` looks up the id. Wrong token → `403` and no change. Owned id → drop that `Response` if it is still the map's value, decrement, `204`. A second DELETE of that id by the same token → `204`. Unknown id → `404`.
 
-WHIP and WHEP origins come from the relay session. The keyframe patch, when `.12` lands, may ask the WHIP encoder on a period. It must not take a local subscriber origin. Metering of viewer bytes stays on that relay subscribe. Per-owner caps are `.4` and are not claimed here.
+Replacement is a new POST with a new bearer. It gets a new connection. The caller DELETEs the old id only after `201`. A failed POST does not DELETE.
 
-## D6. Evidence already in hand
+## D5. Acceptance of "closed"
 
-| Check | Result |
-|---|---|
-| Chromium WHIP to MoQ, VP8/H.264/VP9/AV1 | GO, `spikes/logs/claim1-*` |
-| WHEP in Chromium and Firefox | GO except Firefox AV1 video |
-| Two WebRTC plus one native participant | GO, `claim3-room.log` |
-| Foreign room, no token, expiry closes the PC | GO, `claim4-*` |
-| Protected WHEP | HTTP 422 generic in the spike; this contract requires `403 room_not_open` |
-| 8× WHEP CPU | about 47% of one M1 Max core at 720p |
-| Linux `x86_64` build | not run (SSH timeout). Owed before the unit file is called done |
-| Safari | not run |
+Dropping `run` stops forwarding. That is the acceptance test: after `exp` or DELETE, the relay session for that hold sends no further media. The spike saw browsers notice 6–7 s later. This contract does not require an immediate DTLS `close_notify`, because the pinned `Response` has no such method. A patch that adds one is a separate change.
 
-## D7. Smallest slice after accept
+## D6. Proof the first slice must show
 
-One binary, the three routes, the order in D3, a disposable relay, real `Mint.issue` open and protected tokens. Prove: open WHIP and WHEP exchange the spike's coloured frames through the relay; protected, wide, mismatched `X-Mjolnir-Root`, and old-mint (no `~open`) return the status above with no SDP and no relay session; expiry closes DTLS. Ubuntu build of that binary on the Framework laptop. Then stop. The page is `.15`.
+Real `Mint.issue` open and protected tokens. Wide roots from a test signer, not from `Mint.issue`. Disposable relay.
+
+- Open WHIP and open WHEP: coloured frames and the fixture tone both ways. One connection per token while two legs share it (`refcount` observable in the test log).
+- Protected, mismatched header, foreign broadcast, malformed grant, expired: status from D2, and a dial counter that stayed zero. `/admit` included.
+- Expiry during the catalog wait: no `201`, no registered id, the other leg of that token still running.
+- Failed renewal: old id still runs.
+- Invalid key file after a good load: new POST `403`, old session runs. Then process drain: relay connections closed, legs stop forwarding.
+- DELETE with the admitting bearer, a repeat, and a different bearer.
+- Encoded `%2f` does not become a slash in the moq path.
+
+Ubuntu 24.04 build of this binary is an implementation gate and is not claim 8. Claim 8 is Arch. Safari, eight PeerConnections, and Hang watch stay on their existing gates.
+
+## D7. Order relative to other nodes
+
+Fresh accept of `.12` and of this contract, then `.12` K0–K1 and the ingest patch, then this slice. `.12` still blocks the whole `.13` node. The named-peer page (`.15`) may start after this slice is green; `.14` still blocks calling `.15` done.

@@ -5,11 +5,11 @@ When the keyframe policy is enabled for a WHIP ingest, every PLI the ingest send
 
 #### Scenario: Overlapping causes send one request
 - GIVEN an enabled line that sent a PLI at time t
-- WHEN a startup request, a period deadline, a loss frame and two viewer requests all arrive between t and t + 1 second, and no keyframe arrives
-- THEN the line sends exactly one PLI, at t + 1 second, tagged with all four causes
+- WHEN a startup request, a period deadline, a loss frame and a join request all arrive between t and t + 1 second, and no keyframe arrives
+- THEN the line sends exactly one PLI, at t + 1 second, tagged with those ingest causes, and a viewer PLI adds no cause
 
 #### Scenario: Pinned paths are inside the cooldown
-- GIVEN an enabled line that sent a viewer-cause PLI at time t
+- GIVEN an enabled line that sent a period PLI at time t
 - WHEN a deferred timeline step asks for a keyframe at t + 0.3 seconds
 - THEN no PLI is sent before t + 1 second
 
@@ -40,7 +40,7 @@ When the keyframe policy is enabled for a WHIP ingest, every PLI the ingest send
 
 #### Scenario: Enabling the policy from defaults keeps a one second floor
 - GIVEN `Keyframes { enabled: true, ..Default::default() }`
-- WHEN two viewer requests arrive 100 milliseconds apart
+- WHEN two period deadlines are due 100 milliseconds apart
 - THEN the second PLI is sent 1 second after the first
 
 #### Scenario: A zero interval is refused
@@ -50,8 +50,8 @@ When the keyframe policy is enabled for a WHIP ingest, every PLI the ingest send
 
 #### Scenario: Disabled policy is the pinned behaviour
 - GIVEN `whip::Request::new` with no keyframe settings
-- WHEN a WHIP session runs, starts with no keyframe, takes a timeline step, receives non-contiguous frames, and is asked by a requester
-- THEN it sends exactly the PLIs the pinned crate sends, and its `Response::keyframes()` requester returns `Ignored` for every request
+- WHEN a WHIP session runs, starts with no keyframe, takes a timeline step, and receives non-contiguous frames
+- THEN it sends exactly the PLIs the pinned crate sends, and a viewer PLI is still only logged
 
 ### Requirement: A WHIP ingest asks for keyframes on a period and after loss
 When the policy is enabled with a period, a video line SHALL request a keyframe once the period has passed since the later of its last keyframe and its last sent PLI. When the policy is enabled with loss requests on, a non-keyframe video frame that str0m marks as not contiguous SHALL request a keyframe. The loss cause SHALL NOT change forwarding: the pinned admission decision SHALL still decide whether that frame is forwarded or dropped. Both requests SHALL pass the per-line cooldown. The period is a request cadence; the ingest SHALL NOT treat an unanswered request as an error.
@@ -94,18 +94,18 @@ When the policy is enabled with a refresh ratio, each WHIP video track SHALL car
 - WHEN a reader subscribes
 - THEN the join cause sends nothing, and the startup request covers the line
 
-### Requirement: A WHEP play stays on the viewer's relay token
-The gateway SHALL open each WHEP play as a relay subscribe session with that viewer's own token, and SHALL NOT supply WHEP an in-process publisher origin. The gateway SHALL NOT forward a viewer's PLI or FIR to a WHIP session. A viewer's loss recovery waits for the ingest cadence in "A WHIP ingest asks for keyframes on a period and after loss". The carried patch SHALL NOT add a WHEP requester, a pairing table, or a local-playback source.
+### Requirement: The keyframe patch does not add a viewer path
+The carried patch SHALL NOT add `Response::keyframes`, a requester type, `whep::Request::source`, `whep::Request::keyframes`, or a pairing table. A viewer PLI or FIR SHALL NOT add a WHIP keyframe request. WHEP SHALL NOT be given an in-process publisher origin by this change. How many relay connections a token reuses is `add-webrtc-edge`, not this patch.
 
-#### Scenario: Viewer PLI does not reach the publisher
-- GIVEN alice publishes over WHIP through the relay and bob plays that broadcast over WHEP through the relay with his own token
+#### Scenario: Viewer PLI is not an ingest cause
+- GIVEN alice publishes over WHIP and bob plays that broadcast over WHEP on a relay session admitted with bob's token
 - WHEN bob's browser sends a PLI
-- THEN alice's session receives no viewer-cause request
+- THEN alice's ingest gate records no viewer cause and sends no PLI because of it
 
-#### Scenario: No local origin
-- GIVEN a WHEP accept for a broadcast that a WHIP session on the same process is publishing
-- WHEN the edge builds the WHEP source
-- THEN the source is the relay session opened with the viewer's token
+#### Scenario: No requester API
+- GIVEN the vendored crate after the patch
+- WHEN the public `whip` and `whep` request types are inspected
+- THEN they have no keyframe requester and no pinned source field this patch added
 
 ### Requirement: The keyframe patch is carried without moving the moq pin
 The edge's `moq-webrtc` SHALL be the vendored copy at `native/vendor/moq-webrtc/`: upstream `rs/moq-webrtc` at `4a6f522483168ace392718d68b58a402533c897d`, with only the packaging differences listed in its `VENDOR.md` and the patch in its `patches/` directory. The copy SHALL keep upstream's `LICENSE-MIT` (Copyright (c) 2023 Luke Curley) and `LICENSE-APACHE` unmodified, SHALL mark every file the patch or the packaging changed with a modification notice, and SHALL record in `VENDOR.md` who authorised the outbound licence. Its manifest SHALL keep every feature and default-feature setting the crate inherited from the moq workspace at the pin. Only the consuming workspace's root manifest SHALL patch `moq-webrtc` to that path, and every other moq crate SHALL resolve from `git+https://github.com/moq-dev/moq?rev=4a6f52248`, one copy each. `native/mjolnir_relay/Cargo.toml` and `native/mjolnir_relay/Cargo.lock` SHALL be byte-identical before and after this change.

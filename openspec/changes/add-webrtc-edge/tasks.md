@@ -1,22 +1,15 @@
 # Tasks
 
-Contract only until an independent accept. Duke authorized the build on 2026-11-26; that accept is the remaining architecture gate. Do not deploy.
+PENDING until a fresh accept of this revision and of the reconciled `.12` contract. The 2026-11-26 build grant is already on the bead. Do not ask for it again. Do not deploy.
 
-- [ ] Fresh advise of this contract. Same bar as `.11`: architecture, Astra unless the parent names another reader.
-- [ ] Linux build of the existing spike edge on the Framework laptop (`x86_64`, no Node). Record the log under `spikes/logs/`. This is the owed half of claim 8. It does not by itself accept the contract.
-- [ ] After accept: admission module matching design D3, table-tested with real `Mint.issue` tokens (open, protected, wide root, mismatched header, expired) and zero relay dials on the refusals.
-- [ ] After accept: WHIP and WHEP through a disposable relay, coloured-frame check from `spikes/analyze.py`, both directions, publishers alive across a refused protected attempt.
-- [ ] After accept: expiry closes DTLS; failed renewal keeps the old session; `409` on missing catalog and on codec miss.
-- [ ] After accept: unit file and reserved UDP port behind the deploy flag, default off. Do not run the flag against production.
-- [ ] Handoff note for `.15`: status codes, `X-Mjolnir-Root`, session id, and that `RoomJoin` is not a substitute for this binary.
+- [ ] Fresh advise of this contract and ADR 0020.
+- [ ] After `.12` K0–K1 and this accept: admission and connection pool as design D1–D4, table-tested with `Mint.issue` open and protected tokens and a separately signed wide root. Dial counter zero on every refusal, including `/admit`.
+- [ ] Two legs, one token, one connection; a second token does not share it. DELETE matrix: owner, repeat, other token, unknown id. Failed renewal leaves the old id. Expiry during catalog wait drops only the candidate.
+- [ ] Coloured frames and fixture tone both ways on a disposable relay. Codec miss and missing catalog return `409` with no registered id.
+- [ ] Invalid verify-set reload refuses new admissions and leaves a live session until drain closes the relay connection.
+- [ ] Ubuntu 24.04 build of this binary. Do not cite `claim8-linux.log` for it; that log is Arch x86_64.
+- [ ] Handoff for `.15`: `/admit` response, status codes, `Location`, configured origin, DELETE with the admitting bearer. `RoomJoin` is not this binary.
 
 ## Out of scope
 
-- Roster SSE (`.14`).
-- Browser page (`.15`).
-- TURN, firewall, production hostname.
-- Keyframe vendor patch (`.12`), except consuming a relay session the same way the spike does.
-
-## Fresh independent review of 56d1fedf
-
-- [ ] Resolve G1–G4: reconcile per-token steer, bounded setup/delete/expiry, trusted pre-media admission dependency, HTTP/path/errors and accurate Ubuntu evidence. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.
+- `.14` roster. `.12` viewer path. Production flag. `.4` quotas. Safari and eight-PC proofs.
