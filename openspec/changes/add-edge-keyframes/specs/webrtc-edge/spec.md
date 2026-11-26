@@ -94,57 +94,18 @@ When the policy is enabled with a refresh ratio, each WHIP video track SHALL car
 - WHEN a reader subscribes
 - THEN the join cause sends nothing, and the startup request covers the line
 
-### Requirement: A viewer's keyframe request reaches only the WHIP session whose media it plays
-Each accepted WHIP session SHALL have its own keyframe receiver, dropped when the session's run ends for any reason and not kept alive by a lingering broadcast. `Response::keyframes()` SHALL return a requester holding only a weak reference to that receiver and the session's route instance for a WHIP response, and `None` for a WHEP response. A requester call SHALL return `Retired` once its session has ended, and SHALL never reach another session. A WHIP session SHALL honour a requester call only while it has exactly one negotiated video line with PLI, only for a track that line created, and only when the call names its own route instance; it SHALL ignore and count any other call. Requester calls SHALL coalesce before they are queued, so pending work per session is constant.
+### Requirement: A WHEP play stays on the viewer's relay token
+The gateway SHALL open each WHEP play as a relay subscribe session with that viewer's own token, and SHALL NOT supply WHEP an in-process publisher origin. The gateway SHALL NOT forward a viewer's PLI or FIR to a WHIP session. A viewer's loss recovery waits for the ingest cadence in "A WHIP ingest asks for keyframes on a period and after loss". The carried patch SHALL NOT add a WHEP requester, a pairing table, or a local-playback source.
 
-A WHEP session SHALL forward a viewer's PLI or FIR only when its source was resolved pinned to a publisher instance (`whep::Request::source`), its requester belongs to that same instance, and the video rendition it serves at that moment is a track of the requested broadcast itself (no cross-broadcast reference) whose catalog instance is absent or equal to the pinned one; it SHALL re-check this on every rendition change. In every other case it SHALL forward nothing, return `Ignored(Unbound)`, and count it.
-
-The embedder SHALL pair a WHEP session with a WHIP session only after both requests passed token verification and their path grant, and only when the full verified root and the canonical root-relative broadcast path are equal. It SHALL read the pairing generation, requester, route instance and in-process source in one step and resolve the WHEP source from that in-process source pinned to that instance. When pinned resolution fails, it SHALL play the broadcast without a requester. It SHALL remove a pairing entry only if the entry still belongs to the session that is ending. Replacing a WHIP session SHALL NOT retire the requester of the session it replaced while that session runs.
-
-#### Scenario: Replacement during WHEP source resolution
-- GIVEN S1 and S2 both live for the same root and path, with identically named video tracks and no catalog instance, and a WHEP accept that read S1's entry just before S2 replaced it
-- WHEN the viewer's source resolves and the viewer sends PLIs
-- THEN the viewer plays S1, S1 receives viewer-cause PLIs, and S2's counter does not move
-
-#### Scenario: Pinned resolution fails
-- GIVEN a WHEP accept that read S1's entry, and S1 ends before the source resolves
-- WHEN the edge falls back and the viewer sends PLIs
-- THEN the viewer plays without a requester, every request is counted as unbound, and neither S1 nor S2 receives one
-
-#### Scenario: Sibling catalog reference
-- GIVEN a pinned source whose catalog's video rendition references another broadcast with the same track name
-- WHEN the viewer sends a PLI
-- THEN the egress returns `Ignored(Unbound)` and no publisher receives a request
-
-#### Scenario: Positive forwarding on the default wire
-- GIVEN alice's WHIP session publishes to the relay with the default version set (lite-06) and bob's WHEP is paired with it
+#### Scenario: Viewer PLI does not reach the publisher
+- GIVEN alice publishes over WHIP through the relay and bob plays that broadcast over WHEP through the relay with his own token
 - WHEN bob's browser sends a PLI
-- THEN alice's session receives a viewer-cause request and alice's `pliCount` rises
+- THEN alice's session receives no viewer-cause request
 
-#### Scenario: Two rooms with the same broadcast path
-- GIVEN alice publishes `alice/cam` over WHIP in room `r1` and dana publishes `alice/cam` over WHIP in room `r2`, each with a WHEP viewer in their own room
-- WHEN both viewers send PLIs
-- THEN alice's session counts only the `r1` viewer's requests and dana's only the `r2` viewer's, and each publisher receives a viewer-cause PLI
-
-#### Scenario: Replacement versus retirement
-- GIVEN bob is bound to S1, and S2 replaces S1 at the same root and path while S1 keeps running
-- WHEN bob sends a PLI while S1 runs, and again after S1 ends
-- THEN the first reaches S1, the second returns `Retired`, and S2 receives neither
-
-#### Scenario: Late cleanup of the prior session
-- GIVEN the pairing table holds S2 for a root and path that S1 held before
-- WHEN S1's end is processed after S2 was inserted
-- THEN the table still holds S2
-
-#### Scenario: Ambiguous source
-- GIVEN a WHIP session with two negotiated video lines
-- WHEN a paired viewer sends a PLI
-- THEN the call returns `Ignored` and no PLI is sent
-
-#### Scenario: A flood stays bounded
-- GIVEN one paired viewer and then four, each sending a PLI every 50 milliseconds for 20 seconds
-- WHEN the edge log of sent PLIs is read
-- THEN every gap between PLIs sent on that line is at least 1 second, and the session never holds more than one request for the line
+#### Scenario: No local origin
+- GIVEN a WHEP accept for a broadcast that a WHIP session on the same process is publishing
+- WHEN the edge builds the WHEP source
+- THEN the source is the relay session opened with the viewer's token
 
 ### Requirement: The keyframe patch is carried without moving the moq pin
 The edge's `moq-webrtc` SHALL be the vendored copy at `native/vendor/moq-webrtc/`: upstream `rs/moq-webrtc` at `4a6f522483168ace392718d68b58a402533c897d`, with only the packaging differences listed in its `VENDOR.md` and the patch in its `patches/` directory. The copy SHALL keep upstream's `LICENSE-MIT` (Copyright (c) 2023 Luke Curley) and `LICENSE-APACHE` unmodified, SHALL mark every file the patch or the packaging changed with a modification notice, and SHALL record in `VENDOR.md` who authorised the outbound licence. Its manifest SHALL keep every feature and default-feature setting the crate inherited from the moq workspace at the pin. Only the consuming workspace's root manifest SHALL patch `moq-webrtc` to that path, and every other moq crate SHALL resolve from `git+https://github.com/moq-dev/moq?rev=4a6f52248`, one copy each. `native/mjolnir_relay/Cargo.toml` and `native/mjolnir_relay/Cargo.lock` SHALL be byte-identical before and after this change.

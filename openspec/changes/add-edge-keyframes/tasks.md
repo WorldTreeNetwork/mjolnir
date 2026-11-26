@@ -10,7 +10,7 @@ No product code in this pass. Checked items are observations already captured or
 
 - [x] Advise 2026-11-25 (Astra): send-back. `reviews/2026-11-25-advise.md`, `reviews/2026-11-25-blind-take.md`. This revision answers findings 1–7.
 - [x] Advise 2026-11-25, second read (Astra): send-back, narrowly. `reviews/2026-11-25-advise-2.md`. This revision answers its four edits (source binding, gate defaults and parking, loss forwarding, executable order).
-- [ ] Fresh advise after this revision, by the same reviewer.
+- [ ] Fresh advise after the 2026-11-26 withdrawal of in-process WHEP and viewer PLI forwarding, by the same reviewer. Ingest policy is unchanged. No product code until that accept.
 
 ## Order
 
@@ -39,14 +39,15 @@ K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2
 
 ## Patch (in `native/vendor/moq-webrtc`, tests first, each failing before its code)
 
-- [ ] P1. Gate, a pure struct beside `IngestOrder`: send when the floor allows; one held request per line with cause tags; a keyframe (the first included) cancels; overlapping causes (startup, step, period, loss, join, viewer) between two sends produce exactly one send tagged with all of them; the pinned startup and step paths are inside the cooldown when enabled.
+- [ ] P1. Gate, a pure struct beside `IngestOrder`: send when the floor allows; one held request per line with cause tags; a keyframe (the first included) cancels; overlapping causes (startup, step, period, loss, join) between two sends produce exactly one send tagged with all of them; the pinned startup and step paths are inside the cooldown when enabled. There is no viewer cause.
 - [ ] P1b. Defaults and validation: `Keyframes::default().floor == 1 s`; `Keyframes { enabled: true, ..Default::default() }` spaces two requests by 1 s; `whip::accept` returns `Error::InvalidKeyframes` for an enabled zero floor and for an enabled zero period.
 - [ ] P2. Unanswered request: with period 2 s and an ignored PLI at 2 s, the next period deadline is 4 s; a deadline already in the past is never returned twice.
 - [ ] P3. No receiver or refused writer: a send attempted before the line has a receive stream, with no writer, or refused by str0m (`NoReceiverSource`, `NotReceivingDirection`) leaves the request held, does not move `last_sent`, does not end the session, and is counted. With a paused clock, 10 s elapse with no RTP and the line's timer fires once, then stays disarmed. A first delta then releases one PLI at once; in another run a first keyframe cancels it. A strictly future deadline from another cause re-arms it. A line without negotiated PLI never sends.
 - [ ] P4. Join (H1): `Info::refresh == Some(4)` on video tracks when set, `None` by default; an in-process join over the ratio requests once; first and later joins under the ratio request nothing; an empty track's group-0 demand requests nothing; the observer's first reading requests nothing.
 - [ ] P5. Loss: a usable discontinuous delta (after the line's last keyframe) requests and is forwarded; an ineligible one (on a line with no keyframe yet, and one older than the last keyframe) requests and is dropped by the pinned admission; with `on_loss` off neither requests and forwarding is unchanged.
-- [ ] P6. Requester (crate side): `Response::keyframes()` is `Some` for WHIP and `None` for WHEP; `Requester::instance()` is the route instance; `Retired` after the session ends, including while its broadcast lingers; `Ignored(Ambiguous)` with two video lines; `Ignored(WrongTrack)` and `Ignored(WrongInstance)`; `Ignored(Disabled)` with the policy off; repeated calls coalesce (one pending wakeup).
-- [ ] P6b. Egress binding: with `whep::Request::source` set, `resolve` follows only that instance (a second live instance at the same path is never selected); egress forwards PLI and FIR only when source and requester instances match, the served rendition is the requested broadcast's own track, and its catalog instance is absent or equal; a sibling catalog reference with the same track name gives `Ignored(Unbound)` and no request; a rendition change re-checks; no `source` gives `Ignored(Unbound)`; audio-line and pre-rendition requests are dropped and counted.
+Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress binding, D3a–D3e pairing table, and the `.13` handoff that said a paired WHEP plays in process. Do not implement them.
+
+- [ ] P6. The patch does not add `Response::keyframes`, a WHEP requester, or `whep::Request::source`. A unit test sends a viewer PLI into pinned egress and observes it dropped, as at the pin.
 - [ ] P7. Disabled policy: every upstream test at the pin passes; a new test drives startup, a step, non-contiguous frames and a requester call with `Request::new` and observes exactly the pinned PLIs and the pinned forwarding. Total test count is K1b's plus the new ones (`harness/logs/p7-tests.txt`).
 - [ ] P8. Session wiring: one `select!` arm whose deadline is the earliest armed deadline (REMB, period, gate; a disarmed line contributes none); a paused-clock test of that function.
 - [ ] P9. Commit the patch on its own, with the modification notice on every changed file; export `patches/0001-edge-keyframes.patch` with `git format-patch`; K2 passes; clippy at the crate's own level shows no new warnings.
@@ -54,18 +55,14 @@ K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2
 
 ## Harness pairing (embedder side, in the harness edge)
 
-- [ ] D3a. Table keyed by (full verified root, canonical root-relative path); each entry's generation, requester, route instance and in-process source read under one lock; pairing only after token verification and path grant on both legs. Test: two active rooms with the same broadcast path, each with publisher and viewer; per-session dispatch counters show each viewer reaching only its own publisher, both positive in the same run. `after-D3a.log`.
-- [ ] D3b. Replacement versus retirement: a viewer bound to S1 while S2 replaces it reaches S1 while S1 runs, gets `Retired` after S1 ends, and never reaches S2. `after-D3b.log`.
-- [ ] D3c. Late cleanup: process S1's end after S2 is inserted; the entry still names S2. Unit test in the harness edge.
-- [ ] D3d. Replacement during WHEP source resolution: S1 and S2 both live, identical track names, no catalog instance; a hook in the harness edge holds the WHEP accept between the table read and `whep::accept` while S2 replaces S1. The viewer plays S1 (frame counter from S1's fixture), S1's viewer-cause count rises, S2's does not move. A second run ends S1 inside the hold: the edge falls back without a requester, the fallback is counted, every viewer request is unbound, and neither publisher's count moves. `after-D3d.log`.
-- [ ] D3e. Positive forwarding on the default wire: alice's WHIP session publishes to the relay with the default version set (the negotiated version recorded as `moq-lite-06`); bob's paired WHEP sends PLIs; alice's session logs viewer-cause sends and alice's browser `pliCount` rises. `after-D3e.log`.
+- [ ] D3. Negative control: bob's WHEP plays alice through the relay; bob's PLIs do not increment alice's viewer-cause count (there is no viewer cause). `after-D3.log`.
 
 ## After (D9 local targets)
 
 - [ ] A. WHEP `POST` → first presented frame, H.264 and VP8, 10 joins at varied phase: median ≤ 2.0 s, max ≤ 2.5 s. `after-A.log` beside `before-A.log`.
 - [ ] B. MoQ late join, 10 joins: first decodable frame ≤ 1.0 s after subscribe; lag against the probe's newest media time at that wall time ≤ 2.2 s. Separately, over a real relay hop with the negotiated wire version recorded: the edge trace for the relay's first upstream subscription and for a later relay-side join while it stays open (H1). `after-B.log`.
 - [ ] C. Exporter late join (VP8 uncapped, VP9, AV1): recorded in `after-C.log`. If not content-ok, a bead under `mjolnir-rurh.13` (H3).
-- [ ] D1. Viewer-side 1.5 s blackout at varied phase: first presented frame with a post-burst counter ≤ 1.2 s after the burst end; a viewer-cause PLI in the edge log. `after-D1.log`.
+- [ ] D1. Viewer-side 1.5 s blackout at varied phase, same relayed WHEP route as the before run: record time to the first presented frame with a post-burst counter. A viewer-cause PLI is not required. The 1.2 s figure is an observation against the ingest cadence, not a pass gate. `after-D1.log`.
 - [ ] D2. Publisher-side 1.5 s blackout: the MoQ reader's first post-burst keyframe ≤ 1.2 s after the burst end; a loss-cause PLI in the edge log. `after-D2.log`.
 - [ ] E. Storm, one viewer then four, 20 s at 2.5 Mbit/s cap: every gap between sent PLIs ≥ 1 s on the monotonic clock; held requests ≤ 1 per line; `Requested` results counted; natural keyframes, resolution changes and `RateLimited` recorded separately. `after-E.log`.
 - [ ] F. Cost on identical moving input and cap, all three runs counted at the same probe boundary (MoQ frame payload bytes as the ingest published them): policy off, period 2 s, saturated 1 s feedback. Report separately (a) keyframe byte share, mean keyframe and delta sizes, codec, fps, resolution; (b) the bitrate difference against policy off over equal steady-state windows; (c) the quality difference: PSNR (and SSIM if available) aligned by frame counter, or "quality difference missing" stated explicitly. `RateLimited` per run. Compare the keyframe/delta size ratio with H2. `after-F.log`.
@@ -79,7 +76,7 @@ K0 → K1 → H0 → H1 (the baseline, harness still on git `moq-webrtc`) → K2
 - [ ] U2. `upstream/pr-draft.md` (Problem, Approach, Impact, Alternatives, Follow-ups), with `upstream/cost.md` included as its cost section. Depends on F-PR and U1; not started before both are checked.
 - [ ] U3. Tracking bead (child of `mjolnir-rurh`) with the drop condition from design D8, the rule that the behaviour tests run again at the pin move before the carry is removed, and the rule that only Duke or his named submitter pushes to the `WorldTreeNetwork/moq` fork or opens the PR. Linked from `VENDOR.md`.
 - [ ] U4. `NOTICE` gains a "Vendored third-party code" section (path, `MIT OR Apache-2.0`, Copyright (c) 2023 Luke Curley and the moq authors). `CLAUDE.md` gets one line pointing at `native/vendor/moq-webrtc/VENDOR.md`.
-- [ ] Handoff note on `mjolnir-rurh.13`: the `[patch]` line; the pairing table, its one-read entry (generation, requester, instance, in-process source) and generation rule; the embedder SHALL from the viewer-path requirement; that a paired same-edge WHEP plays in process, not through the relay, so metering (`mjolnir-rurh.4`) must count it at the edge; and the adopted defaults with F's numbers.
+- [ ] Handoff note on `mjolnir-rurh.13`: the `[patch]` line; WHEP stays on the viewer's relay token; no pairing table and no in-process play; adopted defaults with F's numbers.
 
 ## ASK (answered by Duke 2026-11-25: "for contract, i agree with those - wtn fork, measure cost and include in the pr, license matches upstream")
 
