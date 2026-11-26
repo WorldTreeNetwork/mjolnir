@@ -34,6 +34,9 @@ struct Opts {
     loss_pct: u32,
     burn_threads: u32,
     delay_ms: u64,
+    connect: String,
+    mint_key: String,
+    iroh_direct: String,
 }
 
 struct Totals {
@@ -44,6 +47,8 @@ struct Totals {
     late: AtomicU64,
     session_errors: AtomicU64,
     first_frame_us: AtomicU64,
+    joiner_connect_us: AtomicU64,
+    joiner_ready_us: AtomicU64,
     latencies: Mutex<Vec<u32>>,
 }
 
@@ -57,6 +62,8 @@ impl Totals {
             late: AtomicU64::new(0),
             session_errors: AtomicU64::new(0),
             first_frame_us: AtomicU64::new(0),
+            joiner_connect_us: AtomicU64::new(0),
+            joiner_ready_us: AtomicU64::new(0),
             latencies: Mutex::new(Vec::new()),
         }
     }
@@ -153,6 +160,9 @@ fn parse_opts(args: &[String]) -> Opts {
         loss_pct: arg(args, "--loss-pct", "0").parse().unwrap_or(0).min(100),
         burn_threads: arg(args, "--burn-threads", "0").parse().unwrap_or(0),
         delay_ms: arg(args, "--delay-ms", "0").parse().unwrap_or(0),
+        connect: arg(args, "--connect", ""),
+        mint_key: arg(args, "--mint-key", ""),
+        iroh_direct: arg(args, "--iroh", ""),
     }
 }
 
@@ -175,13 +185,14 @@ async fn serve(args: &[String]) -> anyhow::Result<()> {
     let keys_path = arg(args, "--keys", "");
     let burn: u32 = arg(args, "--burn-threads", "0").parse().unwrap_or(0);
     let seconds: u64 = arg(args, "--seconds", "30").parse().unwrap_or(30);
+    let bind = arg(args, "--bind", "127.0.0.1:0");
     let raw = std::fs::read_to_string(&keys_path)?;
     let set: KeySet = raw.parse().map_err(|err| anyhow::anyhow!("keys: {err}"))?;
     let dir = work_dir();
     let (cert, key) = cert_pair(&dir);
     let _ = moq_tokio::crypto::install_default();
     let mut config = moq_relay::Config::default();
-    config.listen.bind = Some("127.0.0.1:0".parse().unwrap());
+    config.listen.bind = Some(bind.parse()?);
     config.listen.tls.cert = vec![cert];
     config.listen.tls.key = vec![key];
     config.web.ws = false;
@@ -216,11 +227,12 @@ async fn serve(args: &[String]) -> anyhow::Result<()> {
         .bind()
         .await?;
     let iroh_id = endpoint.id();
+    let sockets = endpoint.bound_sockets();
     let router = mjolnir_relay::IrohSessions::new(cluster)
         .with_policy(policy)
         .mount(iroh::protocol::Router::builder(endpoint))
         .spawn();
-    println!("READY quic={quic} iroh={iroh_id}");
+    println!("READY quic={quic} iroh={iroh_id} sockets={sockets:?}");
     let _ = std::io::stdout().flush();
     for _ in 0..burn {
         std::thread::spawn(|| {
@@ -271,56 +283,92 @@ impl Drop for RelayChild {
 async fn drive(args: &[String]) -> anyhow::Result<()> {
     let opts = parse_opts(args);
     let work = work_dir();
-    let key = Key::generate(Algorithm::EdDSA, None)?;
-    let public = KeySet {
-        keys: vec![std::sync::Arc::new(key.public()?)],
-    };
-    let keys_path = work.join("verify.json");
-    std::fs::write(&keys_path, public.to_str()?)?;
-    let mut child = Command::new(std::env::current_exe()?)
-        .args([
-            "serve",
-            "--keys",
-            keys_path.to_str().unwrap(),
-            "--seconds",
-            &opts.seconds.to_string(),
-            "--burn-threads",
-            &opts.burn_threads.to_string(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-    let (quic, iroh) = read_ready(child.stdout.take().unwrap())?;
-    let relay = RelayChild { child, quic, iroh };
-    let connect_to = if opts.transport == "wt" && (opts.loss_pct > 0 || opts.delay_ms > 0) {
-        spawn_proxy(relay.quic, opts.loss_pct, opts.delay_ms).await?
+    let key = if opts.mint_key.is_empty() {
+        Key::generate(Algorithm::EdDSA, None)?
     } else {
-        relay.quic
+        let raw = std::fs::read_to_string(&opts.mint_key)?;
+        serde_json::from_str::<Key>(&raw)
+            .or_else(|_| raw.parse::<Key>().map_err(|err| anyhow::anyhow!("{err}")))?
+    };
+    let external = !opts.connect.is_empty();
+    let relay = if external {
+        None
+    } else {
+        let public = KeySet {
+            keys: vec![std::sync::Arc::new(key.public()?)],
+        };
+        let keys_path = work.join("verify.json");
+        std::fs::write(&keys_path, public.to_str()?)?;
+        let exe = std::env::current_exe()?;
+        let mut cmd = if let Ok(cores) = std::env::var("RELAY_CORES") {
+            let mut c = Command::new("taskset");
+            c.arg("-c").arg(cores).arg(&exe);
+            c
+        } else {
+            Command::new(&exe)
+        };
+        let mut child = cmd
+            .args([
+                "serve",
+                "--keys",
+                keys_path.to_str().unwrap(),
+                "--seconds",
+                &opts.seconds.to_string(),
+                "--burn-threads",
+                &opts.burn_threads.to_string(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let (quic, iroh) = read_ready(child.stdout.take().unwrap())?;
+        Some(RelayChild { child, quic, iroh })
+    };
+    let quic = if external {
+        opts.connect.parse()?
+    } else {
+        relay.as_ref().unwrap().quic
+    };
+    let iroh_id = if external {
+        opts.iroh_direct.clone()
+    } else {
+        relay.as_ref().unwrap().iroh.clone()
+    };
+    let connect_to = if !external && opts.transport == "wt" && (opts.loss_pct > 0 || opts.delay_ms > 0) {
+        spawn_proxy(quic, opts.loss_pct, opts.delay_ms).await?
+    } else {
+        quic
     };
     let udp_before = udp_counters();
     let totals = Arc::new(Totals::new());
     let stop = Arc::new(AtomicBool::new(false));
     let stop_s = stop.clone();
-    let pid = relay.child.id();
+    let pid = relay.as_ref().map(|r| r.child.id());
+    let self_pid = std::process::id();
     let sampler = tokio::spawn(async move {
-        let mut out = Vec::new();
+        let mut relay_s = Vec::new();
+        let mut gen_s = Vec::new();
         while !stop_s.load(Ordering::Relaxed) {
-            if let Some(row) = sample_pid(pid) {
-                out.push(row);
+            if let Some(pid) = pid {
+                if let Some(row) = sample_pid(pid) {
+                    relay_s.push(row);
+                }
+            }
+            if let Some(row) = sample_pid(self_pid) {
+                gen_s.push(row);
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        out
+        (relay_s, gen_s)
     });
     let ran = if opts.transport == "iroh" {
-        run_iroh(&opts, &relay.iroh, &key, totals.clone()).await
+        run_iroh(&opts, &iroh_id, &key, totals.clone()).await
     } else if opts.transport == "wt" {
         run_wt(&opts, connect_to, &key, totals.clone()).await
     } else {
         Err(anyhow::anyhow!("transport must be wt or iroh"))
     };
     stop.store(true, Ordering::Relaxed);
-    let samples = sampler.await.unwrap_or_default();
+    let (samples, gen_samples) = sampler.await.unwrap_or_default();
     ran?;
     let udp_after = udp_counters();
     let mut lats = totals.latencies.lock().expect("lat").clone();
@@ -330,14 +378,23 @@ async fn drive(args: &[String]) -> anyhow::Result<()> {
     // published before that subscriber attached are not counted as loss.
     let expected = totals.span.load(Ordering::Relaxed);
     let ratio = if expected == 0 { 0.0 } else { delivered as f64 / expected as f64 };
-    let (cpu_max, rss_max) = samples.iter().fold((0.0f64, 0u64), |(c, r), (cc, rr)| (c.max(*cc), r.max(*rr)));
+    let (cpu_max, rss_max, threads_max) = samples.iter().fold((0.0f64, 0u64, 0u64), |(c, r, t), row| {
+        (c.max(row.0), r.max(row.1), t.max(row.2))
+    });
     let cpu_avg = if samples.is_empty() {
         0.0
     } else {
-        samples.iter().map(|(c, _)| c).sum::<f64>() / samples.len() as f64
+        samples.iter().map(|row| row.0).sum::<f64>() / samples.len() as f64
     };
+    let gen_cpu_max = gen_samples.iter().fold(0.0f64, |c, row| c.max(row.0));
+    let gen_cpu_avg = if gen_samples.is_empty() {
+        0.0
+    } else {
+        gen_samples.iter().map(|row| row.0).sum::<f64>() / gen_samples.len() as f64
+    };
+    let ncpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0);
     println!(
-        "RESULT transport={} rooms={} participants={} seconds={} video_kbps={} loss_pct={} delay_ms={} burn_threads={} quic={} via={} iroh={} published={} expected={} delivered={} delivery={ratio:.4} skipped={} late={} session_errors={} p50_ms={} p95_ms={} p99_ms={} joiner_first_ms={} relay_cpu_avg={cpu_avg:.1} relay_cpu_max={cpu_max:.1} relay_rss_kb={rss_max} udp_rcvbuf_delta={} udp_sndbuf_delta={} udp_proc_drops_delta={} buffers=\"{}\"",
+        "RESULT transport={} rooms={} participants={} seconds={} video_kbps={} loss_pct={} delay_ms={} burn_threads={} ncpu={ncpu} quic={} via={} iroh={} published={} expected={} delivered={} delivery={ratio:.4} skipped={} late={} session_errors={} p50_ms={} p95_ms={} p99_ms={} joiner_connect_ms={} joiner_ready_ms={} joiner_first_ms={} relay_cpu_avg={cpu_avg:.1} relay_cpu_max={cpu_max:.1} relay_threads={threads_max} relay_rss_kb={rss_max} gen_cpu_avg={gen_cpu_avg:.1} gen_cpu_max={gen_cpu_max:.1} udp_rcvbuf_delta={} udp_sndbuf_delta={} udp_proc_drops_delta={} buffers=\"{}\"",
         opts.transport,
         opts.rooms,
         opts.participants,
@@ -346,9 +403,9 @@ async fn drive(args: &[String]) -> anyhow::Result<()> {
         if opts.transport == "wt" { opts.loss_pct } else { 0 },
         if opts.transport == "wt" { opts.delay_ms } else { 0 },
         opts.burn_threads,
-        relay.quic,
+        quic,
         connect_to,
-        relay.iroh,
+        iroh_id,
         published,
         expected,
         delivered,
@@ -358,6 +415,8 @@ async fn drive(args: &[String]) -> anyhow::Result<()> {
         percentile(&mut lats, 0.50) / 1000,
         percentile(&mut lats, 0.95) / 1000,
         percentile(&mut lats, 0.99) / 1000,
+        totals.joiner_connect_us.load(Ordering::Relaxed) / 1000,
+        totals.joiner_ready_us.load(Ordering::Relaxed) / 1000,
         totals.first_frame_us.load(Ordering::Relaxed) / 1000,
         udp_after.rcvbuf.saturating_sub(udp_before.rcvbuf),
         udp_after.sndbuf.saturating_sub(udp_before.sndbuf),
@@ -397,14 +456,26 @@ fn read_ready(stdout: std::process::ChildStdout) -> anyhow::Result<(SocketAddr, 
     anyhow::bail!("timed out waiting for relay READY")
 }
 
-fn sample_pid(pid: u32) -> Option<(f64, u64)> {
-    let out = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "%cpu=,rss="])
+fn sample_pid(pid: u32) -> Option<(f64, u64, u64)> {
+    let threaded = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "%cpu=,rss=,nlwp="])
         .output()
         .ok()?;
+    let out = if threaded.status.success() {
+        threaded
+    } else {
+        Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "%cpu=,rss="])
+            .output()
+            .ok()?
+    };
     let text = String::from_utf8_lossy(&out.stdout);
     let mut parts = text.split_whitespace();
-    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+    ))
 }
 
 struct UdpSnap {
@@ -562,10 +633,16 @@ async fn one_wt(
         .broadcast()
         .create_track("audio", timed())
         .map_err(|err| anyhow::anyhow!("audio: {err}"))?;
-    let video = routed
-        .broadcast()
-        .create_track("video", timed())
-        .map_err(|err| anyhow::anyhow!("video: {err}"))?;
+    let video = if video_kbps == 0 {
+        None
+    } else {
+        Some(
+            routed
+                .broadcast()
+                .create_track("video", timed())
+                .map_err(|err| anyhow::anyhow!("video: {err}"))?,
+        )
+    };
     let sub_origin = moq_tokio::origin::spawn();
     let table = sub_origin.consume();
     let session = wt_client()
@@ -574,15 +651,22 @@ async fn one_wt(
         .connect(url)
         .established()
         .await?;
+    if joiner {
+        totals.joiner_connect_us.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
     let deadline = Instant::now() + Duration::from_secs(seconds);
-    let (delta, keyframe) = video_sizes(video_kbps);
     let audio_pub = {
         let totals = totals.clone();
         tokio::spawn(async move { publish_track(audio, Duration::from_millis(20), 0, 80, 80, deadline, totals).await })
     };
-    let video_pub = {
+    let video_pub = if let Some(video) = video {
+        let (delta, keyframe) = video_sizes(video_kbps);
         let totals = totals.clone();
-        tokio::spawn(async move { publish_track(video, Duration::from_millis(33), 60, delta, keyframe, deadline, totals).await })
+        Some(tokio::spawn(async move {
+            publish_track(video, Duration::from_millis(33), 60, delta, keyframe, deadline, totals).await
+        }))
+    } else {
+        None
     };
     let mut readers = Vec::new();
     for other in 0..participants {
@@ -599,6 +683,9 @@ async fn one_wt(
             }
         };
         for name in ["audio", "video"] {
+            if name == "video" && video_kbps == 0 {
+                continue;
+            }
             let track = match requested.track(name) {
                 Ok(t) => t,
                 Err(err) => {
@@ -607,14 +694,19 @@ async fn one_wt(
                 }
             };
             let totals = totals.clone();
-            let mark = joiner && name == "video";
+            let mark = joiner && ((video_kbps == 0 && name == "audio") || name == "video");
             readers.push(tokio::spawn(async move {
                 read_track(track, deadline, mark, began, totals).await;
             }));
         }
     }
+    if joiner {
+        totals.joiner_ready_us.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
     audio_pub.await.ok();
-    video_pub.await.ok();
+    if let Some(video_pub) = video_pub {
+        video_pub.await.ok();
+    }
     for reader in readers {
         reader.await.ok();
     }
@@ -806,6 +898,9 @@ async fn one_iroh(
     })
     .await
     .map_err(|_| anyhow::anyhow!("iroh link not connected"))?;
+    if joiner {
+        totals.joiner_connect_us.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
     // Iroh announces the absolute path. WebTransport sessions are already rooted
     // at the token root, so they publish `p{me}` instead.
     let own = format!("t/{}/room{room}/p{me}", owner());
@@ -816,19 +911,29 @@ async fn one_iroh(
         .broadcast()
         .create_track("audio", timed())
         .map_err(|err| anyhow::anyhow!("audio: {err}"))?;
-    let video = publication
-        .broadcast()
-        .create_track("video", timed())
-        .map_err(|err| anyhow::anyhow!("video: {err}"))?;
+    let video = if video_kbps == 0 {
+        None
+    } else {
+        Some(
+            publication
+                .broadcast()
+                .create_track("video", timed())
+                .map_err(|err| anyhow::anyhow!("video: {err}"))?,
+        )
+    };
     let deadline = Instant::now() + Duration::from_secs(seconds);
-    let (delta, keyframe) = video_sizes(video_kbps);
     let audio_pub = {
         let totals = totals.clone();
         tokio::spawn(async move { publish_track(audio, Duration::from_millis(20), 0, 80, 80, deadline, totals).await })
     };
-    let video_pub = {
+    let video_pub = if let Some(video) = video {
+        let (delta, keyframe) = video_sizes(video_kbps);
         let totals = totals.clone();
-        tokio::spawn(async move { publish_track(video, Duration::from_millis(33), 60, delta, keyframe, deadline, totals).await })
+        Some(tokio::spawn(async move {
+            publish_track(video, Duration::from_millis(33), 60, delta, keyframe, deadline, totals).await
+        }))
+    } else {
+        None
     };
     let mut readers = Vec::new();
     for other in 0..participants {
@@ -844,6 +949,9 @@ async fn one_iroh(
             }
         };
         for name in ["audio", "video"] {
+            if name == "video" && video_kbps == 0 {
+                continue;
+            }
             let track = match sub.broadcast().track(name) {
                 Ok(t) => t,
                 Err(err) => {
@@ -852,14 +960,19 @@ async fn one_iroh(
                 }
             };
             let totals = totals.clone();
-            let mark = joiner && name == "video";
+            let mark = joiner && ((video_kbps == 0 && name == "audio") || name == "video");
             readers.push(tokio::spawn(async move {
                 read_track(track, deadline, mark, began, totals).await;
             }));
         }
     }
+    if joiner {
+        totals.joiner_ready_us.store(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
     audio_pub.await.ok();
-    video_pub.await.ok();
+    if let Some(video_pub) = video_pub {
+        video_pub.await.ok();
+    }
     for reader in readers {
         reader.await.ok();
     }
