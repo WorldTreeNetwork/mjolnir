@@ -89,7 +89,9 @@ fn room_token(key: &Key, room: &str, participant: &str) -> String {
         .with_root(format!("t/{}/{room}", owner()))
         .with_publish([format!("{participant}/**").parse().unwrap()])
         .with_subscribe(["**".parse().unwrap()])
-        .with_issued(now)
+        // Lab machines are not always within a few seconds. A token issued
+        // in the server's future is rejected as unauthorized.
+        .with_issued(now - Duration::from_secs(180))
         .with_expires(now + Duration::from_secs(600));
     key.sign(&claims).unwrap()
 }
@@ -172,6 +174,15 @@ async fn main() -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("serve") => serve(&args).await,
         Some("run") => drive(&args).await,
+        Some("keygen") => {
+            let key = Key::generate(Algorithm::EdDSA, None)?;
+            let public = KeySet {
+                keys: vec![std::sync::Arc::new(key.public()?)],
+            };
+            println!("PUBLIC {}", public.to_str()?);
+            println!("SECRET {}", key.to_str()?);
+            Ok(())
+        }
         _ => {
             eprintln!(
                 "usage: relay-scale run --transport wt|iroh --rooms N --participants P --seconds S [--video-kbps 1000] [--loss-pct N] [--delay-ms N] [--burn-threads N]"
@@ -579,10 +590,12 @@ async fn spawn_proxy(upstream: SocketAddr, loss_pct: u32, delay_ms: u64) -> anyh
     Ok(addr)
 }
 
-fn wt_client() -> moq_tokio::Client {
+fn wt_client(remote: bool) -> moq_tokio::Client {
     let mut config = moq_tokio::connect::Config::default();
     config.tls.insecure = Some(true);
-    config.bind = Some("127.0.0.1:0".parse().unwrap());
+    // A loopback bind cannot send to a relay on another machine.
+    let bind = if remote { "0.0.0.0:0" } else { "127.0.0.1:0" };
+    config.bind = Some(bind.parse().unwrap());
     config.init(Default::default()).expect("client").with_reconnect(false)
 }
 
@@ -645,7 +658,11 @@ async fn one_wt(
     };
     let sub_origin = moq_tokio::origin::spawn();
     let table = sub_origin.consume();
-    let session = wt_client()
+    let remote = url
+        .host_str()
+        .map(|host| host != "127.0.0.1" && host != "localhost")
+        .unwrap_or(true);
+    let session = wt_client(remote)
         .with_publisher(pub_origin.consume())
         .with_subscriber(sub_origin)
         .connect(url)

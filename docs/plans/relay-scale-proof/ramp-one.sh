@@ -14,8 +14,9 @@ echo "RAMP label=$label transport=$transport video_kbps=$kbps load=$(cut -d' ' -
 run() {
   rooms=$1
   parts=$2
+  shift 2
   echo "STEP rooms=$rooms participants=$parts load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo na)" | tee -a "$out"
-  line=$(timeout 120 "$bin" run --transport "$transport" --rooms "$rooms" --participants "$parts" --seconds 6 --video-kbps "$kbps" "$@" | tee -a "$out" | grep '^RESULT ' | tail -1 || true)
+  line=$(timeout 180 "$bin" run --transport "$transport" --rooms "$rooms" --participants "$parts" --seconds 6 --video-kbps "$kbps" "$@" | tee -a "$out" | grep '^RESULT ' | tail -1 || true)
   if [ -z "$line" ]; then
     echo "STOP no result" | tee -a "$out"
     return 0
