@@ -1,0 +1,26 @@
+# Design
+
+## Public locator at guest setup
+
+Use two flat optional strings in `/etc/mjolnir/vm.json`. Set `relay_url` to the WebTransport base URL `https://<configured-host>/` on UDP 443 and `relay_iroh_endpoint_id` to the complete 64-character lowercase hex display of the relay's Iroh endpoint. The pair provides discovery only. Each transport still requires a valid room token.
+
+Add `/run/mjolnir-relay/locator.json` in the existing systemd `RuntimeDirectory`. The relay writes exactly `host` and `endpoint_id` as JSON strings, using the hostname it loaded and `Endpoint::id()` from the bound endpoint it mounts. Write by rename within the directory after both listeners are set up and before sending `READY=1`. Keep the startup journal line for operators. A publication failure leaves the locator unavailable and emits a local diagnostic. The media service can still start. The file belongs to that unit invocation. Discard any prior file before startup, withdraw it when drain starts, and rely on systemd's non-preserved runtime directory for cleanup after unit exit, including failed starts and forced stops. A relay binary that predates this change supplies no runtime locator.
+
+In `lib/mjolnir/vm.ex`, assemble the pair in `complete_guest_setup/1` beside the blob door and AIE locators. Read `/etc/mjolnir-relay/relay.env` at each setup with a data-only reader for `MJOLNIR_RELAY_ENABLED` and `MJOLNIR_RELAY_HOST`. Accept the installed plain or quoted assignments. Require `true`, a valid bare DNS hostname, and a readable runtime document with a matching hostname (case-insensitive) and a canonical-format endpoint ID. Missing, unreadable, malformed or mismatched locator inputs yield neither field. A hostname edited before the relay restarts cannot be paired with the old process's identity. The resolver has no cached fallback, probes no network endpoint, and needs neither the Iroh private key nor any room-signing or TLS material.
+
+Extend the explicit `configure_identity` locator allowlist in `lib/mjolnir/vsock/protocol.ex`. Send the approved pair inside the existing `locators` map. The guest agent already flattens that map into a newly built document and replaces the file. Boot and resume re-read the host inputs and replace old relay fields, including fields restored from a snapshot. An already-running guest retains its last identity write until its next boot or resume. Discovery is a snapshot at successful guest identity setup. Existing guest identity write errors surface through the existing boot diagnostic. The host sends only the two public strings for this feature.
+
+## Room-token command
+
+`mj relay token <room> <participant> [--api <url>] [--json]` uses the existing profile/API resolution and the saved or refreshed user session. Validate both positional arguments against the existing room path segment rule, `[A-Za-z0-9_-]{1,64}` over the entire argument, before building the URL. Send one JSON POST with `{}` to `/api/relay/rooms/:room/participants/:participant/token` on the resolved controller API. The server chooses the default TTL and enforces the verified caller and scope. Keep this command independent of guest discovery and use the API's default room behavior.
+
+Treat a successful JSON object with a nonempty one-line string field `token` as success. Default output is that token followed by one newline. With `--json`, emit the original successful body bytes, including additional fields the API may return. Mint only on explicit invocation of the token command. Token-bearing responses are written only to the requested stdout. Keep request credentials and all response bodies out of diagnostics, logs and persistence. Reuse the client's authenticated request setup, while handling the response locally because the shared `send_text` helper includes error bodies in its diagnostics. On an HTTP error, report the status without the body. On transport or malformed-response errors, report fixed diagnostic text. In all failure cases before output, stdout is empty.
+
+## Captured observations
+
+| ID | Source observation |
+|---|---|
+| O1 | `native/mjolnir_relay/src/main.rs` binds the Iroh endpoint from the persisted secret and prints `endpoint.id()` before `notify_ready()`. The pinned Iroh 1.5.0 key display is lowercase hex. The relay unit already defines `RuntimeDirectory=mjolnir-relay` and `Type=notify`. It has no locator publication. |
+| O2 | `complete_guest_setup/1` runs on the boot and late-setup paths and always calls `configure_identity` on resume. The host serializer lets only blob door and AIE locators through today. The guest's `identity_json` flattens nonempty locator strings and its vsock handler overwrites the file. |
+| O3 | `docs/guide/host-sidecars.md` currently calls out the relay as a public service without guest locators and has no catalog row for it. `CLAUDE.md` repeats the old locator statement, and the relay runbook points readers to the journal for the endpoint ID. |
+| O4 | `mj ticket get` and `mj secrets` resolve their controller URL from the active profile and use `api_client` for saved-session auth. The shared `send_text` includes failed response bodies in errors. `main.rs` has no relay command. The existing router accepts the requested POST with an empty JSON object and the mint chooses its default TTL. |
