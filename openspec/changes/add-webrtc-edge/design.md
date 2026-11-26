@@ -24,9 +24,9 @@ Origins: the configured list. If the list is empty, same-origin only. `Access-Co
 | 403 | `room_not_open` | not the open shape, or wide `t/<owner>`, or URL room segment differs |
 | 403 | `unexpected_root` | header present and not byte-equal to `grant.root` |
 | 403 | `forbidden` | grant does not match the operation's broadcast |
-| 409 | `not_started` | WHEP catalog timeout, absent broadcast, or no rendition |
+| 409 | `not_started` | Before expiry: WHEP catalog timeout, absent broadcast, or no rendition (D8) |
 | 409 | `codec_unavailable` | offer had video and the built answer has no usable accepted video section (port zero or inactive is rejected) |
-| 503 | `setup_failed` | relay dial failed, setup timeout, or the answer could not be written |
+| 503 | `setup_failed` | Before expiry: dial/other setup timeout or answer-write failure; catalog deadline is 409 (D8) |
 | 204 |  | DELETE owned by this bearer |
 | 404 | `not_found` | DELETE unknown id |
 | 403 | `forbidden` | DELETE with a different bearer |
@@ -50,11 +50,11 @@ One function for `/admit`, WHIP, and WHEP. `/admit` completes steps 1–8 and re
 
 Then, WHIP and WHEP only:
 
-9. Set the deadline `min(exp, now+5s)` BEFORE pool acquisition. Bound acquisition and dial by this deadline and request cancellation. Take or dial the connection for these exact token bytes. Dial uses verified TLS (webpki roots). Failure → `503 setup_failed` and no hold left behind.
+9. Set the deadline `min(exp, now+5s)` BEFORE pool acquisition. Bound acquisition and dial by this deadline and request cancellation. Take or dial the connection for these exact token bytes. Dial uses verified TLS (webpki roots). Failure leaves no hold; apply D8: expiry 403, pre-expiry dial failure/deadline 503.
 10. Increment the refcount. The deadline from step 9 remains unchanged. Race relay closure and that deadline against catalog resolve and answer build.
-11. WHEP: catalog timeout, missing broadcast, or no rendition → drop the unrun `Response`, decrement, `409 not_started`.
+11. WHEP: catalog timeout, missing broadcast, or no rendition → drop the unrun `Response`, decrement, and apply D8: expiry 403; before expiry `409 not_started`.
 12. If the offer contains video and the answer has no usable accepted video section (port zero or inactive is rejected), drop the unrun `Response`, decrement, `409 codec_unavailable`. WHIP does not look for a source catalog.
-13. If `now >= exp` or the relay connection closed or the deadline fired, drop, decrement, `403 bad_token` or `503 setup_failed`.
+13. If `now >= exp` or the relay connection closed or the deadline fired, drop, decrement, and apply D8: expiry `403 bad_token`; before expiry catalog deadline `409 not_started`, other deadline or relay close `503 setup_failed`.
 14. Insert `{id, token_bytes, response}` and return `201`. `run` starts only after the `201` is queued. If the write to the client fails, drop and decrement as if step 13 failed.
 
 A refusal never deletes another id. Decrement to zero closes the connection. `exp` on the connection closes it even if a refcount is non-zero, and every id on that token is dropped. That is the whole-token close. It does not run for a different token.

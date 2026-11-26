@@ -45,7 +45,7 @@ The gateway SHALL authenticate the bearer with `assess` using `key_file_trusted`
 - THEN the path compared to the grant does not contain a slash that came from that escape
 
 ### Requirement: A video offer is not left running as silent audio
-If the offer contains video and the built answer contains no usable accepted video section (port zero or inactive is rejected), the gateway SHALL drop the unrun response and return `409` `codec_unavailable`. If WHEP cannot obtain a catalog or a rendition before the setup deadline, it SHALL drop the unrun response and return `409` `not_started`. WHIP SHALL NOT require a pre-existing catalog.
+If the offer contains video and the built answer contains no usable accepted video section (port zero or inactive is rejected), the gateway SHALL drop the unrun response and return `409` `codec_unavailable`. If WHEP cannot obtain a catalog or a rendition before the setup deadline and the token has not expired, it SHALL drop the unrun response and return `409` `not_started`. Expiry SHALL take precedence as `403 bad_token` on every setup exit per design D8. WHIP SHALL NOT require a pre-existing catalog.
 
 #### Scenario: Codec miss
 - GIVEN an offer with video and an answer the pin would have returned with video rejected

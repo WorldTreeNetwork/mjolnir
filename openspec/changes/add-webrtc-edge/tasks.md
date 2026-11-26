@@ -4,8 +4,8 @@ PENDING until a fresh accept of this revision and of the reconciled `.12` contra
 
 - [ ] Fresh advise of this contract and ADR 0020.
 - [ ] After `.12` K0–K1 and this accept: admission and connection pool as design D1–D4, table-tested with `Mint.issue` open and protected tokens and a separately signed wide root. Dial counter zero on every refusal, including `/admit`.
-- [ ] Two legs, one token, one connection; a second token does not share it. DELETE matrix: owner, repeat, other token, unknown id. Failed renewal leaves the old id. Expiry during catalog wait drops only the candidate.
-- [ ] Coloured frames and fixture tone both ways on a disposable relay. Codec miss and missing catalog return `409` with no registered id.
+- [ ] Two legs, one token, one connection; a second token does not share it. DELETE matrix: owner, repeat, other token, unknown id. Failed renewal leaves the old id. Expiry during catalog wait stops all same-token legs and preserves other-token legs.
+- [ ] Coloured frames and fixture tone both ways on a disposable relay. Before expiry, codec miss and missing catalog return `409` with no registered id; expiry takes precedence as `403 bad_token`.
 - [ ] Invalid verify-set reload refuses new admissions and leaves a live session until drain closes the relay connection.
 - [ ] Ubuntu 24.04 build of this binary. Do not cite `claim8-linux.log` for it; that log is Arch x86_64.
 - [ ] Handoff for `.15`: `/admit` response, status codes, `Location`, configured origin, DELETE with the admitting bearer. `RoomJoin` is not this binary.
@@ -32,3 +32,5 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 Send-back: `reviews/2026-11-26-advise-3.md` (a1be084f).
 
 - [ ] Reconcile proposal expiry journey and original expiry task with whole-token expiry; qualify catalog timeout by pre-expiry and apply D8 precedence throughout D2/D3/spec. Fresh gateway gates remain open.
+
+- [ ] Separate timeout-before-expiry regression: candidate resources released, same-token incumbent continues; at exp all same-token legs stop. Verify D8 error precedence on every setup exit.

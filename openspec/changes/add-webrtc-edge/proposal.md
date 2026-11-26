@@ -18,7 +18,7 @@ The spike admits a bearer and opens one relay connection per WHIP or WHEP call. 
 - **Setup transaction.** Bound by `exp` and a 5 s setup timeout (the pin's catalog wait). Recheck `exp` immediately before `201`. On refusal, timeout, relay close, or failure to write the answer, drop the unrun `Response` and any hold on the connection. A `409` leaves no registered session.
 - **DELETE.** `DELETE /session/<id>` with the same bearer that admitted it. `204` if this token owns it, including a repeat after it is gone. `404` unknown. `403` if another token presents it. Cleanup of one id does not close another leg's WebRTC session. If the refcount hits zero, the connection closes.
 - **HTTP.** Configured page origins, else same origin. Methods POST, DELETE, OPTIONS. Request headers `Content-Type`, `Authorization`, `X-Mjolnir-Root`. Response exposes `Location`. No credentialed redirect. JSON `{"error":"<code>"}`.
-- **Codec.** Inspect the answer `moq_webrtc` built. If video was offered and the answer rejects every video m-line, drop the unrun response and return `409 codec_unavailable`. WHEP with no catalog, catalog timeout, or no rendition: `409 not_started`. WHIP has no source catalog to require.
+- **Codec.** Inspect the answer `moq_webrtc` built. If video was offered and the answer rejects every video m-line, drop the unrun response and return `409 codec_unavailable`. Before expiry, WHEP with no catalog, catalog timeout, or no rendition: `409 not_started`; expiry takes precedence as `403 bad_token` (design D8). WHIP has no source catalog to require.
 
 ## Impact
 
@@ -32,7 +32,7 @@ No new page because `.15` owns the page. This node is the HTTPS origin that page
 
 - **Working:** open token, matching expected root, grant matches, catalog overlaps. `201`, `Location: /session/<id>`, media through the relay.
 - **Refused before dial:** see the status table in the design. No SDP body.
-- **Expired during setup:** no `201`. Candidate resources dropped. Other legs of the same token stay up.
+- **Expired during setup:** no `201`. Candidate resources dropped. All same-token legs stop; other-token legs stay up. A setup timeout strictly before expiry drops only the candidate and preserves same-token incumbents.
 - **Off:** unit not installed.
 
 ## Out of scope
