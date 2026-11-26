@@ -27,7 +27,7 @@ K0 → K1a/K1b → H0 → H1 (baseline on git `moq-webrtc`) → K2 → K3 → K4
 
 ## Harness and the "before" (unpatched pin; the harness still uses git `moq-webrtc`)
 
-- [ ] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build.
+- [x] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build.
 - [ ] H1. Before numbers for design D6 rows A, B, C, D1, D2 and F (policy off) on the unpatched pin, from common observations only: `harness/logs/before-*.log`. Captured before K4 switches the harness. A baseline that already meets its target is recorded as a result; the after run must then still show the cause working (D9).
 
 ## Vendor and switch

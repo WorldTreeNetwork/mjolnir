@@ -1,0 +1,17 @@
+head=084f5d6dd18a98abf556ae045638784d196db438
+date=2026-11-26T08:39:45Z
+host=Darwin arm64 rustc=rustc 1.96.0 (ac68faa20 2026-05-25)
+note=local in-process probe. Not Ubuntu. Framework K1 host was not required for this self-test.
+command=harness probe-selftest
+probe track=0.vp8 at=announcement decision=hold
+probe track=0.vp8 at=group-exists decision=open-after-group
+raw-frame track=0.vp8 group_start=0 bytes=8 media=217845533564ms wall_ms=0
+probe track=1.vp8 at=announcement decision=hold
+probe track=1.vp8 at=rendition-change decision=hold
+probe track=1.vp8 at=group-exists decision=open-after-group
+raw-frame track=1.vp8 group_start=0 bytes=8 media=217845533565ms wall_ms=0
+join-cause PLIs from probe: 0
+patch-only gate logs: unavailable
+probe-selftest ok renditions=2
+exit=0
+stderr=track::Producer dropped without finish() or abort() on both renditions. That is not a join-cause PLI.
