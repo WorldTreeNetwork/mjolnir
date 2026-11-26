@@ -23,9 +23,9 @@ Local comparison after a 200, using the returned `root` as the admitted root and
 5. Asked `open` and class `protected` → `open_refused`.
 6. Asked `protected` and class `open` → `protected_refused`.
 
-This page's ask is `open`. Step 1 fires before step 5. An invitation for `t/<owner>/~open/<room>` and an old mint rooted at `t/<owner>/<room>` is `unexpected_root`, not `open_refused`.
+This page's ask is `open`. Step 1 fires before step 5. Those are pure comparator outcomes only. The real open-only gateway refuses a protected token with `room_not_open`; it never returns an admitted protected root.
 
-Non-200 from `/admit` is `unauthenticated_identity` for 401/403 and `setup_failed` for a network error. No camera.
+Preserve known typed errors from the configured gateway: room_not_open, unexpected_root, forbidden, bad_token, no_token. Unknown/malformed refusal is unauthenticated_identity; network failure is setup_failed. Real old-mint and protected-invitation tests expect room_not_open, not synthetic comparator results. No camera.
 
 WHIP and WHEP repeat the bearer and header. They do not resend the `/admit` JSON as a credential.
 
@@ -40,11 +40,11 @@ sessionIds: string[]
 timer: exp timer bound to this generation
 ```
 
-Arm `exp` and abort before `getUserMedia`. After every await, if generation ≠ current, or `now >= exp`, or abort fired, drop this candidate only.
+Before camera or any PC/media side effect, require finite exp > current time, valid ownership and no abort. Check again after every await. Admit selfPath for publish and EACH named peer for subscribe first, binding results to immutable token, expected root, operation, canonical path and attempt. Expired-on-arrival admission never prompts camera; late permission streams are stopped. A candidate and a committed incumbent have separate live ownership states: starting a candidate does not invalidate incumbent retries or expiry callbacks. Only superseded candidate completions are discarded.
 
 WHIP failure before commit: drop candidate, incumbent unchanged.
-Commit: WHIP `201`, `setRemoteDescription` ok, and the exp check passed. Peer WHEP `409 not_started` does not roll back. Peer `403` or `codec_unavailable` marks that path failed and does not retry. Peer transport errors and `not_started` retry at `retryMs` with exponential backoff capped at 30 s, at most one in flight per path.
-ICE not `connected` within 10 s: close that PC, DELETE that id, retry if the error class is retryable.
+Commit: WHIP `201`, `setRemoteDescription` ok, finite unexpired admission, and ICE connected within min(exp, now+10s). This is transport readiness, not proof of media. Peer WHEP `409 not_started` does not roll back. Peer `403` or `codec_unavailable` marks that path failed and does not retry. Peer transport errors and `not_started` retry at `retryMs` with exponential backoff capped at 30 s, at most one in flight per path.
+Candidate publisher ICE timeout: abort the entire candidate, close its PCs, DELETE its ids and release owned tracks/timers; preserve incumbent. Return setup_failed; no automatic whole-call replacement retry. Peer-only transient failure uses its bounded retry policy.
 
 `renew` / `replace` build a new generation. DELETE old ids only after the new WHIP has committed. On failure, abort the new generation and leave the old timer and PCs. The new generation's timer is the only one that closes the new PCs. Stop a track only when its refcount hits zero.
 
@@ -59,3 +59,11 @@ First green slice: one Chromium, notice before the camera prompt, one WHIP, one 
 ## D4. Licence
 
 MIT page and module. No import from the AGPL host tree.
+
+## D5. Limits and regression cases
+
+Admission covers every intent before media; changed credential/path/operation requires a fresh result. Media POST reassesses keys; revocation can race a camera prompt after successful preflight, so no impossible continuous-revocation guarantee is made.
+
+Pinned WHIP announces inside accept before HTTP delivery. Keeping incumbent PCs until readiness does not make relay publication selection atomic. Test same-path candidate answer failure, remote-description failure and ICE timeout with existing AND new subscribers. Report non-atomic selection honestly; no bypass or seamless handover promise. Test incumbent callbacks during a failed candidate, and real peer termination/resubscribe on publisher replacement.
+
+retryMs must be finite in [1000,30000]; backoff caps at 30000. Validate relative paths with gateway grammar/bounds before requests; encode without introducing queries/fragments. DELETE only validated same-configured-origin /session/id Locations, with the admitting bearer. Missing/foreign Locations refuse cleanup requests and surface failure; server ownership deadlines still reclaim resources.

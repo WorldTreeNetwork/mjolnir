@@ -21,3 +21,8 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 - [ ] G1/G3: make /admit run operation/grant/expiry checks, define its room input and exact RoomClass grammar, and include key_file_trusted parity.
 - [ ] G2: correct same-token expiry assertions; start the deadline before pool/dial; define timeout precedence, single-flight reservations, natural runner cleanup and finite DELETE tombstone retention.
 - [ ] G4: require accepted video rather than mere m-line presence; cover canonical path decode/bounds and coordinate actual admission error mapping with the browser.
+
+## Reconciliation after second review
+
+- [ ] Fresh independent review of corrected admission/setup/lifecycle contract.
+- [ ] Implement and exercise every boundary/race regression added to design D8; report real media results separately from contract acceptance.

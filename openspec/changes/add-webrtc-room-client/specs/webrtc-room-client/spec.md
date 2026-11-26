@@ -1,17 +1,17 @@
 ## ADDED Requirements
 
 ### Requirement: Admission comes from the configured gateway
-The client SHALL send the bearer and the invitation's expected root to `POST /admit` on its configured gateway origin, and SHALL NOT take that origin from the invitation, a query parameter, or `relay_host`. It SHALL compare the expected root, the mint root and kind, and the admitted root in `RoomJoin` order. It SHALL NOT treat caller-supplied JSON as admission. It SHALL NOT call `getUserMedia`, construct an `RTCPeerConnection`, import a content key, or POST WHIP or WHEP until that check succeeds. An open expected root with a protected admitted root SHALL be `unexpected_root`. A protected expected root with ask `open` SHALL be `open_refused`. An open admitted root whose mint omits `kind` SHALL be `kind_mismatch`.
+The client SHALL send the bearer and the invitation's expected root to `POST /admit` on its configured gateway origin, and SHALL NOT take that origin from the invitation, a query parameter, or `relay_host`. It SHALL compare the expected root, the mint root and kind, and the admitted root in `RoomJoin` order. It SHALL NOT treat caller-supplied JSON as admission. It SHALL NOT call `getUserMedia`, construct an `RTCPeerConnection`, import a content key, or POST WHIP or WHEP until that check succeeds. Pure comparator outcomes are separate from gateway refusals: the open-only gateway SHALL refuse protected tokens with `room_not_open`, and the client SHALL preserve that typed error. An open admitted root whose mint omits `kind` SHALL be `kind_mismatch`.
 
 #### Scenario: Old mint
 - GIVEN expected root `t/<owner>/~open/<room>` and an admitted root `t/<owner>/<room>`
 - WHEN `join` runs
-- THEN the result is `unexpected_root` and `getUserMedia` was not called
+- THEN the real gateway result is `room_not_open` and `getUserMedia` was not called
 
 #### Scenario: Protected invitation
 - GIVEN expected root and admitted root are the same protected root and the ask is `open`
 - WHEN `join` runs
-- THEN the result is `open_refused` and no WHIP request is sent
+- THEN the real gateway result is `room_not_open` and no WHIP request is sent
 
 #### Scenario: Open root missing kind
 - GIVEN the admitted root is open and the mint body has no `kind`
@@ -32,7 +32,7 @@ The client SHALL send the bearer and the invitation's expected root to `POST /ad
 - THEN generation 2's PeerConnections are unchanged and generation 1's tracks are stopped
 
 ### Requirement: Named peers retry without a roster
-The page SHALL play only paths on the invitation, at most seven, each a relative broadcast path. `409 not_started` SHALL leave that tile empty and retry under the invitation's minimum one-second backoff. `codec_unavailable` and `403` on that peer SHALL NOT retry. WHIP `201` and a successful remote description SHALL commit the join even while a peer is still `not_started`. If a playing peer's connection ends before expiry, the page SHALL retry that path and SHALL NOT claim the relay follows a replaced publisher. The host-readable notice SHALL be visible before the camera prompt. The page SHALL NOT say the room is end-to-end encrypted.
+The page SHALL play only paths on the invitation, at most seven, each a relative broadcast path. `409 not_started` SHALL leave that tile empty and retry under the invitation's minimum one-second backoff. `codec_unavailable` and `403` on that peer SHALL NOT retry. WHIP `201`, a successful remote description and bounded ICE readiness before expiry SHALL commit the join even while a peer is still `not_started`. If a playing peer's connection ends before expiry, the page SHALL retry that path and SHALL NOT claim the relay follows a replaced publisher. The host-readable notice SHALL be visible before the camera prompt. The page SHALL NOT say the room is end-to-end encrypted.
 
 #### Scenario: Peer not started
 - GIVEN WHIP committed and the named peer returns `409 not_started`
@@ -51,3 +51,6 @@ A passing named-peer slice SHALL NOT close `mjolnir-rurh.15`. Roster, Safari-on-
 - GIVEN an invitation with no peer path and a green local WHIP
 - WHEN the slice is recorded
 - THEN the bead stays open
+
+### Requirement: Fresh operation-bound admission and owned handover
+The client SHALL admit self publish and every named subscribe intent, bind each result to token/root/operation/path/attempt, and check finite unexpired exp and ownership before every media side effect and after each await. Late permission streams SHALL stop. An incumbent remains live until candidate publisher ICE readiness; failed candidates release all their own resources. Relay same-path publication selection is not atomic, since the pin announces inside accept. Tests SHALL observe existing and new subscribers during failed replacement, without promising seamless rollback. Input/Location constraints and error precedence follow design D1/D5.
