@@ -125,6 +125,16 @@ async fn offer(edge: Edge, kind: Kind, room: String, broadcast: String, headers:
                 let cap = moq_net::bandwidth::Cap::new(moq_net::bandwidth::Rate::from_bps((mbps * 1e6) as u64));
                 request.ingest.rate = Some(moq_net::bandwidth::Limit::new(cap));
             }
+            // Named harness hook. off keeps the pin. trial is floor 1s / period 2s.
+            // saturated asks an ingest period cause on the 1s floor. Not a viewer PLI.
+            match std::env::var("KEYFRAME_POLICY").unwrap_or_default().as_str() {
+                "trial" => request.keyframes.enabled = true,
+                "saturated" => {
+                    request.keyframes.enabled = true;
+                    request.keyframes.period = std::time::Duration::from_secs(1);
+                }
+                _ => {}
+            }
             moq_webrtc::whip::accept(&edge.media, request).await
         }
         Kind::Whep => {
