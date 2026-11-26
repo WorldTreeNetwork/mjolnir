@@ -18,7 +18,8 @@ async function launch(kind, who) {
   if (kind === 'chromium') {
     const args = ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'];
     if (who) args.push(`--use-file-for-fake-video-capture=${P}/${who}.y4m`, `--use-file-for-fake-audio-capture=${P}/${who}.wav`);
-    return chromium.launch({ args, channel: process.env.CHROME_CHANNEL || undefined });
+    const executablePath = process.env.CHROMIUM_BIN || undefined;
+    return chromium.launch({ args, executablePath, channel: executablePath ? undefined : (process.env.CHROME_CHANNEL || undefined), headless: true });
   }
   if (kind === 'firefox') return firefox.launch({ firefoxUserPrefs: { 'media.navigator.streams.fake': true, 'media.navigator.permission.disabled': true, 'media.autoplay.default': 0, 'media.autoplay.blocking_policy': 0 } });
   return webkit.launch();
@@ -47,7 +48,14 @@ async function contentCheck(page, name, left, right, hz) {
 const [mode, ...a] = process.argv.slice(2);
 let browsers = [];
 try {
-  if (mode === 'pub') {
+  if (mode === 'join') {
+    const [kind, b, vc, tn] = a;
+    const br = await launch(kind, null); browsers.push(br);
+    const page = await open(br, 'r1', tok(tn || 'erin'), 'join');
+    const r = await call(page, 'play', b, vc === '-' ? null : vc);
+    out({ step: 'join', browser: kind + ' ' + br.version(), broadcast: b, vcodec: vc, ...r });
+    if (r.error) process.exit(2);
+  } else if (mode === 'pub') {
     const [who, b, vc, hold, tn] = a; const br = await launch('chromium', who); browsers.push(br);
     const page = await open(br, 'r1', tok(tn || who), who);
     const r = await call(page, 'publish', b, vc === '-' ? null : vc);

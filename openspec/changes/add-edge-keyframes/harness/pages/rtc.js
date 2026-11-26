@@ -29,6 +29,7 @@ async function negotiate(kind, b, pc, tok = token) {
   const headers = { 'content-type': 'application/sdp' };
   if (tok) headers.authorization = 'Bearer ' + tok;
   const t0 = performance.now();
+  window.lastPostAt = t0;
   const res = await fetch(`${edge}/${kind}/${room}/${b}`, { method: 'POST', headers, body: window.stripCandidates ? pc.localDescription.sdp.replace(/a=candidate:[^\r\n]*\r\n/g, '') : pc.localDescription.sdp });
   const text = await res.text();
   if (res.status !== 201) { const e = Error(`${kind} ${b}: HTTP ${res.status} ${text}`); e.status = res.status; throw e; }
@@ -96,11 +97,17 @@ window.play = async (b, vcodec, tok) => {
   const connectMs = await connected(pc);
   const v = document.createElement('video'); v.autoplay = true; v.muted = true; v.playsInline = true; v.width = 320;
   v.srcObject = ms; document.body.append(v); v.play().catch(() => {});
+  const presented = await new Promise(res => {
+    const done = () => res(Math.round(performance.now() - window.lastPostAt));
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => done());
+    else v.addEventListener('loadeddata', done, { once: true });
+    setTimeout(() => res(null), 8000);
+  });
   const a = document.createElement('audio'); a.autoplay = true; a.srcObject = ms; a.volume = 0.01; document.body.append(a); a.play().catch(() => {});
   window.pcs['play:' + b] = Object.assign(pc, { video: v, stream: ms });
   watchEnd('play:' + b, pc);
-  log('playing', b, 'connect', connectMs);
-  return { location: r.location, postMs: r.postMs, connectMs, answerCodecs: codecsIn(r.answer) };
+  log('playing', b, 'connect', connectMs, 'presented', presented);
+  return { location: r.location, postMs: r.postMs, connectMs, firstPresentedMs: presented, answerCodecs: codecsIn(r.answer) };
 };
 
 function codecsIn(sdp) {
