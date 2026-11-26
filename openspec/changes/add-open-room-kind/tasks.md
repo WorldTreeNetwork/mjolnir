@@ -4,7 +4,7 @@ Revision 3 (path trial). Product boxes stay open until a fresh advise accepts th
 
 ## Gate
 
-- [ ] Fresh advise of revision 3. No product code before an accept. Do not treat the path trial as activation.
+- [x] Fresh advise of revision 3 at `82078ec767cab2bd24cb65c0b9ace201ec6595fe`: independent accept in `reviews/2026-11-26-advise-2.md`. Contract/trial only; PENDING remains PENDING. Do not treat this as activation, product completion or deployment authorization.
 
 ## Trial decisions (Duke, 2026-11-26: try the path)
 
@@ -45,7 +45,7 @@ These are the trial's contract. They are not an advise accept.
 
 No production step in this trial. After accept, the owner gate is a controller deploy only (`--app-only`), then an open mint whose root the live relay admits with `wt-session`, and a protected mint of the same name that does not see that broadcast. No test key is added to the production key set.
 
-Handoffs in design D4 and D5 are not boxes here.
+Handoffs in design D4 and D5 remain owned downstream; the release/preparation obligations below track their completion without marking those products built here.
 
 ## Owed by fresh path review (2026-11-26)
 
@@ -55,3 +55,16 @@ Review: `reviews/2026-11-26-advise.md`, contract `3a64e421`, send-back. These ar
 - [x] R2: Relay-room-auth delta now has the complete MODIFIED room-path requirement: both roots, relative WebTransport, absolute Iroh, participant confinement, sibling isolation, HTTP segment behavior kept.
 - [x] R3: D5 records `.15` fail-closed before open issuance, versioned full-root KDF before encrypted open, full-root roster and metering before those paths ship, and TURN class `c2` in `<unix>:<class>.<owner>[.<room>.<participant>]`. Until that TURN task lands, open rooms get no TURN username. Plaintext open does not wait on E2EE. No deploy approval.
 - [x] R4: Evidence in `spikes/path/finding.md` (section after `fea6caf6`). Browser MoQ receipt is 20 frames of `mjolnir-relay-frame`. Iroh positives are `PAIR-OPEN` and `PAIR-PROT`. Cross-root Iroh is a bounded `Node::subscribe` timeout beside that positive control, not a refusal string. HTTP spellings are today's mint through Bandit. WT `q/track` was admitted and not announced; `p/track` was received. Encoded browser pathnames did not collapse. Repeat against the future open mint is still owed. Fresh advise remains unchecked.
+
+## Implementation and downstream gates retained by fresh accept (2026-11-26)
+
+The historical R1–R4 wording above records the author's amendment. Fresh advise is now checked only at the Gate above. Its independent sustained-publisher check supersedes the weak serial Iroh timing in `path-pair.log`; see `reviews/2026-11-26-advise-2.md` and its adjacent check log.
+
+- [ ] Before product HTTP validation: restore a reproducible build/cache/toolchain. The review reproduced the cached Mix error but compiled current Authz/Auth/AieRouter/Router source successfully in memory. Do not fix nonexistent missing authorization helpers. Run the product route under the intended toolchain; retain actual raw/dispatched spelling observations.
+- [ ] Before implementation acceptance: repeat admission, receipt, bidirectional sibling read/write/announcement isolation and participant confinement on WT/Iroh using actual new-mint participant tokens. Keep publishers live throughout positives and negatives. Rebuild/pin the browser bundle, repeat literal and encoded dials, and record bounds rather than requiring a nonexistent refusal string. Preserve long-call resubscribe-on-announce requirements; no renewal implementation is implied by this trial.
+- [ ] `.13` preparation and release: reconcile its contract to D4 full admission from one validated key snapshot, original root, expected invitation identity, operation checks before I/O/SDP, and expiry teardown. Test wrong owner/room/kind and response/token mismatches on join/replacement/renewal; retain key-unavailable/drain fail-closed behavior.
+- [ ] Before first open issuance, `.15` client guard: ship and test explicit-open/old-mint rollback refusal plus both-kind exact expected-root and response/token binding on join/replacement/renewal. Stage this minimal guard before release without making the finished `.15` page a prerequisite for implementing `.11`/`.13`.
+- [ ] Before encrypted open, `add-call-e2ee`: reconcile versioned full-root invite/KDF context, incompatible-version refusal and same-secret cross-kind vectors in both directions. Protected-only E2EE and plaintext open do not wait for this.
+- [ ] Before open roster/accounting, `.14`/`.4`: reconcile full-root membership and usage attribution and test same-owner/name siblings. No sibling mixing; tenant-wide aggregation remains deliberate and must not permit quota evasion.
+- [ ] Before integrating TURN with open issuance, `add-turn-service`: reconcile its current unconditional configured-room `c1` response with D5. Omit open TURN credentials until explicit `c2.<owner>.<room>.<participant>` support lands; then test equal-expiry sibling inequality, delimiter/collision behavior and existing expiry limits. TURN is not MoQ admission and has no deployment grant here.
+- [ ] After implementation and readiness evidence, obtain separate controller deployment authorization and run the real-mint/live validation. Fresh advise and the path trial do not satisfy this gate.

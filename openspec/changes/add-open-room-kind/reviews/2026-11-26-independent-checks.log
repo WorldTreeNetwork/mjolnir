@@ -1,0 +1,64 @@
+Reviewed HEAD: 82078ec767cab2bd24cb65c0b9ace201ec6595fe
+Shell: /opt/homebrew/bin/elixir and mix; Elixir 1.20.4 / OTP29. Repository mise pins Elixir 1.20.5-otp-27 / OTP27.3.4.19, both missing locally.
+mix compile --no-deps-check --no-deps-compile: exit 1
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_app/4 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_deploy/3 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_record/3 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_record/3 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_record/3 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+error: undefined function authorize_record/3 (expected Mjolnir.API.Router to define such a function or for it to be imported, but none are available)
+== Compilation error in file lib/mjolnir/api/router.ex ==
+
+Cached Authz exports, then Code.compile_file("lib/mjolnir/api/authz.ex") exports:
+~c"/Users/dukejones/work/IdentiKey/mjolnir/_build/dev/lib/mjolnir/ebin/Elixir.Mjolnir.API.Authz.beam"
+[authorize_vm: 4, require_scope: 2]
+    warning: redefining module Mjolnir.API.Authz (current version loaded from _build/dev/lib/mjolnir/ebin/Elixir.Mjolnir.API.Authz.beam)
+    │
+  1 │ defmodule Mjolnir.API.Authz do
+    │ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    │
+    └─ lib/mjolnir/api/authz.ex:1: Mjolnir.API.Authz (module)
+
+    warning: Mjolnir.Deploy.Owner.same?/2 is undefined (module Mjolnir.Deploy.Owner is not available or is yet to be defined)
+    │
+ 98 │       Mjolnir.Deploy.Owner.same?(owner, user_id) ->
+    │                            ~
+    │
+    └─ lib/mjolnir/api/authz.ex:98:28: Mjolnir.API.Authz.authorize_record/3
+
+     warning: Mjolnir.Deploy.Registry.get/1 is undefined (module Mjolnir.Deploy.Registry is not available or is yet to be defined)
+     │
+ 120 │     case Mjolnir.Deploy.Registry.get(app_name) do
+     │                                  ~
+     │
+     └─ lib/mjolnir/api/authz.ex:120:34: Mjolnir.API.Authz.authorize_app/4
+     └─ lib/mjolnir/api/authz.ex:152:34: Mjolnir.API.Authz.authorize_deploy/3
+
+     warning: Mjolnir.Policy.App.authorize/3 is undefined (module Mjolnir.Policy.App is not available or is yet to be defined)
+     │
+ 122 │         case Mjolnir.Policy.App.authorize(action, user, entry) do
+     │                                 ~
+     │
+     └─ lib/mjolnir/api/authz.ex:122:33: Mjolnir.API.Authz.authorize_app/4
+     └─ lib/mjolnir/api/authz.ex:154:33: Mjolnir.API.Authz.authorize_deploy/3
+     └─ lib/mjolnir/api/authz.ex:167:33: Mjolnir.API.Authz.authorize_deploy/3
+
+[
+  authorize_app: 4,
+  authorize_deploy: 3,
+  authorize_record: 3,
+  authorize_vm: 4,
+  require_scope: 2
+]
+
+Independent source compile command (no application start; no beam files written):
+elixir -pa '_build/dev/lib/*/ebin' -e 'Code.compiler_options(infer_signatures: false); for f <- ["authz", "auth", "aie_router", "router"], do: Code.compile_file("lib/mjolnir/api/#{f}.ex"); IO.puts("ROUTER_SOURCE_COMPILE_OK")'
+Exit 0. Warnings about unavailable/stale remote modules remain; this is not a full application build/test.
+ROUTER_SOURCE_COMPILE_OK
+
+Existing spike offline: exit 0; cmp against spikes/logs/path-offline.log: exit 0 (byte-identical).

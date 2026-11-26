@@ -1,0 +1,56 @@
+open-room-kind-spike b89220fe5b11c21e67751b03968b7ba2327b2db61936c70b7a8f0b1b9b07fc5a
+iroh-pair 8f6becae2fa053914c87dd069b8aa3e0d77c783a7eb2f4033200248bd42d141c
+
+own-0 exit=0
+client-endpoint=42c95a62b52578d6d1dc4dc58fcd8dcf78bcacd2d6ed7ade54d9fa82484e2eae
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/marker elapsed_ms=0
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/marker frames=15 bytes=120 first=REVIEW-0
+
+
+cross-0 exit=124
+client-endpoint=c50befafed15edd0aba5dbeb1e693e7d9c8c3c1c59edbd1a569ee043511accf0
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/marker bound_s=6 elapsed_ms=6001
+
+
+announce-0 exit=0
+client-endpoint=bd52bd8e371c98ab6470d553da1f455ab66c617e5fa18e38dad1e53714c66984
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/marker")]), route: RouteInfo { instance: Some(Instance("9b241b7902fac8b9d38aab9e8d40c55d", "minted")), epoch: 0, hops: Hops([Hop { id: 3725901082947576 }, Hop { id: 4313420040163352 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(4313420040163352), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+
+
+own-1 exit=0
+client-endpoint=6b2884a647f599aea2594b083e040fc4b96f627125ebbc86c4197f37c09d701b
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/marker elapsed_ms=0
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/marker frames=16 bytes=128 first=REVIEW-1
+
+
+cross-1 exit=124
+client-endpoint=3a477cafa4ee45b256d8eeafc245b36e6a268bd23cc666790468b6d2a62a1c06
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/marker bound_s=6 elapsed_ms=6002
+
+
+announce-1 exit=0
+client-endpoint=da3fc01f4559f10fd5337e98ea12f29db4ede3b886a6c75c10f5c35030d2e503
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/marker")]), route: RouteInfo { instance: Some(Instance("f1ad71888469938f0147c6b02cbad39d", "minted")), epoch: 0, hops: Hops([Hop { id: 4500842754154000 }, Hop { id: 4313420040163352 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(4313420040163352), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+
+
+stolen-read-0 exit=124
+client-endpoint=cd4b403e0a7d313902d290112dfc312fce1afeedcb6f979a955d61f5427db23e
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/stolen bound_s=6 elapsed_ms=6001
+
+
+stolen-read-1 exit=124
+client-endpoint=ead611d32e9698194f00a80cf8f9e32e0e25bc03c923f8b7faf4c30ec3eeb060
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/stolen bound_s=6 elapsed_ms=6002
+
+All four publishers still alive after concurrent observations.
+PASS: receipts, both-direction bounded non-observation, scoped announcements. No refusal claimed.
