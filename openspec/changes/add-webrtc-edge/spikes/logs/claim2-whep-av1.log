@@ -1,0 +1,31 @@
+# claim2 WHEP out: source codec=av1 2026-11-26T01:53:17Z
+## chromium
+{"step":"play","broadcast":"carol/cam","vcodec":"-","browser":"chromium 158.0.8127.18","location":"/session/90e7a4c3-267e-494c-8a08-418467d1d1f3","postMs":35,"connectMs":254,"answerCodecs":["AV1","opus"]}
+{"step":"result","broadcast":"carol/cam","vcodec":"-","first":{"audioIn":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsReceived":76,"packetsLost":0,"totalAudioEnergy":0.0000016085202008219004,"audioLevel":0.0008545182653279214,"bytesReceived":15587},"videoIn":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesDecoded":87,"keyFramesDecoded":3,"frameWidth":1280,"frameHeight":720,"packetsReceived":87,"packetsLost":0,"nackCount":0,"pliCount":0,"firCount":0,"bytesReceived":2570,"freezeCount":0},"state":"connected"},"last":{"audioIn":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsReceived":242,"packetsLost":0,"totalAudioEnergy":0.000005649449524166558,"audioLevel":0.0008545182653279214,"bytesReceived":50659},"videoIn":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesDecoded":253,"keyFramesDecoded":9,"frameWidth":1280,"frameHeight":720,"packetsReceived":253,"packetsLost":0,"nackCount":0,"pliCount":0,"firCount":0,"bytesReceived":7464,"freezeCount":0},"state":"connected"},"content":{"left":[29,160,61],"right":[126,55,169],"videoWidth":1280,"videoHeight":720,"audioPeakHz":436,"audioPeakDb":-50,"audioRms":0.0569,"videoMatch":true,"audioMatch":true}}
+## firefox
+{"step":"play","broadcast":"carol/cam","vcodec":"-","browser":"firefox 159.0","location":"/session/bfd826fb-5370-43a4-bc5d-a6fef1725484","postMs":117,"connectMs":6,"answerCodecs":["opus"]}
+{"step":"result","broadcast":"carol/cam","vcodec":"-","first":{"audioIn":{"codec":"audio/opus maxplaybackrate=48000;stereo=1;useinbandfec=1","packetsReceived":75,"packetsLost":0,"totalAudioEnergy":0.01858673139609586,"audioLevel":0.08825952940458388,"bytesReceived":15924},"state":"connected"},"last":{"audioIn":{"codec":"audio/opus maxplaybackrate=48000;stereo=1;useinbandfec=1","packetsReceived":240,"packetsLost":0,"totalAudioEnergy":0.06144532089038243,"audioLevel":0.08841212195196387,"bytesReceived":50937},"state":"connected"},"content":{"left":[0,0,0],"right":[0,0,0],"videoWidth":0,"videoHeight":0,"audioPeakHz":436,"audioPeakDb":-50,"audioRms":0.0565,"videoMatch":false,"audioMatch":true}}
+## edge log
+2026-11-26T01:53:20.187718Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=90e7a4c3-267e-494c-8a08-418467d1d1f3 ttl_ms=596812 setup_ms=30
+2026-11-26T01:53:21.053248Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=2000000 error=Moq(Stream(Old))
+2026-11-26T01:53:22.052521Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=3000000 error=Moq(Stream(Old))
+2026-11-26T01:53:23.051428Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=4000000 error=Moq(Stream(Old))
+2026-11-26T01:53:24.055112Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=5000000 error=Moq(Stream(Old))
+2026-11-26T01:53:25.055393Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=6000000 error=Moq(Stream(Old))
+2026-11-26T01:53:26.050773Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=7000000 error=Moq(Stream(Old))
+2026-11-26T01:53:27.052556Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=8000000 error=Moq(Stream(Old))
+2026-11-26T01:53:28.054487Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=9000000 error=Moq(Stream(Old))
+2026-11-26T01:53:29.050278Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=10000000 error=Moq(Stream(Old))
+2026-11-26T01:53:30.052602Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=11000000 error=Moq(Stream(Old))
+2026-11-26T01:53:30.820233Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=bfd826fb-5370-43a4-bc5d-a6fef1725484 ttl_ms=586179 setup_ms=21
+2026-11-26T01:53:30.824715Z  WARN moq_webrtc::session: no codec params for media; ignoring mid=Mid(0)
+2026-11-26T01:53:31.054047Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=12000000 error=Moq(Stream(Old))
+2026-11-26T01:53:32.052599Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=13000000 error=Moq(Stream(Old))
+2026-11-26T01:53:33.055915Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=14000000 error=Moq(Stream(Old))
+2026-11-26T01:53:34.056521Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=15000000 error=Moq(Stream(Old))
+2026-11-26T01:53:35.053870Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=16000000 error=Moq(Stream(Old))
+2026-11-26T01:53:36.053933Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=17000000 error=Moq(Stream(Old))
+2026-11-26T01:53:37.052314Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=18000000 error=Moq(Stream(Old))
+2026-11-26T01:53:38.051125Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=19000000 error=Moq(Stream(Old))
+2026-11-26T01:53:39.053781Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.mkv-v" group=20000000 error=Moq(Stream(Old))
+rc=1

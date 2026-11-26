@@ -39,10 +39,10 @@ stop_all() {
 pub_native() {
   local tok=$1 b=$2 l=$3 r=$4 hz=$5 codec=$6 secs=$7 venc fmt
   case $codec in
-    h264) venc=(-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -g 30 -bf 0); fmt=(-f mp4 -movflags cmaf+frag_keyframe+empty_moov+default_base_moof); pf=fmp4 ;;
-    vp8)  venc=(-c:v libvpx -deadline realtime -cpu-used 8 -b:v 1500k -g 30); fmt=(-f matroska -live 1 -cluster_time_limit 1000); pf=mkv ;;
-    vp9)  venc=(-c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v 1500k -g 30); fmt=(-f matroska -live 1 -cluster_time_limit 1000); pf=mkv ;;
-    av1)  venc=(-c:v libsvtav1 -preset 10 -g 30 -svtav1-params tune=0:fast-decode=1); fmt=(-f matroska -live 1 -cluster_time_limit 1000); pf=mkv ;;
+    h264) venc=(-c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -g 30 -bf 0); fmt=(-f mp4 -frag_duration 20000 -movflags cmaf+empty_moov+default_base_moof); pf=fmp4 ;;
+    vp8)  venc=(-c:v libvpx -deadline realtime -cpu-used 8 -b:v 1500k -g 30); fmt=(-f matroska -live 1 -cluster_time_limit 20 -cluster_size_limit 4096); pf=mkv ;;
+    vp9)  venc=(-c:v libvpx-vp9 -deadline realtime -cpu-used 8 -row-mt 1 -b:v 1500k -g 30); fmt=(-f matroska -live 1 -cluster_time_limit 20 -cluster_size_limit 4096); pf=mkv ;;
+    av1)  venc=(-c:v libsvtav1 -preset 10 -g 30 -svtav1-params tune=0:fast-decode=1); fmt=(-f matroska -live 1 -cluster_time_limit 20 -cluster_size_limit 4096); pf=mkv ;;
   esac
   ffmpeg -hide_banner -loglevel error -re \
     -f lavfi -i "color=c=$l:size=640x720:rate=30" -f lavfi -i "color=c=$r:size=640x720:rate=30" \
