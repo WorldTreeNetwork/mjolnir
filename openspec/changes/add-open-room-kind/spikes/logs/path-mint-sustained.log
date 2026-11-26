@@ -1,0 +1,216 @@
+# sustained mint evidence 2026-11-26T06:17:42Z
+quic=127.0.0.1:52272 iroh=a8d96f70d5bca429813743e5c12c1c176ed833eee41f2d507041ad40ff03f0d1 cert_sha256=5c174d95876cbb9b175e245d4655b0e72e186c37fb87bc1223d32f76fce03af6 hold=130s
+open_root=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+protected_root=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup
+
+22:17:36.946 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice kind=open jti=aK-bFhUB7ydreN4xB8TGRg exp=1795677456
+minted open-alice kind=open publish=alice/**
+
+22:17:36.948 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=bob kind=open jti=XB5xmOLKCZBBP0xplELa3g exp=1795677456
+minted open-bob kind=open publish=bob/**
+
+22:17:36.949 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice kind=protected jti=hbOiKykHgL9T6yyfTOA9-g exp=1795677456
+minted prot-alice kind=protected publish=alice/**
+ready oa=yes ob=yes pa=yes
+publishers-before iroh=alive/alive/alive wt=alive/alive/alive
+
+### iroh before open-alice
+client-endpoint=af1d520dc59855751d7416e0705bea62ed379cfbac5aa751ce325f5e22798006
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker elapsed_ms=2
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+
+### iroh before open-bob
+client-endpoint=6c602f5cb8f8980fec8692c387718ccff9ce0c550cec5242f1b9e3a5737b5948
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=1
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+
+### iroh before protected-alice
+client-endpoint=6fbeacdaf75aaffc680c8467c7c7f89a83ec5586b7ce0f5772c0a36520adbddf
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker elapsed_ms=5
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+
+### iroh cross open token on protected path
+client-endpoint=1bab66ab947b3af04d739008e6c31e6ab56a7ece2c6446a9aaa5c80aac659502
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker bound_s=6 elapsed_ms=6001
+exit=124
+
+### iroh cross protected token on open path
+client-endpoint=fb87068f9f01ae124e34c12c642297ce2522921ef069dcaa6f496902c665815e
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker bound_s=6 elapsed_ms=6004
+exit=124
+
+### iroh alice token on bob path
+client-endpoint=33b0512a93f89efc3c4d9521937256d641f677a2fd75b290ba26a0672dc738d6
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=1
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+publishers-after-iroh-negatives iroh=alive/alive/alive
+
+### iroh after open-alice
+client-endpoint=3b503b803a2f3e6e583f74cffa746059c22d2d0c7f4182523cc931241fafdc75
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker elapsed_ms=2
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker frames=10 bytes=190 first=mjolnir-relay-frame
+exit=0
+
+### iroh after open-bob
+client-endpoint=8925edfe1aa064e26c1775ba34589631e9554e87ea9604ca9d614f4df22096ea
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=0
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+
+### iroh after protected-alice
+client-endpoint=48b8b0598449cb5dc706f545bb88e4a0551a930a8ac8d82865f3dc5382871f43
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker elapsed_ms=0
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker frames=11 bytes=209 first=mjolnir-relay-frame
+exit=0
+
+### iroh listen open-alice 4s
+client-endpoint=4fbba97f35116d15b5911983988c713c82ceaced0d85610e2ced6d9fb631d0f8
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker")]), route: RouteInfo { instance: Some(Instance("9fc03e2ddb759e1468849a1caf9813f6", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(11), auth: None, via: Hop { id: 0 }, source: Peer(1858251923338559), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker")]), route: RouteInfo { instance: Some(Instance("fb1faf92d9e7232d569352c8700b97d2", "minted")), epoch: 0, hops: Hops([Hop { id: 5512708930620001 }, Hop { id: 1858251923338559 }]), cost: Cost(11), auth: None, via: Hop { id: 0 }, source: Peer(1858251923338559), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=2
+exit=0
+
+### wt before alice
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("2aaf8be534b84ac16f3731ef9ea5887e", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=11 bytes=209
+exit=0
+
+### wt before bob
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("4fe0df8449c8f006fd69a68a3e2c6983", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("4388d6194da3e5e8ff4be1ed6224e9be", "minted")), epoch: 0, hops: Hops([Hop { id: 5512708930620001 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=11 bytes=209
+exit=0
+
+### wt before protected
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("d260dd1cfdad548a22ac041141bc0ff0", "minted")), epoch: 0, hops: Hops([Hop { id: 2467030054072101 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=11 bytes=209
+exit=0
+
+### wt cross open token protected url
+Error: unauthorized
+exit=1
+
+### wt alice publish on bob path
+held
+published path=bob/marker bytes=285
+released
+exit=0
+publishers-after-wt-negatives wt=alive/alive/alive iroh=alive/alive/alive
+
+### wt after alice
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("bce810a2021d3c408fecb8f970952dbd", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=11 bytes=209
+exit=0
+
+### wt after bob
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("ce1d87df0dc69c6103e53d0269b86cad", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("a7ba5db724157055c01f3d464514e3f8", "minted")), epoch: 0, hops: Hops([Hop { id: 5512708930620001 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=11 bytes=209
+exit=0
+
+### wt after protected
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("84b80eb333c2affbd4e528f497ca332d", "minted")), epoch: 0, hops: Hops([Hop { id: 2467030054072101 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=11 bytes=209
+exit=0
+
+### wt alice reads bob sibling
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("fe706d4cf9d7e91e547b139d8baffffd", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("88e03ec76b710ee9bffdfa53813589b1", "minted")), epoch: 0, hops: Hops([Hop { id: 5512708930620001 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=10 bytes=190
+exit=0
+
+### wt bob reads alice sibling
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("alice/marker"), captures: Some([Pattern("alice/marker")]), route: RouteInfo { instance: Some(Instance("74a05ce35262de1d0a9a01a4543c18d8", "minted")), epoch: 0, hops: Hops([Hop { id: 5891621227155667 }, Hop { id: 1858251923338559 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=alice/marker frames=11 bytes=209
+exit=0
+chromium-publisher-before=alive
+chromium-publisher-before=alive
+## chromium literal
+document.pathname=/literal
+connect.url.raw=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+connect.url.href=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+document.pathname=/literal
+connect.url.raw=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+connect.url.href=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup?jwt=REDACTED
+moq-connected
+received path=alice/marker frames=21 bytes=399 first=mjolnir-relay-frame
+## chromium encoded
+document.pathname=/encoded
+connect.url.raw=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup
+connect.url.href=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%7Eopen/standup?jwt=REDACTED
+## chromium double
+document.pathname=/double
+connect.url.raw=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup?jwt=REDACTED
+connect.url.pathname=/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup
+connect.url.href=https://127.0.0.1:52272/t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/%257Eopen/standup?jwt=REDACTED
+chromium-publisher-after=not recorded; the copy step stalled and the 130s publishers had then exited
+publishers-at-negative-window=alive (see publishers-after-wt-negatives)
+--- iroh publisher totals ---
+## pub-oa
+client-endpoint=f3fd5e5ee203dd33c98e5890336a1dfdb53644108e5610278c8cb3067713e4d1
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/alice/marker frames=642 bytes=5778 payload-len=9
+## pub-ob
+client-endpoint=55147e30302f982d696394a63c2380782afede491f8a56173d14132df3b3583c
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=642 bytes=5136 payload-len=8
+## pub-pa
+client-endpoint=efc64d57186a8e702b44ef097ef1c638c3df801f3e62851158fcf0044e3a462c
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup/alice/marker frames=642 bytes=5778 payload-len=9
+## wt-oa
+held
+published path=alice/marker bytes=12198
+released
+## wt-ob
+held
+published path=bob/marker bytes=12217
+released
+## wt-pa
+held
+published path=alice/marker bytes=12217
+released
+
+## reading notes
+Iroh and WebTransport publishers were alive before the negatives and still alive after them (publishers-after-iroh-negatives and publishers-after-wt-negatives are alive/alive/alive). After-reads then received frames on each own path.
+Iroh cross-root is subscribe-timeout exit 124, beside those living controls. WebTransport cross-root is unauthorized.
+Iroh listen on the open alice token announced exactly two prefixes, alice/marker and bob/marker, both under the open root. The protected path was absent.
+Alice's subscribe ** read bob/marker and bob's subscribe ** read alice/marker while both publishers were alive. That is same-root sibling read, which the grant allows.
+Alice's WebTransport publish of bob/marker returned exit 0 and local bytes. It is not a relay refusal. Bob's own read still succeeded afterward.
+Browser literal pathname kept ~open, connected, and received 21 frames / 399 bytes of mjolnir-relay-frame while the WebTransport publisher was alive. Encoded and double pathnames kept %7Eopen and %257Eopen and did not log moq-connected inside the wait.
+The first frame on the shared bytes track was mjolnir-relay-frame from the WebTransport publisher, which writes that payload onto the same path the Iroh publisher announces.
+
+## suite failures and toolchain
+Default TMPDIR is /var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T (48 bytes). macOS sun_path is 104 bytes.
+Reconcile thaw socket is btrfs_root plus a 22-character id and `_virtiofs.sock`. Under that TMPDIR the path is about 115 bytes, so :gen_tcp.listen fails. With TMPDIR=/tmp the same test path is about 71 bytes.
+AIE guest_contract live_retry binds std::env::temp_dir()/aie-guest-<uuid>/admit.sock. Under the default TMPDIR that path is 106 bytes and UnixListener returns "path must be shorter than SUN_LEN". With TMPDIR=/tmp it is about 62 bytes.
+TMPDIR=/tmp mix test test/reconcile_test.exs:266 test/mjolnir/aie/execute_test.exs:276 result: 2 passed, 36 excluded. No product source was changed.
+Shell elixir is Homebrew 1.20.4 on OTP 29. mise lists 1.20.5-otp-27 but that binary is not what `elixir` runs. MIX_ENV=test compiles the router. MIX_ENV=dev mix compile --no-deps-check in the repo still fails on stale _build/dev beams with authorize_app/4. An isolated tree at /tmp/mj-dev-iso, with dependency beams symlinked and a fresh mjolnir build directory, ran MIX_ENV=dev mix compile --no-deps-check and produced Elixir.Mjolnir.API.Router.beam. That directory was removed afterward. The repo _build/dev cache was left as it was.
