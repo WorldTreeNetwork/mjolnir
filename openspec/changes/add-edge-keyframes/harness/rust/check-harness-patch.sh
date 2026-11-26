@@ -50,7 +50,7 @@ if ! cargo build --locked --offline --bins >"$blog" 2>&1; then
   rm -f "$blog"
   exit 1
 fi
-if grep -i unused "$blog"; then
+if grep -E 'unused patch|was not used in the crate graph' "$blog"; then
   echo "unused-patch warning"
   rm -f "$blog"
   exit 1
