@@ -2,49 +2,53 @@
 
 > **PENDING**
 
-Node `mjolnir-rurh.12` (edge-keyframes), parent `mjolnir-rurh` (platform-calls). Rigor: change. Group: solo. Blocks `mjolnir-rurh.13` (webrtc-edge). Owner decision 2026-11-25: send the change upstream and carry the patch until it lands; do not move the moq pin for it.
+Node `mjolnir-rurh.12` (edge-keyframes), parent `mjolnir-rurh` (platform-calls). Rigor: change. Group: solo. Blocks `mjolnir-rurh.13` (webrtc-edge). Owner decision 2026-11-25: send the change upstream and carry the patch until it lands; do not move the moq pin for it. Owner answers to the review's five decisions, 2026-11-25: "for contract, i agree with those - wtn fork, measure cost and include in the pr, license matches upstream".
 
 ## Why
 
-A browser WHIP publisher sends a keyframe only when asked or when it changes resolution, and the pinned `moq-webrtc` asks only for the first one (`add-webrtc-edge/spikes/finding.md`, claims 1 and 5). So a WebRTC-origin broadcast has one group per resolution. A late MoQ joiner decodes from that group's keyframe and then chews through seconds of backlog (about 7 s in claim 1). A WHEP viewer's PLI or FIR is logged and dropped (`session.rs:337-341` at `4a6f522`), so a viewer of a WebRTC publisher recovers from heavy loss only when the publisher happens to send a keyframe. Upstream `main` does not fix this and has no open issue or PR for it (spike `upstream-keyframes`, refuted). The session type is crate-private, so the fix is a `moq-webrtc` change.
+A browser WHIP publisher sends a keyframe only when asked or when it changes resolution, and the pinned `moq-webrtc` asks only while a line has no keyframe and for a timeline step (`add-webrtc-edge/spikes/finding.md`, claims 1 and 5). So a WebRTC-origin broadcast has one group per resolution. A late MoQ joiner decodes from that group's keyframe and then works through seconds of backlog (about 7 s in claim 1). A WHEP viewer's PLI or FIR is logged and dropped (`session.rs:337-341` at `4a6f522`), so a viewer of a WebRTC publisher recovers from heavy loss only when the publisher happens to send a keyframe. Upstream `main` does not fix this and has no open issue or PR (spike `upstream-keyframes`, refuted). The session type is crate-private, so the fix is a `moq-webrtc` change.
 
 ## What
 
-- **Policy (design D1).** A WHIP ingest's video line asks its publisher for a keyframe (PLI) when it has had none for 2 s, when a reader's join asks moq-net for a new group (`track::Info::refresh`, ratio 4), when a frame arrives after unrecoverable loss, and when a WHEP viewer of that broadcast on the same edge, in the same room, sends PLI or FIR. All four share one gate: at most one PLI per line per second. A keyframe that arrives answers a held request.
-- **Patch surface (D2).** In `moq-webrtc` only, additive: `keyframe::Keyframes` (period, refresh, on_loss, min_interval) as a new field on `whip::Request`, defaulting to today's behaviour; `whip::Response::keyframes()` returning a weak `keyframe::Requester`; `whep::Request::keyframes: Option<Requester>`.
-- **Viewer path (D3).** The embedder joins a WHEP session to the WHIP session with the same verified root and broadcast. The harness edge does it here. Node `.13` carries it into the product.
-- **Carrying (D4).** `rs/moq-webrtc` from `4a6f522` is vendored to `native/vendor/moq-webrtc/`: pristine first, then the patch, with both licence texts, `VENDOR.md` and the exported patch. Only the consumer's workspace adds `[patch."https://github.com/moq-dev/moq"] moq-webrtc = { path = … }`. The pin is unchanged everywhere. The relay's manifest and lockfile do not change (the relay does not depend on `moq-webrtc`).
-- **Licence and provenance (D5).** The patch is offered `MIT OR Apache-2.0` like the crate. `NOTICE` names the vendored code. A bead tracks the upstream PR and the drop condition.
-- **Upstream (D7).** A port to `main` using `Refresh { ratio, interval }`, `Demand::poll_refresh` and, for the viewer path, `Subscriber::refresh()`. Prepared and tested on a branch here; opening it is an ASK.
-- **Acceptance (D8).** A before/after contrast on the `add-webrtc-edge` spike harness, extended with timing: WHEP join and MoQ join to first decodable frame, recovery after a burst of loss on either leg, a PLI storm bound, and the keyframe cost.
-- Capability: `webrtc-edge` (ADDED ×6). Node `.13` adds the edge's own requirements to the same capability.
+- **Policy (design D1, D2).** With the policy enabled, a WHIP video line asks its publisher for a keyframe (PLI) on a 2 s period, when a join wants a group past the newest (`track::Info::refresh` ratio 4), after unrecoverable loss, and when a paired WHEP viewer sends PLI or FIR. **Every PLI on the line, the two pinned paths included, passes one cooldown of 1 s**, with at most one held request per line. A timer never sends to a line without a receive stream and never ends a session. With the policy disabled the crate behaves as pinned. The settings are a trial, adopted only after the cost and storm measurements.
+- **Residual.** One authorised viewer can hold a publisher's line at one PLI per second. The floor bounds feedback, not encoder output or admission under the ingest cap.
+- **Two seconds is a request cadence.** The edge asks; an encoder may ignore it. Timings are local acceptance targets on the harness, not requirements.
+- **Viewer path (D3).** Each WHIP session has its own receiver; its `Requester` is weak and returns `Retired` once the session ends, so a viewer of a replaced publisher can never reach the new one. Requests are honoured only for the session's one video line, its own tracks, and its own instance when known. The embedder pairs sessions only after token and path-grant checks, keyed by full verified root and canonical path, and removes an entry only if it still belongs to the ending session.
+- **Patch surface (D4).** In `moq-webrtc` only, additive: `keyframe::Keyframes` on `whip::Request` (default off), `Response::keyframes() -> Option<Requester>` (`None` for WHEP), `whep::Request::keyframes`.
+- **Carrying (D5).** Feasibility first: a scratch consumer build on macOS and Linux with package-id checks. Then `rs/moq-webrtc` from `4a6f522` is vendored to `native/vendor/moq-webrtc/` with every inherited feature setting kept, its own committed lock, and a consumer-local `[patch]`. The pin is unchanged everywhere. The relay's manifest and lockfile hashes are checked before and after.
+- **Licence and provenance (D6).** Upstream's MIT notice ("Copyright (c) 2023 Luke Curley") and Apache text are kept unmodified; every modified file is marked; Mjolnir's changes are offered `MIT OR Apache-2.0`, authorised by Duke for the Foundation on 2026-11-25.
+- **Upstream (D8).** The builder prepares a local port to `main` (patch series, CI log, PR draft including the measured cost) in this repository. Pushing to the `WorldTreeNetwork/moq` fork and opening the PR are reserved to Duke or a submitter he names.
+- **Acceptance (D9).** A before/after contrast on the `add-webrtc-edge` spike harness, extended with per-PLI and per-frame logs, a moving fixture with a frame counter, and timing on a common clock.
+- Capability: `webrtc-edge` (ADDED ×5). Node `.13` adds the edge's own requirements to the same capability.
 
-Design and reasons: [`design.md`](design.md). Spike: [`spikes/upstream-keyframes.md`](spikes/upstream-keyframes.md).
+Design and reasons: [`design.md`](design.md). Spike: [`spikes/upstream-keyframes.md`](spikes/upstream-keyframes.md). Review answered: [`reviews/2026-11-25-advise.md`](reviews/2026-11-25-advise.md).
 
 ## Impact
 
-- Capabilities: ADDED `webrtc-edge` ("A WHIP ingest asks for a keyframe on a period", "A WHIP ingest asks for a keyframe when a reader's join wants a new group", "A WHIP ingest asks for a keyframe after unrecoverable loss", "A WHEP viewer's keyframe request reaches a same-edge WHIP source", "Keyframe requests to one publisher are throttled", "The keyframe patch is carried without moving the moq pin").
-- ADRs: none (rigor `change`). `docs/plans/webrtc-turn-sfu.md` is not amended; this node is already in its DAG.
-- Code, after activation: `native/vendor/moq-webrtc/` (new: vendored crate, `VENDOR.md`, `patches/`, licences), `NOTICE` (vendored-code section), `scripts/check-vendored-moq-webrtc.sh` (new), `openspec/changes/add-edge-keyframes/harness/` (copied and extended spike harness with the `[patch]` line). `CLAUDE.md` gets one line under the relay/edge notes pointing at `VENDOR.md`.
-- Not changed: `native/mjolnir_relay/` (manifest, lockfile, code), `native/Cargo.toml` and `native/Cargo.lock`, the E2EE spike crates, `scripts/build-native.sh`, `scripts/deploy.sh`, the moq pin, production.
-- Deploy: none. Nothing here runs on a server. The product edge (`.13`) is the first deployable consumer.
+- Capabilities: ADDED `webrtc-edge` ("Every keyframe request on a WHIP video line passes one cooldown", "A WHIP ingest asks for keyframes on a period and after loss", "A WHIP ingest asks for a keyframe when a join wants a group past the newest", "A viewer's keyframe request reaches only the live WHIP session it is paired with", "The keyframe patch is carried without moving the moq pin").
+- ADRs: none (rigor `change`).
+- Code, after activation: `native/vendor/moq-webrtc/` (new: vendored crate, lock, `VENDOR.md`, `patches/`, licences), `scripts/check-vendored-moq-webrtc.sh` (new), `NOTICE` (vendored-code section), `CLAUDE.md` (one line), `openspec/changes/add-edge-keyframes/harness/` (copied and extended spike harness with the `[patch]` line and the pairing table), `openspec/changes/add-edge-keyframes/upstream/` (local port, CI log, cost write-up, PR draft).
+- Not changed: `native/mjolnir_relay/` (manifest, lockfile, code), `native/Cargo.toml` and `native/Cargo.lock`, the E2EE and webrtc-edge spike crates, `scripts/build-native.sh`, `scripts/deploy.sh`, the moq pin, production, any remote repository.
+- Deploy: none. The product edge (`.13`) is the first deployable consumer.
 
 ## User journey & surfaces
 
-No new UI because the outcome reaches surfaces that node `.13` (WHIP and WHEP on the edge) and node `.15` (the WebRTC room client) own, and the existing MoQ browser client: the viewer's `<video>` starts and recovers sooner. In this change the journey is shown through the spike harness pages.
+No new UI because the outcome reaches surfaces that node `.13` (WHIP and WHEP on the edge) and node `.15` (the WebRTC room client) own, and the existing MoQ browser client: the viewer's video starts and recovers sooner when the publisher answers. In this change the journey is shown through the harness pages. Times below are the local targets on that fixture.
 
-- **Working, WebRTC viewer joins late:** bob opens a WHEP session to `alice/cam` 10 s after alice started publishing over WHIP. The edge forwards bob's first PLI to alice's ingest; alice's browser sends a keyframe; bob sees video within about 2 s.
-- **Working, MoQ viewer joins late:** carol subscribes to `alice/cam` through the relay. She decodes at once from a group at most about 2 s old and is live within about 2 s, instead of replaying the session since alice's last resolution change.
-- **Loss:** bob's network drops everything for 1.5 s. When it returns, his PLI reaches alice and video resumes within about a second. If alice's uplink loses a burst instead, the edge asks alice itself, and MoQ readers get a fresh group within about a second.
-- **Abuse:** a viewer sends PLI every 50 ms. alice still sends at most about one requested keyframe a second, and her session is not closed by the cap.
-- **Off / other sources:** a WHIP session with no edge settings (upstream defaults) behaves exactly as today. A WHEP viewer of a native MoQ publisher behaves as today: its keyframes come from that publisher's own GOP. A viewer in another room cannot reach alice's ingest.
+- **WebRTC viewer joins late:** bob opens a WHEP session to `alice/cam` 10 s after alice started publishing. The edge forwards bob's PLI to alice's session; alice's browser sends a keyframe; bob sees video within the target.
+- **MoQ viewer joins late:** carol subscribes through the relay. Alice's groups last about the period, so carol decodes at once and catches up through about one period of deltas.
+- **Loss:** bob's network drops everything for 1.5 s; his PLI reaches alice and fresh frames resume. If alice's uplink loses a burst instead, the edge asks alice itself.
+- **Abuse:** a viewer sends PLI every 50 ms. The edge still sends alice at most one PLI per second on that line. Alice's encoder answering at that rate costs quality; that cost is measured (task F).
+- **Replaced publisher:** alice reconnects. Bob's old session's requests return `Retired` and never reach the new session.
+- **Off / other sources:** a WHIP session without the policy behaves as today. A WHEP viewer of a native MoQ publisher behaves as today. A viewer in another room, even with the same broadcast path, cannot reach alice's session.
 
 ## Out of scope
 
-- The product edge `mjolnir-rtc`, its routes, the WHIP/WHEP pairing table in product code, its `build-native.sh` branch and deploy: `add-webrtc-edge` (`mjolnir-rurh.13`).
-- Moving the moq pin, and deleting the vendored crate once upstream lands: the coordinated pin move with the E2EE work (plan risk 3); tracked on the upstream bead.
+- The product edge `mjolnir-rtc`, its routes, the pairing table in product code, its build branch and deploy: `add-webrtc-edge` (`mjolnir-rurh.13`).
+- Moving the moq pin and deleting the vendored crate: the coordinated pin move with the E2EE work (plan risk 3); tracked on the upstream bead.
+- Pushing to the `WorldTreeNetwork/moq` fork and opening the upstream PR: Duke or a submitter he names.
 - Forwarding a viewer's PLI to a native MoQ publisher (needs `Subscriber::refresh()` on `main`): upstream PR part 2, then the pin move.
-- Holding deltas back after loss until the keyframe (freeze instead of corruption): not proposed; design D6.
-- Simulcast, per-viewer layer choice, transcoding: plan non-goals for this intention.
+- Holding deltas back after loss (ASK 5: keep forwarding).
+- More than one video line per WHIP session for viewer pairing; simulcast layer choice; transcoding.
 - Linux and multi-viewer scale measurements: `mjolnir-rurh.7`.
 - A Hang watch page check of WHIP-origin playback (finding item 8): `.13`; task C only records the exporter.

@@ -1,185 +1,251 @@
 # Design — add-edge-keyframes
 
-Node `mjolnir-rurh.12`. Owner decision 2026-11-25: send the change upstream and carry the patch until it lands; do not move the moq pin for it. Evidence: `add-webrtc-edge/spikes/finding.md` (claims 1, 2, 5, "What this means for node D" item 2), the pinned source at `4a6f522` (`rs/moq-webrtc/src/{session.rs,ingest.rs,egress.rs,server/whip.rs,server/whep.rs,rate.rs,codec/mod.rs}`, `rs/moq-net/src/model/track.rs`), and spike [`spikes/upstream-keyframes.md`](spikes/upstream-keyframes.md).
+Node `mjolnir-rurh.12`. Owner decision 2026-11-25: send the change upstream and carry the patch until it lands; do not move the moq pin for it. Owner answers to the five review decisions, 2026-11-25: "for contract, i agree with those - wtn fork, measure cost and include in the pr, license matches upstream" (recorded on `mjolnir-rurh.12`; `tasks.md` ASK section).
+
+Evidence: `add-webrtc-edge/spikes/finding.md` (claims 1, 2, 5, "What this means for node D" item 2), the pinned source at `4a6f522` (`rs/moq-webrtc/src/{session.rs,ingest.rs,egress.rs,server/whip.rs,server/whep.rs,server/mod.rs,rate.rs,codec/mod.rs}`, `rs/moq-net/src/model/track.rs`, `rs/moq-net/src/lite/{version.rs,track.rs}`), str0m 0.25.0 (`src/media/writer.rs`, `src/media/event.rs`), spike [`spikes/upstream-keyframes.md`](spikes/upstream-keyframes.md), and the advise [`reviews/2026-11-25-advise.md`](reviews/2026-11-25-advise.md) (send-back) with its blind take.
 
 Citations are `file:line` at the pin unless marked `main`.
 
 ## Context
 
-- Chromium sends a keyframe only when asked or when it changes resolution. In 15 s it sent 1 to 3 (`claim1-whip-H264.log`: `keyFramesEncoded` 1 → 3, `pliCount` 0).
-- The ingest asks only while a video line has no keyframe yet, and for a deferred timeline step (`session.rs:36-38`, `296-313`, `IngestOrder` at `487-590`). Nothing asks on a join, on a period, or after loss. str0m reports loss on every frame (`MediaData::contiguous`, str0m 0.25 `media/event.rs:252-257`), and moq-webrtc ignores it.
-- A viewer's PLI/FIR reaches egress as `Event::KeyframeRequest { mid, rid, kind }` and is logged and dropped (`session.rs:337-341`).
-- moq-net already has the join signal. A track whose `Info::refresh` is `Some(r)` judges each live join: once the newest group's bytes after its keyframe exceed `r` times the keyframe, `Demand::wanted` moves past the newest group and asks the publisher for a new one (`track.rs:163-174`, `1190-1234`, `5906-5947`). A new in-process cursor joins live (`track.rs:8438-8443`). moq-stats uses this pattern (`moq-stats/src/produce.rs:526`, `617`).
-- Refresh does not cross a lite-06 hop (`lite/version.rs:385-390`), and lite-06 is the default wire. The edge publishes to the relay over lite-06, and in the spike each WHEP egress reads through its own relay session.
-- The ingest cap meter credits a frame for its own assembly, "a keyframe larger than the burst included" (`rate.rs:40-51`). Steering is 0.9 of the cap, leaving room "for audio and keyframe overshoot" (`rate.rs:16-21`).
+- Chromium sends a keyframe only when asked or when it changes resolution: 1 to 3 in 15 s (`claim1-whip-H264.log`, `keyFramesEncoded` 1 → 3, `pliCount` 0).
+- The pinned ingest sends PLI from two places, each a real `Writer::request_keyframe` call: while a video line has had no keyframe (`Admit::Request`, `session.rs:298-305`) and for a deferred timeline step (`session.rs:308-313`). Each has its own 1 s repeat (`KEYFRAME_REQUEST_INTERVAL`, `session.rs:36-38`; `IngestOrder`, `487-590`). Nothing asks on a period, a join, or after loss. A failed request returns `Err` through `?` (`session.rs:474-485`), which ends the session.
+- `Writer::request_keyframe` fails with `NotReceivingDirection` when the line cannot request, and with `NoReceiverSource(rid)` when no receive stream exists yet for that mid and rid (str0m `writer.rs:302-321`). A request from a timer can come before the first RTP packet.
+- str0m marks every frame `contiguous` or not (`media/event.rs:252-257`). moq-webrtc ignores it.
+- A viewer's PLI/FIR reaches egress as `Event::KeyframeRequest { mid, rid, kind }` and is logged (`session.rs:337-341`). Its mid belongs to the viewer's session. Egress serves each video line from one catalog rendition, the first enabled one in a negotiated codec (`egress.rs:257-273`), held as a `Target { path, instance, track }` (`egress.rs:339-345`).
+- moq-net judges each live join of a track whose `Info::refresh` is `Some(r)`: once the newest group's bytes after its keyframe exceed `r` times the keyframe, `Demand::wanted` moves past the newest group (`track.rs:163-174`, `1190-1234`, `5906-5947`). A new in-process cursor joins live (`track.rs:8438-8443`). There is no separate rule for a first reader: the first join is judged like any other.
+- Refresh is not on the lite-06 wire (`lite/version.rs:382-390`; `lite/track.rs:183`, `225`), and the spike negotiated lite-06 (`finding.md:5`).
+- The ingest cap meter credits a frame for its own assembly, "a keyframe larger than the burst included" (`rate.rs:40-51`), and steers to 0.9 of the cap (`rate.rs:16-21`). That is room for overshoot, not a promise that any encoder survives the meter.
+- `whip::Response` and `whep::Response` are the same type, re-exported (`server/whip.rs:20`, `server/whep.rs:21`, defined `server/mod.rs:31-37`).
 
-## D1. Policy: both periodic and on-join, plus loss and viewer requests, under one throttle
+## D1. Policy: four causes, one cooldown for every PLI on a line
 
-A video line of a WHIP ingest asks its publisher for a keyframe (PLI) for any of these causes:
+With the policy enabled, a negotiated WHIP video line sends its publisher a PLI for these causes:
 
-| Cause | When | Default in the crate | Edge setting |
-|---|---|---|---|
-| Period | The line has received no keyframe for `period` | off | **2 s** |
-| Join | `Demand::wanted` on the line's track moves past its largest group, or goes from nobody to someone | off (needs `refresh`) | **refresh ratio 4** |
-| Loss | A video frame arrives with `contiguous == false` and is not a keyframe | off | **on** |
-| Viewer | A WHEP session on the same edge, playing this broadcast in the same room, received a PLI or FIR | off (needs the handle) | **on** |
+| Cause | Trigger | Trial edge setting |
+|---|---|---|
+| Startup (pinned) | a video frame arrives on a line that has had no keyframe | as pinned |
+| Step (pinned) | a timeline step waits for a keyframe | as pinned |
+| Period | the line has gone `period` since its last keyframe, or since its last PLI if that is later | 2 s |
+| Join | the track's `Demand::wanted` moves past the largest group written | refresh ratio 4 |
+| Loss | a non-keyframe video frame arrives with `contiguous == false` | on |
+| Viewer | a paired WHEP session forwards a viewer's PLI or FIR (D3) | on |
 
-Every cause goes through one per-line gate: **at most one PLI per video line per `min_interval`, 1 s.** A request inside the window is held and sent once at the window's end. A keyframe that arrives while a request is held cancels it, because that keyframe answers it. The two requests that exist today (first keyframe, timeline step) keep their own 1 s repeat and are not gated, so nothing changes for them.
+The settings are **provisional**. They are trial values until tasks F and E have run on moving input; the owner approved trying them and adopting them after measurement (ASK 4).
 
-Why both period and join:
+**One cooldown per line.** Every actual PLI on a line, startup and step included, goes through one gate per negotiated video line:
 
-- **Period is the only cause that reaches MoQ readers behind the relay.** On lite-06 the relay never forwards a join (spike). Without a period, a late MoQ joiner reads a group as long as the session (7 s of backlog in claim 1, and growing). A 2 s period bounds every group, and so every joiner's catch-up, to about 2 s. 2 s is upstream's own default GOP (`moq-video` `gop = framerate * 2`, JS `keyframeInterval` 2000 ms), and upstream's verdict in #3256 is that a 2 s GOP is enough. The period is measured from the last keyframe received, so a publisher that already sends keyframes (OBS with a 2 s keyint) gets no extra PLI.
-- **Join is the precise cause, and it costs nothing when nobody joins.** It fires for in-process readers and for the first subscription the relay opens, and it will fire for every relay reader once the edge-relay wire carries refresh (lite-07 final, or moq-transport DYNAMIC_GROUPS). Ratio 4 asks only when a joiner would otherwise decode more than four keyframes' worth of deltas. With a keyframe 4 to 8 times a delta frame (assumption H2) at 30 fps, that is a join more than 0.5 to 1 s into a group. Ratio 2 would ask on most joins; 8 would almost never ask under a 2 s period.
+- `last_sent`: a monotonic time, set only when `request_keyframe` returned `Ok`.
+- `pending`: one bit plus a bitmask of causes, and one `deadline`. At most one held request per line, whatever the number of causes or viewers.
+- A cause at time `now` sends at once if `now ≥ last_sent + floor`. Otherwise it sets `pending` and `deadline = last_sent + floor`. A second cause while pending only adds its tag.
+- A keyframe received on the line clears `pending` and re-anchors the period.
+- **Unanswered request.** If no keyframe follows a PLI, the next period request is due at `max(last keyframe, last_sent) + period`. The period deadline is computed from that, never left in the past, so the timer cannot spin. Startup keeps asking at the floor while the line has no keyframe, as pinned (pinned interval and floor are both 1 s).
+- **No receiver yet.** The gate sends only to a line that negotiated PLI and has a current receive stream for the rid of the last frame seen. Before the first frame, or if str0m returns `NoReceiverSource` or `NotReceivingDirection`, the request stays pending, `last_sent` does not move, and the error is logged and counted. A keyframe request never ends a session. The pinned `?` in `request_keyframe` stays only on the pinned paths with the policy disabled.
+- **Policy disabled** (the crate default): the two pinned paths behave exactly as at the pin, with their own repeats and their own error handling. No gate, no timer, no demand watch.
 
-Why 1 s for the gate:
+**Bounded before enqueue.** Requests from outside the session (D3) arrive through a per-session flag plus a wakeup, not a growing queue. Setting the flag twice is the same as once. The session drains it into the line's gate. Memory per session is constant in the number of viewers and requests.
 
-- It bounds the worst case for any number of viewers, honest or not: the publisher never sends more than about one requested keyframe per second, which is a 1 s GOP. A single viewer flooding PLI gets the same bound as a hundred viewers.
-- Loss recovery needs a keyframe within about a round trip plus an encode. With NACK already recovering 5 % random loss (claim 5), PLI is for bursts NACK cannot fill, and 1 s is inside the "about two seconds" goal.
-- It is the interval the crate already uses for its own repeats (`KEYFRAME_REQUEST_INTERVAL`, `session.rs:36-38`), and the interval upstream `main` exposes per hop as `Refresh::interval`.
+**Floor: 1 s.**
 
-Cost at 720p (estimate; assumption H2, measured by task F):
+- It bounds the feedback a publisher receives from all causes and all viewers: about one PLI per line per second.
+- 1 s is the interval the crate already uses for its own repeats, and upstream `main`'s per-hop `Refresh::interval` is the same kind of floor.
+- Loss recovery needs a keyframe in about a round trip plus an encode. NACK already recovers 5 % random loss (claim 5). PLI is for bursts NACK cannot fill.
 
-- At the edge's cap of 2.5 Mbit/s the encoder is steered to 2.25 Mbit/s. At 30 fps a mean frame is about 9.4 kB, and a keyframe 4 to 8 times that, 37 to 75 kB.
-- Against an unbounded GOP, a keyframe every N frames costs `(K/d − 1) / N` of the stream. A 2 s period at 30 fps (N = 60) costs 5 to 12 %, 110 to 260 kbit/s of the 2.25 Mbit/s. At 15 fps it is 10 to 23 %.
-- The worst case under the gate (1 s) doubles that: 10 to 23 % at 30 fps.
-- Under the cap this is not extra bandwidth. REMB holds the encoder's average, so the cost shows as lower quality on the delta frames, plus a burst of one keyframe each period. The meter credits that burst (`rate.rs:40-51`). Task F checks that a 1 s storm does not trip `RateLimited`.
-- The spike fixture cannot measure this. It is a static two-colour image that encoded at about 28 kbit/s (`claim1-whip-H264.log`, `bytesSent` 41720 at t = 12 s). Task F uses a moving 720p fixture.
+**Residual, stated plainly.** One authorised WHEP viewer can hold a publisher's played line at one PLI per second for as long as it plays. Many viewers share that one budget. Each line and each publisher has its own. A compliant encoder answering at that rate spends more bytes on keyframes, lowers delta quality under the cap, and may overshoot the cap. The floor bounds feedback. It does not bound encoder output, and it does not promise admission under the meter (`rate.rs:18-50`), which stays unchanged. The owner accepted this as a trial (ASK 4); task F and E measure it.
 
-## D2. Where the code lives: one crate, additive API, defaults unchanged
+**What "two seconds" means.** The period is a request cadence. An encoder may ignore a PLI, delay it, or answer with a frame the importer does not treat as a keyframe. The edge cannot force a 2 s GOP; it can only ask every 2 s. Every "within about two seconds" in this change is a local acceptance target on the tested fixture (D8), not a promise.
 
-The session type is crate-private, so the change is in `moq-webrtc` only. The surface:
+**Why both period and join.** The period is the only cause that reaches MoQ readers behind the relay on lite-06. It bounds a group's length to about the period when the encoder answers. Join is the precise cause for readers whose join reaches the edge, and it costs nothing when nobody joins. Ratio 4 asks when a joiner would otherwise decode more than four keyframes' worth of deltas.
+
+## D2. Join trigger and first-reader precedence
+
+- **Trigger.** The join cause fires when the line's track's `Demand::wanted` becomes `Some(n)` with `n` greater than the largest group written. Nothing else in demand fires it: not a reader count going from zero to one, not a `wanted` at or below the largest group.
+- **Empty track.** A track with no group yet asks for group 0 (`track.rs:5906-5913`). That is not a join request: the startup cause already covers a line with no keyframe. The demand observer's first reading at session start is taken as the baseline and never fires.
+- **First reader.** A first reader is judged by the ratio like any later one (`track.rs:1190-1214`). There is no first-reader exception. Under the ratio, a first join causes no PLI.
+- **The relay.** At the edge, the relay is one reader. Its first upstream subscription opens a cursor in the edge's process, which moq-net judges by the ratio. Later joins at the relay, while that subscription stays open, are judged at the relay's copy. On lite-06 that copy has no refresh ratio (it is not on the wire), so those joins send nothing to the edge. If the last relay reader leaves and the relay drops its upstream subscription, the next reader opens a new one, which is judged again at the edge. Task P4 traces the first relay subscription and a later relay-side join separately.
+- Neither case escapes the line's gate.
+
+## D3. The viewer path: bound to one source line and one live WHIP instance
+
+At the pin, egress cannot ask through MoQ: `Subscriber::join` is `pub(crate)` (`track.rs:10882-10895`), and on lite-06 through the relay it would go nowhere. So the crate exposes a requester and the embedder pairs sessions.
+
+**Crate side.**
+
+- Each accepted WHIP session creates its own fresh receiver (the flag and wakeup of D1) and a `Requester` that holds only a weak reference to it. The receiver lives in the session's run loop. It is dropped when the run ends: peer DELETE, disconnect, ICE timeout, error, token expiry, or cancellation by the embedder. That happens before and regardless of the broadcast's linger (`Session::finish`, `session.rs:182-191`), so a lingering broadcast takes no feedback.
+- `Response::keyframes() -> Option<Requester>`: `Some` for a WHIP response, `None` for a WHEP response (the type is shared).
+- `Requester::request(track: &str, instance: Option<moq_net::Instance>) -> Requested`, where `Requested` is `Sent`, `Coalesced`, `Retired` (the session ended), or `Ignored(reason)` (reasons: `Disabled` when the policy is off, `Ambiguous`, `WrongTrack`, `WrongInstance`). It never blocks and never fails the caller.
+- **One unambiguous video line.** A WHIP session honours a viewer request only while it has exactly one negotiated video line with PLI. With zero or several, the request is `Ignored(Ambiguous)` and counted. This is the supported pairing: one camera per WHIP session, which is what the spike and the plan use. Simulcast layers on that line are one line (str0m `rid`); the PLI goes to the rid of the last frame seen.
+- **Track and instance check.** The request names the MoQ track the viewer is being served. The WHIP session accepts it only if that track is one of its own video tracks (any rendition its line has created, since H.264, VP9 and AV1 make a new rendition per resolution) and, when the egress knows its source instance (`Target::instance`), only if it is this session's route instance (`server/whip.rs` `route.instance()`). Otherwise `Ignored(WrongTrack)` or `Ignored(WrongInstance)`.
+- `whep::Request::keyframes: Option<Requester>`. On `Event::KeyframeRequest` (PLI or FIR) whose mid is the egress's video line and which is serving a video rendition, egress calls `request(target.track, target.instance)`. Audio-line requests and requests before a rendition is served are dropped and counted. Without a requester it logs as today.
+
+**Address reuse.** A publisher address is (verified root, broadcast path). When a new WHIP session takes an address, it has a new receiver. An old viewer's `Requester` still points at the old receiver: once the old session ends, `request()` returns `Retired`, and it can never reach the new session. A pinned test already shows a stale viewer stays on the old instance (`server/whip.rs` `a_reconnect_replaces_the_stale_session`). A weak pointer to a table slot would not have this property; that is why the handle points at the session's own receiver.
+
+**Embedder side (harness edge here, `mjolnir-rtc` in node `.13`).**
+
+- Verify the token and match the operation's path grant first, exactly as the spike edge does for both legs (`edge.rs:58`, `98`). Pairing never happens for a request that failed either check.
+- Key the table by (full verified root, canonical root-relative broadcast path). Each entry holds a generation id (the WHIP resource id) and that session's `Requester`.
+- On WHIP accept, insert or replace the entry. On WHIP end, remove the entry only if its generation is still the finishing session's. A late cleanup of a replaced session cannot remove the replacement.
+- On WHEP accept, look up the same key and pass the requester. A broadcast with no WHIP session on this edge gets `None`.
+- Feedback is tied to the lifetime of that WHEP play: when the WHEP session ends, its copy of the requester is dropped.
+
+Tests (P6, D3 in `tasks.md`): two active rooms with the same broadcast path, each with a publisher and a viewer, with dispatch counters per session showing each viewer reaches only its own publisher (positive and negative in the same run); a stale viewer after the publisher is replaced gets `Retired` and the new publisher's counter does not move; a late cleanup from the prior session leaves the replacement's entry in place.
+
+## D4. Patch surface: one crate, additive, defaults unchanged
 
 ```rust
 // moq_webrtc::keyframe (new module, re-exported)
 
-/// When a WHIP ingest asks its publisher for a keyframe, beyond the first.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct Keyframes {
-    /// Ask when a video line has received no keyframe for this long. `None` (default): never.
+    /// `false` (default): the pinned behaviour, no gate, no new causes.
+    pub enabled: bool,
+    /// Period cause. `None`: off.
     pub period: Option<Duration>,
-    /// Set `track::Info::refresh` on each video track to this ratio and ask when a join moves
-    /// `Demand::wanted` past the newest group. `None` (default): never.
+    /// Join cause: `track::Info::refresh` on video tracks. `None`: off.
     pub refresh: Option<u32>,
-    /// Ask when a video frame arrives after unrecoverable loss. `false` (default): never.
+    /// Loss cause.
     pub on_loss: bool,
-    /// The floor between two requests for these causes or a `Requester`, per line. Default 1 s.
-    pub min_interval: Duration,
+    /// The one cooldown per line for every PLI while enabled. Default 1 s.
+    pub floor: Duration,
 }
 
-/// A cloneable, weak handle that asks one WHIP ingest for a keyframe. Never blocks; a no-op
-/// once the session ends. Requests coalesce under the ingest's `min_interval`.
 #[derive(Clone)]
-pub struct Requester { /* Weak sender into the session */ }
-impl Requester { pub fn request(&self); }
+pub struct Requester { /* Weak reference to one WHIP session's receiver */ }
+pub enum Requested { Sent, Coalesced, Retired, Ignored(Ignored) }
 ```
 
-- `whip::Request` gains `pub keyframes: Keyframes` (`Default` is all off). `Request` is `#[non_exhaustive]` (`server/whip.rs:96`), so the field is additive. `Request::new` keeps today's behaviour exactly.
-- `whip::Response` gains `pub fn keyframes(&self) -> Requester`. `Response` has a private field (`server/mod.rs:31-37`), so a method is additive.
-- `whep::Request` gains `pub keyframes: Option<Requester>`. `Request` is `#[non_exhaustive]` (`server/whep.rs:110`). On `Event::KeyframeRequest` (PLI or FIR, any mid or rid) the egress session calls `request()` once. Without a requester it logs as today.
-- Inside: `DeferredVideo::new` (`codec/mod.rs:146-155`) adds `.with_refresh(r)` to the `track_info` it already builds, and keeps a `Demand` from the track. `MediaSink` gains a defaulted method that returns the video lines' demands, so the trait change is additive. `Session::run_loop` gains one more `select!` arm: the earliest of the period deadline, the gate's release, a demand change, or a requester message. The gate is a pure struct beside `IngestOrder`, tested the same way (`session.rs:950-991`).
-- PLI always, never FIR toward the publisher: the crate's own `request_keyframe` sends PLI (`session.rs:474-485`) and Chromium answers both. The PLI names the rid of the last frame seen on the line, as today.
-- Not `moq_mux::Ingest`: that struct is shared by RTMP, SRT and RTSP ingest (`moq-mux/src/ingest.rs:5-9`), and putting WebRTC-only knobs there would make the patch two crates.
-- The WHEP client (`client::whep`) also runs an ingest session. It keeps all causes off. Extending it is a later upstream choice.
+- `whip::Request` gains `pub keyframes: Keyframes`. `Request` is `#[non_exhaustive]` (`server/whip.rs:96`), so the field is additive, and `Request::new` keeps today's behaviour.
+- `Response` gains `pub fn keyframes(&self) -> Option<Requester>` (additive; `Response` has a private field).
+- `whep::Request` gains `pub keyframes: Option<Requester>` (`#[non_exhaustive]`, `server/whep.rs:110`).
+- Inside: `DeferredVideo::new` (`codec/mod.rs:146-155`) adds `.with_refresh(r)` to the `track_info` it builds and keeps the track's `Demand`. `MediaSink` gains a defaulted method returning the video lines' demands and track names (additive). `Session::run_loop` gains one `select!` arm: the earliest of a period deadline, a gate deadline, a demand change, or the requester wakeup. The gate is a pure struct beside `IngestOrder`, tested the same way (`session.rs:950-991`). Both pinned call sites route through the gate when enabled.
+- PLI only toward the publisher, as the pinned `request_keyframe` sends (`session.rs:474-485`).
+- Not on `moq_mux::Ingest`: that struct is shared by RTMP, SRT and RTSP (`moq-mux/src/ingest.rs:5-9`), and WebRTC-only knobs there would make the patch two crates.
+- The WHEP client (`client::whep`) also runs an ingest session. It keeps the policy disabled.
 
-## D3. The viewer path at the pin is an explicit handle, and the embedder wires it
+## D5. Carrying: a vendored copy of the one crate, patched in one workspace (owner: ASK 3)
 
-At the pin, egress cannot ask through MoQ: the reader-side `Subscriber::join` is `pub(crate)` in moq-net (`track.rs:10882-10895`), and through the relay on lite-06 it would go nowhere anyway. So the crate exposes `Requester`, and the embedder joins a WHEP session to a WHIP session.
-
-The embedder keys its table by **(verified token root, root-relative broadcast path)**, the same two values the spike edge already checks for both legs (`grant.publish.path.matches(broadcast)` for WHIP, `grant.subscribe.path.matches(broadcast)` for WHEP). A viewer can only reach a publisher in its own room. A WHEP of a broadcast with no WHIP session on this edge gets no requester and behaves as today.
-
-In this change the table lives in the measurement harness's edge. Node `.13` (`mjolnir-rtc`) carries it into the product.
-
-## D4. How the patch is carried: a vendored copy of the one crate, patched in one workspace
+**Feasibility first.** Before any harness or patch work, task K1 builds a scratch consumer against the pristine vendored crate on macOS and on Linux and checks package ids. The review's scratch resolution found the consumer selects local `moq-webrtc 0.3.12` and one `moq-net 0.3.10` from the exact git source and rev, but nothing was compiled and no other platform was tried.
 
 **Layout.**
 
-- `native/vendor/moq-webrtc/` holds `rs/moq-webrtc` from `4a6f522`: `src/` byte-identical in a first commit, then the patch commit. Beside it: `LICENSE-MIT` and `LICENSE-APACHE` copied from the moq repository root at `4a6f522` (the crate directory has none), `VENDOR.md` (base, upstream URL, patch list, upstream PR link, drop condition), and `patches/0001-edge-keyframes.patch` (the patch commit, `git format-patch`).
-- Its `Cargo.toml` is upstream's with the workspace inheritance written out: each `workspace = true` dependency becomes the same crate from `git = "https://github.com/moq-dev/moq", rev = "4a6f52248"` (moq crates) or the version the moq workspace names at the pin (crates.io crates: `str0m = "0.25"`, `rind-str0m = "0.25.2"`, ...). `rust-version = "1.91"`. The `workspace-hack` dev-dependency and `[lints] workspace = true` are dropped (hakari and lint levels, not behaviour). Version stays `0.3.12`. It has its own empty `[workspace]` table, so `cargo test` runs there and does not climb into `native/Cargo.toml`.
-- The consumer's workspace root, and only it, adds:
+- `native/vendor/moq-webrtc/` holds the whole `rs/moq-webrtc` directory from `4a6f522` (`src/`, `CHANGELOG.md`, `MIGRATE.md`, `clippy.toml`): first byte-identical except the manifest, then the patch commit.
+- `LICENSE-MIT` and `LICENSE-APACHE` are copied byte-for-byte from the moq repository root at `4a6f522`; the crate directory has none. The MIT notice stays exactly "Copyright (c) 2023 Luke Curley".
+- `VENDOR.md`: base commit and URL; a table of every packaging difference (manifest lines rewritten, dev-dependency removed, lints dropped, `[workspace]` added, licence files added); the patch list; who authorised the outbound licence and when (D6); the tracking bead; the drop condition (D8).
+- `patches/0001-edge-keyframes.patch`: the patch commit, `git format-patch`.
+- Its own `Cargo.lock` and an empty `[workspace]` table, so `cargo test` runs there and does not climb into `native/Cargo.toml`.
 
-  ```toml
-  [patch."https://github.com/moq-dev/moq"]
-  moq-webrtc = { path = "<relative>/native/vendor/moq-webrtc" }
-  ```
+**The rewritten manifest keeps every inherited setting, not just versions.** Each `workspace = true` dependency becomes the moq workspace's entry at the pin, with its `default-features` and `features` merged with the crate's own:
 
-  In this change the consumer is the harness workspace (`openspec/changes/add-edge-keyframes/harness/rust/Cargo.toml`). Node `.13` adds the same line to `native/mjolnir_rtc/Cargo.toml`, which should be its own `[workspace]` like the relay.
+| Dependency | Source at the pin | Settings to keep |
+|---|---|---|
+| `axum` | crates.io `0.8` | optional; `default-features = false`; features `form, http1, json, matched-path, original-uri, query, tokio, tracing` |
+| `str0m` | crates.io `0.25` | `default-features = false` |
+| `reqwest` | crates.io `0.13` | `default-features = false`; features `rustls-no-provider` |
+| `moq-crypto` | git `4a6f52248` | `default-features = false`; features `provider` |
+| `moq-tokio` | git `4a6f52248` | `default-features = false` (dependency and dev-dependency) |
+| `kio` | git `4a6f52248` | features `runtime` |
+| `moq-mux` | git `4a6f52248` | features `async` |
+| `tokio` | crates.io `1.48` | features `full`; dev: `test-util` |
+| `hang`, `moq-net` | git `4a6f52248` | defaults |
+| `rind-str0m`, `bytes`, `thiserror`, `tracing`, `url`, `uuid`, dev `rind`, dev `tracing-test` | crates.io, versions as the moq workspace names them | as upstream |
 
-**Why vendored, not a fork.** A git fork patched in for `moq-webrtc` alone brings the fork's `moq-net`, `moq-mux`, `hang` and `kio` with it, because inside the moq workspace those are path dependencies (`Cargo.toml:113-160` at the pin). That is a second copy of each type, and `moq_net::origin::Producer` from the fork would not be the one the edge holds. A fork works only if every moq crate in the graph is patched to it. The vendored manifest points at the pinned git source, so the other crates unify and only `moq-webrtc` is replaced. It also keeps the build off a second remote, and the patch reviewable in this repository. The relay already adapts upstream code in-tree with a provenance header (`native/mjolnir_relay/src/iroh_sessions.rs:1-2`, LEARNINGS 2026-11-23).
+The crate's `[features]` table (`default = ["server"]`, `server = ["dep:axum"]`) is unchanged. `workspace-hack` (dev, a path into the moq tree) is removed; `[lints] workspace = true` is removed; `rust-version = "1.91"`. Version stays `0.3.12`. Task K2 checks the manifest against this table mechanically.
 
-**What does not change.**
+**Locks before `--locked`.** The vendored crate's lock and the harness consumer's lock are each written once by an unlocked resolution, reviewed (every moq package from `git+https://github.com/moq-dev/moq?rev=4a6f52248#4a6f522483168ace392718d68b58a402533c897d`, `str0m 0.25.0`), and committed. Every later build and test runs `--locked`.
 
-- `native/mjolnir_relay/Cargo.toml` and `Cargo.lock`. The relay is its own `[workspace]` and does not depend on `moq-webrtc` at all (no `moq-webrtc` entry in its lockfile). Task C3 proves the lockfile hash is unchanged.
-- `native/Cargo.toml` and `native/Cargo.lock`: no moq crate there.
-- `openspec/changes/add-call-e2ee/spikes/rust/` and `add-webrtc-edge/spikes/rust/`: their manifests and locks.
-- `scripts/build-native.sh`: no new branch here. Node `.13` adds its own.
-- The pin `4a6f52248` everywhere.
+**The consumer's root manifest, and only it,** adds:
 
-**Build.** No build script is added; the vendored crate has none today (claim 8: no Node or npm in any build script). It builds with the relay's toolchain (1.95.0) on Linux, which task C2 checks.
+```toml
+[patch."https://github.com/moq-dev/moq"]
+moq-webrtc = { path = "<relative>/native/vendor/moq-webrtc" }
+```
 
-## D5. Licensing and provenance
+Here the consumer is the harness workspace (`openspec/changes/add-edge-keyframes/harness/rust/`). Node `.13` adds the same line to `native/mjolnir_rtc/Cargo.toml`, its own `[workspace]` like the relay.
 
-- `moq-webrtc` is `MIT OR Apache-2.0`, Copyright Luke Curley and the moq authors. Both licence texts stay with the vendored copy. Each file the patch changes gains no new header (upstream files carry none). `VENDOR.md` states the origin, the base commit, and that Mjolnir's changes are offered under the same `MIT OR Apache-2.0`.
-- The patch must be `MIT OR Apache-2.0`, not AGPL. Two reasons: it modifies an `MIT OR Apache-2.0` crate whose copy we redistribute, and it is meant upstream. The Foundation holds the rights to work done for Mjolnir (CLA.md), so licensing this one patch outbound is its decision (ASK in `tasks.md`).
-- Linking an `MIT OR Apache-2.0` crate into an AGPL-3.0-or-later host is the same case as today's moq crates (plan `webrtc-turn-sfu.md`: "linkable into our AGPL binaries").
-- `NOTICE` gains a short "Vendored third-party code" section naming `native/vendor/moq-webrtc` and its licence, so the AGPL and MIT-client paragraphs are not read as covering it.
-- **Tracking.** A bead, child of `mjolnir-rurh`, holds the upstream PR URL once one exists, and the drop condition (D7). `VENDOR.md` links the bead and the PR.
+**Why vendored, not a fork.** Inside the moq workspace, `moq-net`, `moq-mux`, `hang` and `kio` are path dependencies (`Cargo.toml:113-160`). A fork patched in for `moq-webrtc` alone would bring the fork's copies with it, and their types would not be the edge's. The vendored manifest names the pinned git source, so the other crates unify and only `moq-webrtc` is replaced.
 
-## D6. What MoQ readers gain, and what they do not
+**What does not change.** `native/mjolnir_relay/Cargo.toml` and `Cargo.lock` (the relay is its own workspace and has no `moq-webrtc` in its graph); `native/Cargo.toml` and `native/Cargo.lock`; the E2EE and webrtc-edge spike crates; `scripts/build-native.sh`; the pin. Cargo does not forbid unrelated edits to those files, so byte equality is a delivery check (tasks K0, K5), and a concurrent unrelated edit by another agent is told apart from this change by `git log` on those paths.
 
-Gain:
+**Builds on this Mac.** Check `df -h /System/Volumes/Data` first, use a scratch `CARGO_TARGET_DIR` outside the repository, and delete it afterwards.
 
-- Every group of a WHIP-origin video track is at most about 2 s long (the period). A late MoQ joiner decodes at once from the cached keyframe, as today, but catches up through at most about 2 s of deltas instead of the whole session.
-- A player-shaped reader with a latency window (moq-mux's exporter, a Hang watch page) finds a fresh group within about 2 s. In claim 1 the exporter produced nothing on uncapped VP8, VP9 and AV1 late joins. The cause was not isolated, so task C records whether this fixes it rather than gating on it (hypothesis H3).
-- After a burst of loss on the publisher's uplink, the ingest asks at once (loss cause), so MoQ readers stop decoding a broken group within about a second instead of at the next resolution change.
-- In-process readers, the relay's first subscription, and (when the wire carries refresh) every relay reader get a keyframe on a late join, throttled.
+## D6. Licensing and provenance (owner: ASK 2)
+
+- `moq-webrtc` is `MIT OR Apache-2.0`. Both licence texts stay with the copy, unmodified. The MIT notice stays "Copyright (c) 2023 Luke Curley".
+- **Modified files are marked**, for redistribution under the Apache option (section 4(b)). Each source file the patch changes, and the rewritten `Cargo.toml`, carries a prominent comment at the top: modified by the Mjolnir contributors for World Tree Network Foundation in 2026, what was changed, and the upstream path and commit. The headers are part of the patch, so reversing the patch restores upstream byte for byte. `VENDOR.md` alone is not enough.
+- **Outbound licence.** Mjolnir's changes are offered under `MIT OR Apache-2.0`, matching upstream. Authorised by Duke Jones for World Tree Network Foundation on 2026-11-25 ("license matches upstream", recorded on `mjolnir-rurh.12`). `VENDOR.md` records that line. CLA.md has contributors keep copyright and grant rights to the Foundation; this is the Foundation's decision about its changes.
+- Linking an `MIT OR Apache-2.0` crate into an AGPL-3.0-or-later host is the same case as today's moq crates.
+- `NOTICE` gains a "Vendored third-party code" section naming `native/vendor/moq-webrtc`, its licence and copyright holder.
+- Task K2's check verifies the licence files against the upstream root, the manifest against D5's table, and every modified file's header.
+
+## D7. What MoQ readers gain, and what they do not
+
+Gain, when the publisher answers PLIs:
+
+- Groups of a WHIP-origin video track last about the period. A late MoQ joiner decodes from the cached keyframe at once, as today, and catches up through about one period of deltas instead of the whole session.
+- A player-shaped reader with a latency window finds a fresh group within about the period. Whether this fixes claim 1's exporter failures is recorded, not gated (H3).
+- After loss on the publisher's uplink, the loss cause asks at once, subject to the floor.
+- Readers whose join reaches the edge (in-process, and the relay's first upstream subscription) get a keyframe on a late join, subject to the ratio and the floor.
 
 Not gained:
 
-- A MoQ reader cannot ask for a keyframe. MoQ over QUIC does not lose frames inside a group, and a reader that falls behind skips to the next group boundary, which the period bounds. There is no per-reader PLI.
-- On lite-06 a join at the relay sends nothing to the edge; only the period helps those readers.
-- MoQ-origin broadcasts are unchanged. A WHEP viewer of a native MoQ publisher still waits for that publisher's own next keyframe (2 s GOP by default). Forwarding to it needs `Subscriber::refresh()` on `main` (D7).
-- The edge still drops nothing after loss: deltas after a gap are forwarded until the requested keyframe arrives. Holding them back would make a short freeze instead of a short corruption, and changes upstream behaviour more. Not in this change.
-- Group boundaries still follow keyframes only. A resolution change still starts a new rendition for H.264, VP9 and AV1 (claim 1).
+- No per-reader keyframe request for MoQ readers. A reader that falls behind skips to the next group boundary.
+- Later joins at the relay on lite-06 send nothing to the edge (D2).
+- MoQ-origin broadcasts are unchanged. A WHEP viewer of a native MoQ publisher still waits for that publisher's next keyframe.
+- Deltas after loss are still forwarded until the keyframe arrives, which can show corruption briefly (ASK 5: keep forwarding).
+- A publisher that ignores PLI gets no shorter groups. The edge asks; it cannot compel.
 
-## D7. Upstream PR shape, and when the carried patch is dropped
+## D8. Upstream PR, and when the carry is dropped (owner: ASK 1)
 
-The upstream PR targets `main`, which has moved past the pin (session loop restructured; `Refresh { ratio, interval }`; `Demand::poll_refresh`; public `Subscriber::refresh()`). It is a port, not the carried diff:
+The upstream PR targets `main`, which has moved past the pin. It is a port, not the carried diff:
 
-1. `feat(webrtc): a WHIP ingest asks for keyframes on refresh, on a period, and after loss`. `whip::Request::keyframes` as in D2, but the join cause waits on `Demand::poll_refresh`, and video tracks carry `Refresh { ratio, interval: Some(min_interval) }`, so the per-hop floor is moq-net's own.
-2. `feat(webrtc): a WHEP egress turns a viewer's PLI/FIR into a refresh`. The egress calls `Subscriber::refresh()` on the video track it serves. That reaches a WHIP ingest in-process, any publisher that honours refresh (moq-video), and any hop whose wire carries refresh. The optional `whep::Request::keyframes: Option<Requester>` stays in the PR as the out-of-band route for an embedder whose path does not carry refresh (lite-06 through a relay, as here).
-3. PR body per upstream `CONTRIBUTING.md` (Problem, Approach, Impact, Alternatives, Follow-ups; `just ci` before push). The Problem section leads with the browser publisher that has no GOP schedule (claim 1 numbers), since #3256 rejected tune-in PLI for encoders that have one.
+1. `feat(webrtc): a WHIP ingest asks for keyframes on refresh, on a period, and after loss`, with one cooldown per line covering every PLI. On `main` the join cause waits on `Demand::poll_refresh`, and video tracks carry `Refresh { ratio, interval: Some(floor) }`.
+2. `feat(webrtc): a WHEP egress turns a viewer's PLI/FIR into a refresh`. Egress calls `Subscriber::refresh()` on the track it serves. The optional `Requester` stays in the PR as the out-of-band route for a path that does not carry refresh.
+3. The PR body follows upstream `CONTRIBUTING.md` (Problem, Approach, Impact, Alternatives, Follow-ups). The Problem section leads with the browser publisher that has no GOP schedule, since #3256 rejected tune-in PLI for encoders that have one. It includes the measured cost from task F (method, fixture, numbers, how to reproduce), as the owner asked.
 
-Drop condition, recorded in `VENDOR.md` and the bead: **the moq pin moves past the merge of part 1, and either part 2's `Requester` merged, or the edge's WHEP for a same-edge source carries refresh (lite-07 final default, or in-process play).** Then delete `native/vendor/moq-webrtc`, the `[patch]` lines, and the `NOTICE` section. The pin move itself rides the coordinated move the E2EE work already plans (plan risk 3); this node does not move it.
+**Who does what.** The builder prepares a local port and keeps it in this repository: a patch series against a named upstream `main` commit under `openspec/changes/add-edge-keyframes/upstream/`, the `just ci` output, and `pr-draft.md`. Pushing to the `WorldTreeNetwork/moq` fork and opening the PR are reserved to Duke or a submitter he names, at all times. No builder pushes to any fork or opens anything upstream, whatever else has been decided.
 
-If upstream declines part 2's `Requester`, the carried patch shrinks to that one handle until the wire carries refresh. If upstream declines part 1, the patch stays whole and the bead says so; the steer decision (carry until it lands) then needs revisiting, which is an ASK at that time, not now.
+**Drop condition** (in `VENDOR.md` and the tracking bead): the moq pin moves past the merge of part 1, and either part 2's `Requester` merged or the edge's WHEP of a same-edge source carries refresh. Then the same behaviour tests run against the new pin, and only if they pass are `native/vendor/moq-webrtc`, the `[patch]` lines and the `NOTICE` section deleted. The pin move rides the coordinated move the E2EE work plans (plan risk 3).
 
-## D8. Acceptance: a before/after contrast on the spike's own harness
+## D9. Acceptance: crate behaviour is the requirement; timings are local targets
 
-The harness is `add-webrtc-edge/spikes/` (in-process `moq-relay` with the Mjolnir decider, the spike edge, Playwright Chromium, `harness raw` and `harness export`, `lossy.py`, `analyze.py`), copied to `openspec/changes/add-edge-keyframes/harness/` and extended:
+The SHALLs in `specs/webrtc-edge/spec.md` are crate and pairing behaviour, tested deterministically (gate, causes, pairing, carry). Timings and encoder outcomes depend on the browser, the encoder, buffering and the fixture, so they are **named local acceptance targets** on this harness, not requirements.
 
-- the WHEP page timestamps the first decoded frame with `requestVideoFrameCallback` against the `POST` start, and samples `inbound-rtp` `pliCount`, `firCount`, `freezeCount`, `totalFreezesDuration`;
-- the publisher page samples `outbound-rtp` `keyFramesEncoded`, `pliCount`, `bytesSent` every second;
-- `harness raw` prints the wall time of subscribe, of the first decodable frame, and the media-time lag of that frame behind the newest frame;
-- `lossy.py` gains a burst mode (drop everything for a set time, once);
-- a moving 720p Y4M fixture beside the two-colour one (colour check unchanged on its two halves);
-- a small str0m WHEP client that sends a PLI every 50 ms (the storm).
+The harness is `add-webrtc-edge/spikes/`, copied to `harness/` and extended (task H0):
 
-| # | Measure | Setup | Before (captured first) | After |
-|---|---|---|---|---|
-| A | WHEP join → first decoded frame of a WHIP-origin broadcast | Chromium WHIP (H.264, VP8), cap 2.5 Mbit/s; a Chromium WHEP viewer joins 10 s after publish; 10 joins each | measured | median ≤ 2.0 s, max ≤ 2.5 s |
-| B | MoQ late joiner: subscribe → first decodable frame, and that frame's lag behind live | as A; `harness raw` joins at 10 s, 10 joins | measured (claim 1 erin: about 7 s of backlog) | first frame ≤ 1.0 s; lag ≤ 2.2 s |
-| C | Player-shaped MoQ late join (moq-mux exporter) | VP8 uncapped, VP9, AV1 | claim 1: nothing | recorded; content-ok expected, not gated (H3) |
-| D1 | Recovery after a 1.5 s blackout on the WHEP leg | lossy proxy in path, burst at t = 10 s | measured | end of burst → next decoded frame ≤ 1.2 s; publisher `pliCount` rises |
-| D2 | Recovery after a 1.5 s blackout on the WHIP leg | burst toward the edge | measured | MoQ reader's next keyframe ≤ 1.2 s after the burst |
-| E | Storm bound | storm client on WHEP for 20 s | — | publisher `keyFramesEncoded` rises by ≤ 21 plus resolution changes; WHIP session not `RateLimited` |
-| F | Keyframe cost | moving fixture, cap 2.5; period off, 2 s, and the E storm | — | recorded: keyframe share of video bytes and mean keyframe/delta size ratio |
+- the edge logs every PLI it sends: line, rid, cause tags, monotonic time, and whether str0m accepted it; and every requester call with its `Requested` result;
+- the edge logs every ingested video frame: line, keyframe or not, bytes, codec, resolution, media time, arrival time; actual fps is derived from it;
+- a moving 720p Y4M fixture with a burned-in frame counter (so a decoded frame can be matched to its source frame, and fresh post-burst content can be told from buffered content), beside the two-colour fixture;
+- the WHEP page timestamps the first presented frame with `requestVideoFrameCallback` against the `POST` start, and reads the frame counter;
+- `harness raw` decodes the video it receives (not only the container) and prints subscribe time, first decodable frame time, and that frame's media time;
+- `lossy.py --burst` with a start time and a length, logging burst end on the same clock as the edge;
+- a str0m WHEP client that sends PLI on a schedule (the storm), one or several at once.
 
-Thresholds come from the goal ("within about two seconds") and the gate (1 s plus a localhost round trip and encode). Runs are on the Mac, as in the spike; Linux repeats belong to the scale node (`mjolnir-rurh.7`).
+| # | Measure | Target on this fixture |
+|---|---|---|
+| A | WHEP `POST` → first presented frame of a WHIP-origin broadcast, per codec (H.264, VP8), 10 joins at varied phase against the period | median ≤ 2.0 s, max ≤ 2.5 s |
+| B | MoQ late join: subscribe → first decodable frame; and its lag: that frame's media time against the newest media time the edge ingested at the same wall time (same track timebase) | first ≤ 1.0 s; lag ≤ 2.2 s |
+| C | Player-shaped MoQ late join (moq-mux exporter), VP8 uncapped, VP9, AV1 | recorded only (H3) |
+| D1 | 1.5 s blackout toward the WHEP viewer, burst at varied phase: burst end → first presented frame whose counter is after the burst; the cause-tagged viewer PLI in the edge log | ≤ 1.2 s, and a viewer-cause PLI sent |
+| D2 | 1.5 s blackout toward the edge: burst end → the MoQ reader's first keyframe with a counter after the burst; the loss-cause PLI in the edge log | ≤ 1.2 s, and a loss-cause PLI sent |
+| E | Storm, one viewer and then four: spacing of actual PLIs sent, causes, held-request count, `Requested` results; natural keyframes, resolution changes and `RateLimited` recorded separately | every gap between sent PLIs ≥ 1 s on the monotonic clock; held requests ≤ 1 per line; the encoder's answer recorded, not gated |
+| F | Cost, on identical moving input and cap 2.5 Mbit/s: policy off, period 2 s, and saturated 1 s feedback (E's storm) | recorded (below) |
+
+An already-fast baseline is a result, not a blocker: if a "before" number already meets its target, the "after" must still show the cause working (the cause-tagged PLI and the fresh content), and the finding says the baseline was fast. Buffered playout, NACK recovery and the period can each improve A and D1 without the viewer path working, which is why D1 needs the viewer-cause PLI and post-burst content, not just the time.
+
+**Cost (task F) reports two different things.**
+
+- **Keyframe byte share**: keyframe bytes over all video bytes, per run, from the per-frame ingest log; with mean keyframe and delta sizes, codec, fps, resolution and observed bitrate.
+- **Incremental cost of the policy**: the difference between policy runs and the policy-off run on the same input and cap. Under a cap the bitrate stays near the cap, so the cost is quality: PSNR (and SSIM if available) of decoded frames against the source fixture, aligned by the frame counter. If alignment fails, the quality cost is reported as unmeasured, explicitly.
+- Meter closures (`RateLimited`) are recorded per run.
+
+D1's earlier estimate (5 to 12 % at a 2 s period from an assumed keyframe/delta ratio) was an estimate of incremental bytes against a delta-only stream. It is kept only as hypothesis H2, to be compared with F's measurement. A pass on this fixture buys a default for this operating point, not a promise for every encoder.
+
+Runs are on the Mac, as in the spike. Linux scale belongs to `mjolnir-rurh.7`.
 
 ## Unverified hypotheses
 
-- **H1** `refresh-join-signal`: at the pin, a new in-process subscriber on a video track with `Info::refresh = Some(4)` whose newest group is over the ratio moves `Demand::wanted` past the largest group, and the relay's first subscription to the edge does the same. Confidence medium (read from `track.rs:1190-1234`, `8438-8443`; not run). Verification: task P4's unit test and an edge log line in task B. Synthesis: none; source reading in this design.
-- **H2** `keyframe-ratio`: at 720p and 2.25 Mbit/s, a Chromium keyframe is 4 to 8 times a mean delta frame for camera-like content. Confidence low (general knowledge, not measured here). Verification: task F. If the ratio is far outside, D1's cost numbers and the ratio-4 choice are revisited before fold.
-- **H3** `exporter-fix`: the claim 1 exporter failures on late joins are caused by unbounded groups. Confidence low (cause not isolated in the spike). Verification: task C. If not fixed, a bead for the edge's playback check (finding item 8), not a blocker here.
-- **H4** `vendored-unify`: a `[patch]` path crate whose manifest names `moq-net` and the other moq crates from `git = moq-dev/moq, rev = 4a6f52248` unifies with the consumer's own moq crates, giving one `moq-net` in the graph. Confidence high (Cargo patch semantics) but not run. Verification: task C4 (`cargo tree -d` shows no second `moq-net`).
+- **H1** `refresh-join-signal`: at the pin, a new in-process cursor on a video track with `Info::refresh = Some(4)` whose newest group is over the ratio moves `Demand::wanted` past the largest group; so does the relay's first upstream subscription; a later relay-side join on lite-06 does not. Confidence medium (source reading, not run). Verification: task P4 (in-process unit test) and task B's edge trace (relay first subscription and later join, separately).
+- **H2** `keyframe-ratio`: at 720p and 2.25 Mbit/s, a Chromium keyframe is 4 to 8 times a mean delta frame on moving content, and a 2 s period costs about 5 to 12 % in delta-only-equivalent bytes. Confidence low. Verification: task F, before the defaults are adopted or handed to `.13`.
+- **H3** `exporter-fix`: claim 1's exporter failures on late joins come from unbounded groups. Confidence low. Verification: task C, observational.
+- **H4** `vendored-unify`: the consumer with the `[patch]` line builds on macOS and Linux with one `moq-net` and every other moq crate from the pinned git source. Confidence high for resolution (the review resolved it offline), unverified for compilation. Verification: task K1, first.
