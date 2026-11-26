@@ -28,19 +28,20 @@ With the policy enabled, a negotiated WHIP video line sends its publisher a PLI 
 | Step (pinned) | a timeline step waits for a keyframe | as pinned |
 | Period | the line has gone `period` since its last keyframe, or since its last PLI if that is later | 2 s |
 | Join | the track's `Demand::wanted` moves past the largest group written | refresh ratio 4 |
-| Loss | a non-keyframe video frame arrives with `contiguous == false` | on |
+| Loss | a non-keyframe video frame arrives with `contiguous == false`; the cause only requests, and the pinned admission decision (`IngestOrder`, `session.rs:296-305`) still decides whether that frame is forwarded | on |
 | Viewer | a paired WHEP session forwards a viewer's PLI or FIR (D3) | on |
 
 The settings are **provisional**. They are trial values until tasks F and E have run on moving input; the owner approved trying them and adopting them after measurement (ASK 4).
 
 **One cooldown per line.** Every actual PLI on a line, startup and step included, goes through one gate per negotiated video line:
 
-- `last_sent`: a monotonic time, set only when `request_keyframe` returned `Ok`.
+- `last_sent`: a monotonic time, advanced **only when the writer accepted the PLI**: `rtc.writer(mid)` returned a writer and its `request_keyframe` returned `Ok`. The pinned helper returns `Ok` when there is no writer at all (`session.rs:479-484`); the gate uses its own send helper that reports `Sent`, `NoWriter` or the str0m error, and only `Sent` moves `last_sent`.
 - `pending`: one bit plus a bitmask of causes, and one `deadline`. At most one held request per line, whatever the number of causes or viewers.
 - A cause at time `now` sends at once if `now ≥ last_sent + floor`. Otherwise it sets `pending` and `deadline = last_sent + floor`. A second cause while pending only adds its tag.
-- A keyframe received on the line clears `pending` and re-anchors the period.
+- A keyframe received on the line, the line's first keyframe included, clears `pending` and re-anchors the period.
 - **Unanswered request.** If no keyframe follows a PLI, the next period request is due at `max(last keyframe, last_sent) + period`. The period deadline is computed from that, never left in the past, so the timer cannot spin. Startup keeps asking at the floor while the line has no keyframe, as pinned (pinned interval and floor are both 1 s).
-- **No receiver yet.** The gate sends only to a line that negotiated PLI and has a current receive stream for the rid of the last frame seen. Before the first frame, or if str0m returns `NoReceiverSource` or `NotReceivingDirection`, the request stays pending, `last_sent` does not move, and the error is logged and counted. A keyframe request never ends a session. The pinned `?` in `request_keyframe` stays only on the pinned paths with the policy disabled.
+- **No receiver yet, or the writer refused.** The gate sends only to a line that negotiated PLI and has a current receive stream for the rid of the last frame seen. Before the first frame, or on `NoWriter`, `NoReceiverSource` or `NotReceivingDirection`, the request stays pending, `last_sent` does not move, and the event is logged and counted. The expired deadline is then **disarmed**: the line's timer is not re-armed at a time in the past. It is re-armed only by a receive-stream transition on that line (its first frame, or a frame on a new rid), which retries at once if the floor allows, or by a strictly future deadline from another cause (period, viewer). A first keyframe cancels the held request; a first eligible delta, which proves a receive stream, may release it. A keyframe request never ends a session. The pinned `?` in `request_keyframe` stays only on the pinned paths with the policy disabled.
+- **Durations are validated.** `floor` defaults to 1 s explicitly, not to a derived zero. `whip::accept` refuses an enabled policy whose `floor` or `period` is zero (`Error::InvalidKeyframes`), so no configuration can spin a timer.
 - **Policy disabled** (the crate default): the two pinned paths behave exactly as at the pin, with their own repeats and their own error handling. No gate, no timer, no demand watch.
 
 **Bounded before enqueue.** Requests from outside the session (D3) arrive through a per-session flag plus a wakeup, not a growing queue. Setting the flag twice is the same as once. The session drains it into the line's gate. Memory per session is constant in the number of viewers and requests.
@@ -62,70 +63,93 @@ The settings are **provisional**. They are trial values until tasks F and E have
 - **Trigger.** The join cause fires when the line's track's `Demand::wanted` becomes `Some(n)` with `n` greater than the largest group written. Nothing else in demand fires it: not a reader count going from zero to one, not a `wanted` at or below the largest group.
 - **Empty track.** A track with no group yet asks for group 0 (`track.rs:5906-5913`). That is not a join request: the startup cause already covers a line with no keyframe. The demand observer's first reading at session start is taken as the baseline and never fires.
 - **First reader.** A first reader is judged by the ratio like any later one (`track.rs:1190-1214`). There is no first-reader exception. Under the ratio, a first join causes no PLI.
-- **The relay.** At the edge, the relay is one reader. Its first upstream subscription opens a cursor in the edge's process, which moq-net judges by the ratio. Later joins at the relay, while that subscription stays open, are judged at the relay's copy. On lite-06 that copy has no refresh ratio (it is not on the wire), so those joins send nothing to the edge. If the last relay reader leaves and the relay drops its upstream subscription, the next reader opens a new one, which is judged again at the edge. Task P4 traces the first relay subscription and a later relay-side join separately.
+- **The relay.** At the edge, the relay is one reader. Its first upstream subscription opens a cursor in the edge's process, which moq-net judges by the ratio. Later joins at the relay, while that subscription stays open, are judged at the relay's copy. On lite-06 that copy has no refresh ratio (it is not on the wire), so those joins send nothing to the edge. If the last relay reader leaves and the relay drops its upstream subscription, the next reader opens a new one, which is judged again at the edge. Task B traces the first relay subscription and a later relay-side join separately over a real hop, and records the negotiated wire version; task P4 covers the in-process cases deterministically.
 - Neither case escapes the line's gate.
 
-## D3. The viewer path: bound to one source line and one live WHIP instance
+## D3. The viewer path: feedback only from media proven to come from the paired WHIP session
 
-At the pin, egress cannot ask through MoQ: `Subscriber::join` is `pub(crate)` (`track.rs:10882-10895`), and on lite-06 through the relay it would go nowhere. So the crate exposes a requester and the embedder pairs sessions.
+At the pin, egress cannot ask through MoQ: `Subscriber::join` is `pub(crate)` (`track.rs:10882-10895`), and on lite-06 through the relay it would go nowhere. So the crate exposes a requester and the embedder pairs sessions. A requester handle alone proves which WHIP session receives a call. It does not prove which session supplied the media the viewer is playing: `whep::accept` resolves its source separately (`server/whep.rs:163`, `resolve` at `226-239`, `follow(path, None)`), and two WHIP generations can be live at once under the same root, path and track name (the pinned replacement test keeps the old session open, `server/whip.rs:345-362`). So feedback is bound to the served media, and fails closed when that binding cannot be proven.
+
+**What binding exists at `4a6f522`.**
+
+- `moq_net::Instance` "names one continuous stream at a path" (`instance.rs:5-17`). A WHIP route's instance is created with the route (`origin.rs:3229-3238`, read by `whip::accept` as `route.instance()`).
+- `origin::Consumer::follow(path, instance)` and `request(path, instance)` take an instance and pin the stream to it (`origin.rs:8076-8084`, `8142-8151`; `RouteInfo::instance`, `origin.rs:594`: "Pass it to `Consumer::request` to pin this stream").
+- **The instance is carried only in process.** Announcements carry their instance only from lite-07 (`lite/version.rs:348-356`); on lite-06 and earlier "the receiving session mints an instance for each announcement" (`Instance::minted`, `instance.rs:35-41`). So a WHEP that reads through the relay on the default wire sees a minted instance that cannot be tied to any WHIP generation. A catalog's optional rendition instance (`Target::instance`, `egress.rs:293-304`) is set by the publisher of the catalog, and the WHIP ingest's catalog does not set it.
+- **Therefore the only trusted binding at the pin is in-process:** the edge resolves the WHEP source from the WHIP session's own origin, pinned to that session's route instance. Every other path gets no feedback. This change does not promise a binding through the relay; that needs lite-07 instance carriage or `Subscriber::refresh()` on `main` (D8).
 
 **Crate side.**
 
-- Each accepted WHIP session creates its own fresh receiver (the flag and wakeup of D1) and a `Requester` that holds only a weak reference to it. The receiver lives in the session's run loop. It is dropped when the run ends: peer DELETE, disconnect, ICE timeout, error, token expiry, or cancellation by the embedder. That happens before and regardless of the broadcast's linger (`Session::finish`, `session.rs:182-191`), so a lingering broadcast takes no feedback.
-- `Response::keyframes() -> Option<Requester>`: `Some` for a WHIP response, `None` for a WHEP response (the type is shared).
-- `Requester::request(track: &str, instance: Option<moq_net::Instance>) -> Requested`, where `Requested` is `Sent`, `Coalesced`, `Retired` (the session ended), or `Ignored(reason)` (reasons: `Disabled` when the policy is off, `Ambiguous`, `WrongTrack`, `WrongInstance`). It never blocks and never fails the caller.
-- **One unambiguous video line.** A WHIP session honours a viewer request only while it has exactly one negotiated video line with PLI. With zero or several, the request is `Ignored(Ambiguous)` and counted. This is the supported pairing: one camera per WHIP session, which is what the spike and the plan use. Simulcast layers on that line are one line (str0m `rid`); the PLI goes to the rid of the last frame seen.
-- **Track and instance check.** The request names the MoQ track the viewer is being served. The WHIP session accepts it only if that track is one of its own video tracks (any rendition its line has created, since H.264, VP9 and AV1 make a new rendition per resolution) and, when the egress knows its source instance (`Target::instance`), only if it is this session's route instance (`server/whip.rs` `route.instance()`). Otherwise `Ignored(WrongTrack)` or `Ignored(WrongInstance)`.
-- `whep::Request::keyframes: Option<Requester>`. On `Event::KeyframeRequest` (PLI or FIR) whose mid is the egress's video line and which is serving a video rendition, egress calls `request(target.track, target.instance)`. Audio-line requests and requests before a rendition is served are dropped and counted. Without a requester it logs as today.
-
-**Address reuse.** A publisher address is (verified root, broadcast path). When a new WHIP session takes an address, it has a new receiver. An old viewer's `Requester` still points at the old receiver: once the old session ends, `request()` returns `Retired`, and it can never reach the new session. A pinned test already shows a stale viewer stays on the old instance (`server/whip.rs` `a_reconnect_replaces_the_stale_session`). A weak pointer to a table slot would not have this property; that is why the handle points at the session's own receiver.
+- Each accepted WHIP session creates its own fresh receiver (the flag and wakeup of D1) and a `Requester` holding only a weak reference to it. The receiver lives in the session's run loop and is dropped when the run ends: peer DELETE, disconnect, ICE timeout, error, token expiry, or cancellation by the embedder. That happens regardless of the broadcast's linger (`Session::finish`, `session.rs:184`), so a lingering broadcast takes no feedback.
+- `Response::keyframes() -> Option<Requester>`: `Some` for a WHIP response, `None` for a WHEP response (the type is shared). `Requester::instance()` returns the WHIP route instance.
+- `whep::Request` gains `pub source: Option<moq_net::Instance>`. When `Some`, `resolve` calls `follow(path, Some(instance))` instead of `follow(path, None)`, so the egress source is that stream or nothing. It also gains `pub keyframes: Option<Requester>`.
+- **Egress eligibility.** On `Event::KeyframeRequest` (PLI or FIR) on its video line, egress forwards only when all hold: the request carried both a `source` instance and a requester, and the requester's instance equals it; the line is serving a video rendition whose `Target.path` resolves to the requested broadcast itself (no cross-broadcast reference, `egress.rs:307-323`); and the rendition's catalog instance is absent or equal to the pinned instance. The check is repeated whenever the egress moves to another rendition. Anything else is `Ignored(Unbound)` at the egress, counted, and nothing reaches any publisher. Audio-line requests and requests before a rendition is served are dropped and counted.
+- `Requester::request(track: &str, instance: &moq_net::Instance) -> Requested`, where `Requested` is `Sent`, `Coalesced`, `Retired` (the session ended), or `Ignored(reason)` (`Disabled` when the policy is off, `Ambiguous`, `WrongTrack`, `WrongInstance`). The WHIP session checks again on receipt: the instance must be its own route instance, the track one of its own video tracks (any rendition its line created, since H.264, VP9 and AV1 make one per resolution), and it must have exactly one negotiated video line with PLI. It never blocks and never fails the caller.
+- **One unambiguous video line.** With zero or several negotiated video lines, the request is `Ignored(Ambiguous)`. This is the supported pairing: one camera per WHIP session, as in the spike and the plan. Simulcast layers on that line are one line; the PLI goes to the rid of the last frame seen.
 
 **Embedder side (harness edge here, `mjolnir-rtc` in node `.13`).**
 
-- Verify the token and match the operation's path grant first, exactly as the spike edge does for both legs (`edge.rs:58`, `98`). Pairing never happens for a request that failed either check.
-- Key the table by (full verified root, canonical root-relative broadcast path). Each entry holds a generation id (the WHIP resource id) and that session's `Requester`.
-- On WHIP accept, insert or replace the entry. On WHIP end, remove the entry only if its generation is still the finishing session's. A late cleanup of a replaced session cannot remove the replacement.
-- On WHEP accept, look up the same key and pass the requester. A broadcast with no WHIP session on this edge gets `None`.
-- Feedback is tied to the lifetime of that WHEP play: when the WHEP session ends, its copy of the requester is dropped.
+- Verify the token and match the operation's path grant first, as the spike edge does for both legs (`edge.rs:58`, `98`). Pairing never happens for a request that failed either check.
+- Key the table by (full verified root, canonical root-relative broadcast path). Each entry holds, read and written under one lock: the generation id (the WHIP resource id), that session's `Requester`, its route instance, and an in-process consumer of the origin the WHIP session publishes into (the spike edge spawns one origin per WHIP session, `edge.rs:110-128`).
+- On WHIP accept, insert or replace the entry. On WHIP end, remove it only if its generation is still the finishing session's, so a late cleanup cannot remove a replacement.
+- **On WHEP accept with an entry:** take generation, requester, instance and consumer in one read, then call `whep::accept` with that consumer, `source: Some(instance)` and the requester. The viewer is then playing exactly that generation or nothing. This removes the race between lookup and resolution: if S2 replaces S1 after the read, the viewer still resolves S1 by its pinned instance and S1 receives its feedback, which is correct because S1 is what it plays.
+- **If pinned resolution fails** (S1 ended between the read and the resolve, or the catalog did not appear), the edge plays the broadcast through the relay with `source: None` and no requester. The viewer gets media and the periodic cadence, and no feedback. This is the fail-closed path, and it is counted.
+- **Without an entry**, the WHEP plays through the relay as in the spike, with no requester.
+- **Replacement versus retirement.** Replacing S1 with S2 does not retire S1's feedback: viewers already bound to S1 still play S1 and still reach it, until S1's session ends, after which their calls return `Retired`. New viewers bind to S2.
+- **Consequence for `.13`.** A WHEP of a same-edge WHIP source plays from the edge's own process, not through the relay. The edge has already checked the token and the subscribe grant, the same checks the relay applies, and its expiry timer ends the play at `exp`. But the relay does not see that leg, so per-owner metering (`mjolnir-rurh.4`) must count edge-local plays at the edge. This is recorded in the handoff to `.13`.
 
-Tests (P6, D3 in `tasks.md`): two active rooms with the same broadcast path, each with a publisher and a viewer, with dispatch counters per session showing each viewer reaches only its own publisher (positive and negative in the same run); a stale viewer after the publisher is replaced gets `Retired` and the new publisher's counter does not move; a late cleanup from the prior session leaves the replacement's entry in place.
+Tests (P6, P6b, D3a–D3e in `tasks.md`):
+
+- replacement **during** WHEP source resolution, with S1 and S2 both live, identical track names and no catalog instance: the viewer's requests reach only the generation whose media it plays, the other publisher's counter does not move, and a forced resolution failure takes the fail-closed path with neither publisher receiving anything;
+- a sibling catalog reference with the same track name: `Ignored(Unbound)` and no PLI anywhere;
+- a positive forwarding case with the WHIP publisher on the default wire to the relay (lite-06), so the binding does not silently disable the feature;
+- two active rooms with the same broadcast path, positive and negative in the same run;
+- a viewer bound to S1 while S2 replaced it: still reaches S1 while S1 lives (replacement), `Retired` once S1 ends (retirement), and never reaches S2;
+- a late cleanup from S1 leaves S2's entry in place.
 
 ## D4. Patch surface: one crate, additive, defaults unchanged
 
 ```rust
 // moq_webrtc::keyframe (new module, re-exported)
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Keyframes {
     /// `false` (default): the pinned behaviour, no gate, no new causes.
     pub enabled: bool,
-    /// Period cause. `None`: off.
+    /// Period cause. `None` (default): off. `Some(ZERO)` is refused when enabled.
     pub period: Option<Duration>,
-    /// Join cause: `track::Info::refresh` on video tracks. `None`: off.
+    /// Join cause: `track::Info::refresh` on video tracks. `None` (default): off.
     pub refresh: Option<u32>,
-    /// Loss cause.
+    /// Loss cause. `false` (default): off.
     pub on_loss: bool,
-    /// The one cooldown per line for every PLI while enabled. Default 1 s.
+    /// The one cooldown per line for every PLI while enabled. Zero is refused when enabled.
     pub floor: Duration,
 }
 
+impl Default for Keyframes {
+    // Written by hand: a derived Default would make `floor` zero.
+    fn default() -> Self {
+        Self { enabled: false, period: None, refresh: None, on_loss: false, floor: Duration::from_secs(1) }
+    }
+}
+
 #[derive(Clone)]
-pub struct Requester { /* Weak reference to one WHIP session's receiver */ }
+pub struct Requester { /* Weak reference to one WHIP session's receiver, plus its route instance */ }
 pub enum Requested { Sent, Coalesced, Retired, Ignored(Ignored) }
+pub enum Ignored { Disabled, Ambiguous, WrongTrack, WrongInstance, Unbound }
 ```
 
-- `whip::Request` gains `pub keyframes: Keyframes`. `Request` is `#[non_exhaustive]` (`server/whip.rs:96`), so the field is additive, and `Request::new` keeps today's behaviour.
+- `whip::Request` gains `pub keyframes: Keyframes`. `Request` is `#[non_exhaustive]` (`server/whip.rs:96`), so the field is additive, and `Request::new` keeps today's behaviour. `whip::accept` returns `Error::InvalidKeyframes` for an enabled policy with a zero `floor` or `period`.
 - `Response` gains `pub fn keyframes(&self) -> Option<Requester>` (additive; `Response` has a private field).
-- `whep::Request` gains `pub keyframes: Option<Requester>` (`#[non_exhaustive]`, `server/whep.rs:110`).
-- Inside: `DeferredVideo::new` (`codec/mod.rs:146-155`) adds `.with_refresh(r)` to the `track_info` it builds and keeps the track's `Demand`. `MediaSink` gains a defaulted method returning the video lines' demands and track names (additive). `Session::run_loop` gains one `select!` arm: the earliest of a period deadline, a gate deadline, a demand change, or the requester wakeup. The gate is a pure struct beside `IngestOrder`, tested the same way (`session.rs:950-991`). Both pinned call sites route through the gate when enabled.
+- `whep::Request` gains `pub source: Option<moq_net::Instance>` (pins `resolve`'s `follow`) and `pub keyframes: Option<Requester>` (`#[non_exhaustive]`, `server/whep.rs:110`). Both default to `None`, which is the pinned behaviour.
+- Inside: `DeferredVideo::new` (`codec/mod.rs:146-155`) adds `.with_refresh(r)` to the `track_info` it builds and keeps the track's `Demand`. `MediaSink` gains a defaulted method returning the video lines' demands and track names (additive). `Session::run_loop` gains one `select!` arm: the earliest armed deadline (period or gate; a disarmed line contributes none), a demand change, or the requester wakeup. The gate is a pure struct beside `IngestOrder`, tested the same way (`session.rs:950-991`). Both pinned call sites route through the gate when enabled. The egress keeps its pinned instance and re-checks eligibility on each rendition change.
 - PLI only toward the publisher, as the pinned `request_keyframe` sends (`session.rs:474-485`).
 - Not on `moq_mux::Ingest`: that struct is shared by RTMP, SRT and RTSP (`moq-mux/src/ingest.rs:5-9`), and WebRTC-only knobs there would make the patch two crates.
 - The WHEP client (`client::whep`) also runs an ingest session. It keeps the policy disabled.
 
 ## D5. Carrying: a vendored copy of the one crate, patched in one workspace (owner: ASK 3)
 
-**Feasibility first.** Before any harness or patch work, task K1 builds a scratch consumer against the pristine vendored crate on macOS and on Linux and checks package ids. The review's scratch resolution found the consumer selects local `moq-webrtc 0.3.12` and one `moq-net 0.3.10` from the exact git source and rev, but nothing was compiled and no other platform was tried.
+**Feasibility first.** Before any harness or patch work, task K1 has two separate subjects, each on macOS and on Linux: (a) it builds a scratch copy of the spike **consumer** with the `[patch]` line pointing at the pristine vendored crate, its `mjolnir-relay` path dependency rewritten to this checkout's `native/mjolnir_relay`, and checks package ids; (b) it runs the **vendored crate's own tests** in the vendored crate's workspace. The review's scratch resolution found the consumer selects local `moq-webrtc 0.3.12` and one `moq-net 0.3.10` from the exact git source and rev, but nothing was compiled and no other platform was tried.
 
 **Layout.**
 
@@ -211,15 +235,23 @@ The upstream PR targets `main`, which has moved past the pin. It is a port, not 
 
 The SHALLs in `specs/webrtc-edge/spec.md` are crate and pairing behaviour, tested deterministically (gate, causes, pairing, carry). Timings and encoder outcomes depend on the browser, the encoder, buffering and the fixture, so they are **named local acceptance targets** on this harness, not requirements.
 
-The harness is `add-webrtc-edge/spikes/`, copied to `harness/` and extended (task H0):
+The harness is `add-webrtc-edge/spikes/`, copied to `harness/` and extended. Its observations come in two kinds, so the before and after runs measure the same things:
 
-- the edge logs every PLI it sends: line, rid, cause tags, monotonic time, and whether str0m accepted it; and every requester call with its `Requested` result;
-- the edge logs every ingested video frame: line, keyframe or not, bytes, codec, resolution, media time, arrival time; actual fps is derived from it;
+**Common observations** (task H0; available on the unpatched pin and the patched build alike, used for every before/after comparison):
+
+- a measurement-only in-process MoQ reader in the harness edge, subscribed to each WHIP broadcast the edge publishes, logging every video frame: track, group start (a keyframe, by the protocol invariant), payload bytes, media time, wall time; codec and resolution from the catalog; actual fps derived from it. **This is the one byte-counting boundary for every cost run**: MoQ frame payload bytes as the ingest published them, counted by this probe. The probe subscribes when the WHIP route is announced, before the first frame, so by D2 its own join never requests (an empty track's group-0 demand is not a join); each later subscription, the relay's included, still opens its own cursor and is judged by the ratio on its own;
+- publisher-side and viewer-side RTCP stats from the browser pages every second (`outbound-rtp` `keyFramesEncoded`, `pliCount`, `firCount`, `bytesSent`, resolution, fps; `inbound-rtp` `pliCount`, `firCount`, `freezeCount`, `totalFreezesDuration`), so PLIs the publisher received are visible without patched code;
 - a moving 720p Y4M fixture with a burned-in frame counter (so a decoded frame can be matched to its source frame, and fresh post-burst content can be told from buffered content), beside the two-colour fixture;
 - the WHEP page timestamps the first presented frame with `requestVideoFrameCallback` against the `POST` start, and reads the frame counter;
 - `harness raw` decodes the video it receives (not only the container) and prints subscribe time, first decodable frame time, and that frame's media time;
 - `lossy.py --burst` with a start time and a length, logging burst end on the same clock as the edge;
 - a str0m WHEP client that sends PLI on a schedule (the storm), one or several at once.
+
+**Patch-only observations** (marked unavailable on the unpatched build; self-tested in task H2 after the patch lands):
+
+- the edge's log of every PLI the gate sends: line, rid, cause tags, monotonic time, and the send result (`Sent`, `NoWriter`, str0m error);
+- every requester call with its `Requested` result, and every egress `Ignored(Unbound)`;
+- the pairing table's events (insert, replace, generation-checked remove, fail-closed fallback).
 
 | # | Measure | Target on this fixture |
 |---|---|---|
@@ -235,13 +267,16 @@ An already-fast baseline is a result, not a blocker: if a "before" number alread
 
 **Cost (task F) reports two different things.**
 
-- **Keyframe byte share**: keyframe bytes over all video bytes, per run, from the per-frame ingest log; with mean keyframe and delta sizes, codec, fps, resolution and observed bitrate.
-- **Incremental cost of the policy**: the difference between policy runs and the policy-off run on the same input and cap. Under a cap the bitrate stays near the cap, so the cost is quality: PSNR (and SSIM if available) of decoded frames against the source fixture, aligned by the frame counter. If alignment fails, the quality cost is reported as unmeasured, explicitly.
+- **Keyframe byte share**: keyframe bytes over all video bytes, per run, at the probe boundary above; with mean keyframe and delta sizes, codec, fps and resolution.
+- **Incremental cost of the policy**, against the policy-off run on the same input and cap, reported as two separate numbers: the **bitrate difference** over equal steady-state windows (same length, same offset after the first keyframe, probe bytes), and the **quality difference**: PSNR (and SSIM if available) of decoded frames against the source fixture, aligned by the frame counter. If alignment fails, the quality difference is reported as missing, and the PR names it as a missing result.
 - Meter closures (`RateLimited`) are recorded per run.
+- Neither PSNR nor a capped bitrate measures the delta-only counterfactual behind the earlier estimate; H2 is compared only through the measured keyframe/delta size ratio.
 
 D1's earlier estimate (5 to 12 % at a 2 s period from an assumed keyframe/delta ratio) was an estimate of incremental bytes against a delta-only stream. It is kept only as hypothesis H2, to be compared with F's measurement. A pass on this fixture buys a default for this operating point, not a promise for every encoder.
 
 Runs are on the Mac, as in the spike. Linux scale belongs to `mjolnir-rurh.7`.
+
+**Adoption.** The trial defaults are adopted, or revised, only after F (cost), E (storm) and the latency runs A, B, D1 and D2, as ASK 4 says. Until then they are not handed to `.13`.
 
 ## Unverified hypotheses
 
