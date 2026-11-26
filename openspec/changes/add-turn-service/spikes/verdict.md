@@ -59,11 +59,11 @@ Evidence: `spikes/evidence/advise-2026-11-25.txt`. Owner decisions that day are 
 |---|---|
 | 1 Allocation and lifetime | Proven, and the cap does not hold. 12/12 allocates on one username with the key unset (the 11th succeeded). 24/24 distinct usernames from one source. `max_allocations: 2` still allowed 4 on one username and 4 more usernames. Every lifetime request (omit, 60, 3600, 4294967295) was granted 600. `max_lifetime` is an unknown parameter; reload kept the old config and the listener. `disconnect <username>` removed 12 sessions. `disconnect` with no username is a usage error. |
 | 2 Reload and rotation | Proven. New secret allocates after reload. Removed secret: new Allocate is 401. Held allocation stayed up and `sessions` counted 2 sent packets, one of them after the secret was removed. Refresh after removal returned 438 Stale Nonce and was not retried. Malformed YAML on reload keeps 3478 listening. Malformed YAML on start does not listen. |
-| 3 Kernel filter, no 3478 exemption | Partial. Rules validate and the unit lifecycle holds inside a laptop netns. Relayed datagrams were not observed, so the drop is not proven. See the Framework section. |
+| 3 Kernel filter, no 3478 exemption | Proven for local, multicast, 10/8, 172.16/12, and 240/4, after a positive control. Broadcast not proven. Rules-before-listen refuted. ufw packet order not run. See the rerun section. |
 | 4 IPv6 refusal | Proven. Allocate with REQUESTED-ADDRESS-FAMILY returned 440 Address Family not Supported. Log: `IPv6 not supported`. No IPv6 socket on the beam. |
 | 5 Artefact, STUN, distribution, modules | Proven. Tarball above. Startup tcpdump of udp/3478 excluding the host: 0 packets. No `stun.conversations.im` line. Listens on `0.0.0.0:3478` udp and tcp, and `127.0.0.1:3470` for Erlang distribution. `-start_epmd false`. Host epmd on 4369 is not this process. `modules: {}` added no listener. The binary crashes before bind if it cannot create `$HOME/.erlang.cookie`. |
 | 6 Blacklist classes and TCP | Proven. `recommended` plus explicit `1.1.1.1`: CreatePermission 403 for `172.16.9.9`, `240.0.1.1`, `0.1.2.3`, and `1.1.1.1`. `9.9.9.9` allowed. CONNECT returned 405 Method not allowed. TCP 3478 with raw STUN allocated. A RFC 4571 length prefix got EOF. |
-| 7 Cap at 25 Mbit/s and unauthenticated flood | Partial. Amplification was measured. The 25 Mbit/s cap was not measured on the wire. See the Framework section. |
+| 7 Cap at 25 Mbit/s and unauthenticated flood | Proven. Peer 858.72 Mbit/s off, 23.99 Mbit/s on. 1000 unauthenticated Allocates left no session. See the rerun section. |
 
 Decision 3, against these numbers: keep eturnal only with a reaper, and the reaper is not optional. `max_allocations` did not enforce, 24 usernames from one source all allocated, and the lifetime grant is 600 seconds with no config key to lower it. `eturnalctl sessions` plus `eturnalctl disconnect <username>` is the working control. There is no disconnect-all.
 
@@ -100,15 +100,38 @@ The control channel was not driven into failure: an Allocate while the qdisc was
 
 Unauthenticated UDP 3478, measured: Binding 28 bytes in, 44 out, factor 1.57. Allocate 28 in, 92 out, factor 3.29. A bad password returned 401 (`0x0113`) on both Allocate rounds. `eturnalctl sessions` printed `Node is not running!` after that, so this run does not show whether a 401 leaves allocation state. The journal on the earlier bad-password attempts recorded an authentication failure and no allocation-creation line for that username. That is the limit of the state claim.
 
+## Rerun, 2026-11-25 evening
+
+Evidence: `spikes/evidence/framework-morphie-2026-11-25.txt`. The earlier `framework-2026-11-25.txt` is the run where no relayed datagram was captured. This section replaces it for spikes 3 and 7.
+
+The client is `turn_client.py` (ChannelBind, then channel data). A peer at 9.9.9.9 received the payload, and tcpdump on the egress veth showed `192.0.2.10 > 9.9.9.9` UDP. That positive control is what makes the later empty captures meaningful. The first attempts failed because the peer veth had `rp_filter=2` (Linux uses the max of `all` and the interface) and because eturnal had no writable `run/` directory.
+
+| Sub-claim | Verdict |
+|---|---|
+| Relayed datagram leaves and is received | Proven |
+| fib local drops own address, 127.0.0.1, and 10.200.0.1 (+5 pkt each, listener 0) | Proven |
+| fib multicast drops 224.0.0.251 (+5, listener 0) | Proven |
+| Prefix rules drop 10.1.2.3, 172.16.9.9, 240.0.1.1 (+5 each, listener 0) | Proven |
+| Broadcast 192.168.50.255 dropped by the kernel | Not proven. Counter stayed 0. eturnal still counted 5 sent packets. |
+| ufw active, and the same drops still happen ahead of ufw | Not run. `ufw --force enable` inside `systemd-nspawn --private-network` did not change host tables and left host ufw inactive. The drop suite was not repeated there. |
+| Rules installed before the daemon listens | Refuted for this ruleset. With the filter in ExecStartPre the beam never bound. Without it, listen in 2s. |
+| Guest 6.12.8+ can host the filter | Refuted. No NETLINK_NETFILTER. |
+| Production kernel accepts `meta skuid` | Proven, dry run only. nftables 1.0.9, kernel 6.8.0-151-generic. Tables unchanged. |
+| 25 Mbit/s cap on the wire, control channel survives | Proven. Laptop peer 858.72 Mbit/s off, 23.99 Mbit/s on (20s). Allocate 0x0103 and Refresh 0x0104 during the cap. |
+| 1000 unauthenticated Allocates leave no session | Proven. 1000 responses, type 0x0113, length 92. Session list afterwards had 6 named sessions and no anonymous one. |
+| Host firewall unchanged | Proven. Laptop nft table list identical before and after. Morphie ufw left inactive. Dead-man path not used. |
+
+Morphie cleanup is listed in the evidence file. `dummy-mjolnir` has only `10.200.0.1/32`. The Mjolnir beam pid 637 was not touched.
+
 ### What should change the design
 
 These are notes for the contract amendment. This file does not amend it.
 
-- The current guest PVH kernel cannot enforce a uid output filter. The filter has to run on a host kernel that has nft `meta skuid`.
-- The service user needs a home directory or the beam does not create `.erlang.cookie` and does not bind.
-- Readiness has to wait for the listen line. In an empty netns this build took about 35 seconds before `Listening on 0.0.0.0:3478`.
-- eturnal still refuses `0/8` with a nearly empty blacklist, and it still creates permissions for RFC1918, loopback, `240/4`, and multicast. The kernel filter remains the control for those classes, and this run did not prove that filter against relayed packets.
-- A source-port 3478 exemption was not shown to deliver a STUN reply.
-- A cgroup bandwidth limit is not available. `tc` by fwmark is the candidate, and it is not proven until relayed packets are captured and shaped.
-- Unauthenticated Allocate on this build amplifies about 3.3× (28 to 92). Binding amplifies about 1.6× (28 to 44).
+- The guest PVH kernel cannot enforce a uid output filter. Production's host kernel can: `nft -c` of `meta skuid` succeeded on 6.8.0-151-generic. The filter belongs on the host.
+- The service user needs a home for `.erlang.cookie` and a writable `run/` and `log/` under the prefix. Without `run/`, eturnal aborts before bind.
+- Installing this uid output filter before the process starts prevents the beam from binding at all. Without the filter it listened in 2 seconds. A tcp/3470 exception does not cover startup or `eturnalctl` (distribution uses more than that port). The contract has to say how the daemon becomes ready and how the operator lists sessions while the drop is installed.
+- eturnal creates permissions for RFC1918, loopback, 240/4, and multicast when the blacklist is a single unrelated address. The kernel filter drops the relayed datagrams for those classes (5 packets, 300 bytes, listener received nothing). It did not see a broadcast datagram, so the broadcast rule is still untested. eturnal counted those 5 broadcasts as sent.
+- Peer `rp_filter` must be 0 on the relay path. Linux uses the max of `all` and the interface. A value of 2 silently discards relayed packets and looks like a filter drop.
+- cgroup v2 cannot cap packet bandwidth. `tc` HTB at 25 Mbit/s on a uid fwmark, excluding UDP sport 3478, held the peer at 23.99 Mbit/s while an Allocate and a Refresh succeeded.
+- Unauthenticated Allocate amplifies about 3.3× (28 to 92) and does not create a session (1000 requests, 6 pre-existing sessions afterwards). Binding amplifies about 1.6× (28 to 44).
 

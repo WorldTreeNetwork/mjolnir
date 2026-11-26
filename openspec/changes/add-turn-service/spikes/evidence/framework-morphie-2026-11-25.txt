@@ -1,0 +1,91 @@
+Rerun of spikes 3 and 7, 2026-11-25. Host firewall path was not used on either machine. No dead-man rollback was armed because nothing was added to a host netns.
+
+Client: openspec/changes/add-turn-service/spikes/turn_client.py. Channel data after ChannelBind (method 0x009, channel 0x4000), not turnutils. Payload prefix TURNRELAY.
+
+## Positive control — proven
+
+Laptop netns, peer 9.9.9.9:50000, rp_filter set to 0 on the veth (the max of all.rp_filter and the interface value is what Linux applies; interface value 2 was dropping the relay before this). Peer file pos-peer / allow-peer: recv=5 bytes=160. tcpdump on veth-peer-ns:
+
+  192.0.2.10.56381 > 9.9.9.9.50000: UDP, length 40
+  (3 packets captured)
+
+Morphie netns, same client, after the filter was removed so the capture was not the drop case:
+
+  22:06:48.462392 IP 192.0.2.10.62136 > 9.9.9.9.50000: UDP, length 32
+  (3 packets captured)
+
+eturnal session 2000000000:g1.OwnerPos: Sent 5 packets. Blacklist was only 198.51.100.9. Relay range stayed the eturnal default 49152-65535.
+
+## Negative counters — laptop, filter loaded, 5 datagrams each
+
+Rule deltas (60 bytes on the wire = 32 byte payload + IP/UDP). Listeners recorded recv=0.
+
+| class | rule that moved | delta |
+|---|---|---|
+| 1.2.3.1 (own address) | fib daddr type local | +5 pkt / +300 B |
+| 127.0.0.1 | fib daddr type local | +5 pkt / +300 B |
+| 10.200.0.1 | fib daddr type local | +5 pkt / +300 B |
+| 224.0.0.251 | fib daddr type multicast | +5 pkt / +300 B |
+| 10.1.2.3 | ip daddr 10.0.0.0/8 | +5 pkt / +300 B |
+| 172.16.9.9 | ip daddr 172.16.0.0/12 | +5 pkt / +300 B |
+| 240.0.1.1 | ip daddr 240.0.0.0/4 | +5 pkt / +300 B |
+
+10.200.0.1 and 127.0.0.1 never reached the prefix rules; fib local matches first. 224.0.0.251 never reached 224.0.0.0/4. The 224/4 and 127/8 and 10/8 counters for those sends stayed 0.
+
+Broadcast 192.168.50.255: fib broadcast and 192.168/16 stayed 0 on the laptop and again on morphie. eturnal still recorded Sent 5 packets for user g1.Nbcast. No kernel drop was observed. Capture on dummy-lan was empty.
+
+## Startup versus the filter — refuted
+
+Morphie unit with ExecStartPre `nft -f` of the uid filter: the beam stayed in erl_child_setup and never bound 3478 (still unbound at 49s). Log from the earlier attempt in the same tree: `Aborting: Cannot create run directory run: permission denied` until `run/` was created and owned by the service user. After that directory existed, a start with the filter still did not bind. A start in the same netns with the table deleted: `Listening on 0.0.0.0:3478` in 2 seconds (22:03:18).
+
+While the filter was loaded, `eturnalctl sessions` as the service user inside the netns printed `Node is not running!`. After `nft delete table inet mjolnir_turn` in that netns only, the same command listed 6 sessions. A tcp/3470 accept is not enough for distribution.
+
+## Spike 7 — proven on the laptop peer, corroborated on morphie
+
+Mechanism: tc HTB 25mbit class 1:10, fwmark 0x25, iptables mangle OUTPUT owner match for the daemon uid, UDP sport not 3478. cgroup v2 has no packet bandwidth controller. qdisc lived in the daemon netns.
+
+Laptop peer listener, load not sampled at that moment (a later sample on that laptop was 24):
+
+  off: recv=3164768 bytes=3164768000 span=29.484 mbit=858.72
+  on:  recv=60084 bytes=60083016 span=20.033 mbit=23.99
+  class 1:10 Sent 81136430 bytes 77867 pkt
+  mangle: 77867 packets MARK uid 938 udp spt:!3478
+
+During the capped run an Allocate returned 0x0103 lifetime 600 and a Refresh returned 0x0104.
+
+Morphie, load average 1.76 at the start of the measurement and 4.10 at the end. The peer socket was already bound, so the peer file is empty. eturnal's own session counters and the qdisc:
+
+  g1.CapOff Sent 2320201 KiB (2375886 packets) with no qdisc
+  g1.CapOn  Sent 2102690 KiB (2153155 packets) offered
+  class 1:10 Sent 63400548 bytes 60846 pkt (about 25 Mbit/s over 20s)
+  g1.During Allocate 0x0103 and Refresh 0x0104 while that qdisc was installed
+
+## 401 state — proven
+
+1000 unauthenticated Allocates, filter loaded, morphie: responses=1000 timeouts=0 last_len=92 last_type=0x0113. Session list afterwards (filter removed so eturnalctl could connect): exactly 6 sessions, users OwnerPos, OwnerAllow, Nbcast, CapOff, CapOn, During. No session from the unauthenticated flood.
+
+## ufw — not proven for packet order
+
+`systemd-nspawn --private-network -D /var/tmp/ubuntu-turn ufw --force enable` printed `Firewall is active and enabled on system startup`. A second nspawn is a new netns, so that check did not repeat the drop suite. Host `nft list tables` before and after that command were identical. Host `ufw status` stayed `inactive`. The negative suite was not re-run under a live ufw.
+
+## Production kernel — read only
+
+45.76.77.97, kernel 6.8.0-151-generic, nftables v1.0.9. `nft -c -f` of a ruleset using `meta skuid`, `fib daddr type local`, and `meta nfproto ipv6` exited 0. `nft list tables` before and after: ip filter, ip nat, ip6 filter, inet f2b-table. Nothing was loaded.
+
+## Guest
+
+ubuntu-24.04 microVM on the laptop, kernel 6.12.8+, nft: `Protocol not supported` (no NETLINK_NETFILTER). The filter cannot run in that guest.
+
+## Host diffs
+
+Laptop `nft list tables` before the lab and after cleanup: the same eight tables (filter, nat, raw, mjolnir, mangle, and the ip6 filter/nat/mangle). No table was added. Morphie `ufw` left inactive. `dummy-mjolnir` has only 10.200.0.1/32. Mjolnir beam pid 637 was still running after cleanup.
+
+## Morphie leftovers removed
+
+- eturnal beam and children that had been running as mjolnir-turn-spike (pids 4058328, 4058388, 4058431, 4058432, and the later lab beam)
+- user mjolnir-turn-spike and /var/lib/mjolnir-turn-spike
+- /var/tmp/eturnal-spike, /tmp/turn-advise-out2, /var/tmp/ubuntu-turn
+- address 192.0.2.10/32 on dummy-mjolnir (evidence host.txt from before the spike showed only 10.200.0.1/32)
+- netns turnspike and turnpriv, veth-turn
+- no nft table, tc qdisc, or sysctl on the host was changed by this cleanup
+- ufw was not enabled, reloaded, or removed
