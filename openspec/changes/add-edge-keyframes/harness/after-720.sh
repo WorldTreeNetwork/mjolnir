@@ -183,6 +183,7 @@ kill "$PUB" 2>/dev/null || true
 wait "$PUB" 2>/dev/null || true
 PUB=
 
+export STRIP=1
 echo "## D1 viewer-leg blackout only (burst-dir client). Publisher leg is left alone."
 stop_edge
 EDGE_ADVERTISE=$LAN:40001 "$BIN/edge" 127.0.0.1:8088 "$LAN:40000" "https://$(cat "$P/relay.txt")/" "$P/verify.json" > "$P/edge.log" 2>&1 &

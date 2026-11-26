@@ -40,6 +40,7 @@ while True:
         if burst is not None and burst_start is None and sock is front:
             burst_start = time.time() + burst_after
             burst_until = burst_start + burst
+            print(f"burst_window start={burst_start:.3f} until={burst_until:.3f} dir={burst_dir}", flush=True)
         in_burst = burst_start is not None and burst_start <= time.time() < burst_until
         if sock is front:
             b = backs.get(src)
