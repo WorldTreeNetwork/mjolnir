@@ -88,7 +88,13 @@ defmodule Mjolnir.Relay.RoomJoinTest do
     kind_lie = response(@open, "protected")
     assert {:error, :kind_mismatch} = check(@open, :open, kind_lie)
 
-    assert {:error, :bad_token} = check(@open, :open, %{"root" => @open})
+    assert {:error, :invalid_response} =
+             RoomJoin.check(
+               @open,
+               :open,
+               %{"root" => @open},
+               {:ok, %{token: "admitted-token", root: @open}}
+             )
   end
 
   test "atom keys on a matching response" do
