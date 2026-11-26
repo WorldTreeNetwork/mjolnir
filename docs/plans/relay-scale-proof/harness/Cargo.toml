@@ -1,0 +1,21 @@
+[package]
+name = "relay-scale"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "1"
+bs58 = "0.5"
+iroh = { version = "1.4.1", default-features = false, features = ["tls-aws-lc-rs"] }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
+moq-transport-iroh = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
+kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+mjolnir-relay = { path = "../../../../native/mjolnir_relay" }
+moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+rcgen = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "process"] }
+url = "2"
