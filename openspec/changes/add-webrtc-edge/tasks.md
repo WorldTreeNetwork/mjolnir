@@ -2,7 +2,7 @@
 
 PENDING until a fresh accept of this revision and of the reconciled `.12` contract. The 2026-11-26 build grant is already on the bead. Do not ask for it again. Do not deploy.
 
-- [ ] Fresh advise of this contract and ADR 0020.
+- [x] Fresh advise of this contract and ADR 0020. Accepted at `7f9195cb2b5178071d507dc2b5ad44ea91a5f4cd`: `reviews/2026-11-26-advise-4.md` (contract only).
 - [ ] After `.12` K0–K1 and this accept: admission and connection pool as design D1–D4, table-tested with `Mint.issue` open and protected tokens and a separately signed wide root. Dial counter zero on every refusal, including `/admit`.
 - [ ] Two legs, one token, one connection; a second token does not share it. DELETE matrix: owner, repeat, other token, unknown id. Failed renewal leaves the old id. Expiry during catalog wait stops all same-token legs and preserves other-token legs.
 - [ ] Coloured frames and fixture tone both ways on a disposable relay. Before expiry, codec miss and missing catalog return `409` with no registered id; expiry takes precedence as `403 bad_token`.
@@ -24,7 +24,7 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 
 ## Reconciliation after second review
 
-- [ ] Fresh independent review of corrected admission/setup/lifecycle contract.
+- [x] Fresh independent review of corrected admission/setup/lifecycle contract. See `reviews/2026-11-26-advise-4.md`; implementation and media gates remain open.
 - [ ] Implement and exercise every boundary/race regression added to design D8; report real media results separately from contract acceptance.
 
 ## Third review: remaining G2 consistency
