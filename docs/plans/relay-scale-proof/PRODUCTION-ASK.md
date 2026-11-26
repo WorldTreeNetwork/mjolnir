@@ -1,6 +1,12 @@
+# WITHDRAWN (2026-11-25)
+
+The owner decided the scale proof runs on the LAN, not on production.
+This plan is not to be executed. It also assumed an SSH tunnel, which
+cannot carry the relay's UDP.
+
 # ASK — production relay scale run
 
-Do not run this until the owner says yes. The host is `45.76.77.97`
+Do not run this. The host would have been `45.76.77.97`
 (8 cores, live tenant VMs, live `mjolnir-relay` on UDP 443 as
 `media-relay.worldtree.network`). This turn did not load it.
 
