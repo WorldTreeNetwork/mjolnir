@@ -11,7 +11,7 @@ anyhow = "1"
 base64 = "0.22"
 bs58 = "0.5"
 hex = "0.4"
-iroh = { version = "1.4.1", default-features = false, features = ["tls-aws-lc-rs"] }
+iroh = { version = "1.5", default-features = false, features = ["tls-aws-lc-rs"] }
 kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
 moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
 moq-ext-access = { git = "https://github.com/n0-computer/iroh-live", rev = "747b1bd" }
