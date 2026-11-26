@@ -13,3 +13,11 @@ PENDING until a fresh accept of this revision and of the reconciled `.12` contra
 ## Out of scope
 
 - `.14` roster. `.12` viewer path. Production flag. `.4` quotas. Safari and eight-PC proofs.
+
+## Fresh independent re-review of 6abb5065
+
+Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activation or product work from this review.
+
+- [ ] G1/G3: make /admit run operation/grant/expiry checks, define its room input and exact RoomClass grammar, and include key_file_trusted parity.
+- [ ] G2: correct same-token expiry assertions; start the deadline before pool/dial; define timeout precedence, single-flight reservations, natural runner cleanup and finite DELETE tombstone retention.
+- [ ] G4: require accepted video rather than mere m-line presence; cover canonical path decode/bounds and coordinate actual admission error mapping with the browser.

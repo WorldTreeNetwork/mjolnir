@@ -11,3 +11,11 @@ Fresh advise of this text, then a green local `.13` slice, then the named-peer w
 ## Out of scope
 
 - `.14`, Safari phone, three networks, eight PeerConnections, minting, TURN, E2EE.
+
+## Fresh independent re-review of 6abb5065
+
+Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activation or product work from this review.
+
+- [ ] B1/B3: admit self publish and every named peer subscribe for immutable attempt inputs; reject expired-on-arrival admission before camera and cover late camera cleanup.
+- [ ] B2: retain incumbent through bounded publisher readiness; define same-path announcement/rollback limits and overlapping incumbent/candidate callbacks; clean candidate tracks on publisher timeout.
+- [ ] B4: reconcile actual gateway 403 translation with expected-root/kind journeys; distinguish comparator tests from real endpoint behavior.

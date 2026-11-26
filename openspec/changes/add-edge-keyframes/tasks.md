@@ -10,7 +10,7 @@ No product code in this pass. Checked items are observations already captured or
 
 - [x] Advise 2026-11-25 (Astra): send-back. `reviews/2026-11-25-advise.md`, `reviews/2026-11-25-blind-take.md`. This revision answers findings 1–7.
 - [x] Advise 2026-11-25, second read (Astra): send-back, narrowly. `reviews/2026-11-25-advise-2.md`. This revision answers its four edits (source binding, gate defaults and parking, loss forwarding, executable order).
-- [ ] Fresh advise after the 2026-11-26 withdrawal of in-process WHEP and viewer PLI forwarding, by the same reviewer. Ingest policy is unchanged. No product code until that accept.
+- [x] Fresh advise after the 2026-11-26 withdrawal of in-process WHEP and viewer PLI forwarding, by the same reviewer. Ingest policy is unchanged. No product code until that accept.
 
 ## Order
 
@@ -88,4 +88,10 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 
 ## Fresh independent review of 56d1fedf
 
-- [ ] Resolve K1–K3: remove active bypass/requester instructions, reconcile tests/measurements, narrow upstream port/drop condition to ingest. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.
+- [x] Resolve K1–K3: remove active bypass/requester instructions, reconcile tests/measurements, narrow upstream port/drop condition to ingest. See `reviews/2026-11-26-advise.md` (send-back). Preserve the existing fresh-advise gate; only a fresh accepting reader may check it after the amended contract is reviewed.
+
+## Fresh independent re-review of 6abb5065
+
+Accepted by astra-arch-review in `reviews/2026-11-26-advise-2.md`; only the withdrawal/reconciliation gates above are checked. PENDING banner, feasibility and build gates remain unchanged.
+
+- [ ] Before K1/K2, repair stale D5/D6/D9 task references after the design renumbering. Preserve the packaging source/feature table from historical notes D5 as packaging guidance only; do not reactivate viewer/requester sections. Current measurements are design D6 and current licence policy D4.
