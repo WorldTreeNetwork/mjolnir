@@ -1,8 +1,8 @@
 # add-edge-keyframes
 
-> **PENDING**
+> **ACTIVE BUILD**
 
-Node `mjolnir-rurh.12`. Rigor: change. Blocks `.13` until this node's ingest feasibility and measurements are accepted, or a later recorded slice says otherwise. Owner decision 2026-11-25: carry a patch, do not move the pin; upstream push stays with Duke. Owner decision 2026-11-26: no viewer PLI forwarding and no in-process WHEP. That withdrawal needs no further approval. This revision removes those APIs from the active design. Fresh advise of this reconciled text is still owed. No product code until that accept.
+Node `mjolnir-rurh.12`. Rigor: change. Blocks `.13` until this node's ingest feasibility and measurements are accepted. Owner decision 2026-11-25: carry a patch, do not move the pin; upstream push stays with Duke. Owner decision 2026-11-26: no viewer PLI forwarding and no in-process WHEP. Independent accept of `6abb5065` is `reviews/2026-11-26-advise-2.md`. Activation uses Duke's already recorded build grant. No new permission. No deploy. No viewer bypass.
 
 The superseded viewer-path prose is `notes/withdrawn-viewer-path-design.md`. Reviews are unchanged.
 

@@ -1,6 +1,6 @@
 # Tasks — add-edge-keyframes
 
-No product code in this pass. Checked items are observations already captured or decisions already recorded. Each unchecked item names the failing test or the captured observation that must exist before it is checked. Work on `main`; stage only this change's files. Before any build on the Mac: `df -h /System/Volumes/Data`, a scratch `CARGO_TARGET_DIR` outside the repository, deleted afterwards. Nobody pushes to a fork or opens anything upstream except Duke or a submitter he names (design D8).
+No product code in this pass. Checked items are observations already captured or decisions already recorded. Each unchecked item names the failing test or the captured observation that must exist before it is checked. Work on `main`; stage only this change's files. Before any build on the Mac: `df -h /System/Volumes/Data`, a scratch `CARGO_TARGET_DIR` outside the repository, deleted afterwards. Nobody pushes to a fork or opens anything upstream except Duke or a submitter he names (design D5). Packaging detail for K1/K2 is the historical notes' dependency table (axum 0.8 features, str0m 0.25, git `4a6f52248`), not the withdrawn viewer APIs. Licence text is design D4. Measurements are design D6.
 
 ## Spike
 
@@ -10,7 +10,7 @@ No product code in this pass. Checked items are observations already captured or
 
 - [x] Advise 2026-11-25 (Astra): send-back. `reviews/2026-11-25-advise.md`, `reviews/2026-11-25-blind-take.md`. This revision answers findings 1–7.
 - [x] Advise 2026-11-25, second read (Astra): send-back, narrowly. `reviews/2026-11-25-advise-2.md`. This revision answers its four edits (source binding, gate defaults and parking, loss forwarding, executable order).
-- [x] Fresh advise after the 2026-11-26 withdrawal of in-process WHEP and viewer PLI forwarding, by the same reviewer. Ingest policy is unchanged. No product code until that accept.
+- [x] Fresh advise after the 2026-11-26 withdrawal: accept of `6abb5065`, `reviews/2026-11-26-advise-2.md`. Activated from the existing build grant. Ingest only. No viewer bypass.
 
 ## Order
 
@@ -18,8 +18,8 @@ K0 → K1a/K1b → H0 → H1 (baseline on git `moq-webrtc`) → K2 → K3 → K4
 
 ## Feasibility first (before any harness or patch work)
 
-- [ ] K0. Relay baseline in `harness/logs/relay-baseline.txt`: `git rev-parse HEAD`; `shasum -a 256` of `native/mjolnir_relay/Cargo.toml`, `native/mjolnir_relay/Cargo.lock`, `native/Cargo.lock`, `openspec/changes/add-call-e2ee/spikes/rust/Cargo.lock`, `openspec/changes/add-webrtc-edge/spikes/rust/Cargo.lock`; `cargo metadata --locked --format-version 1 --manifest-path native/mjolnir_relay/Cargo.toml` succeeds; and only after that, `cargo tree --locked -i moq-webrtc` in the relay, whose "package not found" is the expected result.
-- [ ] K1. Feasibility (H4), in a scratch directory outside the repository, with the pristine vendored crate (D5 layout, manifest per D5's table, no patch). Two subjects, each on macOS and on the Framework laptop (Linux, toolchain 1.95.0), recorded separately in `harness/logs/k1-feasibility.txt`:
+- [x] K0. Relay baseline in `harness/logs/relay-baseline.txt`: `git rev-parse HEAD`; `shasum -a 256` of `native/mjolnir_relay/Cargo.toml`, `native/mjolnir_relay/Cargo.lock`, `native/Cargo.lock`, `openspec/changes/add-call-e2ee/spikes/rust/Cargo.lock`, `openspec/changes/add-webrtc-edge/spikes/rust/Cargo.lock`; `cargo metadata --locked --format-version 1 --manifest-path native/mjolnir_relay/Cargo.toml` succeeds; and only after that, `cargo tree --locked -i moq-webrtc` in the relay, whose "package not found" is the expected result.
+- [x] K1. Feasibility (H4), in a scratch directory outside the repository, with the pristine vendored crate (D5 layout, manifest per D5's table, no patch). Two subjects, each on macOS and on the Framework laptop (Linux, toolchain 1.95.0), recorded separately in `harness/logs/k1-feasibility.txt`:
   - **K1a, the consumer.** A copy of the spike consumer with the `[patch]` line pointing at the pristine crate, and its `mjolnir-relay` path dependency rewritten to this checkout's `native/mjolnir_relay` (the spike's relative path does not resolve from a scratch directory). Write its lock once with an unlocked resolution, then `cargo build --locked`. Record the `cargo metadata` package ids (`moq-webrtc` a path id; every other moq crate `git+https://github.com/moq-dev/moq?rev=4a6f52248#4a6f5224…`; one `moq-net 0.3.10`), the build time, and no unused-patch warning.
   - **K1b, the vendored crate.** Write its own lock once, then `cargo test --locked` in its workspace. Record test counts and failures.
 
@@ -28,11 +28,11 @@ K0 → K1a/K1b → H0 → H1 (baseline on git `moq-webrtc`) → K2 → K3 → K4
 ## Harness and the "before" (unpatched pin; the harness still uses git `moq-webrtc`)
 
 - [ ] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build.
-- [ ] H1. Before numbers for D9 rows A, B, C, D1, D2 and F (policy off) on the unpatched pin, from common observations only: `harness/logs/before-*.log`. Captured before K4 switches the harness. A baseline that already meets its target is recorded as a result; the after run must then still show the cause working (D9).
+- [ ] H1. Before numbers for design D6 rows A, B, C, D1, D2 and F (policy off) on the unpatched pin, from common observations only: `harness/logs/before-*.log`. Captured before K4 switches the harness. A baseline that already meets its target is recorded as a result; the after run must then still show the cause working (D9).
 
 ## Vendor and switch
 
-- [ ] K2. `scripts/check-vendored-moq-webrtc.sh`, written before the vendor commit and failing because the directory does not exist (capture that run). It fetches `rs/moq-webrtc` and the root licence files at `4a6f522` (cargo git checkout if present, else a scratch shallow fetch outside the repository), reverses every file in `patches/`, and checks: `src/`, `CHANGELOG.md`, `MIGRATE.md`, `clippy.toml` identical; `LICENSE-MIT` and `LICENSE-APACHE` identical to the moq root's; the manifest equal to D5's table (dependency sources, versions, `default-features`, `features`, optional, `[features]`, removed `workspace-hack` and lints); every modified file and the manifest carry the modification notice (D6).
+- [ ] K2. `scripts/check-vendored-moq-webrtc.sh`, written before the vendor commit and failing because the directory does not exist (capture that run). It fetches `rs/moq-webrtc` and the root licence files at `4a6f522` (cargo git checkout if present, else a scratch shallow fetch outside the repository), reverses every file in `patches/`, and checks: `src/`, `CHANGELOG.md`, `MIGRATE.md`, `clippy.toml` identical; `LICENSE-MIT` and `LICENSE-APACHE` identical to the moq root's; the manifest equal to the packaging table in `notes/withdrawn-viewer-path-design.md` (dependency sources, versions, `default-features`, `features`, optional, `[features]`, removed `workspace-hack` and lints) — that table only, not the withdrawn viewer sections; every modified file and the manifest carry the modification notice (design D4).
 - [ ] K3. Vendor commit: the pristine crate into `native/vendor/moq-webrtc/` with its committed lock (from K1b), licence files, manifest notice, `VENDOR.md` (base, packaging-difference table, outbound licence line from ASK 2, tracking bead, drop condition). K2 passes with an empty `patches/`.
 - [ ] K4. Only after H1: the harness consumer gets the `[patch]` line and its committed lock. A script beside it fails before the line (git `moq-webrtc`) and passes after: `cargo metadata --locked` package ids as in K1a, `cargo tree --locked -d` lists no moq crate, no unused-patch warning.
 - [ ] K5. After K3, K4, P9 and every later commit touching Cargo files: rerun K0. `git diff --exit-code <K0 commit> -- native/mjolnir_relay/` is empty and every hash equal. Record in `harness/logs/relay-after.txt`. An unrelated concurrent edit on those paths by another agent is identified by `git log` and reported, not counted as this change.
@@ -94,4 +94,4 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 
 Accepted by astra-arch-review in `reviews/2026-11-26-advise-2.md`; only the withdrawal/reconciliation gates above are checked. PENDING banner, feasibility and build gates remain unchanged.
 
-- [ ] Before K1/K2, repair stale D5/D6/D9 task references after the design renumbering. Preserve the packaging source/feature table from historical notes D5 as packaging guidance only; do not reactivate viewer/requester sections. Current measurements are design D6 and current licence policy D4.
+- [x] Before K1/K2, repair stale D5/D6/D9 task references after the design renumbering. Preserve the packaging source/feature table from historical notes D5 as packaging guidance only; do not reactivate viewer/requester sections. Current measurements are design D6 and current licence policy D4.

@@ -1,0 +1,15 @@
+head=b39bf1b2da2819ee9c7d7f54e451c29cc6d01dc0
+date=2026-11-26T07:47:48Z
+2b59b0cf6e9855d2ba381330c791a5cb47e5741beac0a66ac631cdbc40e530bd  native/mjolnir_relay/Cargo.toml
+99183688c6575d2a233e1d69a79c6b63ca8f5a08214ee443e4cf85e86348bcfa  native/mjolnir_relay/Cargo.lock
+18669dbb2b42f4cd3020637a844c3791955978a2d9b8089d26866735163509fd  native/Cargo.lock
+6c318c9ad6cf8f7fb1c0bf60b4f3c6f522ac27a4dedd2b8c1012cf7d44a09c6a  openspec/changes/add-call-e2ee/spikes/rust/Cargo.lock
+cb0d13f143132252d9e997bf84f4629b797ed8b84e62bab471853783318b2fbf  openspec/changes/add-webrtc-edge/spikes/rust/Cargo.lock
+--- metadata ---
+metadata=ok bytes= 3425983
+--- tree ---
+error: package ID specification `moq-webrtc` did not match any packages
+--- recheck ---
+recheck_head=8e65b23d2ddd73cfa903a9799ff403847b231d9f
+recheck_date=2026-11-26T07:55:26Z
+The five shasum lines above still match this tree. moq-webrtc remains absent from the relay lock.

@@ -1,0 +1,32 @@
+# K1 feasibility — pristine vendored moq-webrtc 0.3.12, pin 4a6f52248
+# Scratch only. No product patch. No viewer API.
+
+date=2026-11-26T07:55:26Z
+repo_head_at_record=8e65b23d2ddd73cfa903a9799ff403847b231d9f
+k0_capture_head=b39bf1b2da2819ee9c7d7f54e451c29cc6d01dc0
+k0_five_hashes=unchanged at record (see relay-baseline.txt recheck)
+
+## macOS — rustc 1.96.0 (ac68faa20 2026-05-25)
+K1a consumer: cargo build --locked exit 0, Finished dev in 1m 07s.
+No line matching "unused" in the build log (no unused-patch warning).
+moq-webrtc 0.3.12 path+file:///tmp/kf-k1/vendor#moq-webrtc@0.3.12
+moq-net count 1: moq-net 0.3.10 git+https://github.com/moq-dev/moq?rev=4a6f52248#moq-net@0.3.10
+Other moq-dev crates in that metadata are the same rev 4a6f52248.
+Two extra names come from the relay graph, not a second pin:
+  moq-ext-access 0.1.0 git+https://github.com/n0-computer/iroh-live?rev=747b1bd
+  moq-transport-iroh 0.1.0 git+https://github.com/n0-computer/iroh-live?rev=747b1bd
+K1b vendor: cargo test --locked exit 0. 99 passed, 0 failed, 0 ignored; doc-tests 0.
+
+## Linux Framework — rustc 1.95.0 (59807616e 2026-04-14)
+Host dorje@192.168.0.108. Not Ubuntu. Relay path /home/dorje/work/IdentiKey/mjolnir/native/mjolnir_relay.
+The Mac consumer lock cannot be reused: rewriting the path dependency makes --locked refuse to update the lock (exit 101). That is the required "write the lock once" step, not a crate failure.
+After rm Cargo.lock and cargo generate-lockfile (exit 0) on this machine:
+K1a first compile Finished dev in 1m 55s.
+K1a cargo build --locked exit 0 (cached Finished in 0.25s).
+No "unused" and no "error:" in the locked build log.
+moq-webrtc 0.3.12 path+file:///tmp/kf-k1/vendor#moq-webrtc@0.3.12
+moq-net count 1, same git id as macOS.
+Same two iroh-live moq-* names. non-pin list is only those two.
+K1b: cargo test --locked. 99 passed, 0 failed, 0 ignored; doc-tests 0. Finished in 0.66s. TEST exit 0.
+
+Verdict: K1a and K1b GO on both platforms. ASK 3 stays closed.
