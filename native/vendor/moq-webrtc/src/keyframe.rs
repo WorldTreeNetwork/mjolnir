@@ -184,6 +184,7 @@ impl Gate {
 	}
 
 	/// A strictly future deadline from another cause re-arms a disarmed line.
+	#[allow(dead_code)] // Used by the unit test. The non-test lib target does not see it.
 	pub fn rearm(&mut self, at: Instant, now: Instant) {
 		if at > now {
 			self.deadline = Some(at);

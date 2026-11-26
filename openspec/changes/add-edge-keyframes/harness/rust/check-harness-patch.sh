@@ -38,7 +38,8 @@ print(webrtc[0])
 print("moq-net", ids["moq-net"][0])
 PY
 tree=$(cargo tree --locked -d)
-if echo "$tree" | grep -E '(^| )moq' >/dev/null; then
+# Only a duplicated package is a column-0 line. Nested moq deps of some other duplicate are not a second moq.
+if echo "$tree" | grep -E '^(moq|hang|kio)' >/dev/null; then
   echo "cargo tree -d lists a moq crate"
   echo "$tree"
   exit 1

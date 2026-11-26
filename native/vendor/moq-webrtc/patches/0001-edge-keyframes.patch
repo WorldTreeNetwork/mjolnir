@@ -436,10 +436,10 @@ index f26dfe30..b6b5e761 100644
  		self.bridges.abort(err);
 diff --git a/src/keyframe.rs b/src/keyframe.rs
 new file mode 100644
-index 00000000..8ed88b03
+index 00000000..a1c8e1f1
 --- /dev/null
 +++ b/src/keyframe.rs
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,387 @@
 +//! Ingest keyframe gate. One per video line. There is no viewer cause.
 +//!
 +//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
@@ -626,6 +626,7 @@ index 00000000..8ed88b03
 +	}
 +
 +	/// A strictly future deadline from another cause re-arms a disarmed line.
++	#[allow(dead_code)] // Used by the unit test. The non-test lib target does not see it.
 +	pub fn rearm(&mut self, at: Instant, now: Instant) {
 +		if at > now {
 +			self.deadline = Some(at);
