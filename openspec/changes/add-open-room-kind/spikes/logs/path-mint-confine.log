@@ -1,0 +1,117 @@
+# confine 2026-11-26T06:32:50Z
+quic=127.0.0.1:64221 iroh=ee7f63e44fc2b74f88db39bad00ad41d1284280a3d8c0f387a3b6da222d0605e hold=70s
+open_root=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup
+suite: TMPDIR=/tmp mix test --exclude integration
+suite: Finished in 63.6 seconds (27.2s async, 36.4s sync)
+suite: Result: 2006 passed, 82 excluded
+suite: EXIT:0
+note: iroh and wt run in sequence so they do not share track bytes
+
+22:32:50.921 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=alice kind=open jti=ufet8NgpoAFmZZASjPnJ6w exp=1795678370
+minted open-alice kind=open publish=alice/**
+
+22:32:50.924 [info] relay mint sub=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=standup participant=bob kind=open jti=l8ZSzcgM_ordJEfY2u18tg exp=1795678370
+minted open-bob kind=open publish=bob/**
+iroh-before iroh=alive ready=yes
+
+### before iroh read bob
+client-endpoint=9156541856121c55d4fdfcf4d6a501e517170dbcf32cf29a8a28bcbe398689e1
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=4
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=11 bytes=88 first=BOB-LIVE
+exit=0
+iroh-during iroh=alive alice-same=alive alice-stamp=alive
+
+### during iroh read bob
+client-endpoint=a10b30a9f69e54e6098ba4a3aebc64487e90f8f861412ee64f3b8cef07a6c9e7
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=2
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=16 bytes=128 first=BOB-LIVE
+exit=0
+
+### during iroh read alice-stamp
+client-endpoint=a097388e536c35425de76184e99deacece3446af9c5a2994f482be7502f7d321
+connected
+subscribe-timeout call=Node::subscribe path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/alice-stamp bound_s=4 elapsed_ms=4002
+exit=124
+
+### during iroh listen bob token
+client-endpoint=37366ea702f957dadc477b59ffeb7a68d7634f101c7b75b0ad57ecc9e9edf64f
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker")]), route: RouteInfo { instance: Some(Instance("d409be351a9c4570ea0ced5712a3d882", "minted")), epoch: 0, hops: Hops([Hop { id: 7721816143422403 }, Hop { id: 3646962455707283 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(3646962455707283), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+exit=0
+iroh-after-attempt iroh=alive alice-same=dead alice-stamp=dead
+
+### after iroh read bob
+client-endpoint=4db7ebe876ac86ea21804cc4535188349f7040d94c5e7c325cdfd939e4d79328
+connected
+subscribed path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker elapsed_ms=1
+received path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=10 bytes=80 first=BOB-LIVE
+exit=0
+
+### after iroh listen bob token
+client-endpoint=639fc76c382960cbd8dc27d21b3323a9048dcfea51a4c563b492273571cd00d3
+connected
+announce: Present(Announce { prefix: Path("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker"), captures: Some([Pattern("t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker")]), route: RouteInfo { instance: Some(Instance("eda5fe4d3b990ceb40d929751fdbba22", "minted")), epoch: 0, hops: Hops([Hop { id: 7721816143422403 }, Hop { id: 3646962455707283 }]), cost: Cost(20), auth: None, via: Hop { id: 0 }, source: Peer(3646962455707283), node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } })
+announcements=1
+exit=0
+iroh-still iroh=alive
+wt-before wt=alive
+
+### before wt read bob
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("622ce1e9edd088d5a12396f3e91a0a64", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=11 bytes=209
+exit=0
+wt-during wt=alive wt-alice=alive
+
+### during wt read bob
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("5ff6ef93a6d0b89fdc03f905b29643d5", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=11 bytes=209
+exit=0
+
+### during wt read alice-stamp
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("3da5411d6ee8e06e700e033d32a6de0f", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/alice-stamp frames=0 bytes=0 no-announcement
+exit=0
+
+### during wt announce
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("44e18e06f820d064a208fa06c67dd1e7", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+exit=0
+wt-after-attempt wt=alive wt-alice=dead
+
+### after wt read bob
+held
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("b6759d3ee0f4e0bd44af950a7194a70c", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+received path=bob/marker frames=11 bytes=209
+exit=0
+
+### after wt announce
+route: RouteEvent { kind: Start, announce: Announce { prefix: Path("bob/marker"), captures: Some([Pattern("bob/marker")]), route: RouteInfo { instance: Some(Instance("96870f8d1b2d52ee66ee11e9d7d3398b", "minted")), epoch: 0, hops: Hops([Hop { id: 8374548073683980 }, Hop { id: 3646962455707283 }]), cost: Cost(2), auth: None, via: Hop { id: 0 }, source: Local, node: None, lane: Lane { primary: true, priority: None, above: 0 }, draining: false, available: true } } }
+exit=0
+wt-still wt=alive
+--- publisher tails (local counts are not the proof) ---
+## iroh bob
+client-endpoint=c3e33f6cf36ebbeea37065b5b1b8acf96bf532121718c27b5772683cb870bdc9
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker
+## iroh alice same path
+client-endpoint=2ca197992eb32467ef4e88e9f30d8da52390af73c38029f46c5fa42f5cb6561b
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/marker frames=40 bytes=520 payload-len=13
+## iroh alice stamp
+client-endpoint=284a9a520d1d290c93f84efd0610f4c65b11c3a07d439c049a16b0801f303356
+connected
+announcing path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/alice-stamp
+published path=t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup/bob/alice-stamp frames=40 bytes=440 payload-len=11
+## wt bob
+held
+## wt alice stamp
+held
+published path=bob/alice-stamp bytes=760
+released
+wrote /Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-open-room-kind/spikes/logs/path-mint-confine.log
