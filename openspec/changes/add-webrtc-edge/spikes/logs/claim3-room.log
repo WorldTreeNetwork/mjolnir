@@ -1,0 +1,32 @@
+# claim3 room 2026-11-26T01:58:00Z
+## browsers (rc=0)
+{"step":"publish","who":"alice","location":"/session/20e1e7dc-0baf-4b0e-9f11-d8394d802922","postMs":19,"connectMs":3,"answerCodecs":["VP8","H264","H264","H264","H264","H264","H264","VP9","VP9","AV1","opus"]}
+{"step":"publish","who":"bob","location":"/session/5a701f1c-2356-4213-8738-698d7273fb3c","postMs":19,"connectMs":2,"answerCodecs":["VP8","H264","H264","H264","H264","H264","H264","VP9","VP9","AV1","opus"]}
+{"step":"roster","who":"alice","broadcasts":["alice/cam","bob/cam","carol/cam"]}
+{"step":"play","who":"alice","other":"bob/cam","location":"/session/53f915ef-b9d9-4335-abaa-cf4c05bb1a4e","postMs":29,"connectMs":302,"answerCodecs":["VP8","opus"]}
+{"step":"play","who":"alice","other":"carol/cam","location":"/session/1890227c-54a6-48e5-b5ea-0bf0cbe48b87","postMs":26,"connectMs":307,"answerCodecs":["VP8","opus"]}
+{"step":"roster","who":"bob","broadcasts":["alice/cam","bob/cam","carol/cam"]}
+{"step":"play","who":"bob","other":"alice/cam","location":"/session/f6422c7d-61a7-4588-9eb1-e810fd7028ed","postMs":27,"connectMs":302,"answerCodecs":["VP8","opus"]}
+{"step":"play","who":"bob","other":"carol/cam","location":"/session/c9709bb6-0fca-4910-a49a-8f55d3b110d8","postMs":22,"connectMs":250,"answerCodecs":["VP8","opus"]}
+{"step":"room-result","results":{"alice<-bob":{"framesDecoded":242,"codec":"video/VP8","audioEnergy":0.000010817897460339561,"videoMatch":true,"audioMatch":true,"left":[227,142,22],"right":[40,60,198],"peakHz":598},"alice<-carol":{"framesDecoded":227,"codec":"video/VP8","audioEnergy":0.000005164340552928027,"videoMatch":true,"audioMatch":true,"left":[40,180,61],"right":[121,40,169],"peakHz":436},"bob<-alice":{"framesDecoded":295,"codec":"video/VP8","audioEnergy":0.000010217344009913155,"videoMatch":true,"audioMatch":true,"left":[200,49,120],"right":[30,160,159],"peakHz":1001},"bob<-carol":{"framesDecoded":234,"codec":"video/VP8","audioEnergy":0.000004933367770404375,"videoMatch":true,"audioMatch":true,"left":[40,180,61],"right":[121,40,169],"peakHz":436}},"peerConnectionsPerBrowser":[3,3]}
+## carol (MoQ) reads alice
+raw path=alice/cam video track=0.vp8 codec=VP8 frames=277 audio track=1.opus packets=401
+{"files": ["c3-carol-reads-alice.ivf", "c3-carol-reads-alice.opus"], "streams": [{"codec_name": "vp8", "codec_type": "video", "width": 320, "height": 180}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 277, "video_frames_matching": 277, "video_decode_errors": 3, "video_mean_left": [196, 49, 119], "video_mean_right": [30, 159, 157], "audio_seconds": 8.01, "audio_peak_hz": 1000.0, "audio_rms": 0.0882, "verdict": "content-ok"}
+exit=0
+## carol (MoQ) reads bob
+raw path=bob/cam video track=0.vp8 codec=VP8 frames=260 audio track=1.opus packets=400
+{"files": ["c3-carol-reads-bob.ivf", "c3-carol-reads-bob.opus"], "streams": [{"codec_name": "vp8", "codec_type": "video", "width": 320, "height": 180}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 260, "video_frames_matching": 260, "video_decode_errors": 3, "video_mean_left": [227, 140, 20], "video_mean_right": [39, 59, 195], "audio_seconds": 7.99, "audio_peak_hz": 600.0, "audio_rms": 0.0881, "verdict": "content-ok"}
+exit=0
+## edge sessions
+2026-11-26T01:58:03.470240Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=20e1e7dc-0baf-4b0e-9f11-d8394d802922 ttl_ms=596529 setup_ms=14
+2026-11-26T01:58:04.032151Z  INFO edge: session accepted kind=Whip room=r1 broadcast=bob/cam id=5a701f1c-2356-4213-8738-698d7273fb3c ttl_ms=595967 setup_ms=14
+2026-11-26T01:58:04.902466Z  INFO edge: session accepted kind=Whep room=r1 broadcast=bob/cam id=53f915ef-b9d9-4335-abaa-cf4c05bb1a4e ttl_ms=595097 setup_ms=17
+2026-11-26T01:58:05.368476Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=1890227c-54a6-48e5-b5ea-0bf0cbe48b87 ttl_ms=594631 setup_ms=22
+2026-11-26T01:58:06.545582Z  INFO edge: session accepted kind=Whep room=r1 broadcast=alice/cam id=f6422c7d-61a7-4588-9eb1-e810fd7028ed ttl_ms=593454 setup_ms=22
+2026-11-26T01:58:07.005181Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=c9709bb6-0fca-4910-a49a-8f55d3b110d8 ttl_ms=592994 setup_ms=19
+2026-11-26T01:58:03.470240Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=20e1e7dc-0baf-4b0e-9f11-d8394d802922 ttl_ms=596529 setup_ms=14
+2026-11-26T01:58:04.032151Z  INFO edge: session accepted kind=Whip room=r1 broadcast=bob/cam id=5a701f1c-2356-4213-8738-698d7273fb3c ttl_ms=595967 setup_ms=14
+2026-11-26T01:58:04.902466Z  INFO edge: session accepted kind=Whep room=r1 broadcast=bob/cam id=53f915ef-b9d9-4335-abaa-cf4c05bb1a4e ttl_ms=595097 setup_ms=17
+2026-11-26T01:58:05.368476Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=1890227c-54a6-48e5-b5ea-0bf0cbe48b87 ttl_ms=594631 setup_ms=22
+2026-11-26T01:58:06.545582Z  INFO edge: session accepted kind=Whep room=r1 broadcast=alice/cam id=f6422c7d-61a7-4588-9eb1-e810fd7028ed ttl_ms=593454 setup_ms=22
+2026-11-26T01:58:07.005181Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=c9709bb6-0fca-4910-a49a-8f55d3b110d8 ttl_ms=592994 setup_ms=19

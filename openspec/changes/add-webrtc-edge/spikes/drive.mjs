@@ -125,7 +125,9 @@ try {
       if (Object.keys(e).length >= 2) break;
     }
     const e = await page.evaluate(() => window.ended);
-    out({ step: 'expiry', ended: e, waitedMs: Date.now() - t0 });
+    const exp = JSON.parse(Buffer.from(tok(tn).split('.')[1], 'base64url').toString()).exp * 1000;
+    const after = Object.fromEntries(Object.entries(e).map(([k, v]) => [k, { state: v.state, endedMsAfterExp: v.at - exp }]));
+    out({ step: 'expiry', exp: new Date(exp).toISOString(), ended: after, waitedMs: Date.now() - t0 });
   }
 } finally { for (const b of browsers) await b.close().catch(() => {}); }
 process.exit(0);

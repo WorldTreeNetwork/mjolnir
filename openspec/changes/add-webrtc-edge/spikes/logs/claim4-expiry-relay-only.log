@@ -1,0 +1,10 @@
+# claim4 auth mode=relay-only 2026-11-26T01:59:54Z
+## expiry: alice token ttl 25 s; WHIP alice/cam + WHEP carol/cam, measured from exp
+{"step":"publish","location":"/session/1b983866-0566-48e1-8633-0d5a46e866a5","postMs":766,"connectMs":116,"answerCodecs":["VP8","H264","H264","H264","H264","H264","H264","VP9","VP9","AV1","opus"]}
+{"step":"play","location":"/session/c4ce40b0-345f-44b5-b62c-21fbdb6f4773","postMs":53,"connectMs":297,"answerCodecs":["VP8","opus"]}
+{"step":"expiry","exp":"2026-11-26T02:00:19.000Z","ended":{"pub:alice/cam":{"state":"disconnected","endedMsAfterExp":7031},"play:carol/cam":{"state":"disconnected","endedMsAfterExp":7312}},"waitedMs":26080}
+## edge log
+2026-11-26T02:00:00.092527Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=1b983866-0566-48e1-8633-0d5a46e866a5 ttl_ms=18907 setup_ms=759
+2026-11-26T02:00:00.386643Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=c4ce40b0-345f-44b5-b62c-21fbdb6f4773 ttl_ms=18613 setup_ms=40
+2026-11-26T02:00:19.017668Z  INFO edge: session ended kind=Whep broadcast=carol/cam id=c4ce40b0-345f-44b5-b62c-21fbdb6f4773 after_ms=18622 ended=relay session closed: Err(MoqNet(Session(Expired)))
+2026-11-26T02:00:19.027009Z  INFO edge: session ended kind=Whip broadcast=alice/cam id=1b983866-0566-48e1-8633-0d5a46e866a5 after_ms=18933 ended=relay session closed: Err(MoqNet(Session(Expired)))

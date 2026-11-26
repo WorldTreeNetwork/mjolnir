@@ -73,7 +73,8 @@ async fn relay(dir: PathBuf) -> anyhow::Result<()> {
 }
 
 fn mint(dir: &Path, room: &str, participant: &str, seconds: u64, owner_byte: u8) -> anyhow::Result<String> {
-    let set = KeySet::from_file(dir.join("private.json")).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let file = std::env::var("MINT_KEYFILE").map(PathBuf::from).unwrap_or_else(|_| dir.join("private.json"));
+    let set = KeySet::from_file(file).map_err(|e| anyhow::anyhow!("{e}"))?;
     let owner = bs58::encode([owner_byte; 32]).into_string();
     let now = kio::clock::wall();
     let claims = Claims::default()
@@ -348,6 +349,12 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args[0].as_str() {
         "relay" => relay(args[1].clone().into()).await,
+        "keygen" => {
+            // A second, unrelated dummy key: tokens it signs must be refused.
+            let key = Key::generate(Algorithm::EdDSA, Some(KeyId::decode("spike-dummy").unwrap())).unwrap();
+            KeySet { keys: vec![Arc::new(key)] }.to_file(&args[1])?;
+            Ok(())
+        }
         "mint" => {
             let owner = args.get(5).map(|s| s.parse()).transpose()?.unwrap_or(9u8);
             println!("{}", mint(Path::new(&args[1]), &args[2], &args[3], args[4].parse()?, owner)?);

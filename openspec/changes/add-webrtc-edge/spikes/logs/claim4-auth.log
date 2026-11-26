@@ -1,0 +1,60 @@
+# claim4 auth mode=full 2026-11-26T01:59:15Z
+## browser refusals
+{"step":"auth","case":"publish as another label (alice token, bob/cam)","refused":true,"status":403,"error":"whip bob/cam: HTTP 403 Whip of bob/cam is outside the token grant"}
+{"step":"auth","case":"token for another room (r2 token on /r1/)","refused":true,"status":403,"error":"whip alice/cam: HTTP 403 token is not for this room"}
+{"step":"auth","case":"no token","refused":true,"status":401,"error":"whip alice/cam: HTTP 401 no token"}
+{"step":"auth","case":"token signed by another key","refused":true,"status":401,"error":"whip alice/cam: HTTP 401 token refused"}
+{"step":"auth","case":"expired token","refused":true,"status":401,"error":"whip alice/cam: HTTP 401 token refused"}
+{"step":"auth","case":"WHEP outside the room (r2 token playing r1 broadcast)","refused":true,"status":403,"error":"whep carol/cam: HTTP 403 token is not for this room"}
+{"step":"auth","case":"control: alice publishes alice/cam","refused":false,"connectMs":4}
+rc=0
+## curl refusals (status code, body)
+no token                                                   401 no token
+malformed bearer                                           401 symmetric signature
+alice token, publish bob/cam                               403 Whip of bob/cam is outside the token grant
+alice token, publish bare 'alice' (no suffix)              400 Whip alice: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f3)
+Unexpected end of input
+Expected `o`
+sdp 
+alice token, publish alice/../bob/cam                      400 bad broadcast path
+r2 token on /r1/                                           403 token is not for this room
+r2 token on /r2/ playing carol/cam (in r1)                 400 Whep carol/cam: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f7)
+Unexpected end of input
+Expected `o`
+
+forged (other key)                                         401 token refused
+expired                                                    401 token refused
+roster with r2 token for r1                                403 token is not for this room
+roster with r2 token for r2 (empty room)                   200 {"broadcasts":[]}
+valid token, garbage SDP                                   400 Whip alice/cam: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f7)
+Unexpected end of input
+Expected `o`
+
+## expiry: alice token ttl 25 s; WHIP alice/cam + WHEP carol/cam, measured from exp
+{"step":"publish","location":"/session/11694e0f-bf20-475a-a96d-5e7a6a5fbd73","postMs":44,"connectMs":2,"answerCodecs":["VP8","H264","H264","H264","H264","H264","H264","VP9","VP9","AV1","opus"]}
+{"step":"play","location":"/session/ebe6e1ae-3f62-43ab-ba54-8f0db996e7b7","postMs":45,"connectMs":246,"answerCodecs":["VP8","opus"]}
+{"step":"expiry","exp":"2026-11-26T01:59:40.000Z","ended":{"pub:alice/cam":{"state":"disconnected","endedMsAfterExp":6047},"play:carol/cam":{"state":"disconnected","endedMsAfterExp":6204}},"waitedMs":23112}
+## edge log
+2026-11-26T01:59:19.588754Z  WARN edge: refused status=403 Forbidden why=Whip of bob/cam is outside the token grant
+2026-11-26T01:59:19.742015Z  WARN edge: refused status=403 Forbidden why=token is not for this room
+2026-11-26T01:59:19.908745Z  WARN edge: refused status=401 Unauthorized why=no token
+2026-11-26T01:59:20.080338Z  WARN edge: refused status=401 Unauthorized why=token refused
+2026-11-26T01:59:20.237112Z  WARN edge: refused status=401 Unauthorized why=token refused
+2026-11-26T01:59:20.369563Z  WARN edge: refused status=403 Forbidden why=token is not for this room
+2026-11-26T01:59:20.567890Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=46bab963-52e8-4423-9b28-e0be24530d9f ttl_ms=594432 setup_ms=34
+2026-11-26T01:59:20.608692Z  WARN edge: refused status=401 Unauthorized why=no token
+2026-11-26T01:59:20.632218Z  WARN edge: refused status=401 Unauthorized why=symmetric signature
+2026-11-26T01:59:20.667265Z  WARN edge: refused status=403 Forbidden why=Whip of bob/cam is outside the token grant
+2026-11-26T01:59:20.703826Z  WARN edge: refused status=400 Bad Request why=Whip alice: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f3)
+2026-11-26T01:59:20.732902Z  WARN edge: refused status=400 Bad Request why=bad broadcast path
+2026-11-26T01:59:20.765764Z  WARN edge: refused status=403 Forbidden why=token is not for this room
+2026-11-26T01:59:20.807705Z  WARN edge: refused status=400 Bad Request why=Whep carol/cam: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f7)
+2026-11-26T01:59:20.840970Z  WARN edge: refused status=401 Unauthorized why=token refused
+2026-11-26T01:59:20.869604Z  WARN edge: refused status=401 Unauthorized why=token refused
+2026-11-26T01:59:20.901082Z  WARN edge: refused status=403 Forbidden why=token is not for this room
+2026-11-26T01:59:21.687955Z  WARN edge: refused status=400 Bad Request why=Whip alice/cam: invalid SDP: SDP parse: Parse error at PointerOffset(0x7c108041f7)
+2026-11-26T01:59:22.777504Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=11694e0f-bf20-475a-a96d-5e7a6a5fbd73 ttl_ms=17223 setup_ms=26
+2026-11-26T01:59:22.944539Z  INFO edge: session accepted kind=Whep room=r1 broadcast=carol/cam id=ebe6e1ae-3f62-43ab-ba54-8f0db996e7b7 ttl_ms=17055 setup_ms=37
+2026-11-26T01:59:40.000762Z  INFO edge: session ended kind=Whep broadcast=carol/cam id=ebe6e1ae-3f62-43ab-ba54-8f0db996e7b7 after_ms=17055 ended=token expired (edge timer)
+2026-11-26T01:59:40.006942Z  INFO edge: session ended kind=Whip broadcast=alice/cam id=11694e0f-bf20-475a-a96d-5e7a6a5fbd73 after_ms=17228 ended=token expired (edge timer)
+2026-11-26T01:59:40.390434Z  INFO edge: session ended kind=Whip broadcast=alice/cam id=46bab963-52e8-4423-9b28-e0be24530d9f after_ms=19822 ended=webrtc ended: Ok(())
