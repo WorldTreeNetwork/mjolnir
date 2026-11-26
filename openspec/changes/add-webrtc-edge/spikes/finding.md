@@ -240,3 +240,7 @@ session and gives the relay the final say, and MoQ and WebRTC participants share
 ## Reproduce
 
 See `README.md` and `run-all.sh`.
+
+## Addendum 2026-11-25: claim 8 on Linux (orchestrator run)
+
+Claim 8's Linux half is now **GO on Arch x86_64**: the edge builds with the relay's toolchain (1.95.0) in under three minutes cold, links only libc, libm and libgcc, and a clean build with Node tools replaced by tripwires called none of them. Log: `logs/claim8-linux.log`. Ubuntu 24.04 is still unchecked.

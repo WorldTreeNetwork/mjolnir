@@ -1,0 +1,14 @@
+Claim 8, Linux x86_64 build. Run by the orchestrator on 2026-11-25 on the Framework laptop
+(Arch, x86_64, 16 threads), checkout at a9c765d, toolchain 1.95.0 (the relay's pin).
+
+1. cargo build --release --locked --bins            -> Finished in 2m 49s (cold), exit 0
+   edge 43,000,032 bytes; stripped 33,559,280 bytes
+   ELF 64-bit PIE, dynamically linked: libgcc_s.so.1 libm.so.6 libc.so.6 (no other shared libraries)
+
+2. Clean build of --bin edge in a fresh target dir, with node, npm, npx, pnpm, bun and yarn
+   replaced on PATH by tripwire scripts that log any call and exit 127
+                                                     -> Finished in 2m 26s, exit 0
+   JavaScript tool invocations during the build: 0
+
+Not checked here: Ubuntu 24.04 (production's distribution and glibc), and a build on the
+production host itself.
