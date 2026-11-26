@@ -34,3 +34,14 @@ The relay SHALL publish the loaded public hostname and the bound Iroh endpoint's
 - GIVEN an operator or guest developer reading the host-sidecars catalog
 - WHEN they look up the edge relay
 - THEN they find its public listener, both guest locator fields, availability and refresh rules, and the room-token command
+
+### Requirement: The controller bounds the untrusted relay locator read
+
+The root controller SHALL accept only a regular locator file of at most 4 KiB, with exactly the string fields `host` and `endpoint_id`. It SHALL use `lstat` before opening, verify the opened file's identity, and limit the read to 4 KiB plus one byte to detect growth. The controller SHALL time out the worker after 500 ms. If the file, its contents or the read is rejected, guest identity setup SHALL continue with both relay fields absent and one warning that names the reason without including the file contents.
+
+#### Scenario: Relay substitutes the locator file
+
+- GIVEN the enabled relay's locator has been replaced by a FIFO or symlink, is swapped with a different file after the type check, or grows beyond 4 KiB after that check
+- WHEN guest identity setup reads its inputs
+- THEN the guest setup omits both relay fields and continues within the locator deadline
+- AND the controller logs the rejection without including file contents
