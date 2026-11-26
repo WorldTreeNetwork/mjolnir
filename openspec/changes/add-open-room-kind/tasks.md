@@ -46,3 +46,12 @@ These are the trial's contract. They are not an advise accept.
 No production step in this trial. After accept, the owner gate is a controller deploy only (`--app-only`), then an open mint whose root the live relay admits with `wt-session`, and a protected mint of the same name that does not see that broadcast. No test key is added to the production key set.
 
 Handoffs in design D4 and D5 are not boxes here.
+
+## Owed by fresh path review (2026-11-26)
+
+Review: `reviews/2026-11-26-advise.md`, contract `3a64e421`, send-back. These are contract/evidence corrections; no product activation or deployment grant.
+
+- [ ] R1: Specify .13 full relay admission (validated trust snapshot, verification, profile/time/TTL, root/path and grant checks), original root return, operation checks before side effects, and leg expiry. Specify both-kind expected full-root and response/token binding for joins, credential replacement and renewal, with wrong-owner/room/kind fixtures and visible refusal; preserve the pure classifier.
+- [ ] R2: Add the complete MODIFIED room-path requirement with both roots, transport spellings, participant confinement and sibling isolation, preserving protected/HTTP behavior.
+- [ ] R3: Record concrete downstream preparation/release obligations: .15 fail-closed before open issuance; versioned invite/KDF binding and cross-kind vectors before encrypted open; full-root roster/metering before their affected paths ship; reconcile TURN's actual dot-separated grammar with a versioned noncolliding identity and equal-expiry sibling tests (or explicitly disposition aggregate accounting).
+- [ ] R4: Finish/reconcile author-owned browser MoQ receipt, paired Iroh positive and negative controls, HTTP spellings, and WT in-session opposite-root operations/announcements. Capture relevant wire spellings and pin evidence. Do not use raw stream writes, local publish byte counts or timeout-without-positive-control as delivery/refusal proof. Repeat with actual mint output after implementation. Fresh advise remains owed after these amendments.

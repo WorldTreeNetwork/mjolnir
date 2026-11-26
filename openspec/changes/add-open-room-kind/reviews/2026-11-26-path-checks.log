@@ -1,0 +1,47 @@
+Independent review checks, contract 3a64e421bd4393c2ecca8dfd0d3fb7a0fbe39b63
+Command: native/mjolnir_relay/target/debug/open-room-kind-spike offline
+Existing binary SHA256: b89220fe5b11c21e67751b03968b7ba2327b2db61936c70b7a8f0b1b9b07fc5a
+No rebuild; binary source provenance not independently established. Source inspected separately.
+PASS: exit 0; stdout byte-equal to committed path-offline.log; explicit expiry/future-time/marker assertions passed.
+CONFIRMED CONTRACT GAP: living room-path requirement is absent from MODIFIED delta.
+
+# offline verification under kio Manual clock (installed on this runtime)
+t0 (manual wall) unix=1735689600
+now = t0+10s; tokens iat=t0 exp=t0+600; room-mint shape publish alice/** subscribe **
+
+## marker roots: own path, encoded spellings of the own path, and the other kind
+root_allowed(~open) = true
+  token ~open  path own literal                  -> ADMIT
+  token ~open  path own %-encoded marker         -> refuse(Profile("path outside the grant"))
+  token ~open  path own double-encoded marker    -> refuse(Profile("path outside the grant"))
+  token ~open  path protected same name          -> refuse(Profile("path outside the grant"))
+  token ~open  path own + /alice                 -> ADMIT
+  token protected path ~open same name           -> refuse(Profile("path outside the grant"))
+  token root %7Eopen    at literal ~open path    -> refuse(Profile("path outside the grant"))
+root_allowed(@open) = true
+  token @open  path own literal                  -> ADMIT
+  token @open  path own %-encoded marker         -> refuse(Profile("path outside the grant"))
+  token @open  path own double-encoded marker    -> refuse(Profile("path outside the grant"))
+  token @open  path protected same name          -> refuse(Profile("path outside the grant"))
+  token @open  path own + /alice                 -> ADMIT
+  token protected path @open same name           -> refuse(Profile("path outside the grant"))
+  token root %40open    at literal @open path    -> refuse(Profile("path outside the grant"))
+root_allowed(+open) = true
+  token +open  path own literal                  -> ADMIT
+  token +open  path own %-encoded marker         -> refuse(Profile("path outside the grant"))
+  token +open  path own double-encoded marker    -> refuse(Profile("path outside the grant"))
+  token +open  path protected same name          -> refuse(Profile("path outside the grant"))
+  token +open  path own + /alice                 -> ADMIT
+  token protected path +open same name           -> refuse(Profile("path outside the grant"))
+  token root %2Bopen    at literal +open path    -> refuse(Profile("path outside the grant"))
+
+## tenant-wide grant (root t/<owner>, subscribe **, publish **): spans both kinds
+  wide token path t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/standup                  -> ADMIT
+  wide token path t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/standup            -> ADMIT
+
+## time is controlled through moq-auth verify and relay profile
+  now=t0+10   KeySet::verify=ok  assess=ADMIT
+  now=t0+600  KeySet::verify=err(token has expired)  assess=refuse(BadToken)
+  now=t0+599  KeySet::verify=ok  assess=ADMIT
+  iat=t0+60 at now=t0+10: KeySet::verify=ok  assess=refuse(Profile("issued in the future"))
+  host clock: KeySet::verify=err(token has expired)  assess=refuse(BadToken)
