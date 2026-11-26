@@ -1,0 +1,70 @@
+platform=Linux 7.2.14-arch1-1 x86_64 rustc=rustc 1.95.0 (59807616e 2026-04-14)
+pin=4a6f52248 policy=trial moq-webrtc=vendor patch
+lan=192.168.0.108 chromium=/usr/bin/chromium
+fixture=testsrc2 1280x720 rate=30 drawtext frame counter font=/usr/share/fonts/noto/NotoSans-Regular.ttf tone=440Hz cap=1500k gop=30
+## A WHEP first presented frame, 10 joins, h264 and vp8, policy=trial
+A h264 join 1
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[142,167,4],"right":[106,95,240],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/aec52ca3-c127-4cd0-a2b8-5a2af76c18d6","postMs":41,"connectMs":296,"firstPresentedMs":407,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 2
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[143,166,3],"right":[102,96,242],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/4a5f6cfd-403a-46b1-837e-d596bd1a4812","postMs":49,"connectMs":300,"firstPresentedMs":391,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 3
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[142,169,2],"right":[103,93,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/9add0279-304a-4f23-8b7f-6da02fa78e7b","postMs":41,"connectMs":304,"firstPresentedMs":398,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 4
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[140,170,2],"right":[106,91,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/60c93aa8-833e-4935-9dab-33ba3f48c579","postMs":56,"connectMs":292,"firstPresentedMs":405,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 5
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[138,169,6],"right":[108,91,242],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/24a049a6-02ff-484e-b558-d2b4af39ce65","postMs":28,"connectMs":301,"firstPresentedMs":386,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 6
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[139,167,10],"right":[108,94,239],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0883},"location":"/session/1e1531f6-21c3-40c8-b790-a35cc220c6b4","postMs":38,"connectMs":295,"firstPresentedMs":433,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 7
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[143,164,10],"right":[104,96,240],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/7cb90610-fa4b-42e8-9ed4-1296b8dc4d40","postMs":36,"connectMs":299,"firstPresentedMs":375,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 8
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[144,165,6],"right":[102,95,243],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/87cf0ce0-7c28-4282-b8e1-dbbfd5721910","postMs":36,"connectMs":308,"firstPresentedMs":392,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 9
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[145,166,6],"right":[103,93,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/634a021e-5812-41e8-ac7c-b3e47cb6982b","postMs":54,"connectMs":307,"firstPresentedMs":406,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A h264 join 10
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[140,170,5],"right":[107,91,244],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-46,"audioRms":0.0884},"location":"/session/8c07b47f-9bb0-4e54-98e6-3b3239f061fc","postMs":35,"connectMs":300,"firstPresentedMs":376,"answerCodecs":["H264","H264","H264","H264","H264","H264","opus"]}
+A vp8 join 1
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[142,178,8],"right":[105,85,239],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-47,"audioRms":0.0749},"location":"/session/7e057c90-7085-403c-a4ca-44b01e2ed222","postMs":73,"connectMs":290,"firstPresentedMs":410,"answerCodecs":["VP8","opus"]}
+A vp8 join 2
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[145,178,9],"right":[104,85,242],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-48,"audioRms":0.0766},"location":"/session/a5a3e44a-2372-4208-93f3-f830a16afa18","postMs":61,"connectMs":260,"firstPresentedMs":388,"answerCodecs":["VP8","opus"]}
+A vp8 join 3
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[146,180,6],"right":[104,82,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-48,"audioRms":0.0762},"location":"/session/fc41f0d3-60eb-4a8f-9780-091c13a133ac","postMs":98,"connectMs":241,"firstPresentedMs":396,"answerCodecs":["VP8","opus"]}
+A vp8 join 4
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[139,185,6],"right":[105,81,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0778},"location":"/session/7529bd50-d6dc-44b2-bfc5-d7002cb7b24e","postMs":146,"connectMs":235,"firstPresentedMs":442,"answerCodecs":["VP8","opus"]}
+A vp8 join 5
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[157,161,39],"right":[109,83,240],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0776},"location":"/session/81d07909-86cb-44bf-b3e8-4d76cb512cde","postMs":84,"connectMs":311,"firstPresentedMs":456,"answerCodecs":["VP8","opus"]}
+A vp8 join 6
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[142,181,6],"right":[107,85,238],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-48,"audioRms":0.0767},"location":"/session/5ba56817-082f-4834-99ce-502ea842356c","postMs":50,"connectMs":249,"firstPresentedMs":346,"answerCodecs":["VP8","opus"]}
+A vp8 join 7
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[143,179,6],"right":[103,86,243],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0759},"location":"/session/820a2106-8a16-41ba-9f8f-154d7a0120e1","postMs":63,"connectMs":288,"firstPresentedMs":422,"answerCodecs":["VP8","opus"]}
+A vp8 join 8
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[145,181,6],"right":[104,82,244],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0782},"location":"/session/d377a5e3-3ca8-4b34-95c4-408e48dba1da","postMs":91,"connectMs":299,"firstPresentedMs":473,"answerCodecs":["VP8","opus"]}
+A vp8 join 9
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[142,184,7],"right":[108,80,241],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0765},"location":"/session/58b469f8-4e38-4547-a3f0-f9418127ef34","postMs":84,"connectMs":303,"firstPresentedMs":472,"answerCodecs":["VP8","opus"]}
+A vp8 join 10
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[150,173,15],"right":[109,83,239],"videoWidth":1280,"videoHeight":720,"audioPeakHz":434,"audioPeakDb":-48,"audioRms":0.0778},"location":"/session/29e99a99-9992-4c83-b6f0-c67ea11ff2aa","postMs":74,"connectMs":262,"firstPresentedMs":395,"answerCodecs":["VP8","opus"]}
+## B decodable first frame and lag versus a live probe
+B joiner_wall0=1795737020.528
+stream|codec_name=vp8|width=1280|height=720|duration=2.500000|nb_frames=75
+B probe_frames=106 join_frames=75
+B first_decodable_media_s=2.000 probe_newest_s=2.733 lag_s=0.7330000000000001
+## C export vp8
+export path=carol/cam segments=1 chunks=2 bytes=193027 end=deadline
+-rw-r--r-- 1 dorje dorje 193027 Nov 26 15:50 /tmp/kf-after720/c-export.1.mkv
+stream|codec_name=vp8|width=1280|height=720
+stream|codec_name=opus
+## E viewer storm negative control: 1 then 4 viewers, 20s, policy=trial
+E gate_lines=0 viewer_cause_lines=0 peer_pli_lines=0
+## F three probe-boundary runs are separate invocations; this process is policy=trial
+F policy=trial groups=2 frames=45 key_bytes=53552 other_bytes=227770 share=0.1904 quality_difference=missing cap=1500k gop=30
+stream|codec_name=vp8|width=1280|height=720|duration=1.500000|nb_frames=45
+## D1 viewer-leg blackout only (burst-dir client). Publisher leg is left alone.
+{"step":"join","browser":"chromium 156.0.8078.79","broadcast":"carol/cam","vcodec":"-","picture":{"left":[140,184,5],"right":[107,80,245],"videoWidth":1280,"videoHeight":720,"audioPeakHz":439,"audioPeakDb":-59,"audioRms":0.0316},"location":"/session/a5d7dfea-bbff-44cc-b3f0-24f366ee7823","postMs":162,"connectMs":299,"firstPresentedMs":571,"answerCodecs":["VP8","opus"]}
+D1 proxy {'to_edge': 22, 'to_edge_dropped': 0, 'to_client': 25, 'to_client_dropped': 0} 
+## D2 publisher-leg blackout (burst-dir edge) plus loss-cause PLI and post-burst keyframe
+D2 proxy 
+D2 proxy_file 
+D2 loss_gate_lines=0
+D2 stamped_frames=29
+D2 group_gaps [(0.5120000839233398, (1795737107.956, 1, '2642581µs')), (0.5350000858306885, (1795737110.588, 2, '5409520µs')), (0.4179999828338623, (1795737113.319, 3, '8309896µs'))]
+done
