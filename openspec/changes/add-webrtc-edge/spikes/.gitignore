@@ -1,0 +1,22 @@
+# Spike outputs that must never be committed: builds, media, captures, keys, tokens.
+rust/target/
+node_modules/
+*.y4m
+*.wav
+*.ivf
+*.h264
+*.opus
+*.mkv
+*.mp4
+*.webm
+*.pcap
+*.pcapng
+*.pem
+*.key
+*.jwk
+*.tok
+*keylog*
+private*.json
+verify.json
+# Evidence transcripts are committed (the root ignores *.log).
+!logs/*.log

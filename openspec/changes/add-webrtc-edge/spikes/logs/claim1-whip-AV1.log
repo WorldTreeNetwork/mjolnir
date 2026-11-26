@@ -1,0 +1,24 @@
+# claim1 WHIP in: codec=AV1 ingest-cap=2.5Mbps 2026-11-26T01:50:07Z
+## browser (publisher)
+{"step":"publish","who":"alice","broadcast":"alice/cam","vcodec":"AV1","browser":"chromium 158.0.8127.18","location":"/session/7acdf43a-84cf-4095-ab62-792bb0f72cf7","postMs":21,"connectMs":253,"answerCodecs":["AV1","opus"]}
+{"step":"stats","t":3,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":150,"bytesSent":12031,"nackCount":0},"videoOut":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesEncoded":90,"keyFramesEncoded":1,"frameWidth":640,"frameHeight":360,"packetsSent":111,"bytesSent":5690,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libaom"},"state":"connected"}
+{"step":"stats","t":6,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":300,"bytesSent":24181,"nackCount":0},"videoOut":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesEncoded":180,"keyFramesEncoded":2,"frameWidth":960,"frameHeight":540,"packetsSent":263,"bytesSent":22947,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libaom"},"state":"connected"}
+{"step":"stats","t":9,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":450,"bytesSent":36331,"nackCount":0},"videoOut":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesEncoded":270,"keyFramesEncoded":3,"frameWidth":1280,"frameHeight":720,"packetsSent":353,"bytesSent":27742,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"none","encoderImplementation":"libaom"},"state":"connected"}
+{"step":"stats","t":12,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":600,"bytesSent":48481,"nackCount":0},"videoOut":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesEncoded":360,"keyFramesEncoded":3,"frameWidth":1280,"frameHeight":720,"packetsSent":443,"bytesSent":31342,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"none","encoderImplementation":"libaom"},"state":"connected"}
+{"step":"stats","t":15,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":750,"bytesSent":60631,"nackCount":0},"videoOut":{"codec":"video/AV1 level-idx=5;profile=0;tier=0","framesEncoded":451,"keyFramesEncoded":3,"frameWidth":1280,"frameHeight":720,"packetsSent":534,"bytesSent":34982,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"none","encoderImplementation":"libaom"},"state":"connected"}
+## MoQ plain subscriber dave
+raw path=alice/cam video track=0.av1 codec=AV1(AV1 { profile: 0, level: 1, tier: 'M', bitdepth: 8, mono_chrome: false, chroma_subsampling_x: true, chroma_subsampling_y: true, chroma_sample_position: 0, color_primaries: 2, transfer_characteristics: 2, matrix_coefficients: 2, full_range: false }) frames=175 audio track=1.opus packets=701
+{"files": ["c1-dave.ivf", "c1-dave.opus"], "streams": [{"codec_name": "av1", "codec_type": "video", "width": 640, "height": 360}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 174, "video_frames_matching": 174, "video_decode_errors": 3, "video_mean_left": [199, 48, 120], "video_mean_right": [29, 159, 158], "audio_seconds": 14.01, "audio_peak_hz": 1000.0, "audio_rms": 0.0882, "verdict": "content-ok"}
+exit=0
+## MoQ plain subscriber erin
+raw path=alice/cam video track=0.av1/1 codec=AV1(AV1 { profile: 0, level: 4, tier: 'M', bitdepth: 8, mono_chrome: false, chroma_subsampling_x: true, chroma_subsampling_y: true, chroma_sample_position: 0, color_primaries: 2, transfer_characteristics: 2, matrix_coefficients: 2, full_range: false }) frames=61 audio track=1.opus packets=298
+{"files": ["c1-erin.ivf", "c1-erin.opus"], "streams": [{"codec_name": "av1", "codec_type": "video", "width": 960, "height": 540}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 60, "video_frames_matching": 60, "video_decode_errors": 3, "video_mean_left": [199, 48, 120], "video_mean_right": [29, 159, 158], "audio_seconds": 5.95, "audio_peak_hz": 1000.0, "audio_rms": 0.0881, "verdict": "content-ok"}
+exit=0
+## moq-mux MKV exporter frank (late)
+export segment=1 rolled: mkv: MKV track layout changed after header was emitted: track '0.av1/2' added
+export path=alice/cam segments=2 chunks=2 bytes=326 end=deadline
+{"files": ["c1-frank.1.mkv", "c1-frank.2.mkv"], "streams": [], "video_frames": 0, "video_frames_matching": 0, "video_decode_errors": 6, "audio_seconds": 0.0, "verdict": "content-bad"}
+exit=1
+## edge log
+2026-11-26T01:50:08.469171Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=06e7d5d3eefed693ff05b29dc21987e7 cap=2500000
+2026-11-26T01:50:08.469360Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=7acdf43a-84cf-4095-ab62-792bb0f72cf7 ttl_ms=598530 setup_ms=16

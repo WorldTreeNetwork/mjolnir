@@ -1,0 +1,33 @@
+[workspace]
+
+[package]
+name = "webrtc-edge-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Spike S4/S7 for the webrtc-edge node (docs/plans/webrtc-turn-sfu.md). Not product code.
+# Pins match native/mjolnir_relay: moq 4a6f52248.
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+bs58 = "0.5"
+bytes = "1"
+hang = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+kio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248" }
+mjolnir-relay = { path = "../../../../../native/mjolnir_relay" }
+moq-auth = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-mux = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-net = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", features = ["async"] }
+moq-relay = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-tokio = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+moq-webrtc = { git = "https://github.com/moq-dev/moq", rev = "4a6f52248", default-features = false }
+rcgen = "0.13"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-std", "io-util", "fs", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+
+[profile.release]
+debug = false

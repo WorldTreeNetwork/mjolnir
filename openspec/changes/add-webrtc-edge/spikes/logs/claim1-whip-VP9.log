@@ -1,0 +1,25 @@
+# claim1 WHIP in: codec=VP9 ingest-cap=2.5Mbps 2026-11-26T01:49:49Z
+## browser (publisher)
+{"step":"publish","who":"alice","broadcast":"alice/cam","vcodec":"VP9","browser":"chromium 158.0.8127.18","location":"/session/8072c617-9e8c-4cf0-8b4c-497df692351d","postMs":21,"connectMs":2,"answerCodecs":["VP9","VP9","opus"]}
+{"step":"stats","t":3,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":150,"bytesSent":12031,"nackCount":0},"videoOut":{"codec":"video/VP9 profile-id=0","framesEncoded":86,"keyFramesEncoded":1,"frameWidth":320,"frameHeight":180,"packetsSent":86,"bytesSent":3248,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":6,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":300,"bytesSent":24181,"nackCount":0},"videoOut":{"codec":"video/VP9 profile-id=0","framesEncoded":176,"keyFramesEncoded":2,"frameWidth":480,"frameHeight":270,"packetsSent":208,"bytesSent":37493,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":9,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":450,"bytesSent":36331,"nackCount":0},"videoOut":{"codec":"video/VP9 profile-id=0","framesEncoded":267,"keyFramesEncoded":4,"frameWidth":960,"frameHeight":540,"packetsSent":299,"bytesSent":45005,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":12,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":600,"bytesSent":48481,"nackCount":0},"videoOut":{"codec":"video/VP9 profile-id=0","framesEncoded":357,"keyFramesEncoded":5,"frameWidth":1280,"frameHeight":720,"packetsSent":403,"bytesSent":59022,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"none","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":15,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":750,"bytesSent":60631,"nackCount":0},"videoOut":{"codec":"video/VP9 profile-id=0","framesEncoded":447,"keyFramesEncoded":5,"frameWidth":1280,"frameHeight":720,"packetsSent":493,"bytesSent":62442,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"none","encoderImplementation":"libvpx"},"state":"connected"}
+## MoQ plain subscriber dave
+raw path=alice/cam video track=0.vp9 codec=VP9(VP9 { profile: 0, level: 11, bit_depth: 8, chroma_subsampling: 1, color_primaries: 2, transfer_characteristics: 2, matrix_coefficients: 2, full_range: false }) frames=118 audio track=1.opus packets=701
+{"files": ["c1-dave.ivf", "c1-dave.opus"], "streams": [{"codec_name": "vp9", "codec_type": "video", "width": 320, "height": 180}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 117, "video_frames_matching": 117, "video_decode_errors": 3, "video_mean_left": [198, 48, 119], "video_mean_right": [28, 159, 158], "audio_seconds": 14.01, "audio_peak_hz": 1000.0, "audio_rms": 0.0882, "verdict": "content-ok"}
+exit=0
+## MoQ plain subscriber erin
+raw path=alice/cam video track=0.vp9/1 codec=VP9(VP9 { profile: 0, level: 21, bit_depth: 8, chroma_subsampling: 1, color_primaries: 2, transfer_characteristics: 2, matrix_coefficients: 2, full_range: false }) frames=62 audio track=1.opus packets=298
+{"files": ["c1-erin.ivf", "c1-erin.opus"], "streams": [{"codec_name": "vp9", "codec_type": "video", "width": 640, "height": 360}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 61, "video_frames_matching": 61, "video_decode_errors": 3, "video_mean_left": [199, 48, 120], "video_mean_right": [29, 159, 158], "audio_seconds": 5.95, "audio_peak_hz": 1000.0, "audio_rms": 0.0881, "verdict": "content-ok"}
+exit=0
+## moq-mux MKV exporter frank (late)
+export segment=1 rolled: mkv: MKV track layout changed after header was emitted: track '0.vp9/2' added
+export segment=2 rolled: mkv: MKV track layout changed after header was emitted: track '0.vp9/3' added
+export path=alice/cam segments=3 chunks=3 bytes=489 end=deadline
+{"files": ["c1-frank.1.mkv", "c1-frank.2.mkv", "c1-frank.3.mkv"], "streams": [], "video_frames": 0, "video_frames_matching": 0, "video_decode_errors": 9, "audio_seconds": 0.0, "verdict": "content-bad"}
+exit=1
+## edge log
+2026-11-26T01:49:49.905324Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=4cca83a478a1fd9830b7d537e6599690 cap=2500000
+2026-11-26T01:49:49.905512Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=8072c617-9e8c-4cf0-8b4c-497df692351d ttl_ms=599094 setup_ms=16

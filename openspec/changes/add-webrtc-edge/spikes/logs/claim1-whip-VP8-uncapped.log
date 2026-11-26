@@ -1,0 +1,23 @@
+# claim1 WHIP in: codec=VP8 ingest-cap=0Mbps 2026-11-26T01:50:33Z
+## browser (publisher)
+{"step":"publish","who":"alice","broadcast":"alice/cam","vcodec":"VP8","browser":"chromium 158.0.8127.18","location":"/session/0333c421-0f0d-43cb-96a0-a6efdac23872","postMs":23,"connectMs":253,"answerCodecs":["VP8","opus"]}
+{"step":"stats","t":3,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":150,"bytesSent":12031,"nackCount":0},"videoOut":{"codec":"video/VP8","framesEncoded":90,"keyFramesEncoded":1,"frameWidth":640,"frameHeight":360,"packetsSent":125,"bytesSent":32387,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":6,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":300,"bytesSent":24181,"nackCount":0},"videoOut":{"codec":"video/VP8","framesEncoded":180,"keyFramesEncoded":1,"frameWidth":640,"frameHeight":360,"packetsSent":227,"bytesSent":55227,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":9,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":450,"bytesSent":36331,"nackCount":0},"videoOut":{"codec":"video/VP8","framesEncoded":271,"keyFramesEncoded":1,"frameWidth":640,"frameHeight":360,"packetsSent":318,"bytesSent":72790,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":12,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":601,"bytesSent":48562,"nackCount":0},"videoOut":{"codec":"video/VP8","framesEncoded":361,"keyFramesEncoded":1,"frameWidth":640,"frameHeight":360,"packetsSent":420,"bytesSent":95616,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+{"step":"stats","t":15,"audioOut":{"codec":"audio/opus minptime=10;useinbandfec=1","packetsSent":751,"bytesSent":60712,"nackCount":0},"videoOut":{"codec":"video/VP8","framesEncoded":451,"keyFramesEncoded":2,"frameWidth":960,"frameHeight":540,"packetsSent":510,"bytesSent":116854,"nackCount":0,"pliCount":0,"firCount":0,"qualityLimitationReason":"bandwidth","encoderImplementation":"libvpx"},"state":"connected"}
+## MoQ plain subscriber dave
+raw path=alice/cam video track=0.vp8 codec=VP8 frames=422 audio track=1.opus packets=701
+{"files": ["c1-dave.ivf", "c1-dave.opus"], "streams": [{"codec_name": "vp8", "codec_type": "video", "width": 640, "height": 360}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 422, "video_frames_matching": 422, "video_decode_errors": 3, "video_mean_left": [199, 48, 120], "video_mean_right": [29, 159, 158], "audio_seconds": 14.01, "audio_peak_hz": 1000.0, "audio_rms": 0.0882, "verdict": "content-ok"}
+exit=0
+## MoQ plain subscriber erin
+raw path=alice/cam video track=0.vp8 codec=VP8 frames=394 audio track=1.opus packets=298
+{"files": ["c1-erin.ivf", "c1-erin.opus"], "streams": [{"codec_name": "vp8", "codec_type": "video", "width": 640, "height": 360}, {"codec_name": "opus", "codec_type": "audio"}], "video_frames": 394, "video_frames_matching": 394, "video_decode_errors": 3, "video_mean_left": [199, 48, 120], "video_mean_right": [29, 159, 158], "audio_seconds": 5.95, "audio_peak_hz": 1000.0, "audio_rms": 0.0881, "verdict": "content-ok"}
+exit=0
+## moq-mux MKV exporter frank (late)
+export path=alice/cam segments=1 chunks=1 bytes=156 end=deadline
+{"files": ["c1-frank.1.mkv"], "streams": [], "video_frames": 0, "video_frames_matching": 0, "video_decode_errors": 3, "audio_seconds": 0.0, "verdict": "content-bad"}
+exit=1
+## edge log
+2026-11-26T01:50:34.142525Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=3f7c51e9263e8df1e22dae1b6bdac665
+2026-11-26T01:50:34.142712Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=0333c421-0f0d-43cb-96a0-a6efdac23872 ttl_ms=598857 setup_ms=17
