@@ -1,0 +1,1214 @@
+From 91f431168b1ebd9c5fb83a28e63391543ffad7a0 Mon Sep 17 00:00:00 2001
+From: Duke Jones <104690+dukejones@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 15:36:44 -0800
+Subject: [PATCH] Add the ingest keyframe gate on the vendored pin.
+
+Policy stays off unless whip::Request enables it. When on, startup, step, period, loss, and join share one floor and one PLI. Viewer keyframe requests stay logged and dropped.
+---
+ native/vendor/moq-webrtc/src/codec/av1.rs   |  27 +-
+ native/vendor/moq-webrtc/src/codec/h264.rs  |  27 +-
+ native/vendor/moq-webrtc/src/codec/h265.rs  |  27 +-
+ native/vendor/moq-webrtc/src/codec/mod.rs   |  35 +-
+ native/vendor/moq-webrtc/src/codec/vp8.rs   |  16 +-
+ native/vendor/moq-webrtc/src/codec/vp9.rs   |  16 +-
+ native/vendor/moq-webrtc/src/error.rs       |   8 +
+ native/vendor/moq-webrtc/src/ingest.rs      |  53 ++-
+ native/vendor/moq-webrtc/src/keyframe.rs    | 392 ++++++++++++++++++++
+ native/vendor/moq-webrtc/src/lib.rs         |   5 +
+ native/vendor/moq-webrtc/src/server/whip.rs |  17 +-
+ native/vendor/moq-webrtc/src/session.rs     | 194 +++++++++-
+ 12 files changed, 784 insertions(+), 33 deletions(-)
+ create mode 100644 native/vendor/moq-webrtc/src/keyframe.rs
+
+diff --git a/src/codec/av1.rs b/src/codec/av1.rs
+index aa90aa4e..809741e6 100644
+--- a/src/codec/av1.rs
++++ b/src/codec/av1.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! AV1 bridge.
+ //!
+ //! str0m hands us complete AV1 temporal units (OBU-framed, with inline sequence
+@@ -10,15 +11,31 @@ use crate::{Result, codec};
+ pub struct Bridge {
+ 	split: moq_mux::codec::av1::Split,
+ 	import: moq_mux::codec::av1::Import,
++	track: moq_net::track::Producer,
++	demand: moq_net::track::Demand,
+ }
+ 
+ impl Bridge {
+ 	/// Publish an `.av1` track on `broadcast`, adding the catalog rendition once config is known.
+ 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
+-		let track = broadcast.unique_track(".av1", catalog.track_info(hang::catalog::PRIORITY.video))?;
+-		let import = moq_mux::codec::av1::Import::new(track, catalog.reserve(), Default::default())?;
++		Self::opening(broadcast, catalog, None)
++	}
++
++	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let mut info = catalog.track_info(hang::catalog::PRIORITY.video);
++		if let Some(ratio) = refresh {
++			info = info.with_refresh(Some(ratio));
++		}
++		let track = broadcast.unique_track(".av1", info)?;
++		let demand = track.demand();
++		let import = moq_mux::codec::av1::Import::new(track.clone(), catalog.reserve(), Default::default())?;
+ 		let split = moq_mux::codec::av1::Split::new();
+-		Ok(Self { split, import })
++		Ok(Self { split, import, track, demand })
+ 	}
+ }
+ 
+@@ -44,4 +61,8 @@ impl codec::Bridge for Bridge {
+ 	fn abort(self: Box<Self>, err: moq_net::Error) {
+ 		self.import.abort(err);
+ 	}
++
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
++	}
+ }
+diff --git a/src/codec/h264.rs b/src/codec/h264.rs
+index 5c660ee3..0646909d 100644
+--- a/src/codec/h264.rs
++++ b/src/codec/h264.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! H.264 bridge.
+ //!
+ //! str0m hands us reassembled Annex-B frames (start-code prefixed NALs with
+@@ -10,14 +11,30 @@ use crate::{Result, codec};
+ pub struct Bridge {
+ 	split: moq_mux::codec::h264::Split,
+ 	import: moq_mux::codec::h264::Import,
++	track: moq_net::track::Producer,
++	demand: moq_net::track::Demand,
+ }
+ 
+ impl Bridge {
+ 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
+-		let track = broadcast.unique_track(".avc3", catalog.track_info(hang::catalog::PRIORITY.video))?;
+-		let import = moq_mux::codec::h264::Import::new(track, catalog.reserve(), Default::default())?;
++		Self::opening(broadcast, catalog, None)
++	}
++
++	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let mut info = catalog.track_info(hang::catalog::PRIORITY.video);
++		if let Some(ratio) = refresh {
++			info = info.with_refresh(Some(ratio));
++		}
++		let track = broadcast.unique_track(".avc3", info)?;
++		let demand = track.demand();
++		let import = moq_mux::codec::h264::Import::new(track.clone(), catalog.reserve(), Default::default())?;
+ 		let split = moq_mux::codec::h264::Split::new();
+-		Ok(Self { split, import })
++		Ok(Self { split, import, track, demand })
+ 	}
+ }
+ 
+@@ -43,4 +60,8 @@ impl codec::Bridge for Bridge {
+ 	fn abort(self: Box<Self>, err: moq_net::Error) {
+ 		self.import.abort(err);
+ 	}
++
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
++	}
+ }
+diff --git a/src/codec/h265.rs b/src/codec/h265.rs
+index 2dd84798..014b000c 100644
+--- a/src/codec/h265.rs
++++ b/src/codec/h265.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! H.265 bridge.
+ //!
+ //! str0m hands us reassembled Annex-B frames (start-code prefixed NALs with
+@@ -11,15 +12,31 @@ use crate::{Result, codec};
+ pub struct Bridge {
+ 	split: moq_mux::codec::h265::Split,
+ 	import: moq_mux::codec::h265::Import,
++	track: moq_net::track::Producer,
++	demand: moq_net::track::Demand,
+ }
+ 
+ impl Bridge {
+ 	/// Publish a `.hev1` track on `broadcast`, adding the catalog rendition once config is known.
+ 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
+-		let track = broadcast.unique_track(".hev1", catalog.track_info(hang::catalog::PRIORITY.video))?;
+-		let import = moq_mux::codec::h265::Import::new(track, catalog.reserve(), Default::default())?;
++		Self::opening(broadcast, catalog, None)
++	}
++
++	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let mut info = catalog.track_info(hang::catalog::PRIORITY.video);
++		if let Some(ratio) = refresh {
++			info = info.with_refresh(Some(ratio));
++		}
++		let track = broadcast.unique_track(".hev1", info)?;
++		let demand = track.demand();
++		let import = moq_mux::codec::h265::Import::new(track.clone(), catalog.reserve(), Default::default())?;
+ 		let split = moq_mux::codec::h265::Split::new();
+-		Ok(Self { split, import })
++		Ok(Self { split, import, track, demand })
+ 	}
+ }
+ 
+@@ -45,4 +62,8 @@ impl codec::Bridge for Bridge {
+ 	fn abort(self: Box<Self>, err: moq_net::Error) {
+ 		self.import.abort(err);
+ 	}
++
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
++	}
+ }
+diff --git a/src/codec/mod.rs b/src/codec/mod.rs
+index bfa5bf11..f53872df 100644
+--- a/src/codec/mod.rs
++++ b/src/codec/mod.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! Per-codec bridges between moq-mux and str0m.
+ //!
+ //! Two directions:
+@@ -57,6 +58,11 @@ pub trait Bridge: Send {
+ 	///
+ 	/// Consumes the bridge: the track is dead afterwards.
+ 	fn abort(self: Box<Self>, err: moq_net::Error);
++
++	/// Wanted group and largest written group, when this bridge publishes a video track.
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		None
++	}
+ }
+ 
+ /// A bridge's finished track, held so a finished broadcast keeps serving it.
+@@ -139,6 +145,8 @@ enum DeferredState<I> {
+ /// Defers a video importer's catalog reservation until its first frame.
+ pub(crate) struct DeferredVideo<I> {
+ 	state: DeferredState<I>,
++	track: moq_net::track::Producer,
++	demand: moq_net::track::Demand,
+ }
+ 
+ impl<I: DeferredImport> DeferredVideo<I> {
+@@ -148,12 +156,35 @@ impl<I: DeferredImport> DeferredVideo<I> {
+ 		catalog: moq_mux::catalog::Producer,
+ 		suffix: &str,
+ 	) -> Result<Self> {
+-		let track = broadcast.unique_track(suffix, catalog.track_info(hang::catalog::PRIORITY.video))?;
++		Self::opening(broadcast, catalog, suffix, None)
++	}
++
++	/// As [`new`](Self::new), with `refresh` on the video track info when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		suffix: &str,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let mut info = catalog.track_info(hang::catalog::PRIORITY.video);
++		if let Some(ratio) = refresh {
++			info = info.with_refresh(Some(ratio));
++		}
++		let track = broadcast.unique_track(suffix, info)?;
++		let demand = track.demand();
+ 		Ok(Self {
+-			state: DeferredState::Pending(Box::new(PendingVideo { track, catalog })),
++			state: DeferredState::Pending(Box::new(PendingVideo { track: track.clone(), catalog })),
++			track,
++			demand,
+ 		})
+ 	}
+ 
++	/// The group consumers want, and the largest group written.
++	pub fn join_sample(&self) -> (Option<u64>, Option<u64>) {
++		let largest = self.track.largest().map(|position| position.group);
++		(self.demand.wanted(), largest)
++	}
++
+ 	/// Decode a frame, creating the importer on first use.
+ 	pub fn decode(&mut self, frame: Bytes, pts: moq_net::Timestamp) -> Result<()> {
+ 		if let DeferredState::Active(import) = &mut self.state {
+diff --git a/src/codec/vp8.rs b/src/codec/vp8.rs
+index 3042b817..0ccf3e76 100644
+--- a/src/codec/vp8.rs
++++ b/src/codec/vp8.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! VP8 bridge.
+ //!
+ //! str0m hands us complete VP8 frames, which is exactly the raw shape that
+@@ -14,7 +15,16 @@ pub struct Bridge {
+ impl Bridge {
+ 	/// Publish a `.vp8` track on `broadcast`, adding the catalog rendition once config is known.
+ 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
+-		let import = codec::DeferredVideo::new(broadcast, catalog, ".vp8")?;
++		Self::opening(broadcast, catalog, None)
++	}
++
++	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let import = codec::DeferredVideo::opening(broadcast, catalog, ".vp8", refresh)?;
+ 		Ok(Self { import })
+ 	}
+ }
+@@ -36,6 +46,10 @@ impl codec::Bridge for Bridge {
+ 	fn abort(self: Box<Self>, err: moq_net::Error) {
+ 		self.import.abort(err);
+ 	}
++
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		Some(self.import.join_sample())
++	}
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/codec/vp9.rs b/src/codec/vp9.rs
+index dc08add7..be715485 100644
+--- a/src/codec/vp9.rs
++++ b/src/codec/vp9.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! VP9 bridge.
+ //!
+ //! str0m hands us complete VP9 frames, which is exactly the raw shape that
+@@ -14,7 +15,16 @@ pub struct Bridge {
+ impl Bridge {
+ 	/// Publish a `.vp9` track on `broadcast`, adding the catalog rendition once config is known.
+ 	pub fn new(broadcast: moq_net::broadcast::Producer, catalog: moq_mux::catalog::Producer) -> Result<Self> {
+-		let import = codec::DeferredVideo::new(broadcast, catalog, ".vp9")?;
++		Self::opening(broadcast, catalog, None)
++	}
++
++	/// As [`new`](Self::new), with a refresh ratio on the video track when set.
++	pub fn opening(
++		broadcast: moq_net::broadcast::Producer,
++		catalog: moq_mux::catalog::Producer,
++		refresh: Option<u32>,
++	) -> Result<Self> {
++		let import = codec::DeferredVideo::opening(broadcast, catalog, ".vp9", refresh)?;
+ 		Ok(Self { import })
+ 	}
+ }
+@@ -36,4 +46,8 @@ impl codec::Bridge for Bridge {
+ 	fn abort(self: Box<Self>, err: moq_net::Error) {
+ 		self.import.abort(err);
+ 	}
++
++	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
++		Some(self.import.join_sample())
++	}
+ }
+diff --git a/src/error.rs b/src/error.rs
+index 6bdbdf52..ea6c3c79 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -1,4 +1,8 @@
+ /// Errors produced by the WebRTC <-> MoQ gateway.
++///
++/// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
++/// Added `InvalidKeyframes`. Upstream: rs/moq-webrtc/src/error.rs at
++/// 4a6f522483168ace392718d68b58a402533c897d.
+ #[derive(Debug, thiserror::Error)]
+ #[non_exhaustive]
+ pub enum Error {
+@@ -71,6 +75,10 @@ pub enum Error {
+ 	#[error("video bridge initialization failed")]
+ 	BridgeFailed,
+ 
++	/// An enabled keyframe policy has a zero floor or a zero period.
++	#[error("invalid keyframe policy")]
++	InvalidKeyframes,
++
+ 	/// This CPU lacks a feature rind, the crypto under DTLS, SRTP, and HTTPS, requires.
+ 	#[error(transparent)]
+ 	UnsupportedCpu(#[from] moq_crypto::cpu::UnsupportedCpu),
+diff --git a/src/ingest.rs b/src/ingest.rs
+index f26dfe30..b6b5e761 100644
+--- a/src/ingest.rs
++++ b/src/ingest.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! Per-broadcast [`MediaSink`](crate::session::MediaSink) used by every
+ //! RTP-in flow (`server publish` / WHIP server, `client subscribe` / WHEP
+ //! client).
+@@ -15,6 +16,8 @@ pub struct IngestSink {
+ 	/// The route announcing the broadcast, when the sink owns it: held for the session's
+ 	/// life, linger included, and retracted when the session drops it.
+ 	_route: Option<moq_net::origin::Route>,
++	/// Set on video tracks when the ingest keyframe policy is enabled.
++	video_refresh: Option<u32>,
+ }
+ 
+ impl IngestSink {
+@@ -25,9 +28,15 @@ impl IngestSink {
+ 			catalog,
+ 			bridges: session::Bridges::new(),
+ 			_route: None,
++			video_refresh: None,
+ 		}
+ 	}
+ 
++	/// Video tracks opened after this carry `refresh` on their info.
++	pub fn set_video_refresh(&mut self, refresh: Option<u32>) {
++		self.video_refresh = refresh;
++	}
++
+ 	/// Fill `route`'s broadcast under a catalog minted from `config`, keeping the route for
+ 	/// the session's life.
+ 	pub fn routed(route: moq_net::origin::Route, config: moq_mux::catalog::Config) -> Result<Self> {
+@@ -65,21 +74,31 @@ impl session::MediaSink for IngestSink {
+ 					channels,
+ 				)?)
+ 			}
+-			str0m::format::Codec::H264 => {
+-				Box::new(codec::h264::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
+-			}
+-			str0m::format::Codec::H265 => {
+-				Box::new(codec::h265::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
+-			}
+-			str0m::format::Codec::Vp8 => {
+-				Box::new(codec::vp8::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
+-			}
+-			str0m::format::Codec::Vp9 => {
+-				Box::new(codec::vp9::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
+-			}
+-			str0m::format::Codec::Av1 => {
+-				Box::new(codec::av1::Bridge::new(self.broadcast.clone(), self.catalog.clone())?)
+-			}
++			str0m::format::Codec::H264 => Box::new(codec::h264::Bridge::opening(
++				self.broadcast.clone(),
++				self.catalog.clone(),
++				self.video_refresh,
++			)?),
++			str0m::format::Codec::H265 => Box::new(codec::h265::Bridge::opening(
++				self.broadcast.clone(),
++				self.catalog.clone(),
++				self.video_refresh,
++			)?),
++			str0m::format::Codec::Vp8 => Box::new(codec::vp8::Bridge::opening(
++				self.broadcast.clone(),
++				self.catalog.clone(),
++				self.video_refresh,
++			)?),
++			str0m::format::Codec::Vp9 => Box::new(codec::vp9::Bridge::opening(
++				self.broadcast.clone(),
++				self.catalog.clone(),
++				self.video_refresh,
++			)?),
++			str0m::format::Codec::Av1 => Box::new(codec::av1::Bridge::opening(
++				self.broadcast.clone(),
++				self.catalog.clone(),
++				self.video_refresh,
++			)?),
+ 			other => return Err(Error::UnsupportedCodec(format!("{other:?}"))),
+ 		};
+ 		self.bridges.insert(mid, bridge);
+@@ -94,6 +113,10 @@ impl session::MediaSink for IngestSink {
+ 		self.bridges.push(mid, frame)
+ 	}
+ 
++	fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
++		self.bridges.join_samples()
++	}
++
+ 	fn abort(&mut self, err: moq_net::Error) {
+ 		self.catalog.clone().abort(err.clone());
+ 		self.bridges.abort(err);
+diff --git a/src/keyframe.rs b/src/keyframe.rs
+new file mode 100644
+index 00000000..94904ae5
+--- /dev/null
++++ b/src/keyframe.rs
+@@ -0,0 +1,392 @@
++//! Ingest keyframe gate. One per video line. There is no viewer cause.
++//!
++//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
++//! Added the ingest keyframe policy. Upstream: rs/moq-webrtc/src at
++//! 4a6f522483168ace392718d68b58a402533c897d. This file is new.
++
++use std::time::Duration;
++
++use kio::clock::Instant;
++
++/// Policy carried on [`crate::server::whip::Request`]. Default is off, which is the pin.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct Keyframes {
++	/// When false, the session keeps the pinned PLI paths and this gate is not called.
++	pub enabled: bool,
++	/// Minimum gap between two sends on one line.
++	pub floor: Duration,
++	/// Request cadence after the later of the last keyframe and the last sent PLI.
++	pub period: Duration,
++	/// A non-contiguous delta may add a loss cause.
++	pub on_loss: bool,
++	/// A join past [`Self::ratio`] may add a join cause.
++	pub on_join: bool,
++	/// Groups ahead of the largest written that count as one join request.
++	pub ratio: u32,
++}
++
++impl Default for Keyframes {
++	fn default() -> Self {
++		Self {
++			enabled: false,
++			floor: Duration::from_secs(1),
++			period: Duration::from_secs(2),
++			on_loss: true,
++			on_join: true,
++			ratio: 4,
++		}
++	}
++}
++
++impl Keyframes {
++	/// Enabled trial: floor 1s, period 2s, loss on, join ratio 4.
++	pub fn trial() -> Self {
++		Self { enabled: true, ..Self::default() }
++	}
++
++	/// `Err` when enabled with a zero floor or a zero period.
++	pub fn validate(self) -> Result<(), ()> {
++		if self.enabled && (self.floor.is_zero() || self.period.is_zero()) {
++			Err(())
++		} else {
++			Ok(())
++		}
++	}
++}
++
++/// Why a line wants a keyframe. A viewer PLI is not a cause.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Cause {
++	Startup,
++	Step,
++	Period,
++	Loss,
++	Join,
++}
++
++impl Cause {
++	fn bit(self) -> u8 {
++		match self {
++			Self::Startup => 1,
++			Self::Step => 2,
++			Self::Period => 4,
++			Self::Loss => 8,
++			Self::Join => 16,
++		}
++	}
++}
++
++/// One held request: a bit, a cause mask, and one deadline.
++#[derive(Clone, Debug, Default)]
++pub struct Gate {
++	pending: bool,
++	causes: u8,
++	deadline: Option<Instant>,
++	last_sent: Option<Instant>,
++	last_keyframe: Option<Instant>,
++	/// How many sends were held because the writer was missing or refused.
++	pub held: u64,
++	pli: bool,
++}
++
++/// What a due request did.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Send {
++	/// The writer accepted the PLI. `causes` is the mask of everything since the previous send.
++	Sent { causes: u8 },
++	/// Still held. `last_sent` did not move.
++	Held { causes: u8 },
++}
++
++impl Gate {
++	pub fn new(pli: bool) -> Self {
++		Self { pli, ..Self::default() }
++	}
++
++	pub fn note(&mut self, cause: Cause, when: Instant) {
++		self.pending = true;
++		self.causes |= cause.bit();
++		if self.deadline.is_none() {
++			self.deadline = Some(when);
++		}
++	}
++
++	/// A keyframe cancels the held request and starts the period from now.
++	pub fn on_keyframe(&mut self, policy: &Keyframes, now: Instant) {
++		self.pending = false;
++		self.causes = 0;
++		self.deadline = None;
++		self.last_keyframe = Some(now);
++		if policy.enabled {
++			self.arm_period(policy, now);
++		}
++	}
++
++	fn arm_period(&mut self, policy: &Keyframes, now: Instant) {
++		let base = match (self.last_keyframe, self.last_sent) {
++			(Some(k), Some(s)) => k.max(s),
++			(Some(k), None) => k,
++			(None, Some(s)) => s,
++			(None, None) => now,
++		};
++		self.deadline = Some(base.saturating_add(policy.period));
++	}
++
++	/// The armed deadline, once. A past deadline is cleared so it is not returned again.
++	pub fn take_deadline(&mut self, now: Instant) -> Option<Instant> {
++		match self.deadline {
++			Some(at) if now >= at => {
++				self.deadline = None;
++				Some(at)
++			}
++			_ => None,
++		}
++	}
++
++	pub fn deadline(&self) -> Option<Instant> {
++		self.deadline
++	}
++
++	/// Whether a send is allowed now, before the writer is touched.
++	pub fn ready(&self, policy: &Keyframes, now: Instant) -> bool {
++		if !self.pending || !self.pli {
++			return false;
++		}
++		match self.last_sent {
++			Some(sent) => now >= sent.saturating_add(policy.floor),
++			None => true,
++		}
++	}
++
++	/// Send when the floor allows and the line negotiated PLI. A refused send stays held.
++	pub fn poll_send(&mut self, policy: &Keyframes, now: Instant, writer_accepted: bool) -> Option<Send> {
++		if !self.pending || !self.pli {
++			return None;
++		}
++		if let Some(sent) = self.last_sent
++			&& now < sent.saturating_add(policy.floor)
++		{
++			return None;
++		}
++		let causes = self.causes;
++		if !writer_accepted {
++			self.held += 1;
++			if self.deadline.is_some_and(|at| now >= at) {
++				self.deadline = None;
++			}
++			return Some(Send::Held { causes });
++		}
++		self.pending = false;
++		self.causes = 0;
++		self.last_sent = Some(now);
++		self.arm_period(policy, now);
++		Some(Send::Sent { causes })
++	}
++
++	/// A strictly future deadline from another cause re-arms a disarmed line.
++	pub fn rearm(&mut self, at: Instant, now: Instant) {
++		if at > now {
++			self.deadline = Some(at);
++		}
++	}
++}
++
++/// Earliest armed instant. A disarmed line contributes nothing.
++pub fn earliest_deadline<I>(times: I) -> Option<Instant>
++where
++	I: IntoIterator<Item = Option<Instant>>,
++{
++	times.into_iter().flatten().min()
++}
++
++/// Join against the live demand. The first reading requests nothing.
++#[derive(Clone, Debug)]
++pub struct JoinWatch {
++	seen: bool,
++	fired_at: Option<u64>,
++}
++
++impl Default for JoinWatch {
++	fn default() -> Self {
++		Self { seen: false, fired_at: None }
++	}
++}
++
++impl JoinWatch {
++	/// `wanted` is the group consumers want. `largest` is the largest written group, `None` when empty.
++	pub fn observe(&mut self, policy: &Keyframes, wanted: Option<u64>, largest: Option<u64>) -> bool {
++		if !self.seen {
++			self.seen = true;
++			return false;
++		}
++		if !policy.enabled || !policy.on_join {
++			return false;
++		}
++		let Some(wanted) = wanted else {
++			return false;
++		};
++		if largest.is_none() && wanted == 0 {
++			return false;
++		}
++		let largest = largest.unwrap_or(0);
++		let over = wanted > largest && wanted - largest >= u64::from(policy.ratio);
++		if over && self.fired_at != Some(wanted) {
++			self.fired_at = Some(wanted);
++			true
++		} else {
++			false
++		}
++	}
++}
++
++/// Causes on one send, for tests and the gate log.
++pub fn cause_names(mask: u8) -> Vec<&'static str> {
++	let mut names = Vec::new();
++	for (cause, name) in [
++		(Cause::Startup, "startup"),
++		(Cause::Step, "step"),
++		(Cause::Period, "period"),
++		(Cause::Loss, "loss"),
++		(Cause::Join, "join"),
++	] {
++		if mask & cause.bit() != 0 {
++			names.push(name);
++		}
++	}
++	names
++}
++
++#[cfg(test)]
++mod tests {
++	use super::*;
++
++	#[test]
++	fn floor_default_is_one_second_and_zero_is_invalid() {
++		assert_eq!(Keyframes::default().floor, Duration::from_secs(1));
++		assert!(Keyframes::default().validate().is_ok());
++		let mut bad = Keyframes::trial();
++		bad.floor = Duration::ZERO;
++		assert!(bad.validate().is_err());
++		bad = Keyframes::trial();
++		bad.period = Duration::ZERO;
++		assert!(bad.validate().is_err());
++	}
++
++	#[test]
++	fn two_enabled_requests_are_a_second_apart() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		gate.note(Cause::Startup, t0);
++		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
++		gate.note(Cause::Step, t0);
++		assert!(gate.poll_send(&policy, t0, true).is_none(), "inside the floor");
++		let later = t0.saturating_add(policy.floor);
++		assert!(matches!(gate.poll_send(&policy, later, true), Some(Send::Sent { .. })));
++	}
++
++	#[test]
++	fn overlapping_causes_are_one_send() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		for cause in [Cause::Startup, Cause::Step, Cause::Period, Cause::Loss, Cause::Join] {
++			gate.note(cause, t0);
++		}
++		match gate.poll_send(&policy, t0, true) {
++			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup", "step", "period", "loss", "join"]),
++			other => panic!("{other:?}"),
++		}
++		assert!(gate.poll_send(&policy, t0, true).is_none());
++	}
++
++	#[test]
++	fn a_keyframe_cancels_the_held_request() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		gate.note(Cause::Startup, t0);
++		gate.on_keyframe(&policy, t0);
++		assert!(gate.poll_send(&policy, t0, true).is_none());
++	}
++
++	#[test]
++	fn an_unanswered_pli_arms_the_period_four_seconds_out() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		let sent_at = t0.saturating_add(Duration::from_secs(2));
++		gate.note(Cause::Period, sent_at);
++		assert!(matches!(gate.poll_send(&policy, sent_at, true), Some(Send::Sent { .. })));
++		let deadline = gate.deadline().unwrap();
++		assert_eq!(deadline, sent_at.saturating_add(Duration::from_secs(2)));
++		assert!(gate.take_deadline(sent_at).is_none(), "not due yet");
++		assert!(gate.take_deadline(deadline).is_some());
++		assert!(gate.take_deadline(deadline).is_none(), "a past deadline is returned once");
++	}
++
++	#[test]
++	fn a_refused_writer_holds_and_does_not_move_last_sent() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		gate.note(Cause::Startup, t0);
++		assert!(matches!(gate.poll_send(&policy, t0, false), Some(Send::Held { .. })));
++		assert_eq!(gate.held, 1);
++		assert!(gate.last_sent.is_none());
++		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
++	}
++
++	#[test]
++	fn a_line_without_pli_never_sends() {
++		let policy = Keyframes::trial();
++		let mut gate = Gate::new(false);
++		gate.note(Cause::Startup, Instant::now());
++		assert!(gate.poll_send(&policy, Instant::now(), true).is_none());
++	}
++
++	#[test]
++	fn a_future_deadline_rearms() {
++		let mut gate = Gate::new(true);
++		let now = Instant::now();
++		gate.take_deadline(now);
++		let later = now.saturating_add(Duration::from_secs(3));
++		gate.rearm(later, now);
++		assert_eq!(gate.deadline(), Some(later));
++	}
++
++	#[test]
++	fn the_first_join_reading_requests_nothing() {
++		let policy = Keyframes::trial();
++		let mut watch = JoinWatch::default();
++		assert!(!watch.observe(&policy, Some(8), Some(0)));
++		assert!(watch.observe(&policy, Some(8), Some(0)), "the same demand, once it is a change past the first read");
++		assert!(!watch.observe(&policy, Some(2), Some(0)), "under the ratio");
++		assert!(!watch.observe(&policy, Some(0), None), "an empty track's group 0");
++	}
++
++	#[tokio::test(start_paused = true)]
++	async fn the_earliest_armed_deadline_is_the_paused_clock() {
++		let now = Instant::now();
++		let remb = Some(now.saturating_add(Duration::from_secs(5)));
++		let gate = Some(now.saturating_add(Duration::from_secs(1)));
++		assert_eq!(earliest_deadline([remb, gate, None]), gate);
++		assert!(earliest_deadline([None, None]).is_none());
++	}
++
++	#[test]
++	fn loss_off_adds_no_loss_cause_and_startup_still_notes() {
++		let mut policy = Keyframes::trial();
++		policy.on_loss = false;
++		let mut gate = Gate::new(true);
++		let t0 = Instant::now();
++		if policy.on_loss {
++			gate.note(Cause::Loss, t0);
++		}
++		gate.note(Cause::Startup, t0);
++		match gate.poll_send(&policy, t0, true) {
++			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup"]),
++			other => panic!("{other:?}"),
++		}
++	}
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 58dddccf..0b09b737 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,6 +1,10 @@
+ //! WebRTC for MoQ: a WHIP/WHEP gateway.
+ //!
+ //! The gateway bridges WHIP (RFC 9725) and WHEP between WebRTC peers and
++//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
++//! The ingest keyframe gate is opt-in on `whip::Request`. Upstream:
++//! rs/moq-webrtc/src/lib.rs at 4a6f522483168ace392718d68b58a402533c897d.
++//!
+ //! [`moq_net`] broadcasts. The crate is split along two orthogonal axes
+ //! so all four combinations can land independently:
+ //!
+@@ -57,6 +61,7 @@ mod egress;
+ mod error;
+ mod ice;
+ mod ingest;
++mod keyframe;
+ mod sdp;
+ mod session;
+ 
+diff --git a/src/server/whip.rs b/src/server/whip.rs
+index 39cda0b2..9a444e38 100644
+--- a/src/server/whip.rs
++++ b/src/server/whip.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! `server publish`: WHIP server (RFC 9725).
+ //!
+ //! `POST /<broadcast-path>` accepts an SDP offer (`Content-Type: application/sdp`)
+@@ -104,6 +105,8 @@ pub struct Request<'a> {
+ 	/// How the ingested broadcast is published, including the [cap](moq_mux::Ingest::rate)
+ 	/// on the session's media (see [`accept`]).
+ 	pub ingest: moq_mux::Ingest,
++	/// Ingest keyframe policy. Off unless the caller enables it.
++	pub keyframes: crate::keyframe::Keyframes,
+ }
+ 
+ impl<'a> Request<'a> {
+@@ -115,6 +118,7 @@ impl<'a> Request<'a> {
+ 			broadcast: broadcast.into(),
+ 			offer,
+ 			ingest: moq_mux::Ingest::default(),
++			keyframes: crate::keyframe::Keyframes::default(),
+ 		}
+ 	}
+ }
+@@ -160,14 +164,20 @@ pub async fn accept(server: &Server, request: Request<'_>) -> Result<Response> {
+ 		broadcast,
+ 		offer,
+ 		mut ingest,
++		keyframes,
+ 	} = request;
++	keyframes.validate().map_err(|_| Error::InvalidKeyframes)?;
+ 	let (offer, refused) = sdp::parse_offer(offer)?;
+ 
+ 	// Create the broadcast hidden up front, so an out-of-scope offer is refused before
+ 	// any mux work. It announces only once negotiation succeeds (below).
+ 	// The session's sink holds the route, so it stays announced until the session ends.
+ 	let route = publisher.route(&broadcast, moq_net::origin::RouteOptions::hidden())?;
+-	let sink = Box::new(IngestSink::routed(route.clone(), ingest.catalog())?);
++	let mut sink = IngestSink::routed(route.clone(), ingest.catalog())?;
++	if keyframes.enabled {
++		sink.set_video_refresh(Some(keyframes.ratio));
++	}
++	let sink = Box::new(sink);
+ 
+ 	// Register a session on the shared media mux: known ICE credentials (so the
+ 	// demux routes this peer's STUN by ufrag), an inbox to read datagrams from,
+@@ -195,6 +205,9 @@ pub async fn accept(server: &Server, request: Request<'_>) -> Result<Response> {
+ 	let resource_id = sdp::new_resource_id();
+ 	let socket = crate::ice::Socket::new(mux.socket(), mux.candidates().to_vec(), inbound)?;
+ 	let mut session = session::Session::ingest(rtc, socket, sink)?;
++	if keyframes.enabled {
++		session = session.with_keyframes(keyframes);
++	}
+ 	let mut cap = None;
+ 	if let Some(mut rate) = ingest.rate.take() {
+ 		cap = rate.get();
+@@ -237,7 +250,7 @@ fn is_sdp(headers: &HeaderMap) -> bool {
+ #[cfg(feature = "server")]
+ fn status_for(err: &Error) -> StatusCode {
+ 	match err {
+-		Error::InvalidSdp(_) | Error::InvalidPath(_) => StatusCode::BAD_REQUEST,
++		Error::InvalidSdp(_) | Error::InvalidPath(_) | Error::InvalidKeyframes => StatusCode::BAD_REQUEST,
+ 		Error::UnsupportedCodec(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+ 		Error::Moq(moq_net::Error::Unauthorized) => StatusCode::UNAUTHORIZED,
+ 		_ => StatusCode::INTERNAL_SERVER_ERROR,
+diff --git a/src/session.rs b/src/session.rs
+index af0e9816..3bc92daa 100644
+--- a/src/session.rs
++++ b/src/session.rs
+@@ -1,3 +1,4 @@
++// Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
+ //! str0m session driver shared by every HTTP role / media direction.
+ //!
+ //! [`crate::ice::Agent`] drives the sans-IO [`str0m::Rtc`] over UDP;
+@@ -64,6 +65,11 @@ pub trait MediaSink: Send {
+ 	/// `Error::Dropped`.
+ 	fn abort(&mut self, err: moq_net::Error);
+ 
++	/// Wanted group and largest written group for each video line, when the sink knows them.
++	fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
++		Vec::new()
++	}
++
+ 	/// Called once when the peer ends the session cleanly after its final media: finish
+ 	/// every track and return the broadcast. The finished tracks stay servable while the sink
+ 	/// is held.
+@@ -122,6 +128,10 @@ pub struct Session {
+ 	rate: Option<IngestRate>,
+ 	/// Which ingested frames may reach the sink. Unused by egress sessions.
+ 	ingest_order: IngestOrder,
++	/// Ingest keyframe policy. `None` keeps the pinned PLI paths.
++	keyframes: Option<crate::keyframe::Keyframes>,
++	gates: HashMap<str0m::media::Mid, crate::keyframe::Gate>,
++	joins: HashMap<str0m::media::Mid, crate::keyframe::JoinWatch>,
+ }
+ 
+ impl Session {
+@@ -138,6 +148,9 @@ impl Session {
+ 			egress_clock: EgressClock::default(),
+ 			rate: None,
+ 			ingest_order: IngestOrder::default(),
++			keyframes: None,
++			gates: HashMap::new(),
++			joins: HashMap::new(),
+ 		})
+ 	}
+ 
+@@ -156,9 +169,18 @@ impl Session {
+ 			egress_clock: EgressClock::default(),
+ 			rate: None,
+ 			ingest_order: IngestOrder::default(),
++			keyframes: None,
++			gates: HashMap::new(),
++			joins: HashMap::new(),
+ 		})
+ 	}
+ 
++	/// Enable the ingest keyframe gate. The pinned paths stay when this is not called.
++	pub(crate) fn with_keyframes(mut self, policy: crate::keyframe::Keyframes) -> Self {
++		self.keyframes = Some(policy);
++		self
++	}
++
+ 	/// Meter an ingest against `limit`'s cap, following its updates, and steer the
+ 	/// publisher under it with REMB on every video line that negotiated it.
+ 	pub(crate) fn with_rate(mut self, mut limit: moq_net::bandwidth::Limit) -> Self {
+@@ -211,6 +233,7 @@ impl Session {
+ 	async fn run_loop(&mut self) -> Result<()> {
+ 		loop {
+ 			let remb_at = self.rate.as_ref().and_then(IngestRate::remb_at);
++			let gate_at = self.gate_deadline();
+ 			tokio::select! {
+ 				// Egress writes get drained promptly; `Agent::next` is cancel safe.
+ 				biased;
+@@ -256,11 +279,17 @@ impl Session {
+ 				}
+ 
+ 				_ = async {
+-					match remb_at {
++					match crate::keyframe::earliest_deadline([remb_at, gate_at]) {
+ 						Some(at) => kio::clock::sleep_until(at).await,
+ 						None => std::future::pending().await,
+ 					}
+-				} => self.send_remb(),
++				} => {
++					let now = Instant::now();
++					if self.rate.as_ref().and_then(IngestRate::remb_at).is_some_and(|at| now >= at) {
++						self.send_remb();
++					}
++					self.fire_gates();
++				}
+ 
+ 				event = self.agent.next() => match event {
+ 					Ok(event) => self.handle_event(event)?,
+@@ -279,6 +308,10 @@ impl Session {
+ 			}
+ 			Event::MediaAdded(added) => self.handle_media(added.mid)?,
+ 			Event::MediaData(data) => {
++				if self.keyframes.is_some() {
++					self.ingest_gated(data)?;
++					return Ok(());
++				}
+ 				// `ingest_clock` and `role` are disjoint fields, so the borrow checker lets
+ 				// us rebase the (random, per-track) RTP base and feed the sink in one
+ 				// block; egress sessions never get here so the clock stays untouched.
+@@ -395,6 +428,10 @@ impl Session {
+ 				let video = kind == str0m::media::MediaKind::Video;
+ 				let pli = negotiated.iter().any(|params| params.fb_pli());
+ 				self.ingest_order.open(mid, video, pli, Instant::now());
++				if video && self.keyframes.is_some() {
++					self.gates.insert(mid, crate::keyframe::Gate::new(pli));
++					self.joins.insert(mid, crate::keyframe::JoinWatch::default());
++				}
+ 				// REMB only where the publisher negotiated it; str0m offers it on video alone.
+ 				if let Some(rate) = &mut self.rate
+ 					&& negotiated.iter().any(|params| params.fb_remb())
+@@ -419,6 +456,135 @@ impl Session {
+ 		Ok(())
+ 	}
+ 
++	fn gate_deadline(&self) -> Option<Instant> {
++		crate::keyframe::earliest_deadline(self.gates.values().map(|gate| gate.deadline()))
++	}
++
++	fn fire_gates(&mut self) {
++		let Some(policy) = self.keyframes else {
++			return;
++		};
++		let now = Instant::now();
++		let mids: Vec<_> = self.gates.keys().copied().collect();
++		for mid in mids {
++			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
++			if due.is_some() {
++				if let Some(gate) = self.gates.get_mut(&mid) {
++					gate.note(crate::keyframe::Cause::Period, now);
++				}
++			}
++			self.flush_gate(policy, mid, None);
++		}
++		self.observe_joins(policy);
++	}
++
++	fn observe_joins(&mut self, policy: crate::keyframe::Keyframes) {
++		let samples = match &mut self.role {
++			MediaRole::Ingest(sink) => sink.join_samples(),
++			MediaRole::Egress(_) => return,
++		};
++		for (mid, wanted, largest) in samples {
++			let request = self
++				.joins
++				.entry(mid)
++				.or_default()
++				.observe(&policy, wanted, largest);
++			if request {
++				if let Some(gate) = self.gates.get_mut(&mid) {
++					gate.note(crate::keyframe::Cause::Join, Instant::now());
++				}
++				self.flush_gate(policy, mid, None);
++			}
++		}
++	}
++
++	fn flush_gate(&mut self, policy: crate::keyframe::Keyframes, mid: str0m::media::Mid, rid: Option<str0m::media::Rid>) {
++		let now = Instant::now();
++		let Some(gate) = self.gates.get(&mid) else {
++			return;
++		};
++		if !gate.ready(&policy, now) {
++			return;
++		}
++		let accepted = pli_accepted(&mut self.agent, mid, rid);
++		let Some(gate) = self.gates.get_mut(&mid) else {
++			return;
++		};
++		if let Some(send) = gate.poll_send(&policy, now, accepted) {
++			let (causes, sent) = match send {
++				crate::keyframe::Send::Sent { causes } => (causes, true),
++				crate::keyframe::Send::Held { causes } => (causes, false),
++			};
++			tracing::info!(
++				?mid,
++				causes = ?crate::keyframe::cause_names(causes),
++				sent,
++				"ingest keyframe gate"
++			);
++		}
++	}
++
++	fn ingest_gated(&mut self, data: str0m::media::MediaData) -> Result<()> {
++		if !matches!(self.role, MediaRole::Ingest(_)) {
++			return Ok(());
++		}
++		let policy = self.keyframes.expect("gated ingest has a policy");
++		let arrival = Instant::from_std(data.network_time);
++		if let Some(rate) = &mut self.rate
++			&& let Err(cap) = rate.meter.charge(data.data.len(), arrival, Instant::now())
++		{
++			tracing::warn!(cap = cap.rate.as_bps(), "ingest exceeded its cap plus burst; closing");
++			return Err(Error::RateLimited { cap: cap.rate });
++		}
++		let now = Instant::now();
++		let media_us = media_time_to_micros(&data.time);
++		let keyframe = data.is_keyframe();
++		if keyframe {
++			if let Some(gate) = self.gates.get_mut(&data.mid) {
++				gate.on_keyframe(&policy, now);
++			}
++		}
++		if policy.on_loss && !data.contiguous && !keyframe {
++			if let Some(gate) = self.gates.get_mut(&data.mid) {
++				gate.note(crate::keyframe::Cause::Loss, now);
++			}
++		}
++		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
++		match decision {
++			Admit::Forward => {}
++			Admit::Drop => {
++				self.flush_gate(policy, data.mid, data.rid);
++				return Ok(());
++			}
++			Admit::Request => {
++				if let Some(gate) = self.gates.get_mut(&data.mid) {
++					gate.note(crate::keyframe::Cause::Startup, now);
++				}
++				self.flush_gate(policy, data.mid, data.rid);
++				return Ok(());
++			}
++		}
++		let opens_group = keyframe || self.ingest_order.is_audio(data.mid);
++		let mapped = self.ingest_clock.normalize(data.mid, arrival, media_us, opens_group);
++		if mapped.deferred {
++			if let Some(gate) = self.gates.get_mut(&data.mid) {
++				gate.note(crate::keyframe::Cause::Step, now);
++			}
++		}
++		let stepped = mapped.stepped;
++		let timestamp_us = mapped.timestamp_us;
++		let mid = data.mid;
++		let payload = bytes::Bytes::from_owner(data.data);
++		self.flush_gate(policy, mid, data.rid);
++		if let MediaRole::Ingest(sink) = &mut self.role {
++			if stepped {
++				sink.on_discontinuity(mid)?;
++			}
++			sink.on_frame(mid, codec::Frame { timestamp_us, payload })?;
++		}
++		Ok(())
++	}
++
+ 	/// Ask the publisher for at most the steered rate on every video line that negotiated
+ 	/// REMB, and schedule the next repeat.
+ 	fn send_remb(&mut self) {
+@@ -471,6 +637,21 @@ impl IngestRate {
+ }
+ 
+ /// Ask the publisher of `mid` for a keyframe with PLI.
++fn pli_accepted(agent: &mut crate::ice::Agent, mid: str0m::media::Mid, rid: Option<str0m::media::Rid>) -> bool {
++	let mut rtc = agent.rtc_mut();
++	let Some(mut writer) = rtc.writer(mid) else {
++		return false;
++	};
++	match writer.request_keyframe(rid, str0m::media::KeyframeRequestKind::Pli) {
++		Ok(()) => true,
++		Err(str0m::RtcError::NoReceiverSource(_)) | Err(str0m::RtcError::NotReceivingDirection) => false,
++		Err(err) => {
++			tracing::debug!(?err, "keyframe request refused");
++			false
++		}
++	}
++}
++
+ fn request_keyframe(
+ 	agent: &mut crate::ice::Agent,
+ 	mid: str0m::media::Mid,
+@@ -808,7 +989,14 @@ impl Bridges {
+ 		Ok(())
+ 	}
+ 
+-	/// Mark a break in `mid`'s track before its next frame.
++	/// Wanted group and largest written group for each video bridge.
++	pub fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
++		self.inner
++			.iter()
++			.filter_map(|(&mid, bridge)| bridge.join_sample().map(|(wanted, largest)| (mid, wanted, largest)))
++			.collect()
++	}
++
+ 	pub fn discontinuity(&mut self, mid: str0m::media::Mid) -> Result<()> {
+ 		if let Some(bridge) = self.inner.get_mut(&mid) {
+ 			bridge.discontinuity()?;
+-- 
+2.54.0 (Apple Git-157)
+
