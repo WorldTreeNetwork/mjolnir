@@ -1,0 +1,85 @@
+Framework laptop 192.168.0.108, 2026-11-25. Morphie was not contacted.
+Host firewall path was not used. No ufw, firewalld, nft delete, or iptables flush on the laptop's default netns.
+
+Guest: ubuntu-24.04 VM Da6pViAkyKhnC3jW1L1uTL. Kernel 6.12.8+ has no NETLINK_NETFILTER (nft userspace: Protocol not supported). Fallback: network namespaces on the laptop kernel. VM deleted, response {"ok":true}.
+
+Artefact SHA-256 matches 4a16e00592802777163efbfaf3c05efc1ab9e61d85b6f16cac8921e234425c8c.
+Service user mjolnir-turn-spike uid 938. Home /var/lib/mjolnir-turn-spike.
+cookie-stat: mode=400 owner=mjolnir-turn-spike size=33 sha256-prefix=1822d2297093
+(cookie value not recorded). User and home removed at cleanup.
+
+nft -c of the design ruleset inside a throwaway netns: nft-check:0
+Rules (rules-good.nft): inet table mjolnir_turn, output hook priority -150,
+exception only `ip daddr 127.0.0.1 tcp dport 3470` for uid 938, then fib
+local/broadcast/multicast drop, written IPv4 specials, and `meta nfproto ipv6` drop.
+Qualifier order that validates is `ip daddr ... tcp dport`. `tcp ip daddr` is a syntax error.
+
+Unit mjolnir-turn-spike.service (removed after the run):
+User=mjolnir-turn-spike
+NetworkNamespacePath=/var/run/netns/turn-daemon
+ExecStartPre=+/usr/sbin/ip netns exec turn-daemon nft -f <rules>
+ExecStart=eturnalctl foreground
+ExecStopPost deletes the table inside the netns.
+State directory is the home above (cookie).
+
+Lifecycle inside the netns, not a guest reboot (guest kernel cannot load nft):
+- after start: table present (nft-after-start.txt)
+- after stop: NO_TABLE
+- after systemctl restart: active, table present (b1-after-restart.txt)
+- bad rules `meta skuid notanumber`: unit failed (b1-bad-active.txt, b1-bad-start.txt)
+One stop hit Timeout and SIGKILL before the bad-rules test.
+Beam with -start_epmd false took about 35s before "Listening on 0.0.0.0:3478".
+Journal: relay IPv4 192.0.2.10, port range 49152-65535 (eturnal default), IPv6 not configured.
+
+ufw binary was not run. A netns-local table inet ufw_standin (input priority 0, policy drop, allow udp/tcp 3478) stood in for an active host firewall. It lived only in the daemon netns.
+HOST_TABLE_ABSENT: no inet mjolnir_turn on the laptop default netns.
+
+Daemon blacklist was only 198.51.100.9/32. CreatePermission succeeded for
+192.0.2.20, 10.200.0.1, 127.0.0.1, 192.168.50.255, 224.0.0.251, 172.16.9.9,
+240.0.1.1, 9.9.9.9. 0.1.2.3 was 403 from eturnal itself.
+tcpdump on dummy-side, lo, and veth-inet during the send window: 0 packets each.
+A later trailing `meta skuid 938` counter on one send counted 4 packets / 374 bytes,
+the STUN replies (401, allocate success, permission), not a relayed datagram.
+After the send window the loaded table showed fib local 6 packets / 340 bytes and
+multicast 1 packet / 58 bytes. Broadcast and the written-prefix counters stayed 0.
+Those counters are not a per-peer proof of the 1000-byte flood. Relayed payload
+was not observed on the wire, so the kernel drop of relayed datagrams is not proven.
+
+Exemption recording run (once): inserted
+`udp sport 3478 ip daddr 10.0.0.0/8 accept` (and 127/8, 192.168/16).
+Client in netns turn-priv (10.255.9.2 -> 10.255.9.1) Allocate timed out.
+Exemption counter stayed packets 0. Not a demonstration that the exemption delivers a reply.
+
+Spike 7 mechanism: tc HTB 25mbit on fwmark 0x25, iptables mangle OUTPUT
+`-m owner --uid-owner 938 -p udp ! --sport 3478 -j MARK --set-mark 0x25`,
+inside the daemon netns only. cgroup v2 has no packet bandwidth controller, and
+shaping sport 3478 would shape STUN replies. HTB warned that the quantum of
+class 10001 is big.
+Class 1:10 Sent 0 bytes on both veth-inet-ns and dummy-self.
+Offered client flood (not a wire rate): off 4000x1000 B in 0.029s = 1092.7 mbit;
+on 4000x1000 in 0.016s = 1984.1 mbit; later 2000 packets in 0.007s = 2218.7 mbit.
+pcaps are header-only (0 packets). The cap did not limit anything observed.
+Allocate while the cap was notionally on succeeded, lifetime 599 (l1-alloc-during.txt).
+An earlier flood window did increment the netns mangle MARK counter
+(8003 packets, 8224K, uid 938, udp sport not 3478). Those packets were not
+seen by HTB or by tcpdump.
+
+Unauthenticated UDP 3478 (l2-unauth.txt):
+Binding req=28 resp=44 factor=1.57
+Allocate req=28 resp=92 factor=3.29
+Bad password Allocate returned 0x0113 401 both times (l2-badpw.txt).
+eturnalctl sessions inside the netns printed "Node is not running!" after unauth
+and after 401, so leftover allocation state was not listed. Do not treat that
+as proof the node was down: the beam had just accepted Allocate.
+
+Host ruleset diff (nft list ruleset, iptables-save, ip6tables-save), before the
+lab versus after cleanup. Table list is identical:
+  table ip filter, nat, raw, mjolnir, mangle
+  table ip6 filter, nat, mangle
+No added table, chain, or rule. nft unified diff is packet/byte counters only
+(0 non-counter lines). iptables-save and ip6tables-save differ only in the
+live chain counters and only those (docker, tailscale, mangle, nat policy
+counters). SSH still worked after cleanup.
+
+Lab removed: unit file, daemon-reload, netns turn-daemon/turn-client/turn-inet/turn-priv,
+veths, userdel, home. VM deleted.
