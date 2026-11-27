@@ -64,4 +64,3 @@ test tests::refuses_missing_expiry_bad_owner_ticket_and_other_key ... ok
 test tests::room_rooted_token_isolates_rooms_and_participants_on_both_deciders ... ok
 
 test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s
-
