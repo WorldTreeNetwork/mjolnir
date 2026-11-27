@@ -1,0 +1,3 @@
+--- pool ---
+2026-11-27T21:16:49.319189Z  INFO mjolnir_relay::edge: expired token dropped legs=1 sessions=1 runners=0 links=1
+2026-11-27T21:16:58.288768Z  INFO mjolnir_relay::edge: pool after delete sessions=1 runners=0 links=1

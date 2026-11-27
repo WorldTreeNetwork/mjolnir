@@ -1,0 +1,8 @@
+minted_short 1795814195.023416604 exp 1795814209
+LIVE_EXIT:0
+past_exp 1795814211.002744825 exp 1795814209
+VIEWER_EXIT:0 sessions_delta:0
+expired_publisher_token_as_requester http 403 at 1795814216.655905504 sessions_delta 0
+{"error":"bad_token"}delete_target /session/a80bf21c-ed2c-441a-be51-e89a6adb0cf3
+owner_delete 204
+repeat_delete 204

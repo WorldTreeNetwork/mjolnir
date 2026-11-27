@@ -53,6 +53,7 @@ async function contentCheck(page, name, left, right, hz) {
 
 const [mode, ...a] = process.argv.slice(2);
 let browsers = [];
+let exitCode = 0;
 try {
   if (mode === 'pub') {
     const [who, b, vc, hold, tn] = a; const br = await launch('chromium', who); browsers.push(br);
@@ -90,12 +91,14 @@ try {
     const page = await open(br, 'r1', tok(tn || 'erin'), kind);
     const r = await call(page, 'play', b, vc === '-' ? null : vc);
     out({ step: 'play', broadcast: b, vcodec: vc, browser: kind + ' ' + br.version(), ...r });
-    if (r.error) process.exit(2);
-    await sleep(2500); const first = await page.evaluate(n => window.stats(n), 'play:' + b);
-    await sleep(Math.max(0, +hold * 1000 - 2500)); const last = await page.evaluate(n => window.stats(n), 'play:' + b);
-    const c = await contentCheck(page, 'play:' + b, l, r_, +hz);
-    out({ step: 'result', broadcast: b, vcodec: vc, first, last, content: c });
-    process.exit(c.videoMatch && c.audioMatch && last.videoIn?.framesDecoded > 0 ? 0 : 1);
+    if (r.error) exitCode = 2;
+    else {
+      await sleep(2500); const first = await page.evaluate(n => window.stats(n), 'play:' + b);
+      await sleep(Math.max(0, +hold * 1000 - 2500)); const last = await page.evaluate(n => window.stats(n), 'play:' + b);
+      const c = await contentCheck(page, 'play:' + b, l, r_, +hz);
+      out({ step: 'result', broadcast: b, vcodec: vc, first, last, content: c });
+      exitCode = c.videoMatch && c.audioMatch && last.videoIn?.framesDecoded > 0 ? 0 : 1;
+    }
   } else if (mode === 'room') {
     // Two WebRTC participants (alice, bob) and one MoQ participant (carol, native) in room r1.
     const fx = { alice: ['0xC83278', '0x1EA0A0', 1000], bob: ['0xE68C14', '0x283CC8', 600], carol: ['0x28B43C', '0x7828AA', 440] };
@@ -163,4 +166,4 @@ try {
     out({ step: 'expiry', exp: new Date(exp).toISOString(), ended: after, waitedMs: Date.now() - t0 });
   }
 } finally { for (const b of browsers) await b.close().catch(() => {}); }
-process.exit(0);
+process.exit(exitCode);

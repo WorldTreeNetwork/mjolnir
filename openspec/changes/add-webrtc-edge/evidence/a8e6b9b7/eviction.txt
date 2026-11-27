@@ -1,0 +1,18 @@
+--- eviction ---
+2026-11-27T21:12:31.403026Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=4065 error=Moq(Stream(Old))
+2026-11-27T21:12:33.435634Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=1236065 error=Moq(Stream(Old))
+2026-11-27T21:12:35.471225Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=3274568 error=Moq(Stream(Old))
+2026-11-27T21:12:37.504212Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=5308581 error=Moq(Stream(Old))
+2026-11-27T21:12:39.536767Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=7341414 error=Moq(Stream(Old))
+2026-11-27T21:12:41.569244Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=9376077 error=Moq(Stream(Old))
+2026-11-27T21:12:43.603624Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=11408771 error=Moq(Stream(Old))
+2026-11-27T21:12:44.007953Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=13441939 error=Moq(Stream(Old))
+2026-11-27T21:12:54.076407Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=6127849 error=Moq(Stream(Old))
+2026-11-27T21:12:56.110956Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=7526744 error=Moq(Stream(Old))
+2026-11-27T21:12:58.145064Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=9560625 error=Moq(Stream(Old))
+2026-11-27T21:13:00.176615Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=11594133 error=Moq(Stream(Old))
+2026-11-27T21:13:00.418623Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=13628002 error=Moq(Stream(Old))
+2026-11-27T21:13:02.445723Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=13861002 error=Moq(Stream(Old))
+2026-11-27T21:13:04.478578Z  WARN moq_mux::container::consumer: current group evicted; skipping to next buffered group track="0.vp8" group=15894091 error=Moq(Stream(Old))
+2026-11-27T21:13:12.307062Z  WARN mjolnir_relay::edge: session negotiation failed text=moq error: unroutable
+2026-11-27T21:13:17.886737Z  WARN mjolnir_relay::edge: session negotiation failed text=moq error: unroutable

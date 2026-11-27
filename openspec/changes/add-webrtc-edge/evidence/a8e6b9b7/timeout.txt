@@ -1,0 +1,10 @@
+timeout_single
+timeout-a start 1795813998.014755591 end 1795814003.025104602 http 503
+{"error":"setup_failed"}cancel_then_second
+after-cancel start 1795814003.229629910 end 1795814004.037409483 http 503
+{"error":"setup_failed"}cancel_finished 1795814004.037067293 code 000 err curl: (28) Operation timed out after 1000 milliseconds with 0 bytes received
+after_cancel_was_started 1795814003.228497842
+two_concurrent
+conc-a start 1795814004.052138072 end 1795814009.062182224 http 503
+conc-b start 1795814004.052139375 end 1795814009.062411944 http 503
+{"error":"setup_failed"}{"error":"setup_failed"}

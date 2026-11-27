@@ -1,0 +1,1 @@
+{"root":"t/cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN/~open/r1","exp":1795814548,"operation":"publish","broadcast":"alice/cam"}

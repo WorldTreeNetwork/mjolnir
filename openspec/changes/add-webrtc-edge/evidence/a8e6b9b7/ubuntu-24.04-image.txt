@@ -1,0 +1,8 @@
+docker.io/library/ubuntu:24.04
+sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b
+PRETTY_NAME=Ubuntu 24.04.5 LTS
+No cargo/rustc in that image. No mjolnir-edge binary was produced inside it.
+The Arch ELF a8e6b9b7 was mounted read-only. file(1) inside the container:
+ELF 64-bit LSB pie executable, x86-64, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 4.4.0, BuildID sha1 dec39447077b8ca123d4df993810b5ee63e005db
+ldd resolved libc.so.6 to the container's /lib/x86_64-linux-gnu/libc.so.6.
+That load is not an Ubuntu build and is not the .13 Ubuntu gate.

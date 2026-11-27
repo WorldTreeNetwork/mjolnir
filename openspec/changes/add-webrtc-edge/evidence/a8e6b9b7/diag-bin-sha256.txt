@@ -1,0 +1,2 @@
+a8e6b9b7b6b7bdf75c7963e9fee6565e0271a79cc91fde778b9403a8cff8d055  /tmp/mj13-tgt/release/mjolnir-edge
+812c76ed185d4f3216e1f735b4cf2e07daf129fffe1512cfda928cf3ba2782b9  /tmp/mj13-tgt/release/mjolnir-relay
