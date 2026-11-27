@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod iroh_sessions;
+pub mod edge;
 
 use moq_auth::{Algorithm, Claims, Grant, KeySet};
 use moq_ext_access::policy::{Authorization, Decision, PeerRequest, Policy, Rejection};
