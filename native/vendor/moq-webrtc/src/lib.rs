@@ -67,6 +67,7 @@ mod session;
 
 pub use client::Client;
 pub use error::*;
+pub use keyframe::Keyframes;
 pub use server::{Response, Server, whep, whip};
 
 #[cfg(all(test, feature = "server"))]

@@ -1,23 +1,32 @@
-//! Local WebRTC edge admission process.
-//! It does not mint tokens and it does not open a firewall.
-//! A verified relay dial is not in this slice: media setup fails closed
-//! (`setup_failed`) until that dial is reviewed. `/admit` never dials.
+//! Local WebRTC edge. It does not mint tokens and it does not open a firewall.
+//! Relay dials verify TLS. A disposable relay is trusted only through
+//! `MJOLNIR_EDGE_TLS_ROOT` (system roots off). Otherwise the platform roots are used.
+//! `/admit` never dials. Ingest keyframes use the adopted trial defaults.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use mjolnir_relay::edge::Edge;
+use mjolnir_relay::moq_session::MoqConfig;
 use mjolnir_relay::{key_file_trusted, load_verify_keys};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = moq_tokio::crypto::install_default();
     let keys_path = PathBuf::from(
         std::env::var("MJOLNIR_EDGE_KEYS").unwrap_or_else(|_| "/etc/mjolnir-relay/relay-keys.json".into()),
     );
     key_file_trusted(&keys_path)?;
     let keys = load_verify_keys(&keys_path)?;
     let edge = Edge::new(keys);
+    let relay: url::Url = std::env::var("MJOLNIR_EDGE_RELAY")?.parse()?;
+    let media_addr = std::env::var("MJOLNIR_EDGE_MEDIA")
+        .unwrap_or_else(|_| "127.0.0.1:0".into())
+        .parse()?;
+    let media = moq_webrtc::Server::bind(media_addr, moq_webrtc::server::Config::default()).await?;
+    let tls_root = std::env::var("MJOLNIR_EDGE_TLS_ROOT").ok().map(PathBuf::from);
+    edge.set_moq(MoqConfig { relay, tls_root, media });
     let edge_reload = Arc::clone(&edge);
     let reload_path = keys_path.clone();
     tokio::spawn(async move {

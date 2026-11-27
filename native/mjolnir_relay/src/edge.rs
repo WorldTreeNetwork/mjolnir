@@ -31,7 +31,7 @@ pub enum Op {
     Subscribe,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdmitError {
     NoToken,
     BadRequest,
@@ -83,10 +83,11 @@ pub struct Edge {
     snap: Mutex<Snapshot>,
     pool: Mutex<Pool>,
     dials: AtomicU64,
-    /// Test double. Production leaves this false and `dial_relay` fails closed
-    /// until a verified TLS dial is wired. Tests set it so a counted dial
-    /// stands in for the relay connection.
+    /// Unit tests of the pool. The binary and the relay integration leave this false
+    /// and dial through `moq`.
     allow_test_dial: AtomicBool,
+    moq: Mutex<Option<crate::moq_session::MoqConfig>>,
+    test_dial_wait: Mutex<Duration>,
 }
 
 struct Pool {
@@ -94,8 +95,13 @@ struct Pool {
     sessions: HashMap<String, Session>,
     tombstones: HashMap<String, Tombstone>,
     next_id: u64,
-    /// Tokens currently inside single-flight dial.
-    inflight: HashMap<String, u32>,
+    flights: HashMap<String, Arc<Flight>>,
+    links: HashMap<String, Arc<crate::moq_session::Shared>>,
+    runners: HashMap<String, tokio::task::JoinHandle<()>>,
+}
+
+struct Flight {
+    waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Result<(), AdmitError>>>>,
 }
 
 struct Hold {
@@ -126,11 +132,19 @@ impl Edge {
                 sessions: HashMap::new(),
                 tombstones: HashMap::new(),
                 next_id: 1,
-                inflight: HashMap::new(),
+                flights: HashMap::new(),
+                links: HashMap::new(),
+                runners: HashMap::new(),
             }),
             dials: AtomicU64::new(0),
             allow_test_dial: AtomicBool::new(false),
+            moq: Mutex::new(None),
+            test_dial_wait: Mutex::new(Duration::from_millis(30)),
         })
+    }
+
+    pub fn set_moq(&self, config: crate::moq_session::MoqConfig) {
+        *self.moq.lock().expect("moq") = Some(config);
     }
 
     pub fn enable_test_dial(&self) {
@@ -143,6 +157,66 @@ impl Edge {
 
     pub fn close_admissions(&self) {
         self.snap.lock().expect("snap").admissions_open = false;
+    }
+
+    /// Dial (or join the in-flight dial), negotiate WHIP/WHEP, then spawn `Response::run`.
+    pub async fn open_session(&self, checked: &Checked, offer: &str) -> Result<(String, String), AdmitError> {
+        let now_unix = unix(SystemTime::now()).map_err(|_| AdmitError::BadToken)?;
+        if now_unix >= checked.exp_unix {
+            self.drop_token(&checked.token);
+            return Err(AdmitError::BadToken);
+        }
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(checked.exp_unix.saturating_sub(now_unix).min(SETUP_BUDGET.as_secs()));
+        self.acquire(&checked.token, checked.exp_unix, deadline).await?;
+        let config = self.moq.lock().expect("moq").clone();
+        let Some(config) = config else {
+            self.release(&checked.token);
+            return Err(AdmitError::SetupFailed);
+        };
+        let shared = self.pool.lock().expect("pool").links.get(&checked.token).cloned();
+        let Some(shared) = shared else {
+            self.release(&checked.token);
+            return Err(AdmitError::SetupFailed);
+        };
+        let negotiated = match checked.operation {
+            Op::Publish => crate::moq_session::whip(&config, &shared, &checked.broadcast, offer).await,
+            Op::Subscribe => crate::moq_session::whep(&config, &shared, &checked.broadcast, offer).await,
+        };
+        let response = match negotiated {
+            Ok(response) => response,
+            Err(text) => {
+                self.release(&checked.token);
+                if unix(SystemTime::now()).unwrap_or(0) >= checked.exp_unix {
+                    self.drop_token(&checked.token);
+                    return Err(AdmitError::BadToken);
+                }
+                if text.contains("NotFound") || text.contains("catalog") || text.contains("NoRenditions") {
+                    return Err(AdmitError::NotStarted);
+                }
+                return Err(AdmitError::SetupFailed);
+            }
+        };
+        if offer_has_video(offer) && !answer_has_usable_video(&response.answer) {
+            drop(response);
+            self.release(&checked.token);
+            return Err(AdmitError::CodecUnavailable);
+        }
+        let id = response.resource_id.clone();
+        let answer = response.answer.clone();
+        let task = tokio::spawn(async move {
+            let _ = response.run().await;
+        });
+        let mut pool = self.pool.lock().expect("pool");
+        pool.runners.insert(id.clone(), task);
+        pool.sessions.insert(
+            id.clone(),
+            Session {
+                token: checked.token.clone(),
+                digest: digest(&checked.token),
+            },
+        );
+        Ok((id, answer))
     }
 
     pub fn refs(&self, token: &str) -> u32 {
@@ -221,7 +295,8 @@ impl Edge {
     }
 
     /// Steps 9–14 for WHIP/WHEP. `/admit` must not call this.
-    pub fn attach(
+    /// The deadline is fixed before the wait. A follower waits on the leader's dial.
+    pub async fn attach(
         &self,
         checked: &Checked,
         offer: &str,
@@ -229,15 +304,13 @@ impl Edge {
         now: SystemTime,
     ) -> Result<String, AdmitError> {
         let now_unix = unix(now).map_err(|_| AdmitError::BadToken)?;
-        let deadline = checked.exp_unix.min(now_unix.saturating_add(SETUP_BUDGET.as_secs()));
         if now_unix >= checked.exp_unix {
             self.drop_token(&checked.token);
             return Err(AdmitError::BadToken);
         }
-        if now_unix >= deadline {
-            return Err(AdmitError::SetupFailed);
-        }
-        self.acquire(&checked.token, checked.exp_unix)?;
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(checked.exp_unix.saturating_sub(now_unix).min(SETUP_BUDGET.as_secs()));
+        self.acquire(&checked.token, checked.exp_unix, deadline).await?;
         if offer_has_video(offer) && !answer_has_usable_video(answer) {
             self.release(&checked.token);
             return Err(AdmitError::CodecUnavailable);
@@ -260,43 +333,115 @@ impl Edge {
         Ok(id)
     }
 
-    fn acquire(&self, token: &str, exp_unix: u64) -> Result<(), AdmitError> {
-        let mut pool = self.pool.lock().expect("pool");
-        if let Some(hold) = pool.holds.get_mut(token) {
-            hold.refs += 1;
-            return Ok(());
-        }
-        let waiting = pool.inflight.entry(token.to_string()).or_insert(0);
-        if *waiting > 0 {
-            *waiting += 1;
-            drop(pool);
-            // The first dial owns the connection. A follower does not dial.
-            let mut pool = self.pool.lock().expect("pool");
-            pool.inflight.get_mut(token).map(|n| *n = n.saturating_sub(1));
-            if let Some(hold) = pool.holds.get_mut(token) {
-                hold.refs += 1;
-                return Ok(());
+    async fn acquire(&self, token: &str, exp_unix: u64, deadline: tokio::time::Instant) -> Result<(), AdmitError> {
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(self.timeout_error(token));
             }
-            return Err(AdmitError::SetupFailed);
+            enum Step {
+                Ready,
+                Follow(tokio::sync::oneshot::Receiver<Result<(), AdmitError>>),
+                Lead(Arc<Flight>),
+            }
+            let step = {
+                let mut pool = self.pool.lock().expect("pool");
+                if let Some(hold) = pool.holds.get_mut(token) {
+                    hold.refs += 1;
+                    Step::Ready
+                } else if let Some(existing) = pool.flights.get(token) {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    existing.waiters.lock().expect("waiters").push(tx);
+                    Step::Follow(rx)
+                } else {
+                    let flight = Arc::new(Flight { waiters: Mutex::new(Vec::new()) });
+                    pool.flights.insert(token.to_string(), flight.clone());
+                    Step::Lead(flight)
+                }
+            };
+            match step {
+                Step::Ready => return Ok(()),
+                Step::Follow(rx) => return self.follow(token, rx, deadline).await,
+                Step::Lead(flight) => return self.lead(token, exp_unix, deadline, flight).await,
+            }
         }
-        *waiting = 1;
-        drop(pool);
-        let dialed = self.dial_relay(token);
-        let mut pool = self.pool.lock().expect("pool");
-        pool.inflight.remove(token);
-        if !dialed {
-            return Err(AdmitError::SetupFailed);
-        }
-        pool.holds.insert(
-            token.to_string(),
-            Hold { refs: 1, exp_unix },
-        );
-        Ok(())
     }
 
-    fn dial_relay(&self, _token: &str) -> bool {
+    async fn follow(
+        &self,
+        token: &str,
+        rx: tokio::sync::oneshot::Receiver<Result<(), AdmitError>>,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), AdmitError> {
+        tokio::select! {
+            biased;
+            result = rx => match result {
+                Ok(Ok(())) => {
+                    let mut pool = self.pool.lock().expect("pool");
+                    if let Some(hold) = pool.holds.get_mut(token) {
+                        hold.refs += 1;
+                        Ok(())
+                    } else {
+                        Err(AdmitError::SetupFailed)
+                    }
+                }
+                Ok(Err(err)) => Err(err),
+                Err(_) => Err(self.timeout_error(token)),
+            },
+            _ = tokio::time::sleep_until(deadline) => Err(self.timeout_error(token)),
+        }
+    }
+
+    async fn lead(
+        &self,
+        token: &str,
+        exp_unix: u64,
+        deadline: tokio::time::Instant,
+        flight: Arc<Flight>,
+    ) -> Result<(), AdmitError> {
+        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let dialed = self.dial_relay(token, budget).await;
+        let mut pool = self.pool.lock().expect("pool");
+        pool.flights.remove(token);
+        let result = match dialed {
+            Ok(()) => {
+                pool.holds.insert(token.to_string(), Hold { refs: 1, exp_unix });
+                Ok(())
+            }
+            Err(err) => Err(err),
+        };
+        for waiter in flight.waiters.lock().expect("waiters").drain(..) {
+            let _ = waiter.send(result);
+        }
+        result
+    }
+
+    fn timeout_error(&self, token: &str) -> AdmitError {
+        let now = unix(SystemTime::now()).unwrap_or(0);
+        let exp = self.pool.lock().expect("pool").holds.get(token).map(|h| h.exp_unix);
+        if exp.is_some_and(|exp| now >= exp) {
+            self.drop_token(token);
+            AdmitError::BadToken
+        } else {
+            AdmitError::SetupFailed
+        }
+    }
+
+    async fn dial_relay(&self, token: &str, budget: Duration) -> Result<(), AdmitError> {
         self.dials.fetch_add(1, Ordering::SeqCst);
-        self.allow_test_dial.load(Ordering::SeqCst)
+        let config = self.moq.lock().expect("moq").clone();
+        if let Some(config) = config {
+            let shared = crate::moq_session::dial(&config, token, budget)
+                .await
+                .map_err(|_| AdmitError::SetupFailed)?;
+            self.pool.lock().expect("pool").links.insert(token.to_string(), Arc::new(shared));
+            return Ok(());
+        }
+        if self.allow_test_dial.load(Ordering::SeqCst) {
+            let wait = *self.test_dial_wait.lock().expect("wait");
+            tokio::time::sleep(wait.min(budget)).await;
+            return Ok(());
+        }
+        Err(AdmitError::SetupFailed)
     }
 
     fn release(&self, token: &str) {
@@ -315,6 +460,7 @@ impl Edge {
     fn drop_token(&self, token: &str) {
         let mut pool = self.pool.lock().expect("pool");
         pool.holds.remove(token);
+        pool.links.remove(token);
         pool.sessions.retain(|_, session| session.token != token);
     }
 
@@ -322,6 +468,9 @@ impl Edge {
         let token = bearer.map(str::trim).filter(|t| !t.is_empty()).ok_or(AdmitError::NoToken)?;
         let dig = digest(token);
         let now_unix = unix(now).map_err(|_| AdmitError::BadToken)?;
+        if let Some(config) = self.moq.lock().expect("moq").clone() {
+            config.media.terminate(id);
+        }
         let mut pool = self.pool.lock().expect("pool");
         pool.tombstones.retain(|_, tomb| tomb.until_unix > now_unix);
         if let Some(session) = pool.sessions.get(id) {
@@ -331,6 +480,9 @@ impl Edge {
             let token = session.token.clone();
             let until = pool.holds.get(&token).map(|h| h.exp_unix).unwrap_or(now_unix) + TOMBSTONE.as_secs();
             pool.sessions.remove(id);
+            if let Some(task) = pool.runners.remove(id) {
+                task.abort();
+            }
             pool.tombstones.insert(
                 id.to_string(),
                 Tombstone { digest: dig, until_unix: until },
@@ -538,18 +690,20 @@ async fn whip_http(
     State(edge): State<Arc<Edge>>,
     Path((room, broadcast)): Path<(String, String)>,
     headers: HeaderMap,
-    body: String,
+    body: bytes::Bytes,
 ) -> Response {
-    media_http(edge, Op::Publish, room, broadcast, headers, body).await
+    let offer = String::from_utf8_lossy(&body).into_owned();
+    media_http(edge, Op::Publish, room, broadcast, headers, offer).await
 }
 
 async fn whep_http(
     State(edge): State<Arc<Edge>>,
     Path((room, broadcast)): Path<(String, String)>,
     headers: HeaderMap,
-    body: String,
+    body: bytes::Bytes,
 ) -> Response {
-    media_http(edge, Op::Subscribe, room, broadcast, headers, body).await
+    let offer = String::from_utf8_lossy(&body).into_owned();
+    media_http(edge, Op::Subscribe, room, broadcast, headers, offer).await
 }
 
 async fn media_http(
@@ -571,13 +725,8 @@ async fn media_http(
         Ok(checked) => checked,
         Err(error) => return err(error),
     };
-    let answer = if offer_has_video(&offer) {
-        "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendonly\r\n".to_string()
-    } else {
-        "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n".to_string()
-    };
-    match edge.attach(&checked, &offer, &answer, SystemTime::now()) {
-        Ok(id) => Response::builder()
+    match edge.open_session(&checked, &offer).await {
+        Ok((id, answer)) => Response::builder()
             .status(StatusCode::CREATED)
             .header("content-type", "application/sdp")
             .header("location", format!("/session/{id}"))
@@ -725,8 +874,8 @@ mod tests {
         assert_eq!(edge.dials(), 0);
     }
 
-    #[test]
-    fn two_legs_one_token_one_dial_and_delete_matrix() {
+    #[tokio::test]
+    async fn two_legs_one_token_one_dial_and_delete_matrix() {
         let (set, token, root) = mint_shaped_open();
         let edge = Edge::new(set);
         edge.enable_test_dial();
@@ -736,8 +885,8 @@ mod tests {
         let b = edge
             .admit(Some(&token), Some(&root), Some("standup"), Op::Subscribe, "alice/cam", SystemTime::now())
             .unwrap();
-        let id_a = edge.attach(&a, "m=video 9 UDP/TLS/RTP/SAVPF 96\n", "m=video 9 UDP/TLS/RTP/SAVPF 96\n", SystemTime::now()).unwrap();
-        let id_b = edge.attach(&b, "m=audio 9 UDP/TLS/RTP/SAVPF 111\n", "m=audio 9 UDP/TLS/RTP/SAVPF 111\n", SystemTime::now()).unwrap();
+        let id_a = edge.attach(&a, "m=video 9 UDP/TLS/RTP/SAVPF 96\n", "m=video 9 UDP/TLS/RTP/SAVPF 96\n", SystemTime::now()).await.unwrap();
+        let id_b = edge.attach(&b, "m=audio 9 UDP/TLS/RTP/SAVPF 111\n", "m=audio 9 UDP/TLS/RTP/SAVPF 111\n", SystemTime::now()).await.unwrap();
         assert_eq!(edge.dials(), 1);
         assert_eq!(edge.refs(&token), 2);
         let (set2, other, root2) = mint_shaped_open();
@@ -756,6 +905,7 @@ mod tests {
                 "m=video 0 UDP/TLS/RTP/SAVPF 96\n",
                 SystemTime::now()
             )
+            .await
             .unwrap_err(),
             AdmitError::CodecUnavailable
         );
@@ -774,5 +924,35 @@ mod tests {
                 .unwrap_err(),
             AdmitError::BadToken
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_posts_share_one_dial_and_a_later_acquire_dials_again() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        *edge.test_dial_wait.lock().unwrap() = Duration::from_millis(80);
+        let a = edge
+            .admit(Some(&token), Some(&root), Some("standup"), Op::Publish, "alice/cam", SystemTime::now())
+            .unwrap();
+        let b = edge
+            .admit(Some(&token), Some(&root), Some("standup"), Op::Subscribe, "alice/cam", SystemTime::now())
+            .unwrap();
+        let offer = "m=audio 9 UDP/TLS/RTP/SAVPF 111\n";
+        let (left, right) = tokio::join!(
+            edge.attach(&a, offer, offer, SystemTime::now()),
+            edge.attach(&b, offer, offer, SystemTime::now()),
+        );
+        assert!(left.is_ok() && right.is_ok());
+        assert_eq!(edge.dials(), 1);
+        assert_eq!(edge.refs(&token), 2);
+        edge.delete(&left.unwrap(), Some(&token), SystemTime::now()).unwrap();
+        edge.delete(&right.unwrap(), Some(&token), SystemTime::now()).unwrap();
+        assert_eq!(edge.refs(&token), 0);
+        let again = edge
+            .admit(Some(&token), Some(&root), Some("standup"), Op::Publish, "alice/cam", SystemTime::now())
+            .unwrap();
+        edge.attach(&again, offer, offer, SystemTime::now()).await.unwrap();
+        assert_eq!(edge.dials(), 2);
     }
 }

@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod iroh_sessions;
 pub mod edge;
+pub mod moq_session;
 
 use moq_auth::{Algorithm, Claims, Grant, KeySet};
 use moq_ext_access::policy::{Authorization, Decision, PeerRequest, Policy, Rejection};
