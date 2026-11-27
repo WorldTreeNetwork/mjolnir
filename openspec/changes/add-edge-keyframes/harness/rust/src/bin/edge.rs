@@ -126,15 +126,16 @@ async fn offer(edge: Edge, kind: Kind, room: String, broadcast: String, headers:
                 request.ingest.rate = Some(moq_net::bandwidth::Limit::new(cap));
             }
             // Named harness hook. off keeps the pin. trial is floor 1s / period 2s.
-            // saturated sets the period to 1s. That is not floor saturation: a keyframe
-            // still cancels a held request, and this process cannot re-note a cause.
+            // saturated arms an ingest cause at the floor and keeps that deadline across
+            // a keyframe cancel. A 1s period is not that hook.
             // loss-watch enables loss and pushes the period out of a short run so a
             // period PLI is not mistaken for a loss PLI.
             match std::env::var("KEYFRAME_POLICY").unwrap_or_default().as_str() {
                 "trial" => request.keyframes.enabled = true,
                 "saturated" => {
                     request.keyframes.enabled = true;
-                    request.keyframes.period = std::time::Duration::from_secs(1);
+                    request.keyframes.saturate = true;
+                    request.keyframes.floor = std::time::Duration::from_secs(1);
                 }
                 "loss-watch" => {
                     request.keyframes.enabled = true;

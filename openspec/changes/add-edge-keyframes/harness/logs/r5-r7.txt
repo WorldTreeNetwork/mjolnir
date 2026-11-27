@@ -1,0 +1,7 @@
+R5–R7 local fix. Not an adoption row. Framework SSH to 192.168.0.108 and 100.121.90.25 timed out (ConnectTimeout 5). No remote WHIP row was run.
+
+Red, unmodified ba1e99f8 via reviews/reproduce-ba1e99f8.py: 6 passed, 0 failed. Three of those assert the remaining bugs.
+
+Green, this tree, CARGO_TARGET_DIR=/tmp/kf-gate, debug/incremental off, cargo test --locked --offline --lib: 125 passed, 0 failed. K2: vendored moq-webrtc matches pin 4a6f52248.
+
+Session regressions cover the queued baseline, a join before the watcher polls, join-before-period, join while parked, unchanged and under-ratio demand, rendition rebase, and watcher exit on session drop with the producer still alive. Park blocks ready and poll_send for every cause. KEYFRAME_POLICY=saturated sets keyframes.saturate so the floor deadline survives a keyframe; that hook is local only until a WHIP row is actually run.

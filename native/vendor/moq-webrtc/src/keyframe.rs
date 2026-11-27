@@ -23,6 +23,10 @@ pub struct Keyframes {
 	pub on_join: bool,
 	/// Groups ahead of the largest written that count as one join request.
 	pub ratio: u32,
+	/// Named harness hook. When set, an ingest cause stays eligible at the floor
+	/// across a keyframe cancel. Trial and the pin leave this false. A 1s period
+	/// alone is not this hook: a keyframe restarts that period.
+	pub saturate: bool,
 }
 
 impl Default for Keyframes {
@@ -34,6 +38,7 @@ impl Default for Keyframes {
 			on_loss: true,
 			on_join: true,
 			ratio: 4,
+			saturate: false,
 		}
 	}
 }
@@ -41,7 +46,10 @@ impl Default for Keyframes {
 impl Keyframes {
 	/// Enabled trial: floor 1s, period 2s, loss on, join ratio 4.
 	pub fn trial() -> Self {
-		Self { enabled: true, ..Self::default() }
+		Self {
+			enabled: true,
+			..Self::default()
+		}
 	}
 
 	/// `Err` when enabled with a zero floor or a zero period.
@@ -121,7 +129,11 @@ impl Gate {
 	pub fn open(policy: &Keyframes, now: Instant, pli: bool) -> Self {
 		let mut gate = Self::new(pli);
 		if policy.enabled && pli {
-			gate.arm_period(policy, now);
+			if policy.saturate {
+				gate.arm_saturation(policy, now);
+			} else {
+				gate.arm_period(policy, now);
+			}
 		}
 		gate
 	}
@@ -150,14 +162,37 @@ impl Gate {
 
 	/// A keyframe cancels the held request and starts the period from now.
 	pub fn on_keyframe(&mut self, policy: &Keyframes, now: Instant) {
+		let armed = self.deadline;
 		self.pending = false;
 		self.causes = 0;
 		self.parked = false;
 		self.deadline = None;
 		self.last_keyframe = Some(now);
 		if policy.enabled && self.pli {
-			self.arm_period(policy, now);
+			if policy.saturate {
+				// The held request is cancelled. An already armed floor stays armed,
+				// so a keyframe cannot postpone the next eligible ingest cause.
+				if let Some(at) = armed {
+					self.arm_saturation_at(at);
+				} else {
+					let base = self.last_sent.unwrap_or(now);
+					self.arm_saturation(policy, base);
+				}
+			} else {
+				self.arm_period(policy, now);
+			}
 		}
+	}
+
+	/// One ingest cause, due at `base + floor`, and still due after a later keyframe.
+	fn arm_saturation(&mut self, policy: &Keyframes, base: Instant) {
+		self.arm_saturation_at(base.saturating_add(policy.floor));
+	}
+
+	fn arm_saturation_at(&mut self, at: Instant) {
+		// Pending stays clear until this deadline. `ready` would otherwise send at once.
+		self.deadline = Some(at);
+		self.wake = Wake::Period;
 	}
 
 	fn arm_period(&mut self, policy: &Keyframes, now: Instant) {
@@ -221,8 +256,10 @@ impl Gate {
 	}
 
 	/// Whether a send is allowed now, before the writer is touched.
+	/// Parked is part of the predicate for every cause: media or a strictly
+	/// future rearm has to clear it before the writer is touched again.
 	pub fn ready(&self, policy: &Keyframes, now: Instant) -> bool {
-		if !self.pending || !self.pli {
+		if self.parked || !self.pending || !self.pli {
 			return false;
 		}
 		match self.last_sent {
@@ -231,9 +268,15 @@ impl Gate {
 		}
 	}
 
+	/// Causes accumulated since the previous accepted send.
+	pub fn causes(&self) -> u8 {
+		self.causes
+	}
+
 	/// Send when the floor allows and the line negotiated PLI. A refused send stays held.
+	/// A parked line returns `None` without touching `held`, including a direct call.
 	pub fn poll_send(&mut self, policy: &Keyframes, now: Instant, writer_accepted: bool) -> Option<Send> {
-		if !self.pending || !self.pli {
+		if self.parked || !self.pending || !self.pli {
 			return None;
 		}
 		if let Some(sent) = self.last_sent
@@ -250,11 +293,15 @@ impl Gate {
 		}
 		self.pending = false;
 		self.causes = 0;
+		self.parked = false;
 		self.last_sent = Some(now);
-		self.arm_period(policy, now);
+		if policy.saturate {
+			self.arm_saturation(policy, now);
+		} else {
+			self.arm_period(policy, now);
+		}
 		Some(Send::Sent { causes })
 	}
-
 }
 
 /// Earliest armed instant. A disarmed line contributes nothing.
@@ -365,7 +412,9 @@ mod tests {
 			gate.note(cause, t0, &policy);
 		}
 		match gate.poll_send(&policy, t0, true) {
-			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup", "step", "period", "loss", "join"]),
+			Some(Send::Sent { causes }) => {
+				assert_eq!(cause_names(causes), ["startup", "step", "period", "loss", "join"])
+			}
 			other => panic!("{other:?}"),
 		}
 		assert!(gate.poll_send(&policy, t0, true).is_none());
@@ -388,11 +437,17 @@ mod tests {
 		let t0 = Instant::now();
 		let sent_at = t0.saturating_add(Duration::from_secs(2));
 		gate.note(Cause::Period, sent_at, &policy);
-		assert!(matches!(gate.poll_send(&policy, sent_at, true), Some(Send::Sent { .. })));
+		assert!(matches!(
+			gate.poll_send(&policy, sent_at, true),
+			Some(Send::Sent { .. })
+		));
 		let deadline = gate.deadline().unwrap();
 		assert_eq!(deadline, sent_at.saturating_add(Duration::from_secs(2)));
 		gate.on_timer(&policy, deadline);
-		assert!(gate.deadline().is_none_or(|at| at > deadline), "the matured period is not armed again at the same instant");
+		assert!(
+			gate.deadline().is_none_or(|at| at > deadline),
+			"the matured period is not armed again at the same instant"
+		);
 	}
 
 	#[test]
@@ -404,7 +459,14 @@ mod tests {
 		assert!(matches!(gate.poll_send(&policy, t0, false), Some(Send::Held { .. })));
 		assert_eq!(gate.held, 1);
 		assert!(gate.last_sent.is_none());
+		assert!(
+			gate.poll_send(&policy, t0, true).is_none(),
+			"parked until media or a future rearm"
+		);
+		assert_eq!(gate.held, 1);
+		gate.on_receiver(&policy, t0);
 		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
+		assert!(!gate.parked);
 	}
 
 	#[test]
@@ -488,11 +550,17 @@ mod tests {
 		assert_eq!(gate.deadline(), Some(due));
 		gate.on_timer(&policy, due);
 		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
-		assert!(gate.deadline().is_none(), "parked, so ten seconds of silence do not spin");
+		assert!(
+			gate.deadline().is_none(),
+			"parked, so ten seconds of silence do not spin"
+		);
 		let later = due.saturating_add(Duration::from_secs(10));
-		assert!(gate.poll_send(&policy, later, true).is_some());
-		// The direct retry above is the caller asking again. The timer path stays quiet
-		// until a receiver or a future cause. Rebuild the parked state and wait for media.
+		assert!(
+			gate.poll_send(&policy, later, true).is_none(),
+			"a direct retry while parked does not touch the writer"
+		);
+		assert_eq!(gate.held, 1);
+		// The timer path stays quiet until a receiver or a future cause. Rebuild the parked state and wait for media.
 		let mut gate = Gate::open(&policy, t0, true);
 		gate.on_timer(&policy, due);
 		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
@@ -506,19 +574,114 @@ mod tests {
 	}
 
 	#[test]
+	fn a_parked_line_accepts_only_media_or_a_strictly_future_rearm() {
+		let policy = Keyframes::trial();
+		let t0 = Instant::now();
+		let mut gate = Gate::new(true);
+		gate.note(Cause::Startup, t0, &policy);
+		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
+		let due = t0.saturating_add(policy.period);
+		gate.on_timer(&policy, due);
+		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
+		assert!(gate.parked);
+		assert!(gate.poll_send(&policy, due, true).is_none());
+		assert_eq!(gate.held, 1);
+		// The floor already elapsed, so this join is immediate and stays parked.
+		gate.note(Cause::Join, due, &policy);
+		assert!(gate.parked);
+		assert!(gate.poll_send(&policy, due, true).is_none());
+		assert_eq!(gate.held, 1);
+		assert!(cause_names(gate.causes()).contains(&"join"));
+
+		// A held line whose next legal send is still ahead of `when` may rearm.
+		// Refuse does not leave this state (the floor has already elapsed); the
+		// predicate is the same one note() uses for every cause.
+		let mut gate = Gate::new(true);
+		gate.note(Cause::Startup, t0, &policy);
+		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
+		gate.note(Cause::Loss, t0, &policy);
+		gate.parked = true;
+		let soon = t0.saturating_add(Duration::from_millis(10));
+		gate.note(Cause::Join, soon, &policy);
+		assert!(!gate.parked, "a deadline strictly after now clears the park");
+		assert!(!gate.ready(&policy, soon));
+		assert!(gate.poll_send(&policy, soon, true).is_none());
+		assert_eq!(gate.held, 0);
+		let rearms = gate.deadline().unwrap();
+		assert!(rearms > soon);
+		gate.on_timer(&policy, rearms);
+		match gate.poll_send(&policy, rearms, true) {
+			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["loss", "join"]),
+			other => panic!("{other:?}"),
+		}
+		assert!(!gate.parked);
+	}
+
+	#[test]
+	fn receiver_then_keyframe_cancels_rather_than_releasing() {
+		let policy = Keyframes::trial();
+		let t0 = Instant::now();
+		let mut gate = Gate::open(&policy, t0, true);
+		let due = t0.saturating_add(policy.period);
+		gate.on_timer(&policy, due);
+		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
+		// Same order as ingest_gated: media unparks, then a keyframe cancels.
+		gate.on_receiver(&policy, due);
+		gate.on_keyframe(&policy, due);
+		assert!(gate.poll_send(&policy, due, true).is_none());
+		assert_eq!(gate.held, 1);
+		assert_eq!(gate.deadline(), Some(due.saturating_add(policy.period)));
+	}
+
+	#[test]
+	fn saturation_stays_due_at_the_floor_across_a_keyframe() {
+		let mut policy = Keyframes::trial();
+		policy.saturate = true;
+		let t0 = Instant::now();
+		let mut gate = Gate::open(&policy, t0, true);
+		assert_eq!(gate.deadline(), Some(t0.saturating_add(policy.floor)));
+		let key = t0.saturating_add(Duration::from_millis(100));
+		gate.on_keyframe(&policy, key);
+		assert_eq!(gate.deadline(), Some(t0.saturating_add(policy.floor)));
+		assert!(!gate.ready(&policy, key));
+		let floor = t0.saturating_add(policy.floor);
+		gate.on_timer(&policy, floor);
+		match gate.poll_send(&policy, floor, true) {
+			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["period"]),
+			other => panic!("{other:?}"),
+		}
+		assert_eq!(gate.deadline(), Some(floor.saturating_add(policy.floor)));
+		let again = floor.saturating_add(Duration::from_millis(50));
+		gate.on_keyframe(&policy, again);
+		assert_eq!(gate.deadline(), Some(floor.saturating_add(policy.floor)));
+	}
+
+	#[test]
 	fn the_first_join_reading_is_a_baseline() {
 		let policy = Keyframes::trial();
 		let mut watch = JoinWatch::default();
 		assert!(!watch.observe(&policy, None, None));
-		assert!(watch.observe(&policy, Some(1), Some(0)), "demand moved past the baseline to the next group");
+		assert!(
+			watch.observe(&policy, Some(1), Some(0)),
+			"demand moved past the baseline to the next group"
+		);
 		assert!(!watch.observe(&policy, Some(1), Some(0)), "unchanged demand");
 		let mut high = JoinWatch::default();
-		assert!(!high.observe(&policy, Some(1), Some(0)), "the first reading, even when already eligible");
-		assert!(!high.observe(&policy, Some(1), Some(0)), "the same initial demand is not a change");
+		assert!(
+			!high.observe(&policy, Some(1), Some(0)),
+			"the first reading, even when already eligible"
+		);
+		assert!(
+			!high.observe(&policy, Some(1), Some(0)),
+			"the same initial demand is not a change"
+		);
 		assert!(!watch.observe(&policy, Some(0), Some(0)), "not past the largest group");
 		assert!(!watch.observe(&policy, Some(0), None), "an empty track's group 0");
 		let mut again = JoinWatch::default();
-		assert!(!again.observe(&policy, Some(1), Some(0)), "a rendition's first sample is its own baseline");
+		assert!(
+			!again.observe(&policy, Some(1), Some(0)),
+			"a rendition's first sample is its own baseline"
+		);
 	}
 
 	#[test]
@@ -528,9 +691,7 @@ mod tests {
 			.unique_track("v", moq_net::track::Info::default().with_refresh(Some(4)))
 			.unwrap();
 		let mut group = track.create_group(moq_net::group::Info { start: 1 }).unwrap();
-		group
-			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
-			.unwrap();
+		group.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..]).unwrap();
 		group
 			.write_frame(moq_net::Timestamp::unscaled(1), vec![0u8; 13])
 			.unwrap();
@@ -550,9 +711,7 @@ mod tests {
 			.unique_track("u", moq_net::track::Info::default().with_refresh(Some(4)))
 			.unwrap();
 		let mut group = under.create_group(moq_net::group::Info { start: 1 }).unwrap();
-		group
-			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
-			.unwrap();
+		group.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..]).unwrap();
 		group.finish().unwrap();
 		let largest = under.largest().map(|position| position.group);
 		let mut watch = JoinWatch::default();

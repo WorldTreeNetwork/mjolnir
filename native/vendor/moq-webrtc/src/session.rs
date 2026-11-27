@@ -292,23 +292,24 @@ impl Session {
 					rate.next_remb = Instant::now();
 				}
 
+				Some(()) = self.demand_rx.recv() => {
+					// Before a due timer in this same wake. Biased select would otherwise
+					// flush the period first and push an already-queued join out by a floor.
+					self.drain_joins();
+				}
+
 				_ = async {
 					match crate::keyframe::earliest_deadline([remb_at, gate_at]) {
 						Some(at) => kio::clock::sleep_until(at).await,
 						None => std::future::pending().await,
 					}
 				} => {
+					self.drain_joins();
 					let now = Instant::now();
 					if self.rate.as_ref().and_then(IngestRate::remb_at).is_some_and(|at| now >= at) {
 						self.send_remb();
 					}
 					self.fire_gates();
-				}
-
-				Some(()) = self.demand_rx.recv() => {
-					if let Some(policy) = self.keyframes {
-						self.observe_joins(policy);
-					}
 				}
 
 				event = self.agent.next() => match event {
@@ -449,31 +450,11 @@ impl Session {
 				let pli = negotiated.iter().any(|params| params.fb_pli());
 				self.ingest_order.open(mid, video, pli, Instant::now());
 				if video && let Some(policy) = self.keyframes {
-					self.gates.insert(mid, crate::keyframe::Gate::open(&policy, Instant::now(), pli));
-					self.joins.insert(mid, crate::keyframe::JoinWatch::default());
-					if let MediaRole::Ingest(sink) = &mut self.role
-						&& let Some(demand) = sink.demand(mid)
-					{
-						let tx = self.demand_tx.clone();
-						tokio::spawn(async move {
-							let mut demand = demand;
-							let mut waiter = None;
-							loop {
-								let step = std::future::poll_fn(|cx| {
-									waiter.get_or_insert_with(|| kio::Waiter::new(cx.waker().clone()));
-									match demand.poll_wanted_changed(waiter.as_ref().expect("waiter")) {
-										std::task::Poll::Ready(Ok(_)) => std::task::Poll::Ready(true),
-										std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(false),
-										std::task::Poll::Pending => std::task::Poll::Pending,
-									}
-								})
-								.await;
-								if !step || tx.send(()).is_err() {
-									break;
-								}
-							}
-						});
-					}
+					self.gates
+						.insert(mid, crate::keyframe::Gate::open(&policy, Instant::now(), pli));
+					// Baseline is the wanted value at attach, before the watcher is spawned
+					// or this task yields. A later notification is a change against that sample.
+					self.attach_demand(mid, policy);
 				}
 				// REMB only where the publisher negotiated it; str0m offers it on video alone.
 				if let Some(rate) = &mut self.rate
@@ -525,17 +506,51 @@ impl Session {
 		}
 	}
 
+	/// Sample this line's demand before any watcher notification can be queued.
+	/// A later call is a rendition replacement: the new first sample is that
+	/// track's baseline, and a new watcher follows the new demand.
+	fn attach_demand(&mut self, mid: str0m::media::Mid, policy: crate::keyframe::Keyframes) {
+		let (wanted, largest) = match &mut self.role {
+			MediaRole::Ingest(sink) => sink
+				.join_samples()
+				.into_iter()
+				.find(|(sample, _, _)| *sample == mid)
+				.map(|(_, wanted, largest)| (wanted, largest))
+				.unwrap_or((None, None)),
+			MediaRole::Egress(_) => return,
+		};
+		let mut watch = crate::keyframe::JoinWatch::default();
+		let _ = watch.observe(&policy, wanted, largest);
+		self.joins.insert(mid, watch);
+		let Some(demand) = (match &mut self.role {
+			MediaRole::Ingest(sink) => sink.demand(mid),
+			MediaRole::Egress(_) => None,
+		}) else {
+			return;
+		};
+		let tx = self.demand_tx.clone();
+		tokio::spawn(watch_demand(demand, tx));
+	}
+
+	fn drain_joins(&mut self) {
+		loop {
+			let Some(policy) = self.keyframes else {
+				break;
+			};
+			self.observe_joins(policy);
+			if self.demand_rx.try_recv().is_err() {
+				break;
+			}
+		}
+	}
+
 	fn observe_joins(&mut self, policy: crate::keyframe::Keyframes) {
 		let samples = match &mut self.role {
 			MediaRole::Ingest(sink) => sink.join_samples(),
 			MediaRole::Egress(_) => return,
 		};
 		for (mid, wanted, largest) in samples {
-			let request = self
-				.joins
-				.entry(mid)
-				.or_default()
-				.observe(&policy, wanted, largest);
+			let request = self.joins.entry(mid).or_default().observe(&policy, wanted, largest);
 			if request {
 				if let Some(gate) = self.gates.get_mut(&mid) {
 					gate.note(crate::keyframe::Cause::Join, Instant::now(), &policy);
@@ -545,7 +560,12 @@ impl Session {
 		}
 	}
 
-	fn flush_gate(&mut self, policy: crate::keyframe::Keyframes, mid: str0m::media::Mid, rid: Option<str0m::media::Rid>) {
+	fn flush_gate(
+		&mut self,
+		policy: crate::keyframe::Keyframes,
+		mid: str0m::media::Mid,
+		rid: Option<str0m::media::Rid>,
+	) {
 		let now = Instant::now();
 		let Some(gate) = self.gates.get(&mid) else {
 			return;
@@ -589,12 +609,12 @@ impl Session {
 		if let Some(gate) = self.gates.get_mut(&data.mid) {
 			gate.on_receiver(&policy, now);
 		}
-		if keyframe
-			&& let Some(gate) = self.gates.get_mut(&data.mid)
-		{
+		if keyframe && let Some(gate) = self.gates.get_mut(&data.mid) {
 			gate.on_keyframe(&policy, now);
 		}
-		if policy.on_loss && !data.contiguous && !keyframe
+		if policy.on_loss
+			&& !data.contiguous
+			&& !keyframe
 			&& let Some(gate) = self.gates.get_mut(&data.mid)
 		{
 			gate.note(crate::keyframe::Cause::Loss, now, &policy);
@@ -997,6 +1017,30 @@ pub(crate) fn end(role: &str, result: Result<()>) -> Result<()> {
 		Err(err) => tracing::warn!(%err, role, "session ended"),
 	}
 	result
+}
+
+/// One Tokio task owns the waiter. The channel closing ends the task even when
+/// demand never changes again, so a dropped custom-sink session does not leave it.
+async fn watch_demand(mut demand: moq_net::track::Demand, tx: mpsc::UnboundedSender<()>) {
+	let mut waiter = None;
+	loop {
+		tokio::select! {
+			biased;
+			_ = tx.closed() => break,
+			step = std::future::poll_fn(|cx| {
+				waiter.get_or_insert_with(|| kio::Waiter::new(cx.waker().clone()));
+				match demand.poll_wanted_changed(waiter.as_ref().expect("waiter")) {
+					std::task::Poll::Ready(Ok(_)) => std::task::Poll::Ready(true),
+					std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(false),
+					std::task::Poll::Pending => std::task::Poll::Pending,
+				}
+			}) => {
+				if !step || tx.send(()).is_err() {
+					break;
+				}
+			}
+		}
+	}
 }
 
 /// Convert a str0m [`MediaTime`](str0m::media::MediaTime) to microseconds.
@@ -1562,6 +1606,262 @@ mod tests {
 		clock.observe(video, sender_info(2, report_time, base + 133_000));
 		// With one track the reports change nothing, and a delta keeps its place.
 		assert_eq!(times(&mut clock, [200, 266, 233]), [100_000, 166_000, 133_000]);
+	}
+
+	/// Demand watcher regressions. The sink is a real moq-net track. The loop is
+	/// `Session::run_loop`. The agent is replaced after negotiate so the writer is missing.
+	mod demand_watch {
+		use std::sync::{Arc, Mutex};
+		use std::time::Duration;
+
+		use super::*;
+
+		struct Sink {
+			track: Arc<Mutex<moq_net::track::Producer>>,
+			mid: str0m::media::Mid,
+		}
+
+		impl MediaSink for Sink {
+			fn on_track(
+				&mut self,
+				_: str0m::media::Mid,
+				_: str0m::media::MediaKind,
+				_: str0m::format::Codec,
+				_: Option<(u32, u32)>,
+			) -> Result<()> {
+				Ok(())
+			}
+			fn on_frame(&mut self, _: str0m::media::Mid, _: codec::Frame) -> Result<()> {
+				Ok(())
+			}
+			fn on_discontinuity(&mut self, _: str0m::media::Mid) -> Result<()> {
+				Ok(())
+			}
+			fn abort(&mut self, _: moq_net::Error) {}
+			fn finish(&mut self) -> Result<moq_net::broadcast::Producer> {
+				unreachable!("the watcher tests do not finish the session")
+			}
+			fn demand(&mut self, _: str0m::media::Mid) -> Option<moq_net::track::Demand> {
+				Some(self.track.lock().expect("track").demand())
+			}
+			fn join_samples(&mut self) -> Vec<(str0m::media::Mid, Option<u64>, Option<u64>)> {
+				let track = self.track.lock().expect("track");
+				vec![(
+					self.mid,
+					track.demand().wanted(),
+					track.largest().map(|position| position.group),
+				)]
+			}
+		}
+
+		fn over_ratio(track: &moq_net::track::Producer) {
+			over_ratio_at(track, 1);
+		}
+
+		fn over_ratio_at(track: &moq_net::track::Producer, start: u64) {
+			let mut group = track.create_group(moq_net::group::Info { start }).unwrap();
+			group
+				.write_frame(moq_net::Timestamp::unscaled(start), &b"key"[..])
+				.unwrap();
+			group
+				.write_frame(moq_net::Timestamp::unscaled(start), vec![0u8; 13])
+				.unwrap();
+			group.finish().unwrap();
+		}
+
+		async fn open_line() -> (Session, Arc<Mutex<moq_net::track::Producer>>, str0m::media::Mid) {
+			let now = Instant::now().into_std();
+			let mut offerer = rtc_config().unwrap().build(now);
+			let mut api = offerer.sdp_api();
+			let mid = api.add_media(
+				str0m::media::MediaKind::Video,
+				str0m::media::Direction::SendOnly,
+				None,
+				None,
+				None,
+			);
+			let (offer, _) = api.apply().unwrap();
+			let mut rtc = rtc_config().unwrap().build(now);
+			rtc.sdp_api().accept_offer(offer).unwrap();
+			let broadcast = moq_net::broadcast::Info::new().produce();
+			let track = broadcast
+				.unique_track("v", moq_net::track::Info::default().with_refresh(Some(4)))
+				.unwrap();
+			let track = Arc::new(Mutex::new(track));
+			let mut session = Session::ingest(
+				rtc,
+				bind_udp().await.unwrap(),
+				Box::new(Sink {
+					track: track.clone(),
+					mid,
+				}),
+			)
+			.unwrap()
+			.with_keyframes(crate::keyframe::Keyframes::trial());
+			session.handle_media(mid).unwrap();
+			session.agent =
+				crate::ice::Agent::new(rtc_config().unwrap().build(now), bind_udp().await.unwrap()).unwrap();
+			(session, track, mid)
+		}
+
+		async fn drive(session: &mut Session) {
+			assert!(
+				tokio::time::timeout(Duration::from_millis(50), session.run_loop())
+					.await
+					.is_err()
+			);
+		}
+
+		#[tokio::test]
+		async fn queued_notifications_still_see_the_attach_baseline() {
+			let (mut session, track, mid) = open_line().await;
+			tokio::task::yield_now().await;
+			assert!(
+				session.demand_rx.len() >= 1,
+				"the first poll queues the sample taken at attach"
+			);
+			over_ratio(&track.lock().unwrap());
+			let _subscriber = track.lock().unwrap().subscribe(None);
+			tokio::task::yield_now().await;
+			assert!(session.demand_rx.len() >= 2);
+			drive(&mut session).await;
+			assert_eq!(
+				session.gates[&mid].held, 1,
+				"the late high sample is a change from the empty baseline"
+			);
+			assert!(crate::keyframe::cause_names(session.gates[&mid].causes()).contains(&"join"));
+		}
+
+		#[tokio::test]
+		async fn a_join_before_the_watcher_polls_uses_the_attach_baseline() {
+			let (mut session, track, mid) = open_line().await;
+			over_ratio(&track.lock().unwrap());
+			let _subscriber = track.lock().unwrap().subscribe(None);
+			drive(&mut session).await;
+			assert_eq!(session.gates[&mid].held, 1);
+			assert!(crate::keyframe::cause_names(session.gates[&mid].causes()).contains(&"join"));
+		}
+
+		#[tokio::test]
+		async fn unchanged_and_under_ratio_demand_do_not_ask() {
+			let (mut session, track, mid) = open_line().await;
+			drive(&mut session).await;
+			assert_eq!(session.gates[&mid].held, 0);
+			let mut group = track
+				.lock()
+				.unwrap()
+				.create_group(moq_net::group::Info { start: 1 })
+				.unwrap();
+			group.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..]).unwrap();
+			group.finish().unwrap();
+			let _subscriber = track.lock().unwrap().subscribe(None);
+			drive(&mut session).await;
+			assert_eq!(
+				session.gates[&mid].held, 0,
+				"under the ratio, wanted does not pass the largest group"
+			);
+		}
+
+		#[tokio::test]
+		async fn a_join_while_parked_does_not_touch_the_writer() {
+			let (mut session, track, mid) = open_line().await;
+			drive(&mut session).await;
+			let policy = crate::keyframe::Keyframes::trial();
+			session
+				.gates
+				.get_mut(&mid)
+				.unwrap()
+				.note(crate::keyframe::Cause::Period, Instant::now(), &policy);
+			session.fire_gates();
+			assert_eq!(session.gates[&mid].held, 1);
+			assert!(session.gates[&mid].deadline().is_none());
+			over_ratio(&track.lock().unwrap());
+			let _subscriber = track.lock().unwrap().subscribe(None);
+			drive(&mut session).await;
+			assert_eq!(
+				session.gates[&mid].held, 1,
+				"join records the cause and leaves the parked writer alone"
+			);
+			assert!(crate::keyframe::cause_names(session.gates[&mid].causes()).contains(&"join"));
+			for _ in 0..100 {
+				session.fire_gates();
+			}
+			assert_eq!(session.gates[&mid].held, 1);
+		}
+
+		#[tokio::test(start_paused = true)]
+		async fn a_queued_join_is_decided_before_the_simultaneous_period() {
+			let (mut session, track, mid) = open_line().await;
+			let policy = crate::keyframe::Keyframes::trial();
+			let opened = Instant::now();
+			// One accepted send so the period and the floor can meet, then replace the gate
+			// the open already armed. The writer stays missing for the next attempt.
+			let mut gate = crate::keyframe::Gate::open(&policy, opened, true);
+			gate.note(crate::keyframe::Cause::Startup, opened, &policy);
+			assert!(gate.poll_send(&policy, opened, true).is_some());
+			session.gates.insert(mid, gate);
+			tokio::time::advance(policy.period).await;
+			over_ratio(&track.lock().unwrap());
+			let _subscriber = track.lock().unwrap().subscribe(None);
+			tokio::task::yield_now().await;
+			assert!(
+				tokio::time::timeout(Duration::from_millis(1), session.run_loop())
+					.await
+					.is_err()
+			);
+			assert_eq!(
+				session.gates[&mid].held, 1,
+				"one attempt at the period, not a second after another floor"
+			);
+			let names = crate::keyframe::cause_names(session.gates[&mid].causes());
+			assert!(names.contains(&"join"), "{names:?}");
+		}
+
+		#[tokio::test]
+		async fn replacing_the_track_rebases_before_the_next_join() {
+			let (mut session, track, mid) = open_line().await;
+			drive(&mut session).await;
+			let broadcast = moq_net::broadcast::Info::new().produce();
+			let replacement = broadcast
+				.unique_track("v2", moq_net::track::Info::default().with_refresh(Some(4)))
+				.unwrap();
+			over_ratio(&replacement);
+			let _subscriber = replacement.subscribe(None);
+			assert!(replacement.demand().wanted() > replacement.largest().map(|position| position.group));
+			*track.lock().unwrap() = replacement.clone();
+			let policy = session.keyframes.expect("trial");
+			session.attach_demand(mid, policy);
+			drive(&mut session).await;
+			assert_eq!(
+				session.gates[&mid].held, 0,
+				"the rendition's first sample is its baseline"
+			);
+			// The pending refresh was the baseline. A new over-ratio group and a new
+			// subscriber ask for a group strictly after that sample.
+			over_ratio_at(&replacement, 3);
+			let _again = replacement.subscribe(None);
+			let wanted = replacement.demand().wanted();
+			let largest = replacement.largest().map(|position| position.group);
+			drive(&mut session).await;
+			assert_eq!(session.gates[&mid].held, 1, "wanted {wanted:?} largest {largest:?}");
+			assert!(crate::keyframe::cause_names(session.gates[&mid].causes()).contains(&"join"));
+		}
+
+		#[tokio::test]
+		async fn dropping_the_session_ends_the_watcher_while_the_producer_lives() {
+			let (session, track, _) = open_line().await;
+			tokio::task::yield_now().await;
+			let weak = session.demand_tx.downgrade();
+			drop(session);
+			tokio::task::yield_now().await;
+			assert!(
+				weak.upgrade().is_none(),
+				"the watcher stops when the session drops the channel"
+			);
+			let track = track.lock().unwrap();
+			assert!(track.demand().wanted().is_none() || track.largest().is_none());
+			let _still_alive = track.clone();
+		}
 	}
 
 	fn sender_info(ssrc: u32, ntp_time: SystemTime, rtp_us: u64) -> SenderInfo {
