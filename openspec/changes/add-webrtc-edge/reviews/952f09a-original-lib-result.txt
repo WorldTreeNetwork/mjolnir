@@ -1,0 +1,36 @@
+
+running 31 tests
+test edge::tests::admit_open_mint_shape_does_not_dial_and_refuses_protected_and_wide ... ok
+test edge::tests::cancelled_waiter_does_not_stick_a_ref ... ok
+test edge::tests::candidate_timeout_keeps_the_other_token ... ok
+test edge::tests::concurrent_posts_share_one_dial_and_a_later_acquire_dials_again ... ok
+test edge::tests::configured_origins_are_an_exact_list ... ok
+test edge::tests::drain_during_dial_does_not_register ... ok
+test edge::tests::drain_is_not_cleared_by_a_good_reload ... ok
+test edge::tests::first_acquire_past_exp_is_bad_token ... ok
+test edge::tests::foreign_broadcast_header_mismatch_and_closed_admissions_do_not_dial ... ok
+test edge::tests::http_flush_ack_keeps_session_after_close_and_failures_do_not ... ok
+test edge::tests::http_single_decode_and_admit_envelope ... ok
+test edge::tests::last_release_closes_the_real_relay_connection ... ok
+test edge::tests::parser_rejects_encoded_slash_backslash_and_dot_segments ... ok
+test edge::tests::pipelined_second_response_failure_keeps_the_first_ack ... ok
+test edge::tests::rejected_leader_keeps_waiter_reservation ... ok
+test edge::tests::stale_deadline_drain_and_generation_do_not_start_at_ack ... ok
+test edge::tests::stale_generation_cleanup_leaves_the_replacement ... ok
+test edge::tests::tombstone_horizon_reaps_without_another_delete ... ok
+test edge::tests::ttl_ceiling_is_the_snapshot_value ... ok
+test edge::tests::two_legs_one_token_one_dial_and_delete_matrix ... ok
+test edge::tests::untrusted_key_file_closes_admissions_and_keeps_old_keys ... ok
+test edge::tests::usable_video_rejects_port_zero_and_inactive ... ok
+test tests::a_key_file_that_becomes_readable_is_picked_up ... ok
+test tests::elixir_eddsa_token_verifies ... ok
+test tests::group_writable_key_file_is_refused ... ok
+test tests::key_directory_writable_by_others_is_refused ... ok
+test tests::loader_rejects_a_disallowed_algorithm ... ok
+test tests::loader_rejects_a_key_with_no_kid ... ok
+test tests::loader_rejects_a_private_key_an_empty_set_and_a_duplicate_kid ... ok
+test tests::refuses_missing_expiry_bad_owner_ticket_and_other_key ... ok
+test tests::room_rooted_token_isolates_rooms_and_participants_on_both_deciders ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.63s
+

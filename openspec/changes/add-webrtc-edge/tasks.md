@@ -51,3 +51,13 @@ Review: `reviews/2026-11-27-code-review-4169315.md`. Contract acceptance remains
 - [ ] R10: apply the recorded default ingest rate cap before actual WHIP accept; verify TIAS/REMB and over-cap termination while preserving adopted keyframe trial defaults.
 - [ ] Consolidate production-path regressions instead of treating fabricated-answer attach tests as runtime coverage; cfg-gate mock-only helpers, redact Checked Debug, verify valid foreign CA and hostname rejection.
 - [ ] Re-run repaired binary with recorded hash and real Mint-issued media/refusal/expiry/isolation cases; repeat early/late tone checks on the repaired hash (current a8e6b9b7 diagnostics pass both); preserve the outstanding Ubuntu 24.04 gate.
+
+## Independent CODE re-review of 952f09a — send-back
+
+Exact product `952f09a59a899d71e27635099760dcde5bd483bf`; `reviews/2026-11-27-code-review-952f09a.md`. Current library 31 and TLS 1 pass; independent real-Response/HTTP suite 10 passes includes three defect characterizations. Local flush boundary is valid; code and builder-owned media/platform readiness remain separate. No `.15` unlock, node close, fold or deploy.
+
+- [ ] N1 (P1): distinguish pre-expiry original setup deadline from actual expiry in locked pending insertion; candidate timeout must not return BadToken or drop same-token incumbents. Exercise final-registration deadline/expiry ordering.
+- [ ] N2 (P1): notify/wake the HTTP driver when a pending ticket is invalidated; terminate stalled/incomplete output on deadline, DELETE, drain or relay death, and terminate on rejected ack. Preserve previously acknowledged sessions. Assert completion without external task abortion.
+- [ ] N3 (P2): at ack, atomically detach the whole matching token generation on expiry/known relay death; retain candidate-only cleanup for pre-expiry deadlines. Make pending-only cancellation check/removal atomic; test actual Response ownership and other-token isolation.
+- [ ] N4 (P2): prevent new acquisition from reusing a token slot before its old generation is closed; add a controlled real-connection last-release/redial interleaving.
+- [ ] N5 (P2): remove settled tickets from the connection context instead of retaining/scanning every historical response; assert pending state is empty after repeated keepalive POST/DELETE cycles.

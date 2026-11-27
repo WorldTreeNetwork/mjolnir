@@ -1,0 +1,35 @@
+EXACT CHECKED-IN LIBRARY AND TLS
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5iwhj0zq/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5iwhj0zq/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5iwhj0zq/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2305:17
+     |
+2305 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+rustc-LLVM ERROR: IO failure on output stream: No space left on device
+error: could not compile `mjolnir-relay` (bin "mjolnir-relay")
+
+Caused by:
+  process didn't exit successfully: `/Users/dukejones/.rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/rustc --crate-name mjolnir_relay --edition=2021 src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type bin --emit=dep-info,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=e4c31476f754c496 -C extra-filename=-9982560d666bfe26 --out-dir /Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps -C incremental=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/incremental -L dependency=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps --extern anyhow=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libanyhow-069556cafecb5f00.rlib --extern axum=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libaxum-96e5d80584ed1246.rlib --extern base64=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libbase64-f87e431b22978310.rlib --extern bs58=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libbs58-d13af9127d3012d1.rlib --extern bytes=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libbytes-9a078178f778b278.rlib --extern hex=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhex-a36e081a1c27dff6.rlib --extern http_body=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhttp_body-d2f618ba7d6717dd.rlib --extern http_body_util=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhttp_body_util-5bb03dd6f90b096c.rlib --extern hyper=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhyper-f87f8228652ad205.rlib --extern hyper_util=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhyper_util-8172806e861667c7.rlib --extern iroh=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libiroh-55c434bf7478a7aa.rlib --extern kio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libkio-4375f274b54b8fc1.rlib --extern mjolnir_relay=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmjolnir_relay-4b5ef63c1e56e0db.rlib --extern moq_auth=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_auth-8b64cdac1c19c8ab.rlib --extern moq_ext_access=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_ext_access-76a3c869d723159a.rlib --extern moq_net=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_net-a2162e0783365a4c.rlib --extern moq_pattern=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_pattern-dc26a8402021487b.rlib --extern moq_relay=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_relay-702c1a7c18b96e7b.rlib --extern moq_tokio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_tokio-bb998fdd43ee7da4.rlib --extern moq_transport_iroh=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_transport_iroh-b142a0250ae653e6.rlib --extern moq_webrtc=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_webrtc-2b7b18d7506da299.rlib --extern pin_project_lite=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libpin_project_lite-f525e879ca987c5d.rlib --extern serde=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libserde-a7f02c7e170f1c1f.rlib --extern serde_json=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libserde_json-a0059b8de095aaa5.rlib --extern sha2=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libsha2-13e3d0bd843ddf6b.rlib --extern tempfile=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtempfile-bace71404def1e6a.rlib --extern tokio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtokio-6ac33cc6abed56b0.rlib --extern tokio_util=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtokio_util-82238c57fe63c872.rlib --extern tower=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtower-301da44bbd48b60a.rlib --extern tracing=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtracing-e74c391d0d495351.rlib --extern tracing_subscriber=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtracing_subscriber-87f5749d4b62fad0.rlib --extern url=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/liburl-51cf59bea979a572.rlib --extern x509_parser=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libx509_parser-5542e408e21c9aee.rlib -L native=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/build/blake3-dde8dd28ad7af057/out -L native=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/build/aws-lc-sys-83801b3fec7e4b61/out -L native=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/build/ring-afb662c8e44e13a8/out` (exit status: 101)
+Traceback (most recent call last):
+  File "/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-webrtc-edge/reviews/reproduce-952f09a.py", line 29, in <module>
+    subprocess.run(['cargo', '+1.95.0', 'test', '--offline', '--locked', '--lib', '--test', 'edge_tls', '--', '--test-threads=1'], cwd=crate, env=env, check=True, timeout=900)
+  File "/Users/dukejones/.local/share/mise/installs/python/3.12.13/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['cargo', '+1.95.0', 'test', '--offline', '--locked', '--lib', '--test', 'edge_tls', '--', '--test-threads=1']' returned non-zero exit status 101.

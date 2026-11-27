@@ -1,0 +1,46 @@
+INDEPENDENT APPENDED REVIEW PROBES
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-1ws5_w96/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-1ws5_w96/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-1ws5_w96/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2305:17
+     |
+2305 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.87s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-2a659ba4c0a28514)
+
+running 10 tests
+test edge::independent_review::preexpiry_pending_deadline_wrongly_reports_token_expiry_defect ... DEFECT insert_pending returns BadToken for pre-expiry setup deadline; open_session then drops whole token, incumbent 1
+ok
+test edge::independent_review::real_ack_expiry_only_cancels_candidate_defect ... DEFECT ack expiry branch leaves same-token incumbent running; independent expiry task not executed in this controlled ordering
+ok
+test edge::independent_review::real_catalog_timeout_and_whole_token_expiry_regression ... ok
+test edge::independent_review::real_pending_ack_gates_do_not_resurrect_or_start ... ok
+test edge::independent_review::real_pending_teardown_does_not_wake_http_defect ... DEFECT real pending deadline removed RTC ownership but left HTTP task pending, including after flush release
+DEFECT real pending delete removed RTC ownership but left HTTP task pending, including after flush release
+DEFECT real pending relay removed RTC ownership but left HTTP task pending, including after flush release
+ok
+test edge::independent_review::real_pipelined_failure_commits_only_first ... ok
+test edge::independent_review::real_tcp_flush_runner_finish_and_cap ... ok
+test edge::independent_review::real_three_pipeline_success_and_h2_rejection ... ok
+test edge::independent_review::real_transport_failure_matrix_preserves_incumbent ... ok
+test edge::independent_review::real_unrun_drop_missing_context_and_relay_cleanup ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 42.45s
+
