@@ -1,0 +1,36 @@
+   Compiling http-delivery-probe v0.0.0 (/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-webrtc-edge/reviews/http-delivery-probe)
+    Finished `test` profile [unoptimized] target(s) in 0.66s
+     Running unittests src/lib.rs (openspec/changes/add-webrtc-edge/reviews/http-delivery-probe/target/debug/deps/http_delivery_probe-aa6d7d58e3e5bfcd)
+
+running 12 tests
+test tests::cancellation_after_eof_before_flush ... result=Err(Elapsed(())) committed=[99] cancelled=[1] bytes=319 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1"]
+ok
+test tests::flush_failure ... result=Ok(Err(hyper::Error(BodyWrite, Kind(BrokenPipe)))) committed=[99] cancelled=[1] bytes=319 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1"]
+ok
+test tests::large_body_early_flush_does_not_commit ... result=Ok(Err(hyper::Error(BodyWrite, Kind(BrokenPipe)))) committed=[99] cancelled=[1] bytes=17 events=[]
+ok
+test tests::large_body_success_flushes_before_eof ... result=Ok(Ok(())) committed=[99, 1] cancelled=[] bytes=400896 events=[]
+ok
+test tests::partial_write_failure ... result=Ok(Err(hyper::Error(BodyWrite, Kind(BrokenPipe)))) committed=[99] cancelled=[1] bytes=17 events=["eof 1", "write 1", "write 1"]
+ok
+test tests::pipelined_success ... result=Ok(Ok(())) committed=[99, 1, 2, 3] cancelled=[] bytes=919 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "flush-ok", "commit 1", "eof 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "write 2", "flush-ok", "commit 2", "eof 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "write 3", "flush-ok", "commit 3", "flush-ok"]
+ok
+test tests::pipelined_success_then_failure_preserves_first ... result=Ok(Err(hyper::Error(BodyWrite, Kind(BrokenPipe)))) committed=[99, 1] cancelled=[2] bytes=300 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "flush-ok", "commit 1", "eof 2", "write 2"]
+ok
+test tests::success_close_partial_writes ... result=Ok(Ok(())) committed=[99, 1] cancelled=[] bytes=319 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "flush-ok", "commit 1", "flush-ok"]
+ok
+test tests::success_keepalive_then_connection_cancel ... result=Err(Elapsed(())) committed=[99, 1] cancelled=[] bytes=300 events=["eof 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "write 1", "flush-ok", "commit 1", "flush-ok"]
+ok
+test tests::unconsumed_body_drop ... ok
+test tests::write_failure_after_eof ... result=Ok(Err(hyper::Error(BodyWrite, Kind(BrokenPipe)))) committed=[99] cancelled=[1] bytes=0 events=["eof 1", "write 1"]
+ok
+test tests::zero_write ... result=Ok(Err(hyper::Error(BodyWrite, Kind(WriteZero)))) committed=[99] cancelled=[1] bytes=0 events=["eof 1", "write 1"]
+ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+   Doc-tests http_delivery_probe
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

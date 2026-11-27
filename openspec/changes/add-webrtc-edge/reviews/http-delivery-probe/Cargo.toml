@@ -1,0 +1,16 @@
+[workspace]
+[package]
+name = "http-delivery-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[dependencies]
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+bytes = "1"
+http-body = "=1.1.0"
+hyper = { version = "=1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt", "io-util", "time"] }
+tower = { version = "=0.5.3", features = ["util"] }
+[profile.dev]
+debug = 0
