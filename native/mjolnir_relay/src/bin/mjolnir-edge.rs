@@ -25,6 +25,14 @@ async fn main() -> anyhow::Result<()> {
     key_file_trusted(&keys_path)?;
     let keys = load_verify_keys(&keys_path)?;
     let edge = Edge::new(keys);
+    if let Ok(raw) = std::env::var("MJOLNIR_EDGE_MAX_TTL").or_else(|_| std::env::var("MJOLNIR_RELAY_TOKEN_MAX_TTL")) {
+        let secs: u64 = raw.parse()?;
+        edge.set_max_ttl(Duration::from_secs(secs)).map_err(|_| anyhow::anyhow!("max ttl must be non-zero"))?;
+    }
+    if let Ok(raw) = std::env::var("MJOLNIR_EDGE_ORIGINS") {
+        let origins = raw.split(',').map(str::trim).filter(|origin| !origin.is_empty()).map(str::to_string).collect();
+        edge.set_origins(origins);
+    }
     let relay: url::Url = std::env::var("MJOLNIR_EDGE_RELAY")?.parse()?;
     let media_addr = std::env::var("MJOLNIR_EDGE_MEDIA")
         .unwrap_or_else(|_| "127.0.0.1:0".into())
@@ -32,6 +40,25 @@ async fn main() -> anyhow::Result<()> {
     let media = moq_webrtc::Server::bind(media_addr, moq_webrtc::server::Config::default()).await?;
     let tls_root = std::env::var("MJOLNIR_EDGE_TLS_ROOT").ok().map(PathBuf::from);
     edge.set_moq(MoqConfig { relay, tls_root, media });
+    let edge_drain = Arc::clone(&edge);
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut term = signal(SignalKind::terminate()).expect("sigterm");
+            let mut int = signal(SignalKind::interrupt()).expect("sigint");
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        tracing::warn!("edge drain: admissions closed, relay links dropped");
+        edge_drain.drain();
+    });
     let edge_reload = Arc::clone(&edge);
     let reload_path = keys_path.clone();
     tokio::spawn(async move {

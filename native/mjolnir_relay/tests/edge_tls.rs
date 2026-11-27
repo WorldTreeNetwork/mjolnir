@@ -94,7 +94,36 @@ async fn verified_root_dials_and_a_foreign_root_does_not() {
         media,
     };
     let failed = mjolnir_relay::moq_session::dial(&bad, &token, Duration::from_secs(3)).await;
-    assert!(failed.is_err(), "a foreign root must not verify");
+    assert!(failed.is_err(), "a malformed root must not verify");
+
+    let foreign_key = rcgen::KeyPair::generate().unwrap();
+    let foreign_params = rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap();
+    let foreign_signed = foreign_params.self_signed(&foreign_key).unwrap();
+    let foreign_cert = dir.path().join("foreign.pem");
+    std::fs::write(&foreign_cert, foreign_signed.pem()).unwrap();
+    let media = moq_webrtc::Server::bind("127.0.0.1:0".parse().unwrap(), Default::default())
+        .await
+        .unwrap();
+    let foreign = mjolnir_relay::moq_session::MoqConfig {
+        relay: url.clone(),
+        tls_root: Some(foreign_cert),
+        media,
+    };
+    let failed = mjolnir_relay::moq_session::dial(&foreign, &token, Duration::from_secs(3)).await;
+    assert!(failed.is_err(), "a different but valid CA must not verify");
+
+    let mut by_addr = edge_url.clone();
+    by_addr.set_host(Some("127.0.0.1")).unwrap();
+    let media = moq_webrtc::Server::bind("127.0.0.1:0".parse().unwrap(), Default::default())
+        .await
+        .unwrap();
+    let mismatch = mjolnir_relay::moq_session::MoqConfig {
+        relay: by_addr,
+        tls_root: Some(cert.clone()),
+        media,
+    };
+    let failed = mjolnir_relay::moq_session::dial(&mismatch, &token, Duration::from_secs(3)).await;
+    assert!(failed.is_err(), "localhost cert must not match 127.0.0.1");
 
     let good = mjolnir_relay::moq_session::MoqConfig {
         relay: edge_url.clone(),
