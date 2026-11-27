@@ -1,0 +1,13 @@
+2026-11-27T21:16:49.000976Z  INFO moq_tokio::connection: connection closed err=authorization token expired
+2026-11-27T21:16:49.000967Z  WARN moq_net::lite::publisher: subscribed error broadcast=short/cam track=0.vp8 err=authorization token expired
+2026-11-27T21:16:49.001090Z  WARN moq_net::lite::publisher: announcing error err=authorization token expired prefix=
+2026-11-27T21:16:49.001123Z  WARN moq_net::lite::publisher: subscribed error broadcast=short/cam track=catalog.json err=authorization token expired
+2026-11-27T21:16:49.001153Z  WARN moq_net::lite::publisher: subscribed error broadcast=short/cam track=1.opus err=authorization token expired
+2026-11-27T21:16:49.001229Z  WARN moq_net::lite::session: session error err=authorization token expired
+2026-11-27T21:16:49.001493Z  WARN moq_net::lite::subscriber: subscribe error broadcast=short/cam track=catalog.json err=unroutable
+2026-11-27T21:16:49.001606Z  WARN moq_webrtc::egress: egress catalog failed err=moq: unroutable
+2026-11-27T21:16:49.001676Z  WARN moq_webrtc::session: session ended err=mux error: moq: unroutable role="whep server"
+2026-11-27T21:16:49.001714Z  WARN moq_net::lite::subscriber: subscribe error broadcast=short/cam track=1.opus err=unroutable
+2026-11-27T21:16:49.319189Z  INFO mjolnir_relay::edge: expired token dropped legs=1 sessions=1 runners=0 links=1
+2026-11-27T21:16:56.589584Z  WARN mjolnir_relay::edge: session negotiation failed text=moq error: unroutable
+2026-11-27T21:16:58.288768Z  INFO mjolnir_relay::edge: pool after delete sessions=1 runners=0 links=1
