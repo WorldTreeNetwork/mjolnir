@@ -1,0 +1,18 @@
+# A. WHIP-origin WHEP joins. Framework Arch (not Ubuntu). 2026-11-27.
+# Source ingest 1491c33c8dc5c3e4be93af832ecf3bee2cfe46dc. Accept review b6482b37.
+# Pin moq 4a6f522483168ace392718d68b58a402533c897d. Cap EDGE_INGEST_MBPS=2.5.
+# Route: Chromium 156.0.8078.79 WHIP -> edge 127.0.0.1:8088 -> in-process relay -> WHEP.
+# LAN 10.42.166.103 (Tailscale ssh 100.121.90.25). rustc 1.95.0. Linux 7.2.14-arch1-1.
+# Fixture: testsrc2 1280x720@30 drawtext counter, sine 440 Hz. Harness /tmp/kf-after/debug.
+# Policy off is the route-matched baseline on this LAN. before-720.log is 192.168.0.108 and is not this comparison.
+# Gate: median <= 2.0 s, max <= 2.5 s. All pictures 1280x720, audioPeakHz 439.
+#
+# policy=off (patched binary, gate not entered)
+# H264 firstPresentedMs: 328 330 381 391 393 393 396 407 408 412. Median 393 ms. Max 412 ms.
+# VP8: 349 353 356 363 406 408 409 413 422 429. Median 407 ms. Max 429 ms.
+#
+# policy=trial
+# H264: 360 401 405 406 407 421 422 424 425 442. Median 421 ms. Max 442 ms.
+# VP8: 348 351 377 404 407 419 422 422 424 468. Median 419 ms. Max 468 ms.
+#
+# PASS both policies, both codecs.

@@ -31,15 +31,20 @@ if [ ! -f "$P/alice.y4m" ]; then
 fi
 
 start_relay || { echo relay_failed; cat "$P/relay.log"; exit 1; }
-# Advertise the loss-proxy port when LOSS_PROXY=1, else the edge's own port.
+# Advertise the loss-proxy port when LOSS_PROXY=1. The edge binds a fixed port behind it.
+MEDIA="$LAN:0"
 if [ "${LOSS_PROXY:-}" = 1 ]; then
   python3 "$here/lossy.py" "$LAN:40001" "127.0.0.1:40000" "${LOSS_CLIENT:-0}" "${LOSS_EDGE:-0}" \
     ${BURST:+--burst "$BURST"} ${BURST_AFTER:+--burst-after "$BURST_AFTER"} ${BURST_DIR:+--burst-dir "$BURST_DIR"} \
+    ${SUPPRESS_DELTA:+--suppress-delta} \
     > "$P/proxy.log" 2>&1 &
   PX=$!
   export EDGE_ADVERTISE="$LAN:40001"
+  MEDIA="127.0.0.1:40000"
 fi
-start_edge || { echo edge_failed; cat "$P/edge.log"; exit 1; }
+"${EDGE_BIN:-$BIN/edge}" 127.0.0.1:8088 "$MEDIA" "https://$(cat "$P/relay.txt")/" "$P/verify.json" > "$P/edge.log" 2>&1 &
+echo $! > "$P/edge.pid"
+wait_grep "$P/edge.log" "edge up" || { echo edge_failed; cat "$P/edge.log"; exit 1; }
 grep -q "edge up" "$P/edge.log" || { echo edge_not_up; cat "$P/edge.log"; exit 1; }
 start_pages || exit 1
 for n in alice erin frank dave grace heidi; do mint r1 "$n" 1800 > "$P/$n.tok"; done
@@ -64,13 +69,21 @@ case "$ROW" in
     node drive.mjs pub alice alice/cam VP8 200 > "$P/pub-B.out" 2>&1 &
     PUB=$!
     for _ in $(seq 1 40); do grep -q '"step":"publish"' "$P/pub-B.out" 2>/dev/null && break; pause 0.5; done
-    pause 3
-    url=$(relay_url "$(cat "$P/erin.tok")")
+    pause 2
+    echo "probe_start wall=$(date +%s.%N)"
+    timeout 70 "$BIN/harness" raw "$(relay_url "$(cat "$P/erin.tok")")" alice/cam 60 "$P/probe" > "$P/probe.live" 2>&1 &
+    PROBE=$!
+    pause 2
     for i in 1 2 3 4 5 6 7 8 9 10; do
       echo "B join $i wall=$(date +%s.%N)"
-      timeout 8 "$BIN/harness" raw "$url" alice/cam 3 "$P/b-$i" || echo "B join $i failed"
+      timeout 8 "$BIN/harness" raw "$(relay_url "$(cat "$P/dave.tok")")" alice/cam 3 "$P/b-$i" > "$P/b-$i.live" 2>&1 || echo "B join $i failed"
+      head -1 "$P/b-$i.live"
     done
-    kill "$PUB" 2>/dev/null || true
+    kill "$PROBE" "$PUB" 2>/dev/null || true
+    echo "## relay log (subscription / version)"
+    rg -n "version|subscri|announce|lite" "$P/relay.log" | head -40 || true
+    echo "## gate causes"
+    rg -n "ingest keyframe gate" "$P/edge.log" || true
     ;;
   C)
     for vc in VP8 VP9 AV1; do
@@ -86,6 +99,8 @@ case "$ROW" in
     done
     ;;
   D1|D2)
+    # The browser is on this host, so an unstripped host candidate skips the proxy.
+    export STRIP=1
     node drive.mjs pub alice alice/cam VP8 40 > "$P/pub-$ROW.out" 2>&1 &
     PUB=$!
     for _ in $(seq 1 40); do grep -q '"step":"publish"' "$P/pub-$ROW.out" 2>/dev/null && break; pause 0.5; done
@@ -94,7 +109,8 @@ case "$ROW" in
       node drive.mjs join chromium alice/cam - erin || echo D1_join_failed
     else
       pause 2
-      timeout 12 "$BIN/harness" raw "$(relay_url "$(cat "$P/erin.tok")")" alice/cam 8 "$P/d2" || echo D2_raw_failed
+      echo "d2_raw_start wall=$(date +%s.%N)"
+      timeout 16 "$BIN/harness" raw "$(relay_url "$(cat "$P/erin.tok")")" alice/cam 12 "$P/d2" > "$P/d2.live" 2>&1 || echo D2_raw_failed
     fi
     kill "$PUB" 2>/dev/null || true
     echo "## gate lines"
@@ -106,31 +122,53 @@ case "$ROW" in
     cat "$P/proxy.log" || true
     ;;
   E)
-    node drive.mjs pub alice alice/cam VP8 30 > "$P/pub-E.out" 2>&1 &
+    node drive.mjs pub alice alice/cam VP8 70 > "$P/pub-E.out" 2>&1 &
     PUB=$!
     for _ in $(seq 1 40); do grep -q '"step":"publish"' "$P/pub-E.out" 2>/dev/null && break; pause 0.5; done
     pause 1
-    node drive.mjs join chromium alice/cam - erin > "$P/e1.out" 2>&1 &
-    pause 20
     echo "## one viewer"
-    rg -n "keyframe request|ingest keyframe gate" "$P/edge.log" || true
-    wait || true
+    node drive.mjs play chromium alice/cam - 20 0x000000 0x000000 440 erin > "$P/e1.out" 2>&1 || true
+    echo "## four viewers"
+    pids=()
+    for n in erin frank dave grace; do
+      node drive.mjs play chromium alice/cam - 20 0x000000 0x000000 440 "$n" > "$P/e4-$n.out" 2>&1 &
+      pids+=($!)
+    done
+    wait "${pids[@]}" || true
+    echo "## peer keyframe requests"
+    rg -c "keyframe request from peer" "$P/edge.log" || true
+    echo "## gate lines"
+    rg -n "ingest keyframe gate" "$P/edge.log" || true
     kill "$PUB" 2>/dev/null || true
     ;;
   F)
     node drive.mjs pub alice alice/cam VP8 16 > "$P/pub-F.out" 2>&1 &
     PUB=$!
     for _ in $(seq 1 40); do grep -q '"step":"publish"' "$P/pub-F.out" 2>/dev/null && break; pause 0.5; done
-    timeout 14 "$BIN/harness" raw "$(relay_url "$(cat "$P/erin.tok")")" alice/cam 8 "$P/f" || true
+    timeout 14 "$BIN/harness" raw "$(relay_url "$(cat "$P/erin.tok")")" alice/cam 8 "$P/f" > "$P/f.live" 2>&1 || true
     kill "$PUB" 2>/dev/null || true
     echo "## gate lines"
     rg -n "ingest keyframe gate" "$P/edge.log" || true
     python3 - << 'PY'
 import os,re
 p=os.environ["P"]
-text=open(p+"/f.out").read() if os.path.exists(p+"/f.out") else ""
-# harness raw prints group lines; fall back to ivf size
-print("raw_log_bytes", os.path.getsize(p+"/f.out") if os.path.exists(p+"/f.out") else 0)
+text=open(p+"/f.live").read() if os.path.exists(p+"/f.live") else ""
+frames=[]
+for line in text.splitlines():
+    m=re.search(r"raw-frame track=(\S+) group_start=(\d+) bytes=(\d+) wall_ms=(\d+)", line)
+    if m and "vp8" in m.group(1):
+        frames.append((int(m.group(2)), int(m.group(3)), int(m.group(4))))
+if not frames:
+    print("share missing frames=0")
+else:
+    total=sum(b for _,b,_ in frames)
+    seen=set(); kf=0
+    for g,b,_ in frames:
+        if g not in seen:
+            seen.add(g); kf += b
+    dur=max(w for *_,w in frames)-min(w for *_,w in frames)
+    print(f"frames={len(frames)} groups={len(seen)} bytes={total} kf_bytes={kf} share={kf/total:.4f} wall_ms={dur} bitrate_kbps={total*8/max(dur,1):.1f}")
+print("quality_difference=missing")
 PY
     ;;
   *) echo "unknown row $ROW"; exit 2 ;;

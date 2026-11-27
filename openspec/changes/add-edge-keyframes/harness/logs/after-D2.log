@@ -1,0 +1,14 @@
+# D2. Publisher RTP/RTX suppression, then a 1.5 s publisher-leg blackout. policy=trial. STRIP=1 so the browser cannot skip the proxy.
+# SRTP hides the VP8 P bit. The proxy used the clear RTP header: after one completed frame on the largest SSRC,
+# it dropped the next timestamp's sequence numbers and, for 0.8 s, every other payload type (RTX).
+# media_ssrc=4036068831 media_pt=96
+# delta_suppress range 28097-28102 n=6
+# counts: to_edge 3477, to_edge_dropped 398, delta_dropped 6, rtx_dropped 70, to_client_dropped 0
+# burst_window 1.5 s dir=edge after the suppression.
+# Ingest gate (not a period relabel):
+# 2026-11-27T19:51:18.476436Z causes=["loss"] sent=true
+# 2026-11-27T19:51:24.601431Z causes=["loss"] sent=true
+# Reader groups around the burst end (1795809084.339, raw start 1795809079.152):
+# group 2 wall_ms=2402 media=4.697 s, 2.785 s before the burst end
+# group 3 wall_ms=5262 media=6.796 s, 0.075 s after the burst end
+# First post-burst keyframe group is 75 ms after the burst end. Gate is 1.2 s. PASS.

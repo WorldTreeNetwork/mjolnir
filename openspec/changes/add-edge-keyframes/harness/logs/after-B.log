@@ -1,0 +1,12 @@
+# B. Ten WHIP-origin MoQ joins with a simultaneous probe. Same host, pin, cap, fixture, and route as after-A.log.
+# policy=trial. Probe token held alice/cam for the whole run. Ten later raw subscribers, 3 s each.
+# First raw-frame wall_ms (subscribe to first video frame): 3 2 5 3 2 2 5 3 2 4. Max 5 ms. Gate is 1.0 s. PASS.
+# Lag = probe newest media timestamp at that wall minus the joiner's first media timestamp:
+# 0.134 1.100 2.033 0.934 1.834 0.634 1.466 0.266 1.234 2.100 seconds. Max 2.100 s. Gate is 2.2 s. PASS.
+# Every first frame is the subscriber's group 0 (a keyframe group) on track 0.vp8.
+#
+# Wire. Neither the relay nor the client sets a version. Pin rs/moq-net/src/version.rs ALPNS[0] is moq-lite-06.
+# moq-lite-07-wip is not in the default set. lite-06 has_refresh is false, so a later join cannot cross the open upstream hop.
+# This run's ingest gate, while the probe stayed subscribed: causes period x16, join x0.
+# An earlier trial on the same binary (ten raw joins, no long-lived probe) logged join x1 and period x15, so the cause does fire when demand qualifies.
+# The ten later joins in this run did not add a join cause. That is the later relay-side join trace.

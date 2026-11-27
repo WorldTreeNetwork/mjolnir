@@ -1,0 +1,6 @@
+# C. Exporter late join, policy=trial, same WHIP route and 1280x720 fixture.
+# ffprobe of the moq-mux matroska the exporter wrote:
+# VP8  yuv420p 1280x720 30 fps, opus 48000 stereo. File c-VP8.1.mkv 1153567 bytes.
+# VP9  Profile 0 yuv420p 1280x720 30 fps, opus. File c-VP9.1.mkv 1445233 bytes.
+# AV1  Main yuv420p 1280x720 30 fps, opus. File c-AV1.1.mkv 1075780 bytes.
+# Content-ok for all three. No H3 bead.

@@ -1,0 +1,5 @@
+# D1. Viewer-leg blackout. Recorded. Does not gate adoption.
+# LOSS_PROXY=1 BURST=1.5 BURST_AFTER=1 BURST_DIR=client STRIP=1, policy=trial, WHIP VP8 publisher.
+# Proxy: to_client 423, to_client_dropped 283, to_edge_dropped 0. Direction is the viewer leg.
+# WHEP join picture 1280x720, answer VP8+opus, firstPresentedMs 121, connectMs 3, audioPeakHz 0.
+# firstPresentedMs is from the WHEP POST, not from the burst end. The counter is the fixture drawtext; this join did not OCR it.
