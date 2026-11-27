@@ -61,8 +61,23 @@ function watchEnd(name, pc) {
   });
 }
 
+async function trackRms(track) {
+  const ctx = new AudioContext(); await ctx.resume();
+  const src = ctx.createMediaStreamSource(new MediaStream([track]));
+  const an = ctx.createAnalyser(); an.fftSize = 8192; src.connect(an);
+  await new Promise(r => setTimeout(r, 400));
+  const td = new Float32Array(an.fftSize); an.getFloatTimeDomainData(td);
+  const rms = Math.sqrt(td.reduce((s, x) => s + x * x, 0) / td.length);
+  const fr = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(fr);
+  let best = 0; for (let i = 1; i < fr.length; i++) if (fr[i] > fr[best]) best = i;
+  const hz = Math.round(best * ctx.sampleRate / an.fftSize);
+  await ctx.close();
+  return { rms: +rms.toFixed(4), hz, label: track.label, settings: track.getSettings() };
+}
+
 window.publish = async (b, vcodec, tok) => {
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const localAudio = await trackRms(stream.getAudioTracks()[0]);
   const pc = new RTCPeerConnection();
   const vt = pc.addTransceiver(stream.getVideoTracks()[0], { direction: 'sendonly' });
   pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendonly' });
@@ -71,7 +86,7 @@ window.publish = async (b, vcodec, tok) => {
   const connectMs = await connected(pc);
   window.pcs['pub:' + b] = pc; watchEnd('pub:' + b, pc);
   log('published', b, 'connect', connectMs);
-  return { location: r.location, postMs: r.postMs, connectMs, answerCodecs: codecsIn(r.answer) };
+  return { location: r.location, postMs: r.postMs, connectMs, answerCodecs: codecsIn(r.answer), localAudio };
 };
 
 // Three simulcast layers on one video line (rids f/h/q), as a conferencing client would send.

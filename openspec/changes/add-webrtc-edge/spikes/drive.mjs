@@ -18,7 +18,12 @@ async function launch(kind, who) {
   if (kind === 'chromium') {
     const args = ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'];
     if (who) args.push(`--use-file-for-fake-video-capture=${P}/${who}.y4m`, `--use-file-for-fake-audio-capture=${P}/${who}.wav`);
-    return chromium.launch({ args, channel: process.env.CHROME_CHANNEL || undefined });
+    return chromium.launch({
+      args,
+      channel: process.env.CHROME_CHANNEL || undefined,
+      executablePath: process.env.CHROMIUM_BIN || undefined,
+      dumpio: process.env.DUMPIO === '1',
+    });
   }
   if (kind === 'firefox') return firefox.launch({ firefoxUserPrefs: { 'media.navigator.streams.fake': true, 'media.navigator.permission.disabled': true, 'media.autoplay.default': 0, 'media.autoplay.blocking_policy': 0 } });
   return webkit.launch();
@@ -29,7 +34,8 @@ async function open(browser, room, token, label) {
   const page = await ctx.newPage();
   page.on('console', m => { if (process.env.VERBOSE) console.error(label + ': ' + m.text()); });
   page.on('pageerror', e => console.error(label + ' pageerror: ' + e));
-  const root = process.env.EDGE_ROOT ? `&root=${encodeURIComponent(process.env.EDGE_ROOT)}` : '';
+  const rootValue = (process.env.EDGE_ROOT || '').trim();
+  const root = rootValue ? `&root=${encodeURIComponent(rootValue)}` : '';
   await page.goto(`${PAGES}/rtc.html?edge=${encodeURIComponent(EDGE)}&room=${room}${root}#t=${token}`);
   await page.waitForFunction(() => window.ready);
   // Loss runs: withhold host candidates so the edge learns only the lossy proxy's address.

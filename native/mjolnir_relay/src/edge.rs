@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, post};
 use axum::{Json, Router};
@@ -104,6 +105,33 @@ struct Flight {
     waiters: Mutex<Vec<tokio::sync::oneshot::Sender<Result<(), AdmitError>>>>,
 }
 
+/// Removes the in-flight dial if the leader is cancelled before it records a result.
+struct FlightGuard<'a> {
+    edge: &'a Edge,
+    token: &'a str,
+    flight: Arc<Flight>,
+    armed: bool,
+}
+
+impl Drop for FlightGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut pool = self.edge.pool.lock().expect("pool");
+        if pool
+            .flights
+            .get(self.token)
+            .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
+        {
+            pool.flights.remove(self.token);
+        }
+        for waiter in self.flight.waiters.lock().expect("waiters").drain(..) {
+            let _ = waiter.send(Err(AdmitError::SetupFailed));
+        }
+    }
+}
+
 struct Hold {
     refs: u32,
     exp_unix: u64,
@@ -159,6 +187,23 @@ impl Edge {
         self.snap.lock().expect("snap").admissions_open = false;
     }
 
+    /// Close every leg whose token is already expired. The relay connection
+    /// and the `Response::run` tasks go with the token.
+    pub fn sweep(&self, now: SystemTime) {
+        let now_unix = unix(now).unwrap_or(0);
+        let expired: Vec<String> = {
+            let pool = self.pool.lock().expect("pool");
+            pool.holds
+                .iter()
+                .filter(|(_, hold)| now_unix >= hold.exp_unix)
+                .map(|(token, _)| token.clone())
+                .collect()
+        };
+        for token in expired {
+            self.drop_token(&token);
+        }
+    }
+
     /// Dial (or join the in-flight dial), negotiate WHIP/WHEP, then spawn `Response::run`.
     pub async fn open_session(&self, checked: &Checked, offer: &str) -> Result<(String, String), AdmitError> {
         let now_unix = unix(SystemTime::now()).map_err(|_| AdmitError::BadToken)?;
@@ -179,13 +224,15 @@ impl Edge {
             self.release(&checked.token);
             return Err(AdmitError::SetupFailed);
         };
+        let moq_path = checked.broadcast.clone();
         let negotiated = match checked.operation {
-            Op::Publish => crate::moq_session::whip(&config, &shared, &checked.broadcast, offer).await,
-            Op::Subscribe => crate::moq_session::whep(&config, &shared, &checked.broadcast, offer).await,
+            Op::Publish => crate::moq_session::whip(&config, &shared, &moq_path, offer).await,
+            Op::Subscribe => crate::moq_session::whep(&config, &shared, &moq_path, offer).await,
         };
         let response = match negotiated {
             Ok(response) => response,
             Err(text) => {
+                tracing::warn!(%text, "session negotiation failed");
                 self.release(&checked.token);
                 if unix(SystemTime::now()).unwrap_or(0) >= checked.exp_unix {
                     self.drop_token(&checked.token);
@@ -255,6 +302,7 @@ impl Edge {
         now: SystemTime,
     ) -> Result<Checked, AdmitError> {
         let token = bearer.map(str::trim).filter(|t| !t.is_empty()).ok_or(AdmitError::NoToken)?;
+        self.sweep(now);
         let snap = self.snap.lock().expect("snap").clone();
         if !snap.admissions_open {
             return Err(AdmitError::BadToken);
@@ -399,7 +447,9 @@ impl Edge {
         flight: Arc<Flight>,
     ) -> Result<(), AdmitError> {
         let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let mut guard = FlightGuard { edge: self, token, flight, armed: true };
         let dialed = self.dial_relay(token, budget).await;
+        guard.armed = false;
         let mut pool = self.pool.lock().expect("pool");
         pool.flights.remove(token);
         let result = match dialed {
@@ -409,7 +459,7 @@ impl Edge {
             }
             Err(err) => Err(err),
         };
-        for waiter in flight.waiters.lock().expect("waiters").drain(..) {
+        for waiter in guard.flight.waiters.lock().expect("waiters").drain(..) {
             let _ = waiter.send(result);
         }
         result
@@ -432,7 +482,10 @@ impl Edge {
         if let Some(config) = config {
             let shared = crate::moq_session::dial(&config, token, budget)
                 .await
-                .map_err(|_| AdmitError::SetupFailed)?;
+                .map_err(|err| {
+                    tracing::warn!(%err, "relay dial failed");
+                    AdmitError::SetupFailed
+                })?;
             self.pool.lock().expect("pool").links.insert(token.to_string(), Arc::new(shared));
             return Ok(());
         }
@@ -454,25 +507,77 @@ impl Edge {
         };
         if gone {
             pool.holds.remove(token);
+            pool.links.remove(token);
+        }
+    }
+
+    fn reap_runners(pool: &mut Pool) {
+        pool.runners.retain(|_, task| !task.is_finished());
+    }
+
+    /// `Server::terminate` sends the oneshot `Response::run` selects on.
+    /// Aborting the task afterwards drops `AcceptedSession` if the oneshot
+    /// already unregistered it, and keeps the runner map from holding a
+    /// finished or cancelled task. Linger is not waited: expiry and DELETE
+    /// stop forwarding.
+    fn end_runner(&self, pool: &mut Pool, id: &str) {
+        if let Some(config) = self.moq.lock().expect("moq").clone() {
+            config.media.terminate(id);
+        }
+        if let Some(task) = pool.runners.remove(id) {
+            task.abort();
         }
     }
 
     fn drop_token(&self, token: &str) {
         let mut pool = self.pool.lock().expect("pool");
+        let ids: Vec<String> = pool
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.token == token)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &ids {
+            pool.sessions.remove(id);
+        }
         pool.holds.remove(token);
         pool.links.remove(token);
-        pool.sessions.retain(|_, session| session.token != token);
+        pool.flights.remove(token);
+        Self::reap_runners(&mut pool);
+        let legs = ids.len();
+        for id in ids {
+            self.end_runner(&mut pool, &id);
+        }
+        tracing::info!(
+            legs,
+            sessions = pool.sessions.len(),
+            runners = pool.runners.len(),
+            links = pool.links.len(),
+            "expired token dropped"
+        );
+    }
+
+    pub fn runner_count(&self) -> usize {
+        let mut pool = self.pool.lock().expect("pool");
+        Self::reap_runners(&mut pool);
+        pool.runners.len()
+    }
+
+    pub fn flight_count(&self) -> usize {
+        self.pool.lock().expect("pool").flights.len()
+    }
+
+    pub fn link_count(&self) -> usize {
+        self.pool.lock().expect("pool").links.len()
     }
 
     pub fn delete(&self, id: &str, bearer: Option<&str>, now: SystemTime) -> Result<(), AdmitError> {
         let token = bearer.map(str::trim).filter(|t| !t.is_empty()).ok_or(AdmitError::NoToken)?;
         let dig = digest(token);
         let now_unix = unix(now).map_err(|_| AdmitError::BadToken)?;
-        if let Some(config) = self.moq.lock().expect("moq").clone() {
-            config.media.terminate(id);
-        }
         let mut pool = self.pool.lock().expect("pool");
         pool.tombstones.retain(|_, tomb| tomb.until_unix > now_unix);
+        Self::reap_runners(&mut pool);
         if let Some(session) = pool.sessions.get(id) {
             if session.digest != dig {
                 return Err(AdmitError::Forbidden);
@@ -480,9 +585,7 @@ impl Edge {
             let token = session.token.clone();
             let until = pool.holds.get(&token).map(|h| h.exp_unix).unwrap_or(now_unix) + TOMBSTONE.as_secs();
             pool.sessions.remove(id);
-            if let Some(task) = pool.runners.remove(id) {
-                task.abort();
-            }
+            self.end_runner(&mut pool, id);
             pool.tombstones.insert(
                 id.to_string(),
                 Tombstone { digest: dig, until_unix: until },
@@ -495,7 +598,14 @@ impl Edge {
             };
             if gone {
                 pool.holds.remove(&token);
+                pool.links.remove(&token);
             }
+            tracing::info!(
+                sessions = pool.sessions.len(),
+                runners = pool.runners.len(),
+                links = pool.links.len(),
+                "pool after delete"
+            );
             return Ok(());
         }
         if let Some(tomb) = pool.tombstones.get(id) {
@@ -512,8 +622,31 @@ impl Edge {
             .route("/whip/{room}/{*broadcast}", post(whip_http))
             .route("/whep/{room}/{*broadcast}", post(whep_http))
             .route("/session/{id}", delete(delete_http))
+            .layer(middleware::from_fn(cors))
             .with_state(self.clone())
     }
+}
+
+async fn cors(req: axum::extract::Request, next: Next) -> Response {
+    if req.method() == axum::http::Method::OPTIONS {
+        return cors_headers(StatusCode::NO_CONTENT.into_response());
+    }
+    cors_headers(next.run(req).await)
+}
+
+fn cors_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert("access-control-allow-origin", HeaderValue::from_static("*"));
+    headers.insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("POST,DELETE,OPTIONS"),
+    );
+    headers.insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static("authorization,content-type,x-mjolnir-root"),
+    );
+    headers.insert("access-control-expose-headers", HeaderValue::from_static("location"));
+    response
 }
 
 fn map_refuse(err: Refuse) -> AdmitError {
@@ -714,6 +847,8 @@ async fn media_http(
     headers: HeaderMap,
     offer: String,
 ) -> Response {
+    let names: Vec<&str> = headers.keys().map(|key| key.as_str()).collect();
+    tracing::debug!(%room, %broadcast, ?names, "media request");
     let checked = match edge.admit(
         bearer(&headers),
         headers.get("x-mjolnir-root").and_then(|v| v.to_str().ok()),

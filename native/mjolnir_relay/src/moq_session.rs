@@ -19,6 +19,8 @@ pub struct Shared {
     pub publish: Producer,
     pub subscribe: Producer,
     conn: moq_tokio::Connection,
+    /// Keeps the relay session discovering announcements. Dropping it stops WHEP from seeing catalogs.
+    _watch: std::sync::Arc<moq_net::announce::Consumer>,
 }
 
 impl Shared {
@@ -47,7 +49,7 @@ pub async fn dial(config: &MoqConfig, token: &str, budget: Duration) -> Result<S
     url.query_pairs_mut().append_pair("jwt", token);
     let dial = client
         .with_reconnect(false)
-        .with_publisher(publish.consume())
+        .with_publisher(publish.clone())
         .with_subscriber(subscribe.clone())
         .connect(url)
         .established();
@@ -55,7 +57,8 @@ pub async fn dial(config: &MoqConfig, token: &str, budget: Duration) -> Result<S
         .await
         .map_err(|_| "dial deadline".to_string())?
         .map_err(|err| err.to_string())?;
-    Ok(Shared { publish, subscribe, conn })
+    let watch = std::sync::Arc::new(subscribe.consume().with_hidden(true).announced());
+    Ok(Shared { publish, subscribe, conn, _watch: watch })
 }
 
 pub async fn whip(config: &MoqConfig, shared: &Shared, broadcast: &str, offer: &str) -> Result<moq_webrtc::server::Response, String> {
@@ -72,7 +75,7 @@ pub async fn whep(config: &MoqConfig, shared: &Shared, broadcast: &str, offer: &
     let path = moq_net::Path::new(broadcast).map_err(|err| err.to_string())?;
     let consumer = shared.subscribe.consume();
     let request = moq_webrtc::whep::Request::new(&consumer, path, offer);
-    tokio::time::timeout(Duration::from_secs(5), moq_webrtc::whep::accept(&config.media, request))
+    tokio::time::timeout(Duration::from_secs(12), moq_webrtc::whep::accept(&config.media, request))
         .await
         .map_err(|_| "whep deadline".to_string())?
         .map_err(|err| err.to_string())
