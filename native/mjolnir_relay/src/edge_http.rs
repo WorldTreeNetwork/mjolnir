@@ -43,8 +43,19 @@ struct Ticket {
     id: String,
     generation: u64,
     serialized: bool,
-    settled: bool,
+    stop: Arc<crate::edge::PendingStop>,
 }
+
+#[cfg(test)]
+pub(crate) static OPEN_TICKETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+fn note_tickets(n: usize) {
+    OPEN_TICKETS.store(n, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(not(test))]
+fn note_tickets(_n: usize) {}
 
 impl DeliveryContext {
     fn new() -> Self {
@@ -58,13 +69,15 @@ impl DeliveryContext {
         if ctx.tickets.iter().any(|ticket| ticket.id == id && ticket.generation == generation) {
             return;
         }
+        let stop = edge.pending_stop(id, generation);
         ctx.tickets.push(Ticket {
             edge,
             id: id.to_string(),
             generation,
             serialized: false,
-            settled: false,
+            stop,
         });
+        note_tickets(ctx.tickets.len());
     }
 
     fn mark_serialized(&self, id: &str, generation: u64) {
@@ -72,7 +85,7 @@ impl DeliveryContext {
         if let Some(ticket) = ctx
             .tickets
             .iter_mut()
-            .find(|ticket| ticket.id == id && ticket.generation == generation && !ticket.settled)
+            .find(|ticket| ticket.id == id && ticket.generation == generation)
         {
             ticket.serialized = true;
         }
@@ -84,63 +97,57 @@ impl DeliveryContext {
             let Some(pos) = ctx
                 .tickets
                 .iter()
-                .position(|ticket| ticket.id == id && ticket.generation == generation && !ticket.settled)
+                .position(|ticket| ticket.id == id && ticket.generation == generation)
             else {
                 return;
             };
-            let mut ticket = ctx.tickets.swap_remove(pos);
-            ticket.settled = true;
-            ticket
+            ctx.tickets.swap_remove(pos)
         };
+        note_tickets(self.inner.lock().expect("delivery").tickets.len());
         ticket.edge.cancel_delivery(&ticket.id, ticket.generation);
     }
 
-    fn commit_serialized(&self) {
+    /// `false` when a serialized answer was rejected. The connection must stop.
+    fn commit_serialized(&self) -> bool {
         let ready: Vec<Ticket> = {
             let mut ctx = self.inner.lock().expect("delivery");
             let mut ready = Vec::new();
-            for ticket in &mut ctx.tickets {
-                if ticket.serialized && !ticket.settled {
-                    ticket.settled = true;
-                    ready.push(Ticket {
-                        edge: Arc::clone(&ticket.edge),
-                        id: ticket.id.clone(),
-                        generation: ticket.generation,
-                        serialized: true,
-                        settled: true,
-                    });
+            let mut left = Vec::new();
+            for ticket in ctx.tickets.drain(..) {
+                if ticket.serialized {
+                    ready.push(ticket);
+                } else {
+                    left.push(ticket);
                 }
             }
+            ctx.tickets = left;
+            note_tickets(ctx.tickets.len());
             ready
         };
+        let mut accepted = true;
         for ticket in ready {
             if !ticket.edge.ack_delivery(&ticket.id, ticket.generation) {
-                ticket.edge.cancel_delivery(&ticket.id, ticket.generation);
+                accepted = false;
             }
         }
+        accepted
     }
 
     fn cancel_outstanding(&self) {
         let pending: Vec<Ticket> = {
             let mut ctx = self.inner.lock().expect("delivery");
-            let mut pending = Vec::new();
-            for ticket in &mut ctx.tickets {
-                if !ticket.settled {
-                    ticket.settled = true;
-                    pending.push(Ticket {
-                        edge: Arc::clone(&ticket.edge),
-                        id: ticket.id.clone(),
-                        generation: ticket.generation,
-                        serialized: ticket.serialized,
-                        settled: true,
-                    });
-                }
-            }
+            let pending = std::mem::take(&mut ctx.tickets);
+            note_tickets(0);
             pending
         };
         for ticket in pending {
             ticket.edge.cancel_delivery(&ticket.id, ticket.generation);
         }
+    }
+
+    fn aborted(&self, cx: &Context<'_>) -> bool {
+        let ctx = self.inner.lock().expect("delivery");
+        ctx.tickets.iter().any(|ticket| ticket.stop.poll(cx))
     }
 }
 
@@ -248,14 +255,36 @@ where
     I: AsyncWrite,
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
-        self.project().inner.poll_write(cx, buf)
+        let this = self.project();
+        if this.ctx.aborted(cx) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "pending answer invalidated",
+            )));
+        }
+        this.inner.poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let this = self.project();
+        if this.ctx.aborted(cx) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "pending answer invalidated",
+            )));
+        }
         let result = this.inner.poll_flush(cx);
-        if matches!(result, Poll::Ready(Ok(()))) {
-            this.ctx.commit_serialized();
+        if this.ctx.aborted(cx) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "pending answer invalidated",
+            )));
+        }
+        if matches!(result, Poll::Ready(Ok(()))) && !this.ctx.commit_serialized() {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "answer rejected at flush",
+            )));
         }
         result
     }

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Waker};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
@@ -161,6 +162,9 @@ struct Hold {
 struct Link {
     generation: u64,
     shared: Option<Arc<crate::moq_session::Shared>>,
+    /// Test-only. Invoked under the pool lock after abort and before the slot is removed.
+    #[cfg(test)]
+    retire_probe: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 struct Session {
@@ -177,9 +181,40 @@ enum Leg {
     /// `Response::run` has not been called. Dropping this drops the unrun response.
     Pending {
         response: Option<moq_webrtc::server::Response>,
-        /// Original setup deadline (`min(exp, setup_start+5s)`), not a fresh budget at ack.
-        deadline: SystemTime,
+        /// Original monotonic setup bound, not a wall clock reconstructed at insert or ack.
+        bound: Deadline,
+        stop: Arc<PendingStop>,
     },
+}
+
+/// Wakes the HTTP/1 connection that still owns this candidate's bytes.
+pub(crate) struct PendingStop {
+    tripped: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl PendingStop {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            tripped: AtomicBool::new(false),
+            waker: Mutex::new(None),
+        })
+    }
+
+    pub(crate) fn trip(self: &Arc<Self>) {
+        self.tripped.store(true, Ordering::SeqCst);
+        if let Some(waker) = self.waker.lock().expect("pending stop").take() {
+            waker.wake();
+        }
+    }
+
+    pub(crate) fn poll(&self, cx: &Context<'_>) -> bool {
+        if self.tripped.load(Ordering::SeqCst) {
+            return true;
+        }
+        *self.waker.lock().expect("pending stop") = Some(cx.waker().clone());
+        self.tripped.load(Ordering::SeqCst)
+    }
 }
 
 struct Tombstone {
@@ -297,14 +332,11 @@ impl Edge {
     pub fn drain(self: &Arc<Self>) {
         self.snap.lock().expect("snap").draining = true;
         self.draining.store(true, Ordering::SeqCst);
-        let shareds = {
+        {
             let mut pool = self.pool.lock().expect("pool");
             let gens: Vec<(String, u64)> = pool.holds.iter().map(|(token, hold)| (token.clone(), hold.generation)).collect();
-            let mut shareds = Vec::new();
             for (token, generation) in gens {
-                if let Some(shared) = self.detach_locked(&mut pool, &token, generation) {
-                    shareds.push(shared);
-                }
+                self.detach_locked(&mut pool, &token, generation);
             }
             let flights: Vec<Arc<Flight>> = pool.flights.drain().map(|(_, flight)| flight).collect();
             for flight in flights {
@@ -312,10 +344,6 @@ impl Edge {
                     let _ = waiter.send(Err(AdmitError::SetupFailed));
                 }
             }
-            shareds
-        };
-        for shared in shareds {
-            shared.close();
         }
     }
 
@@ -345,11 +373,6 @@ impl Edge {
         offer: &str,
     ) -> Result<Negotiated, AdmitError> {
         let deadline = setup_deadline(checked.exp)?;
-        let bound_at = if deadline.exp_bound {
-            checked.exp
-        } else {
-            SystemTime::now() + SETUP_BUDGET
-        };
         let mut reservation = self.acquire(&checked.token, checked.exp, &deadline).await?;
         let generation = reservation.generation;
         let shared = self
@@ -369,7 +392,7 @@ impl Edge {
                     id
                 };
                 let answer = self.test_answer.lock().expect("answer").clone().unwrap_or_else(|| "v=0\r\n".into());
-                self.insert_pending(&mut reservation, &id, checked, None, bound_at)
+                self.insert_pending(&mut reservation, &id, checked, None, deadline, false)
                     .map_err(|error| {
                         if error == AdmitError::BadToken {
                             reservation.disarm();
@@ -378,7 +401,7 @@ impl Edge {
                         error
                     })?;
                 reservation.disarm();
-                self.arm_pending_deadline(&id, generation, bound_at);
+                self.arm_pending_deadline(&id, generation, deadline);
                 return Ok(Negotiated {
                     id,
                     answer,
@@ -431,7 +454,7 @@ impl Edge {
         }
         let id = response.resource_id.clone();
         let answer = response.answer.clone();
-        self.insert_pending(&mut reservation, &id, checked, Some(response), bound_at)
+        self.insert_pending(&mut reservation, &id, checked, Some(response), deadline, catalog)
             .map_err(|error| {
                 if error == AdmitError::BadToken {
                     reservation.disarm();
@@ -440,7 +463,7 @@ impl Edge {
                 error
             })?;
         reservation.disarm();
-        self.arm_pending_deadline(&id, generation, bound_at);
+        self.arm_pending_deadline(&id, generation, deadline);
         Ok(Negotiated {
             id,
             answer,
@@ -677,14 +700,22 @@ impl Edge {
         id: &str,
         checked: &Checked,
         response: Option<moq_webrtc::server::Response>,
-        deadline: SystemTime,
+        bound: Deadline,
+        catalog: bool,
     ) -> Result<(), AdmitError> {
         let mut pool = self.pool.lock().expect("pool");
         if self.draining.load(Ordering::SeqCst) {
             return Err(AdmitError::SetupFailed);
         }
-        if SystemTime::now() >= checked.exp || SystemTime::now() >= deadline {
+        // Token expiry and the original monotonic setup bound stay distinct.
+        // Only expiry (including a bound that *is* expiry) drops the whole token.
+        let expired = SystemTime::now() >= checked.exp
+            || (bound.exp_bound && tokio::time::Instant::now() >= bound.at);
+        if expired {
             return Err(AdmitError::BadToken);
+        }
+        if tokio::time::Instant::now() >= bound.at {
+            return Err(if catalog { AdmitError::NotStarted } else { AdmitError::SetupFailed });
         }
         match pool.holds.get(&checked.token) {
             Some(hold) if hold.generation == reservation.generation => {}
@@ -705,21 +736,54 @@ impl Edge {
                 digest: digest(&checked.token),
                 generation: reservation.generation,
                 exp_unix: checked.exp_unix,
-                leg: Leg::Pending { response, deadline },
+                leg: Leg::Pending {
+                    response,
+                    bound,
+                    stop: PendingStop::new(),
+                },
             },
         );
         Ok(())
     }
 
-    fn arm_pending_deadline(self: &Arc<Self>, id: &str, generation: u64, deadline: SystemTime) {
+    fn arm_pending_deadline(self: &Arc<Self>, id: &str, generation: u64, bound: Deadline) {
         let edge = Arc::clone(self);
         let id = id.to_string();
         tokio::spawn(async move {
-            if let Ok(wait) = deadline.duration_since(SystemTime::now()) {
-                tokio::time::sleep(wait).await;
+            tokio::time::sleep_until(bound.at).await;
+            if bound.exp_bound {
+                edge.fire_expired_candidate(&id, generation);
+            } else {
+                edge.cancel_delivery(&id, generation);
             }
-            edge.cancel_delivery(&id, generation);
         });
+    }
+
+    /// The setup bound was the token's own expiry. Drop that generation, not only this id.
+    fn fire_expired_candidate(&self, id: &str, generation: u64) {
+        let token = {
+            let pool = self.pool.lock().expect("pool");
+            pool.sessions.get(id).and_then(|session| {
+                (session.generation == generation).then(|| session.token.clone())
+            })
+        };
+        if let Some(token) = token {
+            self.drop_token_gen(&token, generation);
+        }
+    }
+
+    pub(crate) fn pending_stop(&self, id: &str, generation: u64) -> Arc<PendingStop> {
+        let pool = self.pool.lock().expect("pool");
+        if let Some(session) = pool.sessions.get(id) {
+            if session.generation == generation {
+                if let Leg::Pending { stop, .. } = &session.leg {
+                    return Arc::clone(stop);
+                }
+            }
+        }
+        let stop = PendingStop::new();
+        stop.trip();
+        stop
     }
 
     /// Start the parked runner, or return false and leave a stale id untouched.
@@ -739,8 +803,8 @@ impl Edge {
             }
             let token = session.token.clone();
             let exp_unix = session.exp_unix;
-            let deadline = match &session.leg {
-                Leg::Pending { deadline, .. } => *deadline,
+            let bound = match &session.leg {
+                Leg::Pending { bound, .. } => *bound,
                 Leg::Settled => return true,
             };
             let now_unix = unix(SystemTime::now()).unwrap_or(u64::MAX);
@@ -749,20 +813,39 @@ impl Edge {
                 .get(&token)
                 .and_then(|link| link.shared.as_ref())
                 .is_some_and(|shared| shared.dead());
-            let stale = self.draining.load(Ordering::SeqCst)
-                || now_unix >= exp_unix
-                || SystemTime::now() >= deadline
-                || dead;
-            let Leg::Pending { response, .. } = &mut pool.sessions.get_mut(id).expect("session").leg else {
+            let token_expired = now_unix >= exp_unix
+                || (bound.exp_bound && tokio::time::Instant::now() >= bound.at);
+            let setup_late = !token_expired && tokio::time::Instant::now() >= bound.at;
+            let draining = self.draining.load(Ordering::SeqCst);
+            if token_expired || dead {
+                let Leg::Pending { response, stop, .. } =
+                    &mut pool.sessions.get_mut(id).expect("session").leg
+                else {
+                    return true;
+                };
+                response.take();
+                let stop = Arc::clone(stop);
+                self.detach_locked(&mut pool, &token, generation);
+                drop(pool);
+                stop.trip();
+                return false;
+            }
+            if setup_late || draining {
+                let Leg::Pending { response, .. } =
+                    &mut pool.sessions.get_mut(id).expect("session").leg
+                else {
+                    return true;
+                };
+                response.take();
+                self.finish_in(&mut pool, id, generation, true);
+                return false;
+            }
+            let Leg::Pending { response, .. } =
+                &mut pool.sessions.get_mut(id).expect("session").leg
+            else {
                 return true;
             };
             let response = response.take();
-            if stale {
-                drop(pool);
-                drop(response);
-                self.finish_id(id, generation, true);
-                return false;
-            }
             pool.sessions.get_mut(id).expect("session").leg = Leg::Settled;
             if let Some(response) = response {
                 let edge = Arc::clone(self);
@@ -785,16 +868,15 @@ impl Edge {
         true
     }
 
-    /// Pending candidates only. An acknowledged session stays up.
+    /// Pending candidates only. Check and removal share one pool lock.
+    /// An acknowledged session stays up.
     pub(crate) fn cancel_delivery(&self, id: &str, generation: u64) {
-        let pending = {
-            let pool = self.pool.lock().expect("pool");
-            pool.sessions.get(id).is_some_and(|session| {
-                session.generation == generation && matches!(session.leg, Leg::Pending { .. })
-            })
-        };
+        let mut pool = self.pool.lock().expect("pool");
+        let pending = pool.sessions.get(id).is_some_and(|session| {
+            session.generation == generation && matches!(session.leg, Leg::Pending { .. })
+        });
         if pending {
-            self.finish_id(id, generation, true);
+            self.finish_in(&mut pool, id, generation, true);
         }
     }
 
@@ -968,6 +1050,8 @@ impl Edge {
                                 Dialed::Live(shared) => Some(Arc::new(shared)),
                                 Dialed::Test => None,
                             },
+                            #[cfg(test)]
+                            retire_probe: None,
                         },
                     );
                     generation
@@ -1043,13 +1127,8 @@ impl Edge {
     }
 
     fn release_gen(&self, token: &str, generation: u64) {
-        let shared = {
-            let mut pool = self.pool.lock().expect("pool");
-            release_locked(&mut pool, token, generation)
-        };
-        if let Some(shared) = shared {
-            shared.close();
-        }
+        let mut pool = self.pool.lock().expect("pool");
+        release_locked(&mut pool, token, generation);
     }
 
     fn runner_finished(pool: &mut Pool) {
@@ -1066,13 +1145,8 @@ impl Edge {
     }
 
     fn drop_token_gen(&self, token: &str, generation: u64) {
-        let shared = {
-            let mut pool = self.pool.lock().expect("pool");
-            self.detach_locked(&mut pool, token, generation)
-        };
-        if let Some(shared) = shared {
-            shared.close();
-        }
+        let mut pool = self.pool.lock().expect("pool");
+        self.detach_locked(&mut pool, token, generation);
     }
 
     fn drop_token(&self, token: &str) {
@@ -1083,10 +1157,10 @@ impl Edge {
     }
 
     /// Validate and detach one generation, including its sessions, under one pool lock.
-    fn detach_locked(&self, pool: &mut Pool, token: &str, generation: u64) -> Option<Arc<crate::moq_session::Shared>> {
+    fn detach_locked(&self, pool: &mut Pool, token: &str, generation: u64) {
         let matches = pool.holds.get(token).is_some_and(|hold| hold.generation == generation);
         if !matches {
-            return None;
+            return;
         }
         let ids: Vec<String> = pool
             .sessions
@@ -1095,18 +1169,19 @@ impl Edge {
             .map(|(id, _)| id.clone())
             .collect();
         let legs = ids.len();
+        let mut stops = Vec::new();
         for id in &ids {
             let Some(session) = pool.sessions.remove(id) else { continue };
+            if let Leg::Pending { stop, .. } = &session.leg {
+                stops.push(Arc::clone(stop));
+            }
             let until = session.exp_unix.saturating_add(TOMBSTONE.as_secs());
             pool.tombstones.insert(id.clone(), Tombstone { digest: session.digest, until_unix: until });
             self.end_runner(pool, id);
         }
+        // Abort this generation before either map shows the slot as free.
+        retire_link(pool, token, generation);
         pool.holds.remove(token);
-        let shared = if pool.links.get(token).is_some_and(|link| link.generation == generation) {
-            pool.links.remove(token).and_then(|link| link.shared)
-        } else {
-            None
-        };
         tracing::info!(
             legs,
             sessions = pool.sessions.len(),
@@ -1114,11 +1189,18 @@ impl Edge {
             links = pool.links.len(),
             "expired token dropped"
         );
-        shared
+        // Wake is synchronous scheduling. The HTTP task cannot take this lock until we return.
+        for stop in stops {
+            stop.trip();
+        }
     }
 
     fn finish_id(&self, id: &str, generation: u64, abort_runner: bool) {
         let mut pool = self.pool.lock().expect("pool");
+        self.finish_in(&mut pool, id, generation, abort_runner);
+    }
+
+    fn finish_in(&self, pool: &mut Pool, id: &str, generation: u64, abort_runner: bool) {
         let Some(session) = pool.sessions.get(id) else {
             return;
         };
@@ -1128,22 +1210,27 @@ impl Edge {
         let token = session.token.clone();
         let digest = session.digest;
         let until = session.exp_unix.saturating_add(TOMBSTONE.as_secs());
+        let stop = match &session.leg {
+            Leg::Pending { stop, .. } => Some(Arc::clone(stop)),
+            Leg::Settled => None,
+        };
         pool.sessions.remove(id);
         if abort_runner {
-            self.end_runner(&mut pool, id);
+            self.end_runner(pool, id);
         } else {
             pool.runners.remove(id);
         }
         pool.tombstones.insert(id.to_string(), Tombstone { digest, until_unix: until });
-        let shared = release_locked(&mut pool, &token, generation);
-        let sessions = pool.sessions.len();
-        let runners = pool.runners.len();
-        let links = pool.links.len();
-        drop(pool);
-        if let Some(shared) = shared {
-            shared.close();
+        release_locked(pool, &token, generation);
+        tracing::info!(
+            sessions = pool.sessions.len(),
+            runners = pool.runners.len(),
+            links = pool.links.len(),
+            "session finished"
+        );
+        if let Some(stop) = stop {
+            stop.trip();
         }
-        tracing::info!(sessions, runners, links, "session finished");
     }
 
     pub fn runner_count(&self) -> usize {
@@ -1201,10 +1288,10 @@ impl Edge {
     }
 }
 
-fn release_locked(pool: &mut Pool, token: &str, generation: u64) -> Option<Arc<crate::moq_session::Shared>> {
+fn release_locked(pool: &mut Pool, token: &str, generation: u64) {
     let gone = if let Some(hold) = pool.holds.get_mut(token) {
         if hold.generation != generation {
-            return None;
+            return;
         }
         hold.refs = hold.refs.saturating_sub(1);
         hold.refs == 0
@@ -1212,12 +1299,28 @@ fn release_locked(pool: &mut Pool, token: &str, generation: u64) -> Option<Arc<c
         false
     };
     if gone {
+        // Abort before the hold disappears, so a redial cannot observe an empty slot
+        // and open generation G+1 while G is still connected.
+        retire_link(pool, token, generation);
         pool.holds.remove(token);
-        if pool.links.get(token).is_some_and(|link| link.generation == generation) {
-            return pool.links.remove(token).and_then(|link| link.shared);
-        }
     }
-    None
+}
+
+fn retire_link(pool: &mut Pool, token: &str, generation: u64) {
+    let Some(link) = pool.links.get(token) else {
+        return;
+    };
+    if link.generation != generation {
+        return;
+    }
+    if let Some(shared) = &link.shared {
+        shared.close();
+    }
+    #[cfg(test)]
+    if let Some(probe) = pool.links.get(token).and_then(|link| link.retire_probe.clone()) {
+        probe();
+    }
+    pool.links.remove(token);
 }
 
 struct PreAdmit {
@@ -1297,6 +1400,7 @@ impl Drop for RunGuard {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Deadline {
     at: tokio::time::Instant,
     /// The bound is token expiry, so firing it is `bad_token` even if the clock is a hair early.
@@ -2197,6 +2301,8 @@ mod tests {
         SecondFlushFails,
         /// Hold flushes until `release` is set.
         HoldFlush,
+        /// Hold writes until `release` is set.
+        HoldWrite,
     }
 
     fn whip_bytes(token: &str, root: &str, path: &str, body: &str) -> Vec<u8> {
@@ -2282,11 +2388,15 @@ mod tests {
     impl tokio::io::AsyncWrite for Captured {
         fn poll_write(
             self: std::pin::Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
+            cx: &mut std::task::Context<'_>,
             buf: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
             let me = self.get_mut();
             match me.mode {
+                WireMode::HoldWrite if !me.release.load(Ordering::SeqCst) => {
+                    *me.waker.lock().expect("waker") = Some(cx.waker().clone());
+                    return std::task::Poll::Pending;
+                }
                 WireMode::WriteFail => return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
                 WireMode::PartialFail if me.partial.load(Ordering::SeqCst) => {
                     return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
@@ -2430,8 +2540,11 @@ mod tests {
         {
             let mut pool = edge.pool.lock().expect("pool");
             let session = pool.sessions.values_mut().find(|session| matches!(session.leg, Leg::Pending { .. })).expect("pending");
-            if let Leg::Pending { deadline, .. } = &mut session.leg {
-                *deadline = SystemTime::UNIX_EPOCH;
+            if let Leg::Pending { bound, .. } = &mut session.leg {
+                *bound = Deadline {
+                    at: tokio::time::Instant::now() - Duration::from_secs(1),
+                    exp_bound: false,
+                };
             }
         }
         release.store(true, Ordering::SeqCst);
@@ -2450,5 +2563,235 @@ mod tests {
         let _ = task.await;
         assert_eq!(edge.session_count(), 0);
         assert_eq!(edge.runner_count(), 0);
+    }
+
+    fn two_edges() -> (Arc<Edge>, String, String, String) {
+        let owner = owner();
+        let root = format!("t/{owner}/~open/standup");
+        let key = Key::generate(Algorithm::EdDSA, None).unwrap();
+        let now = kio::clock::wall();
+        let mint = |publish: &str| {
+            let claims = Claims::default()
+                .with_root(&root)
+                .with_publish([publish.parse().unwrap()])
+                .with_subscribe(["**".parse().unwrap()])
+                .with_issued(now)
+                .with_expires(now + Duration::from_secs(600));
+            key.sign(&claims).unwrap()
+        };
+        let set = KeySet { keys: vec![std::sync::Arc::new(key.public().unwrap())] };
+        (Edge::new(set), mint("alice/**"), mint("bob/**"), root)
+    }
+
+    fn hold(
+        edge: &Arc<Edge>,
+        token: &str,
+        root: &str,
+        mode: WireMode,
+    ) -> (tokio::task::JoinHandle<Result<(), hyper::Error>>, Arc<AtomicBool>, Arc<Mutex<Option<std::task::Waker>>>) {
+        let release = Arc::new(AtomicBool::new(false));
+        let waker = Arc::new(Mutex::new(None));
+        let io = Captured {
+            request: Mutex::new(Some(whip_bytes(token, root, "/whip/standup/alice/cam", "m=audio 9 RTP/AVP 111"))),
+            mode,
+            max_write: 17,
+            partial: AtomicBool::new(false),
+            flushes: AtomicU64::new(0),
+            bytes: Arc::new(Mutex::new(Vec::new())),
+            release: Arc::clone(&release),
+            waker: Arc::clone(&waker),
+            flushed: Arc::new(AtomicU64::new(0)),
+        };
+        let task = tokio::spawn(crate::edge_http::serve_connection(io, edge.router()));
+        (task, release, waker)
+    }
+
+    async fn until_sessions(edge: &Edge, n: usize) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while edge.session_count() < n {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("sessions");
+    }
+
+    #[tokio::test]
+    async fn preexpiry_deadline_does_not_drop_incumbents() {
+        let (edge, alice, bob, root) = two_edges();
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let alice_checked = checked(&edge, &alice, &root, Op::Publish);
+        let bob_checked = edge.admit(Some(&bob), Some(&root), Some("standup"), Op::Publish, "bob/cam", SystemTime::now()).unwrap();
+        let incumbent = edge.attach(&alice_checked, offer, offer, SystemTime::now()).await.unwrap();
+        let _other = edge.attach(&bob_checked, offer, offer, SystemTime::now()).await.unwrap();
+        let bound = Deadline {
+            at: tokio::time::Instant::now() - Duration::from_millis(5),
+            exp_bound: false,
+        };
+        let setup = setup_deadline(alice_checked.exp).unwrap();
+        let reservation = edge.acquire(&alice, alice_checked.exp, &setup).await.unwrap();
+        let error = edge
+            .insert_pending(&reservation, "late", &alice_checked, None, bound, false)
+            .unwrap_err();
+        assert_eq!(error, AdmitError::SetupFailed);
+        assert!(SystemTime::now() < alice_checked.exp);
+        drop(reservation);
+        assert_eq!(edge.refs(&alice), 1, "incumbent {incumbent} must survive a pre-expiry setup bound");
+        assert_eq!(edge.refs(&bob), 1);
+        assert_eq!(edge.session_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn paused_setup_bound_cancels_only_the_candidate_and_the_http_task() {
+        let (edge, alice, _bob, root) = two_edges();
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let checked = checked(&edge, &alice, &root, Op::Publish);
+        let _incumbent = edge.attach(&checked, offer, offer, SystemTime::now()).await.unwrap();
+        let (task, _release, _waker) = hold(&edge, &alice, &root, WireMode::HoldFlush);
+        until_sessions(&edge, 2).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..20 {
+            if task.is_finished() {
+                break;
+            }
+            tokio::time::advance(Duration::from_millis(20)).await;
+        }
+        assert!(task.is_finished(), "held flush must end when the original setup bound fires");
+        let _ = task.await;
+        assert_eq!(edge.session_count(), 1);
+        assert_eq!(edge.refs(&alice), 1);
+        assert_eq!(edge.runner_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn invalidated_pending_wakes_held_write_and_flush_without_abort() {
+        let (edge, alice, bob, root) = two_edges();
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let alice_checked = checked(&edge, &alice, &root, Op::Publish);
+        let bob_checked = edge.admit(Some(&bob), Some(&root), Some("standup"), Op::Publish, "bob/cam", SystemTime::now()).unwrap();
+        let _incumbent = edge.attach(&alice_checked, offer, offer, SystemTime::now()).await.unwrap();
+        let _other = edge.attach(&bob_checked, offer, offer, SystemTime::now()).await.unwrap();
+        for mode in [WireMode::HoldFlush, WireMode::HoldWrite] {
+            let (task, _release, _waker) = hold(&edge, &alice, &root, mode);
+            until_sessions(&edge, 3).await;
+            let pending = {
+                let pool = edge.pool.lock().expect("pool");
+                pool.sessions
+                    .iter()
+                    .find(|(_, session)| matches!(session.leg, Leg::Pending { .. }))
+                    .map(|(id, _)| id.clone())
+                    .expect("pending")
+            };
+            edge.delete(&pending, Some(&alice), SystemTime::now()).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !task.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("delete must finish the held http task");
+            let _ = task.await;
+            assert_eq!(edge.refs(&alice), 1);
+            assert_eq!(edge.refs(&bob), 1);
+        }
+        edge.drain();
+        assert_eq!((edge.session_count(), edge.link_count()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn ack_expiry_removes_the_token_and_leaves_the_other() {
+        let (edge, alice, bob, root) = two_edges();
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let alice_checked = checked(&edge, &alice, &root, Op::Publish);
+        let bob_checked = edge.admit(Some(&bob), Some(&root), Some("standup"), Op::Publish, "bob/cam", SystemTime::now()).unwrap();
+        let _incumbent = edge.attach(&alice_checked, offer, offer, SystemTime::now()).await.unwrap();
+        let _other = edge.attach(&bob_checked, offer, offer, SystemTime::now()).await.unwrap();
+        let (task, release, waker) = hold(&edge, &alice, &root, WireMode::HoldFlush);
+        until_sessions(&edge, 3).await;
+        {
+            let mut pool = edge.pool.lock().expect("pool");
+            let session = pool.sessions.values_mut().find(|session| matches!(session.leg, Leg::Pending { .. })).unwrap();
+            session.exp_unix = 0;
+        }
+        release.store(true, Ordering::SeqCst);
+        if let Some(waker) = waker.lock().expect("waker").take() {
+            waker.wake();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("rejected ack terminates http");
+        let _ = task.await;
+        assert_eq!(edge.refs(&alice), 0);
+        assert_eq!(edge.refs(&bob), 1);
+        assert_eq!(edge.session_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn last_release_aborts_before_the_slot_is_reusable() {
+        let (edge, alice, _bob, root) = two_edges();
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let checked = checked(&edge, &alice, &root, Op::Publish);
+        let id = edge.attach(&checked, offer, offer, SystemTime::now()).await.unwrap();
+        let saw = Arc::new(AtomicBool::new(false));
+        {
+            let mut pool = edge.pool.lock().expect("pool");
+            let probe_edge = Arc::clone(&edge);
+            let saw = Arc::clone(&saw);
+            pool.links.get_mut(&alice).expect("link").retire_probe = Some(Arc::new(move || {
+                assert!(probe_edge.pool.try_lock().is_err(), "retire ran after the pool lock was released");
+                saw.store(true, Ordering::SeqCst);
+            }));
+        }
+        edge.delete(&id, Some(&alice), SystemTime::now()).unwrap();
+        assert!(saw.load(Ordering::SeqCst));
+        assert_eq!(edge.link_count(), 0);
+        assert_eq!(edge.refs(&alice), 0);
+    }
+
+    #[tokio::test]
+    async fn settled_tickets_do_not_accumulate_on_a_keepalive() {
+        let (edge, alice, _bob, root) = two_edges();
+        edge.enable_test_dial();
+        let body = "m=audio 9 RTP/AVP 111";
+        let mut bytes = Vec::new();
+        for _ in 0..4 {
+            bytes.extend(whip_bytes(&alice, &root, "/whip/standup/alice/cam", body));
+        }
+        let io = Captured {
+            request: Mutex::new(Some(bytes)),
+            mode: WireMode::Ok,
+            max_write: 17,
+            partial: AtomicBool::new(false),
+            flushes: AtomicU64::new(0),
+            bytes: Arc::new(Mutex::new(Vec::new())),
+            release: Arc::new(AtomicBool::new(true)),
+            waker: Arc::new(Mutex::new(None)),
+            flushed: Arc::new(AtomicU64::new(0)),
+        };
+        let task = tokio::spawn(crate::edge_http::serve_connection(io, edge.router()));
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while edge.session_count() < 4 || crate::edge_http::OPEN_TICKETS.load(Ordering::SeqCst) != 0 {
+                if task.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("sessions={} tickets={}", edge.session_count(), crate::edge_http::OPEN_TICKETS.load(Ordering::SeqCst)));
+        assert_eq!(crate::edge_http::OPEN_TICKETS.load(Ordering::SeqCst), 0);
+        assert_eq!(edge.session_count(), 4);
+        task.abort();
+        let _ = task.await;
     }
 }
