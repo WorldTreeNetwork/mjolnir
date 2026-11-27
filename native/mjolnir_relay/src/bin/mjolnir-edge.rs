@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
     let bind = std::env::var("MJOLNIR_EDGE_BIND").unwrap_or_else(|_| "127.0.0.1:8444".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("edge admission listening on {bind}");
-    axum::serve(listener, edge.router()).await?;
+    // Plain HTTP/1. HTTP/2 is not advertised and is rejected by the HTTP/1 parser.
+    mjolnir_relay::edge_http::serve(listener, edge.router()).await?;
     Ok(())
 }

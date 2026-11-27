@@ -26,7 +26,7 @@ Origins: the configured list. If the list is empty, same-origin only. `Access-Co
 | 403 | `forbidden` | grant does not match the operation's broadcast |
 | 409 | `not_started` | Before expiry: WHEP catalog timeout, absent broadcast, or no rendition (D8) |
 | 409 | `codec_unavailable` | offer had video and the built answer has no usable accepted video section (port zero or inactive is rejected) |
-| 503 | `setup_failed` | Before expiry: dial/other setup timeout or answer-write failure; catalog deadline is 409 (D8) |
+| 503 | `setup_failed` | Before expiry: dial/other setup timeout, or the local HTTP/1 transport did not accept the serialized answer; catalog deadline is 409 (D8) |
 | 204 |  | DELETE owned by this bearer |
 | 404 | `not_found` | DELETE unknown id |
 | 403 | `forbidden` | DELETE with a different bearer |
@@ -89,7 +89,7 @@ Fresh accept of `.12` and of this contract, then `.12` K0–K1 and the ingest pa
 
 ## D8. Setup ownership and precedence
 
-Pool acquisition is single-flight per exact token, with owned reservations. Last-release/new-acquire, simultaneous POSTs, cancellation and relay-death races must not create two connections or orphan a hold. Each hold is released once. The registry owns a cancellable runner after `Response::run(self)` consumes the response. Normal completion removes its entry; cancellation or failed answer delivery cancels its runner. Before a Response exists, cleanup still releases the candidate reservation.
+Pool acquisition is single-flight per exact token, with owned reservations. Last-release/new-acquire, simultaneous POSTs, cancellation and relay-death races must not create two connections or orphan a hold. Each hold is released once. The unrun `Response` stays parked on the session until the HTTP/1 adapter acknowledges local transport acceptance: the underlying socket `poll_flush` returned `Ready(Ok(()))` after the body EOF serialization marker. That ack is not TCP peer receipt, proxy forwarding, or browser application of the SDP. The registry then owns a cancellable runner, started in that same pool critical section (drain, generation, token expiry, original setup deadline, live relay). Normal completion removes its entry. Connection failure or drop before that ack cancels only the still-pending candidate. An acknowledged session survives a later HTTP close. HTTP/2 is not spoken on this listener. Before a Response exists, cleanup still releases the candidate reservation. Mechanism note: `reviews/2026-11-27-http-delivery-design.md`.
 
 Expiry wins every setup race (`403 bad_token`, all same-token resources stop). Before expiry, an outer deadline during catalog resolution is `409 not_started`; dial/other setup deadline is `503 setup_failed`. Candidate timeout before expiry preserves same-token incumbents. A video offer requires at least one usable accepted video section in the answer, not merely an m=video line; test pinned port-zero and inactive answers.
 

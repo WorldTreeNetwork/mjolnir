@@ -109,6 +109,7 @@ pub struct Edge {
     allow_test_dial: AtomicBool,
     moq: Mutex<Option<crate::moq_session::MoqConfig>>,
     test_dial_wait: Mutex<Duration>,
+    test_answer: Mutex<Option<String>>,
 }
 
 struct Pool {
@@ -167,6 +168,18 @@ struct Session {
     digest: [u8; 32],
     generation: u64,
     exp_unix: u64,
+    leg: Leg,
+}
+
+enum Leg {
+    /// Admitted without an unrun RTC response (test attach), or already acknowledged.
+    Settled,
+    /// `Response::run` has not been called. Dropping this drops the unrun response.
+    Pending {
+        response: Option<moq_webrtc::server::Response>,
+        /// Original setup deadline (`min(exp, setup_start+5s)`), not a fresh budget at ack.
+        deadline: SystemTime,
+    },
 }
 
 struct Tombstone {
@@ -242,6 +255,7 @@ impl Edge {
             allow_test_dial: AtomicBool::new(false),
             moq: Mutex::new(None),
             test_dial_wait: Mutex::new(Duration::from_millis(30)),
+            test_answer: Mutex::new(None),
         })
     }
 
@@ -331,6 +345,11 @@ impl Edge {
         offer: &str,
     ) -> Result<Negotiated, AdmitError> {
         let deadline = setup_deadline(checked.exp)?;
+        let bound_at = if deadline.exp_bound {
+            checked.exp
+        } else {
+            SystemTime::now() + SETUP_BUDGET
+        };
         let mut reservation = self.acquire(&checked.token, checked.exp, &deadline).await?;
         let generation = reservation.generation;
         let shared = self
@@ -349,10 +368,20 @@ impl Edge {
                     pool.next_id += 1;
                     id
                 };
-                self.commit_session(&mut reservation, &id, checked)?;
+                let answer = self.test_answer.lock().expect("answer").clone().unwrap_or_else(|| "v=0\r\n".into());
+                self.insert_pending(&mut reservation, &id, checked, None, bound_at)
+                    .map_err(|error| {
+                        if error == AdmitError::BadToken {
+                            reservation.disarm();
+                            self.drop_token(&checked.token);
+                        }
+                        error
+                    })?;
+                reservation.disarm();
+                self.arm_pending_deadline(&id, generation, bound_at);
                 return Ok(Negotiated {
                     id,
-                    answer: "v=0\r\n".into(),
+                    answer,
                     generation,
                     edge: Arc::clone(self),
                     response: None,
@@ -402,13 +431,22 @@ impl Edge {
         }
         let id = response.resource_id.clone();
         let answer = response.answer.clone();
-        self.commit_session(&mut reservation, &id, checked)?;
+        self.insert_pending(&mut reservation, &id, checked, Some(response), bound_at)
+            .map_err(|error| {
+                if error == AdmitError::BadToken {
+                    reservation.disarm();
+                    self.drop_token(&checked.token);
+                }
+                error
+            })?;
+        reservation.disarm();
+        self.arm_pending_deadline(&id, generation, bound_at);
         Ok(Negotiated {
             id,
             answer,
             generation,
             edge: Arc::clone(self),
-            response: Some(response),
+            response: None,
             armed: true,
         })
     }
@@ -626,9 +664,138 @@ impl Edge {
                 digest: digest(&checked.token),
                 generation: reservation.generation,
                 exp_unix: checked.exp_unix,
+                leg: Leg::Settled,
             },
         );
         Ok(())
+    }
+
+    /// Same critical section as `insert_session`, holding the unrun response until HTTP ack.
+    fn insert_pending(
+        &self,
+        reservation: &Reservation,
+        id: &str,
+        checked: &Checked,
+        response: Option<moq_webrtc::server::Response>,
+        deadline: SystemTime,
+    ) -> Result<(), AdmitError> {
+        let mut pool = self.pool.lock().expect("pool");
+        if self.draining.load(Ordering::SeqCst) {
+            return Err(AdmitError::SetupFailed);
+        }
+        if SystemTime::now() >= checked.exp || SystemTime::now() >= deadline {
+            return Err(AdmitError::BadToken);
+        }
+        match pool.holds.get(&checked.token) {
+            Some(hold) if hold.generation == reservation.generation => {}
+            _ => return Err(AdmitError::SetupFailed),
+        }
+        let dead = pool
+            .links
+            .get(&checked.token)
+            .and_then(|link| link.shared.as_ref())
+            .is_some_and(|shared| shared.dead());
+        if dead {
+            return Err(AdmitError::SetupFailed);
+        }
+        pool.sessions.insert(
+            id.to_string(),
+            Session {
+                token: checked.token.clone(),
+                digest: digest(&checked.token),
+                generation: reservation.generation,
+                exp_unix: checked.exp_unix,
+                leg: Leg::Pending { response, deadline },
+            },
+        );
+        Ok(())
+    }
+
+    fn arm_pending_deadline(self: &Arc<Self>, id: &str, generation: u64, deadline: SystemTime) {
+        let edge = Arc::clone(self);
+        let id = id.to_string();
+        tokio::spawn(async move {
+            if let Ok(wait) = deadline.duration_since(SystemTime::now()) {
+                tokio::time::sleep(wait).await;
+            }
+            edge.cancel_delivery(&id, generation);
+        });
+    }
+
+    /// Start the parked runner, or return false and leave a stale id untouched.
+    /// On a still-pending session that fails drain, expiry, deadline, or relay
+    /// liveness, the unrun response is dropped and the candidate is finished.
+    pub(crate) fn ack_delivery(self: &Arc<Self>, id: &str, generation: u64) -> bool {
+        let started = {
+            let mut pool = self.pool.lock().expect("pool");
+            let Some(session) = pool.sessions.get(id) else {
+                return false;
+            };
+            if session.generation != generation {
+                return false;
+            }
+            if !matches!(session.leg, Leg::Pending { .. }) {
+                return true;
+            }
+            let token = session.token.clone();
+            let exp_unix = session.exp_unix;
+            let deadline = match &session.leg {
+                Leg::Pending { deadline, .. } => *deadline,
+                Leg::Settled => return true,
+            };
+            let now_unix = unix(SystemTime::now()).unwrap_or(u64::MAX);
+            let dead = pool
+                .links
+                .get(&token)
+                .and_then(|link| link.shared.as_ref())
+                .is_some_and(|shared| shared.dead());
+            let stale = self.draining.load(Ordering::SeqCst)
+                || now_unix >= exp_unix
+                || SystemTime::now() >= deadline
+                || dead;
+            let Leg::Pending { response, .. } = &mut pool.sessions.get_mut(id).expect("session").leg else {
+                return true;
+            };
+            let response = response.take();
+            if stale {
+                drop(pool);
+                drop(response);
+                self.finish_id(id, generation, true);
+                return false;
+            }
+            pool.sessions.get_mut(id).expect("session").leg = Leg::Settled;
+            if let Some(response) = response {
+                let edge = Arc::clone(self);
+                let run_id = id.to_string();
+                let (gate, opened) = tokio::sync::oneshot::channel::<()>();
+                let task = tokio::spawn(async move {
+                    let _ = opened.await;
+                    let _ = response.run().await;
+                    edge.finish_id(&run_id, generation, false);
+                });
+                pool.runners.insert(id.to_string(), task);
+                Some(gate)
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = started {
+            let _ = gate.send(());
+        }
+        true
+    }
+
+    /// Pending candidates only. An acknowledged session stays up.
+    pub(crate) fn cancel_delivery(&self, id: &str, generation: u64) {
+        let pending = {
+            let pool = self.pool.lock().expect("pool");
+            pool.sessions.get(id).is_some_and(|session| {
+                session.generation == generation && matches!(session.leg, Leg::Pending { .. })
+            })
+        };
+        if pending {
+            self.finish_id(id, generation, true);
+        }
     }
 
     async fn acquire(
@@ -1080,7 +1247,7 @@ impl CodecRank for AdmitError {
     }
 }
 
-/// An accepted answer whose runner starts only once the HTTP response is queued.
+/// An accepted answer. The RTC runner stays parked until HTTP/1 flush ack.
 pub struct Negotiated {
     id: String,
     answer: String,
@@ -1147,58 +1314,25 @@ fn setup_deadline(exp: SystemTime) -> Result<Deadline, AdmitError> {
     Ok(Deadline { at: tokio::time::Instant::now() + budget, exp_bound })
 }
 
-struct QueuedBody {
-    data: Option<bytes::Bytes>,
-    guard: Option<RunGuard>,
-}
-
-impl Drop for QueuedBody {
-    fn drop(&mut self) {
-        if let Some(guard) = self.guard.take() {
-            drop(guard);
-        }
-    }
-}
-
-impl http_body::Body for QueuedBody {
-    type Data = bytes::Bytes;
-    type Error = std::convert::Infallible;
-
-    fn poll_frame(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
-        let this = self.get_mut();
-        if let Some(data) = this.data.take() {
-            return std::task::Poll::Ready(Some(Ok(http_body::Frame::data(data))));
-        }
-        // hyper 1.8.1 `proto/h1/dispatch.rs` polls the body to EOF while `can_buffer_body` (a small SDP fits), then flushes.
-        // `http_body::Body` has no write-completion callback, and `collect()` polls this same EOF. Disarming only on Drop
-        // aborts a successful runner; leaving the guard armed past EOF leaks a BrokenPipe that happens after the flush.
-        if let Some(guard) = this.guard.as_mut() {
-            guard.armed = false;
-        }
-        std::task::Poll::Ready(None)
-    }
-}
-
-fn queue_http(edge: Arc<Edge>, negotiated: Negotiated) -> Response {
-    let _ = edge;
-    let (id, answer, guard, response) = negotiated.queue();
-    if let Some(response) = response {
-        let edge = Arc::clone(&guard.edge);
-        let run_id = guard.id.clone();
-        let generation = guard.generation;
-        let task = tokio::spawn(async move {
-            let _ = response.run().await;
-            edge.finish_id(&run_id, generation, false);
-        });
-        guard.edge.pool.lock().expect("pool").runners.insert(guard.id.clone(), task);
-    }
-    let body = axum::body::Body::new(QueuedBody {
-        data: Some(bytes::Bytes::from(answer)),
-        guard: Some(guard),
-    });
+fn queue_http(edge: Arc<Edge>, negotiated: Negotiated, extensions: &axum::http::Extensions) -> Response {
+    let (id, answer, guard, _response) = negotiated.queue();
+    // The negotiated guard must not finish the candidate; the body and the
+    // connection own cancellation until flush ack. Disarm it.
+    let generation = guard.generation;
+    guard_disarm(guard);
+    let Some(ctx) = extensions.get::<crate::edge_http::DeliveryContext>().cloned() else {
+        // No delivery context: do not pretend the answer was accepted.
+        edge.cancel_delivery(&id, generation);
+        return err(AdmitError::SetupFailed);
+    };
+    let body = axum::body::Body::new(crate::edge_http::AnswerBody::new(
+        answer,
+        edge,
+        id.clone(),
+        generation,
+        ctx,
+    ));
+    // No Content-Length. An exact length lets Hyper finish the body without polling EOF.
     Response::builder()
         .status(StatusCode::CREATED)
         .header("content-type", "application/sdp")
@@ -1206,6 +1340,10 @@ fn queue_http(edge: Arc<Edge>, negotiated: Negotiated) -> Response {
         .header("cache-control", "no-store")
         .body(body)
         .unwrap()
+}
+
+fn guard_disarm(mut guard: RunGuard) {
+    guard.armed = false;
 }
 
 async fn cors(
@@ -1441,14 +1579,22 @@ async fn whep_http(State(edge): State<Arc<Edge>>, req: axum::extract::Request) -
 async fn media_from_request(edge: Arc<Edge>, operation: Op, req: axum::extract::Request) -> Response {
     let path = req.uri().path().to_string();
     let headers = req.headers().clone();
+    let extensions = req.extensions().clone();
     let body = http_body_util::BodyExt::collect(req.into_body())
         .await
         .map(|collected| collected.to_bytes())
         .unwrap_or_default();
-    media_http(edge, operation, &path, headers, body).await
+    media_http(edge, operation, &path, headers, body, &extensions).await
 }
 
-async fn media_http(edge: Arc<Edge>, operation: Op, raw_path: &str, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+async fn media_http(
+    edge: Arc<Edge>,
+    operation: Op,
+    raw_path: &str,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+    extensions: &axum::http::Extensions,
+) -> Response {
     let Some(prefix) = (match operation {
         Op::Publish => raw_path.strip_prefix("/whip/"),
         Op::Subscribe => raw_path.strip_prefix("/whep/"),
@@ -1478,7 +1624,7 @@ async fn media_http(edge: Arc<Edge>, operation: Op, raw_path: &str, headers: Hea
     };
     let offer = String::from_utf8_lossy(&body).into_owned();
     match edge.open_session(&checked, &offer).await {
-        Ok(negotiated) => queue_http(edge, negotiated),
+        Ok(negotiated) => queue_http(edge, negotiated, extensions),
         Err(error) => err(error),
     }
 }
@@ -1516,6 +1662,7 @@ mod tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use moq_auth::{Algorithm, Claims, Key};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use tower::ServiceExt;
 
     fn owner() -> String {
@@ -1866,9 +2013,16 @@ mod tests {
             assert_eq!(response.status(), 400, "{path}");
         }
         assert_eq!(edge.dials(), 0);
-        let encoded = http(&edge, &token, &root, "POST", "/whip/standup/alice/cam%2D1", "m=audio 9 RTP/AVP 111").await;
-        assert_eq!(encoded.status(), 201, "{}", String::from_utf8_lossy(&encoded.into_body().collect().await.unwrap().to_bytes()));
-        assert_eq!(edge.moq_paths(), vec!["alice/cam-1".to_string()]);
+        // oneshot + collect is not delivery. Without a DeliveryContext the candidate is refused.
+        let compared = http(&edge, &token, &root, "POST", "/whip/standup/alice/cam%2D1", "m=audio 9 RTP/AVP 111").await;
+        assert_eq!(compared.status(), 503);
+        assert_eq!(edge.session_count(), 0);
+        assert_eq!(edge.runner_count(), 0);
+        let delivered = deliver(&edge, &token, &root, "/whip/standup/alice/cam%2D1", "m=audio 9 RTP/AVP 111", WireMode::Ok).await;
+        assert!(delivered.contains("201 Created"), "{delivered}");
+        assert_eq!(edge.moq_paths(), vec!["alice/cam-1".to_string(), "alice/cam-1".to_string()]);
+        assert_eq!(edge.session_count(), 1);
+        assert_eq!(edge.runner_count(), 0);
     }
 
     #[tokio::test]
@@ -2029,5 +2183,272 @@ mod tests {
         );
         edge.set_max_ttl(Duration::from_secs(3600)).unwrap();
         assert!(edge.admit(Some(&token), Some(&root), None, Op::Publish, "alice/cam", SystemTime::now()).is_ok());
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum WireMode {
+        Ok,
+        WriteFail,
+        PartialFail,
+        FlushFail,
+        Stall,
+        Zero,
+        /// First response flushes; the next flush fails.
+        SecondFlushFails,
+        /// Hold flushes until `release` is set.
+        HoldFlush,
+    }
+
+    fn whip_bytes(token: &str, root: &str, path: &str, body: &str) -> Vec<u8> {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: edge.test\r\nAuthorization: Bearer {token}\r\nx-mjolnir-root: {root}\r\nContent-Type: application/sdp\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    async fn deliver(edge: &Arc<Edge>, token: &str, root: &str, path: &str, body: &str, mode: WireMode) -> String {
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let release = Arc::new(AtomicBool::new(mode != WireMode::HoldFlush));
+        let waker = Arc::new(Mutex::new(None));
+        let flushed = Arc::new(AtomicU64::new(0));
+        let io = Captured {
+            request: Mutex::new(Some(whip_bytes(token, root, path, body))),
+            mode,
+            max_write: 17,
+            partial: AtomicBool::new(false),
+            flushes: AtomicU64::new(0),
+            bytes: Arc::clone(&captured),
+            release: Arc::clone(&release),
+            waker: Arc::clone(&waker),
+            flushed: Arc::clone(&flushed),
+        };
+        let router = edge.router();
+        let task = tokio::spawn(crate::edge_http::serve_connection(io, router));
+        let wait = if matches!(mode, WireMode::Stall) { Duration::from_millis(200) } else { Duration::from_secs(2) };
+        let _ = tokio::time::timeout(wait, async {
+            loop {
+                if task.is_finished() {
+                    break;
+                }
+                let text = String::from_utf8_lossy(&captured.lock().expect("cap")).into_owned();
+                let flushed_ok = flushed.load(Ordering::SeqCst) > 0;
+                if matches!(mode, WireMode::Ok | WireMode::SecondFlushFails) && text.contains("201 Created") && flushed_ok {
+                    break;
+                }
+                if matches!(mode, WireMode::WriteFail | WireMode::PartialFail | WireMode::FlushFail | WireMode::Zero) && task.is_finished() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if !task.is_finished() {
+            task.abort();
+        }
+        let _ = task.await;
+        let text = String::from_utf8_lossy(&captured.lock().expect("cap")).into_owned();
+        text
+    }
+
+    struct Captured {
+        request: Mutex<Option<Vec<u8>>>,
+        mode: WireMode,
+        max_write: usize,
+        partial: AtomicBool,
+        flushes: AtomicU64,
+        bytes: Arc<Mutex<Vec<u8>>>,
+        release: Arc<AtomicBool>,
+        waker: Arc<Mutex<Option<std::task::Waker>>>,
+        flushed: Arc<AtomicU64>,
+    }
+
+    impl tokio::io::AsyncRead for Captured {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let me = self.get_mut();
+            if let Some(req) = me.request.lock().expect("req").take() {
+                buf.put_slice(&req);
+                std::task::Poll::Ready(Ok(()))
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    impl tokio::io::AsyncWrite for Captured {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let me = self.get_mut();
+            match me.mode {
+                WireMode::WriteFail => return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+                WireMode::PartialFail if me.partial.load(Ordering::SeqCst) => {
+                    return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+                }
+                WireMode::Zero => return std::task::Poll::Ready(Ok(0)),
+                _ => {}
+            }
+            let n = buf.len().min(me.max_write);
+            me.partial.store(true, Ordering::SeqCst);
+            me.bytes.lock().expect("bytes").extend_from_slice(&buf[..n]);
+            std::task::Poll::Ready(Ok(n))
+        }
+
+        fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+            let me = self.get_mut();
+            let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+            match me.mode {
+                WireMode::FlushFail => return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into())),
+                WireMode::SecondFlushFails
+                    if me.bytes.lock().expect("bytes").windows(11).filter(|w| *w == b"201 Created").count() >= 2 =>
+                {
+                    return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+                }
+                WireMode::Stall => return std::task::Poll::Pending,
+                WireMode::HoldFlush if !me.release.load(Ordering::SeqCst) => {
+                    *me.waker.lock().expect("waker") = Some(cx.waker().clone());
+                    return std::task::Poll::Pending;
+                }
+                _ => {}
+            }
+            me.flushed.fetch_add(1, Ordering::SeqCst);
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn http_flush_ack_keeps_session_after_close_and_failures_do_not() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        let offer = "m=audio 9 RTP/AVP 111";
+        let incumbent = {
+            let checked = checked(&edge, &token, &root, Op::Publish);
+            edge.attach(&checked, offer, offer, SystemTime::now()).await.unwrap()
+        };
+        assert_eq!((edge.session_count(), edge.runner_count(), edge.refs(&token)), (1, 0, 1));
+
+        let ok = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::Ok).await;
+        assert!(ok.contains("201 Created"), "{ok}");
+        assert!(ok.contains("v=0"), "{ok}");
+        assert_eq!((edge.session_count(), edge.runner_count()), (2, 0));
+
+        let broken = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::WriteFail).await;
+        assert!(!broken.contains("201 Created"), "{broken}");
+        assert_eq!((edge.session_count(), edge.runner_count(), edge.refs(&token)), (2, 0, 2));
+
+        let partial = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::PartialFail).await;
+        assert_eq!(edge.session_count(), 2, "partial write then BrokenPipe left {partial}");
+        let flush = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::FlushFail).await;
+        assert_eq!(edge.session_count(), 2, "{flush}");
+        let zero = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::Zero).await;
+        assert_eq!(edge.session_count(), 2, "{zero}");
+        let stall = deliver(&edge, &token, &root, "/whip/standup/alice/cam", offer, WireMode::Stall).await;
+        assert_eq!(edge.session_count(), 2, "stall dropped the connection: {stall}");
+        assert_eq!(edge.runner_count(), 0);
+        assert!(edge.delete(&incumbent, Some(&token), SystemTime::now()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn pipelined_second_response_failure_keeps_the_first_ack() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        let body = "m=audio 9 RTP/AVP 111";
+        let first = whip_bytes(&token, &root, "/whip/standup/alice/cam", body);
+        let second = whip_bytes(&token, &root, "/whip/standup/alice/cam", body);
+        let mut both = first;
+        both.extend_from_slice(&second);
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let io = Captured {
+            request: Mutex::new(Some(both)),
+            mode: WireMode::SecondFlushFails,
+            max_write: 17,
+            partial: AtomicBool::new(false),
+            flushes: AtomicU64::new(0),
+            bytes: Arc::clone(&captured),
+            release: Arc::new(AtomicBool::new(true)),
+            waker: Arc::new(Mutex::new(None)),
+            flushed: Arc::new(AtomicU64::new(0)),
+        };
+        let task = tokio::spawn(crate::edge_http::serve_connection(io, edge.router()));
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if !task.is_finished() {
+            task.abort();
+        }
+        let _ = task.await;
+        let text = String::from_utf8_lossy(&captured.lock().expect("cap")).into_owned();
+        assert!(text.contains("201 Created"), "{text}");
+        assert_eq!(edge.session_count(), 1, "{text}");
+        assert_eq!(edge.runner_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_deadline_drain_and_generation_do_not_start_at_ack() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        let body = "m=audio 9 RTP/AVP 111";
+        let release = Arc::new(AtomicBool::new(false));
+        let waker = Arc::new(Mutex::new(None));
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let io = Captured {
+            request: Mutex::new(Some(whip_bytes(&token, &root, "/whip/standup/alice/cam", body))),
+            mode: WireMode::HoldFlush,
+            max_write: 17,
+            partial: AtomicBool::new(false),
+            flushes: AtomicU64::new(0),
+            bytes: Arc::clone(&captured),
+            release: Arc::clone(&release),
+            waker: Arc::clone(&waker),
+            flushed: Arc::new(AtomicU64::new(0)),
+        };
+        let task = tokio::spawn(crate::edge_http::serve_connection(io, edge.router()));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while edge.session_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("candidate parked");
+        assert_eq!(edge.runner_count(), 0);
+        {
+            let mut pool = edge.pool.lock().expect("pool");
+            let session = pool.sessions.values_mut().find(|session| matches!(session.leg, Leg::Pending { .. })).expect("pending");
+            if let Leg::Pending { deadline, .. } = &mut session.leg {
+                *deadline = SystemTime::UNIX_EPOCH;
+            }
+        }
+        release.store(true, Ordering::SeqCst);
+        if let Some(waker) = waker.lock().expect("waker").take() {
+            waker.wake();
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while !task.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if !task.is_finished() {
+            task.abort();
+        }
+        let _ = task.await;
+        assert_eq!(edge.session_count(), 0);
+        assert_eq!(edge.runner_count(), 0);
     }
 }
