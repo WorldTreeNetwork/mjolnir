@@ -1,0 +1,41 @@
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-317mqaj5/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-317mqaj5/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-317mqaj5/native/mjolnir_relay)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.05s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-e67a6c16fa6f43dc)
+
+running 15 tests
+test edge::independent_review::cancelled_leader_live_waiter_retries ... ok
+test edge::independent_review::defect_configured_origin_list_still_allows_unlisted_same_host ... DEFECT nonempty origin allowlist still permits unlisted http/https host origins
+ok
+test edge::independent_review::defect_drain_allows_pending_dial_to_publish ... DEFECT drain during flight => successful session registered after drain
+ok
+test edge::independent_review::defect_http_write_failure_after_body_eof_leaks_candidate ... WRITE FAILURE actual Hyper=Err(hyper::Error(BodyWrite, Kind(BrokenPipe))); refs=2 sessions=2 runners=2
+ok
+test edge::independent_review::defect_last_release_retains_real_connection_and_redial_overlaps ... DEFECT final release reports links=0 but watcher retains live Shared; next acquire dials a second live connection; drain does not close old connection
+ok
+test edge::independent_review::expiry_during_first_dial_finishes_without_mutex_deadlock ... ok
+test edge::independent_review::prior_first_expiry_and_tombstones ... ok
+test edge::independent_review::prior_http_decode_cors_cache_json_regressions ... ok
+test edge::independent_review::prior_real_absent_source_is_now_409 ... ok
+test edge::independent_review::prior_real_answer_drop_and_cancellation ... ok
+test edge::independent_review::prior_real_natural_runner_cleanup_and_cap ... ok
+test edge::independent_review::prior_rejected_leader_reserves_waiter ... ok
+test edge::independent_review::real_catalog_timeout_preserves_incumbent_then_controlled_expiry_isolates_tokens ... ok
+test edge::independent_review::real_http_delivery_and_request_disconnect ... HTTP disconnect: refs=1 sessions=1 runners=1
+ok
+test edge::independent_review::real_relay_death_cleans_two_same_token_legs ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 42.13s
+

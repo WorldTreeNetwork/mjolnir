@@ -1,0 +1,32 @@
+warning: method `causes` is never used
+   --> /Users/dukejones/work/IdentiKey/mjolnir/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/Users/dukejones/work/IdentiKey/mjolnir/native/mjolnir_relay)
+error[E0382]: borrow of moved value: `url`
+   --> tests/edge_tls.rs:108:16
+    |
+ 64 |     let url = url::Url::parse(&format!("https://localhost:{}", quic.port())).unwrap();
+    |         --- move occurs because `url` has type `Url`, which does not implement the `Copy` trait
+...
+ 92 |         relay: url,
+    |                --- value moved here
+...
+108 |         relay: url.clone(),
+    |                ^^^ value borrowed here after move
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+ 92 |         relay: url.clone(),
+    |                   ++++++++
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `mjolnir-relay` (test "edge_tls") due to 1 previous error
