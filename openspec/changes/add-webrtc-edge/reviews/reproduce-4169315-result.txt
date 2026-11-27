@@ -1,0 +1,41 @@
+Exact source: 4169315c55ee49b160deaafe5182420a690dc6ee
+Platform: macOS arm64; Rust 1.95.0; single Cargo job
+Command: python3 openspec/changes/add-webrtc-edge/reviews/reproduce-4169315.py
+Assertions characterize defects, not contract acceptance.
+running 15 tests
+test edge::independent_review::failed_leader_discards_successful_waiter_reservation ... REPRO successful shared dial: rejected leader causes otherwise-valid follower setup_failed
+ok
+test edge::independent_review::first_acquire_expiry_is_setup_failed ... REPRO acquisition deadline with expired exp and no hold => setup_failed, not bad_token
+ok
+test edge::independent_review::http_cors_cache_and_json_contract ... REPRO /admit: unlisted origin '*', no cache-control; missing fields 422 text
+ok
+test edge::independent_review::http_encoded_slash_reaches_dial_and_double_decode_changes_name ... REPRO encoded slash + double decode: HTTP 503, 2 dials; /admit rejects raw encoded slash
+ok
+test edge::independent_review::real_missing_broadcast_is_503 ... REPRO real absent broadcast: setup_failed after 5.107675292s, token still valid
+ok
+test edge::independent_review::real_runner_completion_leaves_session_and_link ... REPRO actual Response::run completion: runners=0 sessions=1 refs=1 links=1
+ok
+test edge::independent_review::real_whep_cancellation_leaks_hold ... REPRO cancelled real WHEP: refs=1 links=1 sessions=0
+ok
+test edge::independent_review::tombstones_wrong_owner_and_expiry_cleanup ... REPRO tombstones: foreign bearer 404; sweep retains old tombstone; expired active id owner gets 404
+ok
+test edge::tests::admit_open_mint_shape_does_not_dial_and_refuses_protected_and_wide ... ok
+test edge::tests::concurrent_posts_share_one_dial_and_a_later_acquire_dials_again ... ok
+test edge::tests::foreign_broadcast_header_mismatch_and_closed_admissions_do_not_dial ... ok
+test edge::tests::parser_rejects_encoded_slash_backslash_and_dot_segments ... ok
+test edge::tests::two_legs_one_token_one_dial_and_delete_matrix ... ok
+test edge::tests::untrusted_key_file_closes_admissions_and_keeps_old_keys ... ok
+test edge::tests::usable_video_rejects_port_zero_and_inactive ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 35.85s
+
+
+Additional real HTTP delivery ownership probe (same snapshot/toolchain):
+running 1 test
+test edge::independent_review::real_http_answer_drop_leaves_runner ... REPRO discarded actual HTTP 201/body: runners=1 sessions=1 refs=1
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.27s
+
+
+Original edge_tls integration test: 1 passed (matching root + malformed PEM rejection).
