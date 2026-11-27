@@ -1,0 +1,18 @@
+2026-11-27T19:45:51.620029Z  INFO edge: edge up media=10.42.166.103:45560 listen=127.0.0.1:8088
+2026-11-27T19:45:52.666014Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:45:54.794132Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:45:56.827437Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:45:58.912514Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:00.974556Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:03.039978Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:05.157605Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:07.284854Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:09.422094Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:11.559134Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:13.687108Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:15.819176Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:17.959456Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:20.090427Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:22.217950Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:24.358081Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:26.484657Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true

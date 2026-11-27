@@ -1,0 +1,91 @@
+2026-11-27T19:52:43.391576Z  INFO edge: edge up media=127.0.0.1:40000 listen=127.0.0.1:8088
+2026-11-27T19:52:44.429800Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:52:46.400715Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:52:46.449974Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["join"] sent=true
+2026-11-27T19:52:48.517474Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:52:50.625328Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:52:52.713877Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:52:54.777837Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:52:56.779034Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:52:57.926981Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:52:58.894970Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:00.895806Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:00.942258Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:01.435877Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:03.025557Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:03.958505Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:05.026817Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:06.973523Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:07.162973Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:08.018026Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:53:08.049219Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:53:08.132947Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:53:08.132947Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:53:08.207250Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.250927Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.316525Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.400738Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.489235Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.568507Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.568691Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.662098Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.770208Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.770847Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.864007Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.974078Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:08.974217Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.067253Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.177242Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.177242Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.270333Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.290071Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:09.380417Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.380417Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.582773Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.786103Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.786317Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.989300Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:09.989300Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:10.192698Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:10.192698Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:10.395735Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:10.598521Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:10.802799Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:11.004566Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:11.207699Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:11.392447Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:11.410912Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:11.817668Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:13.524634Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:15.333037Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:15.520478Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:15.622816Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:17.004449Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:17.722751Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:18.536078Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:19.504490Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:19.770100Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:19.823216Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:21.848474Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:21.927990Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:22.702094Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:22.786105Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:22.864815Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:24.063638Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:24.866080Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:25.738943Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:25.801746Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:25.880225Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:26.064731Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:26.569390Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:26.705250Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:27.880407Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:28.187936Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:28.755970Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:28.817224Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:28.895906Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:28.904880Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:29.136198Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:30.291207Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:53:30.895692Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+2026-11-27T19:53:32.428311Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true

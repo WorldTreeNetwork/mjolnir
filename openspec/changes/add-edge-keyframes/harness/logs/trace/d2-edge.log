@@ -1,0 +1,19 @@
+2026-11-27T19:51:15.841064Z  INFO moq_webrtc::server::mux: webrtc media mux listening candidates=[10.42.166.103:40001] bound=127.0.0.1:40000
+2026-11-27T19:51:15.841173Z  INFO edge: edge up media=127.0.0.1:40000 listen=127.0.0.1:8088
+2026-11-27T19:51:16.808020Z  WARN moq_tokio::tls: TLS server certificate verification is disabled; A man-in-the-middle attack is possible.
+2026-11-27T19:51:16.808172Z  WARN moq_sock::bind: UDP receive buffer is smaller than requested; raise `net.core.rmem_max` or expect packet loss under load wanted=8388608 granted=4194304
+2026-11-27T19:51:16.808189Z  WARN moq_sock::bind: UDP send buffer is smaller than requested; raise `net.core.wmem_max` or expect packet loss under load wanted=8388608 granted=4194304
+2026-11-27T19:51:16.808890Z  INFO moq_net::reconnect: connecting peer=https://127.0.0.1:51495
+2026-11-27T19:51:16.819519Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:51:16.819625Z  INFO moq_tokio::connection: connected peer=https://127.0.0.1:51495 transport=webtransport
+2026-11-27T19:51:16.833726Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=0d73faf29ade11e2398bc99c14b4feed cap=2500000
+2026-11-27T19:51:16.833959Z  INFO edge: session accepted kind=Whip room=r1 broadcast=alice/cam id=ec5d482a-317d-4eed-97c6-4b72c1cb22fe ttl_ms=1799166 setup_ms=27
+2026-11-27T19:51:18.476436Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["loss"] sent=true
+2026-11-27T19:51:19.477107Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["join"] sent=true
+2026-11-27T19:51:21.514940Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:51:21.599936Z  WARN moq_mux::catalog::interval: a track's groups are longer than the declared join interval; HLS lists them as overruns interval=2.033133s declared=1.000454s
+2026-11-27T19:51:23.600867Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:51:24.601431Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["loss"] sent=true
+2026-11-27T19:51:26.700265Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:51:28.809182Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:51:30.942283Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true

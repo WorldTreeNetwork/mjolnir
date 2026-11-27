@@ -1,0 +1,6 @@
+burst_window start=1795809082.839 until=1795809084.339 dir=edge
+delta_warmup until=1795809077.839
+media_ssrc=4036068831 media_pt=96
+delta_suppress start ts=3790735546 seq=28097 epoch=1795809077.875
+delta_suppress range 28097-28102 n=6 epoch=1795809077.876
+{'to_edge': 3477, 'to_edge_dropped': 398, 'to_client': 366, 'to_client_dropped': 0, 'delta_dropped': 6, 'rtx_dropped': 70}

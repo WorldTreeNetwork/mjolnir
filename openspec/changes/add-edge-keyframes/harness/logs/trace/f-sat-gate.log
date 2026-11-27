@@ -1,0 +1,10 @@
+2026-11-27T19:46:47.928208Z  INFO edge: edge up media=10.42.166.103:52562 listen=127.0.0.1:8088
+2026-11-27T19:46:48.929483Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-27T19:46:50.195835Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:51.196453Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:52.197857Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:53.198557Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:54.199297Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:55.201008Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:56.201604Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true
+2026-11-27T19:46:57.202691Z  INFO moq_webrtc::session: ingest keyframe gate mid=Mid(0) causes=["period"] sent=true

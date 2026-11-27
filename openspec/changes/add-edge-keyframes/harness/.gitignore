@@ -20,3 +20,4 @@ private*.json
 verify.json
 # Evidence transcripts are committed (the root ignores *.log).
 !logs/*.log
+!logs/trace/*.log
