@@ -43,4 +43,3 @@ test edge::tests::concurrent_posts_share_one_dial_and_a_later_acquire_dials_agai
 test edge::tests::cancelled_waiter_does_not_stick_a_ref ... ok
 
 test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
-
