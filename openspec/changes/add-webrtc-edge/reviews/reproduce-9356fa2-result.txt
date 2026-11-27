@@ -1,0 +1,47 @@
+INDEPENDENT APPENDED REVIEW PROBES
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-vatklpzn/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-vatklpzn/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-vatklpzn/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2415:17
+     |
+2415 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.11s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-498ebe92c3767071)
+
+running 14 tests
+test edge::independent_review::real_ack_dead_relay_and_watcher_detach_generation ... ok
+test edge::independent_review::real_ack_expiry_detaches_generation ... ack-first expiry detached same-token incumbent, preserved other token
+ok
+test edge::independent_review::real_catalog_timeout_and_whole_token_expiry_regression ... ok
+test edge::independent_review::real_final_registration_distinguishes_deadline_and_expiry ... ok
+test edge::independent_review::real_held_scalar_output_terminates_on_all_invalidations ... ok
+test edge::independent_review::real_keepalive_post_delete_prunes_tickets ... ok
+test edge::independent_review::real_last_release_closes_under_lock_before_redial ... ok
+test edge::independent_review::real_pending_ack_gates_do_not_resurrect_or_start ... ok
+test edge::independent_review::real_pipelined_failure_commits_only_first ... ok
+test edge::independent_review::real_tcp_flush_runner_finish_and_cap ... ok
+test edge::independent_review::real_three_pipeline_success_and_h2_rejection ... ok
+test edge::independent_review::real_transport_failure_matrix_preserves_incumbent ... ok
+test edge::independent_review::real_unrun_drop_missing_context_and_relay_cleanup ... ok
+test edge::independent_review::real_vectored_write_invalidation_defect ... DEFECT: real Response deleted, but vectored HTTP output stays pending even after socket wake; external abort required
+ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 51.02s
+

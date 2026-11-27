@@ -1,0 +1,33 @@
+INDEPENDENT APPENDED REVIEW PROBES
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5z634z6j/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5z634z6j/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-5z634z6j/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2415:17
+     |
+2415 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.79s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-b669cadc7c575351)
+
+running 1 test
+test edge::independent_review::real_ack_expiry_detaches_generation ... ack-first expiry detached same-token incumbent, preserved other token
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.33s
+

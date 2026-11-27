@@ -56,8 +56,14 @@ Review: `reviews/2026-11-27-code-review-4169315.md`. Contract acceptance remains
 
 Exact product `952f09a59a899d71e27635099760dcde5bd483bf`; `reviews/2026-11-27-code-review-952f09a.md`. Current library 31 and TLS 1 pass; independent real-Response/HTTP suite 10 passes includes three defect characterizations. Local flush boundary is valid; code and builder-owned media/platform readiness remain separate. No `.15` unlock, node close, fold or deploy.
 
-- [ ] N1 (P1): distinguish pre-expiry original setup deadline from actual expiry in locked pending insertion; candidate timeout must not return BadToken or drop same-token incumbents. Exercise final-registration deadline/expiry ordering.
+- [x] N1 (P1): distinguish pre-expiry original setup deadline from actual expiry in locked pending insertion; candidate timeout must not return BadToken or drop same-token incumbents. Exercise final-registration deadline/expiry ordering.
 - [ ] N2 (P1): notify/wake the HTTP driver when a pending ticket is invalidated; terminate stalled/incomplete output on deadline, DELETE, drain or relay death, and terminate on rejected ack. Preserve previously acknowledged sessions. Assert completion without external task abortion.
-- [ ] N3 (P2): at ack, atomically detach the whole matching token generation on expiry/known relay death; retain candidate-only cleanup for pre-expiry deadlines. Make pending-only cancellation check/removal atomic; test actual Response ownership and other-token isolation.
-- [ ] N4 (P2): prevent new acquisition from reusing a token slot before its old generation is closed; add a controlled real-connection last-release/redial interleaving.
-- [ ] N5 (P2): remove settled tickets from the connection context instead of retaining/scanning every historical response; assert pending state is empty after repeated keepalive POST/DELETE cycles.
+- [x] N3 (P2): at ack, atomically detach the whole matching token generation on expiry/known relay death; retain candidate-only cleanup for pre-expiry deadlines. Make pending-only cancellation check/removal atomic; test actual Response ownership and other-token isolation.
+- [x] N4 (P2): prevent new acquisition from reusing a token slot before its old generation is closed; add a controlled real-connection last-release/redial interleaving.
+- [x] N5 (P2): remove settled tickets from the connection context instead of retaining/scanning every historical response; assert pending state is empty after repeated keepalive POST/DELETE cycles.
+
+## Independent CODE re-review of 9356fa2 — send-back
+
+Exact product `9356fa2dc80b9ea17dd6a7faf64e3baca85fc8e3`; `reviews/2026-11-27-code-review-9356fa2.md`. N1/N3/N4/N5 are verified above; N2 remains incomplete. Local exact library 37 passed; independent real-Response/TCP/controlled-IO suite 14 passed includes one intentional defect characterization; strengthened consistent ack-expiry probe passed separately. Builder-owned media/Ubuntu evidence and all broader acceptance obligations remain separate. No node closure/fold/deploy or gateway-dependent `.15` unlock.
+
+- [ ] V1 / remaining N2 (P1): guard `DeliveryIo::poll_write_vectored` with the pending cancellation registration/check used by scalar writes (or disable vectored writes). A real pending Response is removed on DELETE while a vectored HTTP write stays Pending even after a socket wake. Test deadline/DELETE/drain/relay closure with vectored support enabled, assert HTTP completion without external abort, and preserve acknowledged sessions as appropriate. Obtain fresh code acceptance before a green local media slice can unlock the authorized named-peer browser work.
