@@ -29,7 +29,8 @@ async function open(browser, room, token, label) {
   const page = await ctx.newPage();
   page.on('console', m => { if (process.env.VERBOSE) console.error(label + ': ' + m.text()); });
   page.on('pageerror', e => console.error(label + ' pageerror: ' + e));
-  await page.goto(`${PAGES}/rtc.html?edge=${encodeURIComponent(EDGE)}&room=${room}#t=${token}`);
+  const root = process.env.EDGE_ROOT ? `&root=${encodeURIComponent(process.env.EDGE_ROOT)}` : '';
+  await page.goto(`${PAGES}/rtc.html?edge=${encodeURIComponent(EDGE)}&room=${room}${root}#t=${token}`);
   await page.waitForFunction(() => window.ready);
   // Loss runs: withhold host candidates so the edge learns only the lossy proxy's address.
   if (process.env.STRIP) await page.evaluate(() => { window.stripCandidates = true; });

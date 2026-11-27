@@ -28,6 +28,7 @@ async function negotiate(kind, b, pc, tok = token) {
   });
   const headers = { 'content-type': 'application/sdp' };
   if (tok) headers.authorization = 'Bearer ' + tok;
+  if (q.get('root')) headers['x-mjolnir-root'] = q.get('root');
   const t0 = performance.now();
   const res = await fetch(`${edge}/${kind}/${room}/${b}`, { method: 'POST', headers, body: window.stripCandidates ? pc.localDescription.sdp.replace(/a=candidate:[^\r\n]*\r\n/g, '') : pc.localDescription.sdp });
   const text = await res.text();
