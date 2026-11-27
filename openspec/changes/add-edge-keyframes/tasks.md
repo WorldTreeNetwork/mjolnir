@@ -27,7 +27,7 @@ K0 → K1a/K1b → H0 → H1 (baseline on git `moq-webrtc`) → K2 → K3 → K4
 
 ## Harness and the "before" (unpatched pin; the harness still uses git `moq-webrtc`)
 
-- [x] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build.
+- [ ] H0. Copy `add-webrtc-edge/spikes/` to `harness/` and add design D6 observations: the measurement probe (per-frame track, group start, payload bytes, media time, wall time), browser RTCP every second, the moving 720p fixture, `harness raw` timing lines, `lossy.py --burst`, and a str0m viewer that sends PLIs (negative control only). The probe opens a video track only after a group exists, including after a rendition change, and `selftest-common.log` shows zero join-cause PLIs from the probe. Subscribing at announcement is not this test. Patch-only gate logs are listed as unavailable on this build. Reopened by the ba1e99f8 code re-review: implementation exists, but the printed zero is an unmodified synthetic counter; real active-gate probe and rendition-change cause observations remain owed.
 - [x] H1. Before numbers for design D6 rows A, B, C, D1, D2 and F (policy off) on the unpatched pin, from common observations only: `harness/logs/before-720.log`. Captured before K4 switches the harness. A meets 2.0 s / 2.5 s on the 1280x720 fixture. B's first payload is under 1.0 s and a decoded ivf is 1280x720, but the 10-join groups sit about 2–4 s behind live, so lag does not meet 2.2 s. D2 dropped a mid-session burst (396 packets, 833 ms media gap) and produced no loss-cause PLI, which this pin does not have. F share 0.1814, quality missing. `before-partial.txt` (d0fcfc6a) is a different fixture and is not this row. The after run must still show the cause working (D9).
 
 ## Vendor and switch
@@ -59,12 +59,12 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 
 ## After (D9 local targets)
 
-- [ ] A. WHEP `POST` → first presented frame, H.264 and VP8, 10 joins at varied phase: median ≤ 2.0 s, max ≤ 2.5 s. `after-A.log` beside `before-A.log`.
-- [ ] B. MoQ late join, 10 joins: first decodable frame ≤ 1.0 s after subscribe; lag against the probe's newest media time at that wall time ≤ 2.2 s. Separately, over a real relay hop with the negotiated wire version recorded: the edge trace for the relay's first upstream subscription and for a later relay-side join while it stays open (H1). `after-B.log`.
+- [ ] A. With matched WHIP-origin off/trial media (the current native-MoQ publishing script bypasses the gate), WHEP `POST` → first presented frame, H.264 and VP8, 10 joins at varied phase: median ≤ 2.0 s, max ≤ 2.5 s. `after-A.log` beside `before-A.log`.
+- [ ] B. WHIP-origin MoQ late join, 10 joins: first decodable frame ≤ 1.0 s after subscribe; lag against the probe's newest media time at that wall time ≤ 2.2 s. Separately, over a real relay hop with the negotiated wire version recorded: the edge trace for the relay's first upstream subscription and for a later relay-side join while it stays open (H1). `after-B.log`.
 - [ ] C. Exporter late join (VP8 uncapped, VP9, AV1): recorded in `after-C.log`. If not content-ok, a bead under `mjolnir-rurh.13` (H3).
 - [ ] D1. Viewer-side 1.5 s blackout at varied phase, same relayed WHEP route as the before run: record time to the first presented frame with a post-burst counter. A viewer-cause PLI is not required. The 1.2 s figure is an observation against the ingest cadence, not a pass gate. `after-D1.log`.
 - [ ] D2. Publisher-side 1.5 s blackout: the MoQ reader's first post-burst keyframe ≤ 1.2 s after the burst end; a loss-cause PLI in the edge log. `after-D2.log`.
-- [ ] E. Viewer storm, one then four, 20 s: zero viewer-cause sends. This is a negative control, not the saturation run. `after-E.log`.
+- [ ] E. Viewer storm, one then four actual PLI-generating viewers, 20 s: observe received peer feedback and zero viewer-cause sends; a zero-match grep without observed feedback is insufficient. This is a negative control, not the saturation run. `after-E.log`.
 - [ ] F. Cost on identical moving input, cap, and relayed route. Three runs at the probe boundary: policy off, period 2 s, and saturated 1 s requests from a named ingest-cause test hook (not from viewer PLIs). Report keyframe byte share, bitrate difference, and quality difference or "quality difference missing". `after-F.log`.
 - [ ] F-PR. Turn F into `upstream/cost.md` for the upstream PR body: method, fixture (how it is generated, resolution, frame rate, content), encoder and browser versions, cap, the counting boundary, the numbers for each run (bitrate and quality differences separately), any missing result named as missing, and the commands to reproduce from a clean checkout. It is written so it can be pasted into the PR without editing.
 - [ ] Adopt or revise the trial defaults. Depends on A, B, D2, E, and F. D1 is recorded and does not block. Record the numbers on the bead. Only then hand the defaults to `.13`.
@@ -95,3 +95,12 @@ Withdrawn 2026-11-26 (relay-authorized media): P6 requester API, P6b egress bind
 Accepted by astra-arch-review in `reviews/2026-11-26-advise-2.md`; only the withdrawal/reconciliation gates above are checked. PENDING banner, feasibility and build gates remain unchanged.
 
 - [x] Before K1/K2, repair stale D5/D6/D9 task references after the design renumbering. Preserve the packaging source/feature table from historical notes D5 as packaging guidance only; do not reactivate viewer/requester sections. Current measurements are design D6 and current licence policy D4.
+
+## Independent code re-review of ba1e99f8
+
+Code SEND-BACK; adoption NOT READY. Exact hash, reproductions and limits: `reviews/2026-11-27-code-review-ba1e99f8.md`. Independent Mac 115/115 and six scratch session reproductions do not close the following work or unblock `.13`/`.15`.
+
+- [ ] R5. Initialize demand baseline at attachment; preserve eligible changes across queued notifications and coalesce them before simultaneous timer sends. Add actual session tests for delayed baseline delivery, under/over-ratio real demand, parked timer, no REMB and rendition/reset behavior.
+- [ ] R6. Enforce parking in the send predicate, clear it on valid rearm/success, and test join while parked, first-delta release, first-keyframe cancellation and future rearm through the session. Do not retain the helper assertion permitting a direct parked retry.
+- [ ] R7. Bind demand watcher cancellation to Session/receiver lifetime; test dropping Session while an external producer stays alive and demand remains unchanged.
+- [ ] K2 hardening. Validate cached/override checkout HEAD and the complete manifest table; fix fresh-fetch sparse-checkout file arguments; reverse multiple patches in reverse order. Current cached-checkout provenance passes; these enduring checker guarantees remain owed.
