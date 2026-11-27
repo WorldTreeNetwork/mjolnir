@@ -5,11 +5,12 @@ Subject: [PATCH] Add the ingest keyframe gate on the vendored pin
 
 Policy stays off unless whip::Request enables it. When on, startup, step,
 period, loss, and join share one floor and one PLI. Viewer keyframe
-requests stay logged and dropped.
+requests stay logged and dropped. A held cause is armed at the floor,
+a line without PLI arms no timer, and join follows moq-net demand.
 
 ---
 diff --git a/src/codec/av1.rs b/src/codec/av1.rs
-index aa90aa4e..21d22573 100644
+index aa90aa4..c9cddc8 100644
 --- a/src/codec/av1.rs
 +++ b/src/codec/av1.rs
 @@ -1,3 +1,4 @@
@@ -53,7 +54,7 @@ index aa90aa4e..21d22573 100644
  	}
  }
  
-@@ -44,4 +62,8 @@ impl codec::Bridge for Bridge {
+@@ -44,4 +62,12 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -61,9 +62,13 @@ index aa90aa4e..21d22573 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
 +	}
++
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		Some(self.demand.clone())
++	}
  }
 diff --git a/src/codec/h264.rs b/src/codec/h264.rs
-index 5c660ee3..f9cf200b 100644
+index 5c660ee..1063cc1 100644
 --- a/src/codec/h264.rs
 +++ b/src/codec/h264.rs
 @@ -1,3 +1,4 @@
@@ -106,7 +111,7 @@ index 5c660ee3..f9cf200b 100644
  	}
  }
  
-@@ -43,4 +61,8 @@ impl codec::Bridge for Bridge {
+@@ -43,4 +61,12 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -114,9 +119,13 @@ index 5c660ee3..f9cf200b 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
 +	}
++
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		Some(self.demand.clone())
++	}
  }
 diff --git a/src/codec/h265.rs b/src/codec/h265.rs
-index 2dd84798..15d96d6b 100644
+index 2dd8479..008b0b1 100644
 --- a/src/codec/h265.rs
 +++ b/src/codec/h265.rs
 @@ -1,3 +1,4 @@
@@ -160,7 +169,7 @@ index 2dd84798..15d96d6b 100644
  	}
  }
  
-@@ -45,4 +63,8 @@ impl codec::Bridge for Bridge {
+@@ -45,4 +63,12 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -168,9 +177,13 @@ index 2dd84798..15d96d6b 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
 +	}
++
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		Some(self.demand.clone())
++	}
  }
 diff --git a/src/codec/mod.rs b/src/codec/mod.rs
-index bfa5bf11..b83a2ee4 100644
+index bfa5bf1..6a49dd2 100644
 --- a/src/codec/mod.rs
 +++ b/src/codec/mod.rs
 @@ -1,3 +1,4 @@
@@ -178,7 +191,7 @@ index bfa5bf11..b83a2ee4 100644
  //! Per-codec bridges between moq-mux and str0m.
  //!
  //! Two directions:
-@@ -57,6 +58,11 @@ pub trait Bridge: Send {
+@@ -57,6 +58,16 @@ pub trait Bridge: Send {
  	///
  	/// Consumes the bridge: the track is dead afterwards.
  	fn abort(self: Box<Self>, err: moq_net::Error);
@@ -187,10 +200,15 @@ index bfa5bf11..b83a2ee4 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		None
 +	}
++
++	/// A clone of the video track's demand, when this bridge has one.
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		None
++	}
  }
  
  /// A bridge's finished track, held so a finished broadcast keeps serving it.
-@@ -139,21 +145,47 @@ enum DeferredState<I> {
+@@ -139,21 +150,51 @@ enum DeferredState<I> {
  /// Defers a video importer's catalog reservation until its first frame.
  pub(crate) struct DeferredVideo<I> {
  	state: DeferredState<I>,
@@ -237,11 +255,15 @@ index bfa5bf11..b83a2ee4 100644
 +		(self.demand.wanted(), largest)
 +	}
 +
++	pub fn demand(&self) -> moq_net::track::Demand {
++		self.demand.clone()
++	}
++
  	/// Decode a frame, creating the importer on first use.
  	pub fn decode(&mut self, frame: Bytes, pts: moq_net::Timestamp) -> Result<()> {
  		if let DeferredState::Active(import) = &mut self.state {
 diff --git a/src/codec/vp8.rs b/src/codec/vp8.rs
-index 3042b817..015e9bb0 100644
+index 3042b81..8b2a04b 100644
 --- a/src/codec/vp8.rs
 +++ b/src/codec/vp8.rs
 @@ -1,3 +1,4 @@
@@ -269,7 +291,7 @@ index 3042b817..015e9bb0 100644
  		Ok(Self { import })
  	}
  }
-@@ -36,6 +47,10 @@ impl codec::Bridge for Bridge {
+@@ -36,6 +47,14 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -277,11 +299,15 @@ index 3042b817..015e9bb0 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		Some(self.import.join_sample())
 +	}
++
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		Some(self.import.demand())
++	}
  }
  
  #[cfg(test)]
 diff --git a/src/codec/vp9.rs b/src/codec/vp9.rs
-index dc08add7..ad0226ca 100644
+index dc08add..b523ba9 100644
 --- a/src/codec/vp9.rs
 +++ b/src/codec/vp9.rs
 @@ -1,3 +1,4 @@
@@ -309,7 +335,7 @@ index dc08add7..ad0226ca 100644
  		Ok(Self { import })
  	}
  }
-@@ -36,4 +47,8 @@ impl codec::Bridge for Bridge {
+@@ -36,4 +47,12 @@ impl codec::Bridge for Bridge {
  	fn abort(self: Box<Self>, err: moq_net::Error) {
  		self.import.abort(err);
  	}
@@ -317,9 +343,13 @@ index dc08add7..ad0226ca 100644
 +	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 +		Some(self.import.join_sample())
 +	}
++
++	fn demand(&self) -> Option<moq_net::track::Demand> {
++		Some(self.import.demand())
++	}
  }
 diff --git a/src/error.rs b/src/error.rs
-index 6bdbdf52..ea6c3c79 100644
+index 6bdbdf5..ea6c3c7 100644
 --- a/src/error.rs
 +++ b/src/error.rs
 @@ -1,4 +1,8 @@
@@ -343,7 +373,7 @@ index 6bdbdf52..ea6c3c79 100644
  	#[error(transparent)]
  	UnsupportedCpu(#[from] moq_crypto::cpu::UnsupportedCpu),
 diff --git a/src/ingest.rs b/src/ingest.rs
-index f26dfe30..b6b5e761 100644
+index f26dfe3..b2ed7ff 100644
 --- a/src/ingest.rs
 +++ b/src/ingest.rs
 @@ -1,3 +1,4 @@
@@ -423,7 +453,7 @@ index f26dfe30..b6b5e761 100644
  			other => return Err(Error::UnsupportedCodec(format!("{other:?}"))),
  		};
  		self.bridges.insert(mid, bridge);
-@@ -94,6 +113,10 @@ impl session::MediaSink for IngestSink {
+@@ -94,6 +113,14 @@ impl session::MediaSink for IngestSink {
  		self.bridges.push(mid, frame)
  	}
  
@@ -431,15 +461,19 @@ index f26dfe30..b6b5e761 100644
 +		self.bridges.join_samples()
 +	}
 +
++	fn demand(&mut self, mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
++		self.bridges.demand(mid)
++	}
++
  	fn abort(&mut self, err: moq_net::Error) {
  		self.catalog.clone().abort(err.clone());
  		self.bridges.abort(err);
-diff --git a/src/keyframe.rs b/src/keyframe.rs
+diff --git a/new/src/keyframe.rs b/src/keyframe.rs
 new file mode 100644
-index 00000000..a1c8e1f1
+index 0000000..ad06557
 --- /dev/null
 +++ b/src/keyframe.rs
-@@ -0,0 +1,387 @@
+@@ -0,0 +1,620 @@
 +//! Ingest keyframe gate. One per video line. There is no viewer cause.
 +//!
 +//! Modified by the Mjolnir contributors for World Tree Network Foundation in 2026.
@@ -518,12 +552,25 @@ index 00000000..a1c8e1f1
 +	}
 +}
 +
++/// Why the one armed deadline exists.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++enum Wake {
++	#[default]
++	Period,
++	/// A held request becomes sendable at the floor boundary.
++	Send,
++}
++
 +/// One held request: a bit, a cause mask, and one deadline.
 +#[derive(Clone, Debug, Default)]
 +pub struct Gate {
 +	pending: bool,
 +	causes: u8,
 +	deadline: Option<Instant>,
++	wake: Wake,
++	/// A refused or missing writer. The timer stays disarmed until media arrives
++	/// or a cause schedules a strictly future instant.
++	parked: bool,
 +	last_sent: Option<Instant>,
 +	last_keyframe: Option<Instant>,
 +	/// How many sends were held because the writer was missing or refused.
@@ -545,21 +592,46 @@ index 00000000..a1c8e1f1
 +		Self { pli, ..Self::default() }
 +	}
 +
-+	pub fn note(&mut self, cause: Cause, when: Instant) {
++	/// Enabled video line. Arms the period immediately when the line can send PLI,
++	/// before any RTP. A line that did not negotiate PLI contributes no timer.
++	pub fn open(policy: &Keyframes, now: Instant, pli: bool) -> Self {
++		let mut gate = Self::new(pli);
++		if policy.enabled && pli {
++			gate.arm_period(policy, now);
++		}
++		gate
++	}
++
++	pub fn note(&mut self, cause: Cause, when: Instant, policy: &Keyframes) {
 +		self.pending = true;
 +		self.causes |= cause.bit();
-+		if self.deadline.is_none() {
-+			self.deadline = Some(when);
++		let at = self.earliest_send(policy, when);
++		// A cause whose send is strictly after `when` is the future re-arm that
++		// lifts a parked line. An immediate cause stays parked until media arrives.
++		if self.parked && at <= when {
++			return;
 +		}
++		self.parked = false;
++		self.schedule_send(policy, when);
++	}
++
++	/// Media arrived on a parked line. Schedule the held request, at the floor if one is still in force.
++	pub fn on_receiver(&mut self, policy: &Keyframes, now: Instant) {
++		if !(self.parked && self.pending && self.pli) {
++			return;
++		}
++		self.parked = false;
++		self.schedule_send(policy, now);
 +	}
 +
 +	/// A keyframe cancels the held request and starts the period from now.
 +	pub fn on_keyframe(&mut self, policy: &Keyframes, now: Instant) {
 +		self.pending = false;
 +		self.causes = 0;
++		self.parked = false;
 +		self.deadline = None;
 +		self.last_keyframe = Some(now);
-+		if policy.enabled {
++		if policy.enabled && self.pli {
 +			self.arm_period(policy, now);
 +		}
 +	}
@@ -572,16 +644,51 @@ index 00000000..a1c8e1f1
 +			(None, None) => now,
 +		};
 +		self.deadline = Some(base.saturating_add(policy.period));
++		self.wake = Wake::Period;
 +	}
 +
-+	/// The armed deadline, once. A past deadline is cleared so it is not returned again.
-+	pub fn take_deadline(&mut self, now: Instant) -> Option<Instant> {
-+		match self.deadline {
-+			Some(at) if now >= at => {
-+				self.deadline = None;
-+				Some(at)
++	fn earliest_send(&self, policy: &Keyframes, not_before: Instant) -> Instant {
++		match self.last_sent {
++			Some(sent) => not_before.max(sent.saturating_add(policy.floor)),
++			None => not_before,
++		}
++	}
++
++	/// Arm the soonest send that still respects the floor. Never replaces an earlier deadline.
++	fn schedule_send(&mut self, policy: &Keyframes, not_before: Instant) {
++		if !self.pli {
++			self.deadline = None;
++			return;
++		}
++		let at = self.earliest_send(policy, not_before);
++		let sooner = self.deadline.is_none_or(|existing| at < existing);
++		if sooner {
++			self.deadline = Some(at);
++			self.wake = Wake::Send;
++		}
++	}
++
++	/// The armed instant was reached. Period is recorded only when this wake is the period itself.
++	/// A floor-blocked request is rescheduled at the floor. A line without PLI is left disarmed.
++	pub fn on_timer(&mut self, policy: &Keyframes, now: Instant) {
++		let wake = self.wake;
++		self.deadline = None;
++		if !self.pli {
++			return;
++		}
++		if wake == Wake::Period {
++			self.pending = true;
++			self.causes |= Cause::Period.bit();
++		}
++		if self.parked || !self.pending {
++			return;
++		}
++		if let Some(sent) = self.last_sent {
++			let floor = sent.saturating_add(policy.floor);
++			if now < floor {
++				self.deadline = Some(floor);
++				self.wake = Wake::Send;
 +			}
-+			_ => None,
 +		}
 +	}
 +
@@ -613,9 +720,8 @@ index 00000000..a1c8e1f1
 +		let causes = self.causes;
 +		if !writer_accepted {
 +			self.held += 1;
-+			if self.deadline.is_some_and(|at| now >= at) {
-+				self.deadline = None;
-+			}
++			self.parked = true;
++			self.deadline = None;
 +			return Some(Send::Held { causes });
 +		}
 +		self.pending = false;
@@ -625,13 +731,6 @@ index 00000000..a1c8e1f1
 +		Some(Send::Sent { causes })
 +	}
 +
-+	/// A strictly future deadline from another cause re-arms a disarmed line.
-+	#[allow(dead_code)] // Used by the unit test. The non-test lib target does not see it.
-+	pub fn rearm(&mut self, at: Instant, now: Instant) {
-+		if at > now {
-+			self.deadline = Some(at);
-+		}
-+	}
 +}
 +
 +/// Earliest armed instant. A disarmed line contributes nothing.
@@ -642,20 +741,30 @@ index 00000000..a1c8e1f1
 +	times.into_iter().flatten().min()
 +}
 +
-+/// Join against the live demand. The first reading requests nothing.
++/// Join against live demand. The ratio itself is the track's payload-byte refresh.
++/// This watch only sees the group that demand already asked for, and the first
++/// reading is the baseline.
 +#[derive(Clone, Debug, Default)]
 +pub struct JoinWatch {
-+	seen: bool,
++	/// `None` until the first sample. The sample's wanted value is the baseline.
++	baseline: Option<Option<u64>>,
 +	fired_at: Option<u64>,
 +}
 +
 +impl JoinWatch {
 +	/// `wanted` is the group consumers want. `largest` is the largest written group, `None` when empty.
++	///
++	/// Fires when `wanted` changes past the baseline to a group strictly after `largest`.
++	/// An empty track's group 0 is not a join. The same sample never fires twice.
 +	pub fn observe(&mut self, policy: &Keyframes, wanted: Option<u64>, largest: Option<u64>) -> bool {
-+		if !self.seen {
-+			self.seen = true;
++		if self.baseline.is_none() {
++			self.baseline = Some(wanted);
 +			return false;
 +		}
++		if self.baseline == Some(wanted) {
++			return false;
++		}
++		self.baseline = Some(wanted);
 +		if !policy.enabled || !policy.on_join {
 +			return false;
 +		}
@@ -665,9 +774,10 @@ index 00000000..a1c8e1f1
 +		if largest.is_none() && wanted == 0 {
 +			return false;
 +		}
-+		let largest = largest.unwrap_or(0);
-+		let over = wanted > largest && wanted - largest >= u64::from(policy.ratio);
-+		if over && self.fired_at != Some(wanted) {
++		let Some(largest) = largest else {
++			return false;
++		};
++		if wanted > largest && self.fired_at != Some(wanted) {
 +			self.fired_at = Some(wanted);
 +			true
 +		} else {
@@ -714,9 +824,9 @@ index 00000000..a1c8e1f1
 +		let policy = Keyframes::trial();
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
-+		gate.note(Cause::Startup, t0);
++		gate.note(Cause::Startup, t0, &policy);
 +		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
-+		gate.note(Cause::Step, t0);
++		gate.note(Cause::Step, t0, &policy);
 +		assert!(gate.poll_send(&policy, t0, true).is_none(), "inside the floor");
 +		let later = t0.saturating_add(policy.floor);
 +		assert!(matches!(gate.poll_send(&policy, later, true), Some(Send::Sent { .. })));
@@ -728,7 +838,7 @@ index 00000000..a1c8e1f1
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
 +		for cause in [Cause::Startup, Cause::Step, Cause::Period, Cause::Loss, Cause::Join] {
-+			gate.note(cause, t0);
++			gate.note(cause, t0, &policy);
 +		}
 +		match gate.poll_send(&policy, t0, true) {
 +			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup", "step", "period", "loss", "join"]),
@@ -742,7 +852,7 @@ index 00000000..a1c8e1f1
 +		let policy = Keyframes::trial();
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
-+		gate.note(Cause::Startup, t0);
++		gate.note(Cause::Startup, t0, &policy);
 +		gate.on_keyframe(&policy, t0);
 +		assert!(gate.poll_send(&policy, t0, true).is_none());
 +	}
@@ -753,13 +863,12 @@ index 00000000..a1c8e1f1
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
 +		let sent_at = t0.saturating_add(Duration::from_secs(2));
-+		gate.note(Cause::Period, sent_at);
++		gate.note(Cause::Period, sent_at, &policy);
 +		assert!(matches!(gate.poll_send(&policy, sent_at, true), Some(Send::Sent { .. })));
 +		let deadline = gate.deadline().unwrap();
 +		assert_eq!(deadline, sent_at.saturating_add(Duration::from_secs(2)));
-+		assert!(gate.take_deadline(sent_at).is_none(), "not due yet");
-+		assert!(gate.take_deadline(deadline).is_some());
-+		assert!(gate.take_deadline(deadline).is_none(), "a past deadline is returned once");
++		gate.on_timer(&policy, deadline);
++		assert!(gate.deadline().is_none_or(|at| at > deadline), "the matured period is not armed again at the same instant");
 +	}
 +
 +	#[test]
@@ -767,7 +876,7 @@ index 00000000..a1c8e1f1
 +		let policy = Keyframes::trial();
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
-+		gate.note(Cause::Startup, t0);
++		gate.note(Cause::Startup, t0, &policy);
 +		assert!(matches!(gate.poll_send(&policy, t0, false), Some(Send::Held { .. })));
 +		assert_eq!(gate.held, 1);
 +		assert!(gate.last_sent.is_none());
@@ -778,28 +887,186 @@ index 00000000..a1c8e1f1
 +	fn a_line_without_pli_never_sends() {
 +		let policy = Keyframes::trial();
 +		let mut gate = Gate::new(false);
-+		gate.note(Cause::Startup, Instant::now());
++		gate.note(Cause::Startup, Instant::now(), &policy);
 +		assert!(gate.poll_send(&policy, Instant::now(), true).is_none());
 +	}
 +
 +	#[test]
-+	fn a_future_deadline_rearms() {
++	fn held_loss_is_scheduled_at_the_floor_not_the_period() {
++		let policy = Keyframes::trial();
 +		let mut gate = Gate::new(true);
-+		let now = Instant::now();
-+		gate.take_deadline(now);
-+		let later = now.saturating_add(Duration::from_secs(3));
-+		gate.rearm(later, now);
-+		assert_eq!(gate.deadline(), Some(later));
++		let t0 = Instant::now();
++		gate.note(Cause::Startup, t0, &policy);
++		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
++		let loss_at = t0.saturating_add(Duration::from_millis(300));
++		gate.note(Cause::Loss, loss_at, &policy);
++		let floor = t0.saturating_add(policy.floor);
++		assert_eq!(gate.deadline(), Some(floor));
++		assert!(floor > loss_at);
++		assert!(gate.deadline().is_some_and(|at| at == floor));
++		gate.on_timer(&policy, floor);
++		match gate.poll_send(&policy, floor, true) {
++			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["loss"]),
++			other => panic!("{other:?}"),
++		}
 +	}
 +
 +	#[test]
-+	fn the_first_join_reading_requests_nothing() {
++	fn a_period_shorter_than_the_floor_wakes_once_then_waits() {
++		let mut policy = Keyframes::trial();
++		policy.period = Duration::from_millis(100);
++		let t0 = Instant::now();
++		let mut gate = Gate::new(true);
++		gate.note(Cause::Startup, t0, &policy);
++		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
++		let early = t0.saturating_add(policy.period);
++		assert_eq!(gate.deadline(), Some(early));
++		gate.on_timer(&policy, early);
++		let floor = t0.saturating_add(policy.floor);
++		assert_eq!(gate.deadline(), Some(floor));
++		for _ in 0..100 {
++			assert!(gate.deadline().is_some_and(|at| early < at));
++			if gate.deadline().is_some_and(|at| early >= at) {
++				gate.on_timer(&policy, early);
++			}
++		}
++		gate.on_timer(&policy, floor);
++		match gate.poll_send(&policy, floor, true) {
++			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["period"]),
++			other => panic!("{other:?}"),
++		}
++	}
++
++	#[test]
++	fn a_line_without_pli_contributes_no_timer() {
++		let mut policy = Keyframes::trial();
++		policy.period = Duration::from_millis(100);
++		let t0 = Instant::now();
++		let mut gate = Gate::open(&policy, t0, false);
++		assert!(gate.deadline().is_none());
++		gate.on_keyframe(&policy, t0);
++		assert!(gate.deadline().is_none());
++		let later = t0.saturating_add(Duration::from_secs(10));
++		for _ in 0..100 {
++			if gate.deadline().is_some_and(|at| later >= at) {
++				gate.on_timer(&policy, later);
++			}
++			assert!(gate.deadline().is_none());
++		}
++	}
++
++	#[test]
++	fn silence_parks_a_missing_writer_until_media() {
++		let policy = Keyframes::trial();
++		let t0 = Instant::now();
++		let mut gate = Gate::open(&policy, t0, true);
++		let due = t0.saturating_add(policy.period);
++		assert_eq!(gate.deadline(), Some(due));
++		gate.on_timer(&policy, due);
++		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
++		assert!(gate.deadline().is_none(), "parked, so ten seconds of silence do not spin");
++		let later = due.saturating_add(Duration::from_secs(10));
++		assert!(gate.poll_send(&policy, later, true).is_some());
++		// The direct retry above is the caller asking again. The timer path stays quiet
++		// until a receiver or a future cause. Rebuild the parked state and wait for media.
++		let mut gate = Gate::open(&policy, t0, true);
++		gate.on_timer(&policy, due);
++		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
++		gate.on_receiver(&policy, later);
++		assert_eq!(gate.deadline(), Some(later));
++		gate.on_timer(&policy, later);
++		match gate.poll_send(&policy, later, true) {
++			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["period"]),
++			other => panic!("{other:?}"),
++		}
++	}
++
++	#[test]
++	fn the_first_join_reading_is_a_baseline() {
 +		let policy = Keyframes::trial();
 +		let mut watch = JoinWatch::default();
-+		assert!(!watch.observe(&policy, Some(8), Some(0)));
-+		assert!(watch.observe(&policy, Some(8), Some(0)), "the same demand, once it is a change past the first read");
-+		assert!(!watch.observe(&policy, Some(2), Some(0)), "under the ratio");
++		assert!(!watch.observe(&policy, None, None));
++		assert!(watch.observe(&policy, Some(1), Some(0)), "demand moved past the baseline to the next group");
++		assert!(!watch.observe(&policy, Some(1), Some(0)), "unchanged demand");
++		let mut high = JoinWatch::default();
++		assert!(!high.observe(&policy, Some(1), Some(0)), "the first reading, even when already eligible");
++		assert!(!high.observe(&policy, Some(1), Some(0)), "the same initial demand is not a change");
++		assert!(!watch.observe(&policy, Some(0), Some(0)), "not past the largest group");
 +		assert!(!watch.observe(&policy, Some(0), None), "an empty track's group 0");
++		let mut again = JoinWatch::default();
++		assert!(!again.observe(&policy, Some(1), Some(0)), "a rendition's first sample is its own baseline");
++	}
++
++	#[test]
++	fn a_real_track_join_past_ratio_four_asks_for_the_next_group_once() {
++		let broadcast = moq_net::broadcast::Info::new().produce();
++		let track = broadcast
++			.unique_track("v", moq_net::track::Info::default().with_refresh(Some(4)))
++			.unwrap();
++		let mut group = track.create_group(moq_net::group::Info { start: 1 }).unwrap();
++		group
++			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
++			.unwrap();
++		group
++			.write_frame(moq_net::Timestamp::unscaled(1), vec![0u8; 13])
++			.unwrap();
++		group.finish().unwrap();
++		let largest = track.largest().map(|position| position.group);
++		let demand = track.demand();
++		let policy = Keyframes::trial();
++		let mut watch = JoinWatch::default();
++		assert!(!watch.observe(&policy, demand.wanted(), largest));
++		let _subscriber = track.subscribe(None);
++		let wanted = demand.wanted();
++		assert_eq!(wanted, Some(largest.unwrap() + 1));
++		assert!(watch.observe(&policy, wanted, largest));
++		assert!(!watch.observe(&policy, demand.wanted(), largest));
++
++		let under = broadcast
++			.unique_track("u", moq_net::track::Info::default().with_refresh(Some(4)))
++			.unwrap();
++		let mut group = under.create_group(moq_net::group::Info { start: 1 }).unwrap();
++		group
++			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
++			.unwrap();
++		group.finish().unwrap();
++		let largest = under.largest().map(|position| position.group);
++		let mut watch = JoinWatch::default();
++		assert!(!watch.observe(&policy, under.demand().wanted(), largest));
++		let _subscriber = under.subscribe(None);
++		assert_eq!(under.demand().wanted(), Some(0));
++		assert!(!watch.observe(&policy, under.demand().wanted(), largest));
++	}
++
++	#[tokio::test]
++	async fn a_disarmed_timer_does_not_starve_the_peer_event() {
++		let mut policy = Keyframes::trial();
++		policy.period = Duration::from_millis(100);
++		let mut gate = Gate::open(&policy, Instant::now(), false);
++		let (tx, mut rx) = tokio::sync::mpsc::channel(1);
++		tx.try_send(()).unwrap();
++		let peer = tokio::time::timeout(Duration::from_secs(1), async {
++			tokio::select! {
++				biased;
++				_ = async {
++					loop {
++						match gate.deadline() {
++							Some(at) => {
++								kio::clock::sleep_until(at).await;
++								let now = Instant::now();
++								if gate.deadline().is_some_and(|due| now >= due) {
++									gate.on_timer(&policy, now);
++								}
++							}
++							None => std::future::pending::<()>().await,
++						}
++					}
++				} => panic!("the timer arm ended"),
++				_ = rx.recv() => {}
++			}
++		})
++		.await;
++		assert!(peer.is_ok(), "a line without PLI left the peer event unpolled");
 +	}
 +
 +	#[tokio::test(start_paused = true)]
@@ -818,9 +1085,9 @@ index 00000000..a1c8e1f1
 +		let mut gate = Gate::new(true);
 +		let t0 = Instant::now();
 +		if policy.on_loss {
-+			gate.note(Cause::Loss, t0);
++			gate.note(Cause::Loss, t0, &policy);
 +		}
-+		gate.note(Cause::Startup, t0);
++		gate.note(Cause::Startup, t0, &policy);
 +		match gate.poll_send(&policy, t0, true) {
 +			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup"]),
 +			other => panic!("{other:?}"),
@@ -828,7 +1095,7 @@ index 00000000..a1c8e1f1
 +	}
 +}
 diff --git a/src/lib.rs b/src/lib.rs
-index 58dddccf..0b09b737 100644
+index 58dddcc..0b09b73 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -1,6 +1,10 @@
@@ -851,7 +1118,7 @@ index 58dddccf..0b09b737 100644
  mod session;
  
 diff --git a/src/server/whip.rs b/src/server/whip.rs
-index 39cda0b2..9a444e38 100644
+index 39cda0b..9a444e3 100644
 --- a/src/server/whip.rs
 +++ b/src/server/whip.rs
 @@ -1,3 +1,4 @@
@@ -918,7 +1185,7 @@ index 39cda0b2..9a444e38 100644
  		Error::Moq(moq_net::Error::Unauthorized) => StatusCode::UNAUTHORIZED,
  		_ => StatusCode::INTERNAL_SERVER_ERROR,
 diff --git a/src/session.rs b/src/session.rs
-index af0e9816..f4788392 100644
+index af0e981..144b0e0 100644
 --- a/src/session.rs
 +++ b/src/session.rs
 @@ -1,3 +1,4 @@
@@ -926,7 +1193,7 @@ index af0e9816..f4788392 100644
  //! str0m session driver shared by every HTTP role / media direction.
  //!
  //! [`crate::ice::Agent`] drives the sans-IO [`str0m::Rtc`] over UDP;
-@@ -64,6 +65,11 @@ pub trait MediaSink: Send {
+@@ -64,6 +65,16 @@ pub trait MediaSink: Send {
  	/// `Error::Dropped`.
  	fn abort(&mut self, err: moq_net::Error);
  
@@ -935,10 +1202,15 @@ index af0e9816..f4788392 100644
 +		Vec::new()
 +	}
 +
++	/// A clone of one video line's demand, when the sink publishes one.
++	fn demand(&mut self, _mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
++		None
++	}
++
  	/// Called once when the peer ends the session cleanly after its final media: finish
  	/// every track and return the broadcast. The finished tracks stay servable while the sink
  	/// is held.
-@@ -122,6 +128,10 @@ pub struct Session {
+@@ -122,12 +133,20 @@ pub struct Session {
  	rate: Option<IngestRate>,
  	/// Which ingested frames may reach the sink. Unused by egress sessions.
  	ingest_order: IngestOrder,
@@ -946,26 +1218,48 @@ index af0e9816..f4788392 100644
 +	keyframes: Option<crate::keyframe::Keyframes>,
 +	gates: HashMap<str0m::media::Mid, crate::keyframe::Gate>,
 +	joins: HashMap<str0m::media::Mid, crate::keyframe::JoinWatch>,
++	/// Join demand, watched outside the select so a change wakes this loop.
++	demand_tx: mpsc::UnboundedSender<()>,
++	demand_rx: mpsc::UnboundedReceiver<()>,
  }
  
  impl Session {
-@@ -138,6 +148,9 @@ impl Session {
+ 	/// Convenience for the ingest case (WHIP server, WHEP client). The socket's
+ 	/// `inbound` comes from the server mux, or [`crate::ice::reader`] for a 1:1 client socket.
+ 	pub fn ingest(rtc: Rtc, socket: crate::ice::Socket, sink: Box<dyn MediaSink>) -> Result<Self> {
++		let (demand_tx, demand_rx) = mpsc::unbounded_channel();
+ 		Ok(Self {
+ 			agent: crate::ice::Agent::new(rtc, socket)?,
+ 			role: MediaRole::Ingest(sink),
+@@ -138,6 +157,11 @@ impl Session {
  			egress_clock: EgressClock::default(),
  			rate: None,
  			ingest_order: IngestOrder::default(),
 +			keyframes: None,
 +			gates: HashMap::new(),
 +			joins: HashMap::new(),
++			demand_tx,
++			demand_rx,
  		})
  	}
  
-@@ -156,9 +169,18 @@ impl Session {
+@@ -146,6 +170,7 @@ impl Session {
+ 	pub fn egress(rtc: Rtc, socket: crate::ice::Socket, mut source: EgressSource) -> Result<Self> {
+ 		let writes_rx = source.take_writes();
+ 		let catalog_end = source.take_catalog_end();
++		let (demand_tx, demand_rx) = mpsc::unbounded_channel();
+ 		Ok(Self {
+ 			agent: crate::ice::Agent::new(rtc, socket)?,
+ 			role: MediaRole::Egress(Box::new(source)),
+@@ -156,9 +181,20 @@ impl Session {
  			egress_clock: EgressClock::default(),
  			rate: None,
  			ingest_order: IngestOrder::default(),
 +			keyframes: None,
 +			gates: HashMap::new(),
 +			joins: HashMap::new(),
++			demand_tx,
++			demand_rx,
  		})
  	}
  
@@ -978,7 +1272,7 @@ index af0e9816..f4788392 100644
  	/// Meter an ingest against `limit`'s cap, following its updates, and steer the
  	/// publisher under it with REMB on every video line that negotiated it.
  	pub(crate) fn with_rate(mut self, mut limit: moq_net::bandwidth::Limit) -> Self {
-@@ -211,6 +233,7 @@ impl Session {
+@@ -211,6 +247,7 @@ impl Session {
  	async fn run_loop(&mut self) -> Result<()> {
  		loop {
  			let remb_at = self.rate.as_ref().and_then(IngestRate::remb_at);
@@ -986,7 +1280,7 @@ index af0e9816..f4788392 100644
  			tokio::select! {
  				// Egress writes get drained promptly; `Agent::next` is cancel safe.
  				biased;
-@@ -256,11 +279,17 @@ impl Session {
+@@ -256,11 +293,23 @@ impl Session {
  				}
  
  				_ = async {
@@ -1003,10 +1297,16 @@ index af0e9816..f4788392 100644
 +					}
 +					self.fire_gates();
 +				}
++
++				Some(()) = self.demand_rx.recv() => {
++					if let Some(policy) = self.keyframes {
++						self.observe_joins(policy);
++					}
++				}
  
  				event = self.agent.next() => match event {
  					Ok(event) => self.handle_event(event)?,
-@@ -279,6 +308,10 @@ impl Session {
+@@ -279,6 +328,10 @@ impl Session {
  			}
  			Event::MediaAdded(added) => self.handle_media(added.mid)?,
  			Event::MediaData(data) => {
@@ -1017,18 +1317,41 @@ index af0e9816..f4788392 100644
  				// `ingest_clock` and `role` are disjoint fields, so the borrow checker lets
  				// us rebase the (random, per-track) RTP base and feed the sink in one
  				// block; egress sessions never get here so the clock stays untouched.
-@@ -395,6 +428,10 @@ impl Session {
+@@ -395,6 +448,33 @@ impl Session {
  				let video = kind == str0m::media::MediaKind::Video;
  				let pli = negotiated.iter().any(|params| params.fb_pli());
  				self.ingest_order.open(mid, video, pli, Instant::now());
-+				if video && self.keyframes.is_some() {
-+					self.gates.insert(mid, crate::keyframe::Gate::new(pli));
++				if video && let Some(policy) = self.keyframes {
++					self.gates.insert(mid, crate::keyframe::Gate::open(&policy, Instant::now(), pli));
 +					self.joins.insert(mid, crate::keyframe::JoinWatch::default());
++					if let MediaRole::Ingest(sink) = &mut self.role
++						&& let Some(demand) = sink.demand(mid)
++					{
++						let tx = self.demand_tx.clone();
++						tokio::spawn(async move {
++							let mut demand = demand;
++							let mut waiter = None;
++							loop {
++								let step = std::future::poll_fn(|cx| {
++									waiter.get_or_insert_with(|| kio::Waiter::new(cx.waker().clone()));
++									match demand.poll_wanted_changed(waiter.as_ref().expect("waiter")) {
++										std::task::Poll::Ready(Ok(_)) => std::task::Poll::Ready(true),
++										std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(false),
++										std::task::Poll::Pending => std::task::Poll::Pending,
++									}
++								})
++								.await;
++								if !step || tx.send(()).is_err() {
++									break;
++								}
++							}
++						});
++					}
 +				}
  				// REMB only where the publisher negotiated it; str0m offers it on video alone.
  				if let Some(rate) = &mut self.rate
  					&& negotiated.iter().any(|params| params.fb_remb())
-@@ -419,6 +456,135 @@ impl Session {
+@@ -419,6 +499,142 @@ impl Session {
  		Ok(())
  	}
  
@@ -1043,15 +1366,19 @@ index af0e9816..f4788392 100644
 +		let now = Instant::now();
 +		let mids: Vec<_> = self.gates.keys().copied().collect();
 +		for mid in mids {
-+			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
-+			if due.is_some()
-+				&& let Some(gate) = self.gates.get_mut(&mid)
-+			{
-+				gate.note(crate::keyframe::Cause::Period, now);
++			let due = self
++				.gates
++				.get(&mid)
++				.and_then(|gate| gate.deadline())
++				.is_some_and(|at| now >= at);
++			if !due {
++				continue;
++			}
++			if let Some(gate) = self.gates.get_mut(&mid) {
++				gate.on_timer(&policy, now);
 +			}
 +			self.flush_gate(policy, mid, None);
 +		}
-+		self.observe_joins(policy);
 +	}
 +
 +	fn observe_joins(&mut self, policy: crate::keyframe::Keyframes) {
@@ -1067,7 +1394,7 @@ index af0e9816..f4788392 100644
 +				.observe(&policy, wanted, largest);
 +			if request {
 +				if let Some(gate) = self.gates.get_mut(&mid) {
-+					gate.note(crate::keyframe::Cause::Join, Instant::now());
++					gate.note(crate::keyframe::Cause::Join, Instant::now(), &policy);
 +				}
 +				self.flush_gate(policy, mid, None);
 +			}
@@ -1115,6 +1442,9 @@ index af0e9816..f4788392 100644
 +		let now = Instant::now();
 +		let media_us = media_time_to_micros(&data.time);
 +		let keyframe = data.is_keyframe();
++		if let Some(gate) = self.gates.get_mut(&data.mid) {
++			gate.on_receiver(&policy, now);
++		}
 +		if keyframe
 +			&& let Some(gate) = self.gates.get_mut(&data.mid)
 +		{
@@ -1123,7 +1453,7 @@ index af0e9816..f4788392 100644
 +		if policy.on_loss && !data.contiguous && !keyframe
 +			&& let Some(gate) = self.gates.get_mut(&data.mid)
 +		{
-+			gate.note(crate::keyframe::Cause::Loss, now);
++			gate.note(crate::keyframe::Cause::Loss, now, &policy);
 +		}
 +		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
 +		match decision {
@@ -1134,7 +1464,7 @@ index af0e9816..f4788392 100644
 +			}
 +			Admit::Request => {
 +				if let Some(gate) = self.gates.get_mut(&data.mid) {
-+					gate.note(crate::keyframe::Cause::Startup, now);
++					gate.note(crate::keyframe::Cause::Startup, now, &policy);
 +				}
 +				self.flush_gate(policy, data.mid, data.rid);
 +				return Ok(());
@@ -1145,7 +1475,7 @@ index af0e9816..f4788392 100644
 +		if mapped.deferred
 +			&& let Some(gate) = self.gates.get_mut(&data.mid)
 +		{
-+			gate.note(crate::keyframe::Cause::Step, now);
++			gate.note(crate::keyframe::Cause::Step, now, &policy);
 +		}
 +		let stepped = mapped.stepped;
 +		let timestamp_us = mapped.timestamp_us;
@@ -1164,7 +1494,7 @@ index af0e9816..f4788392 100644
  	/// Ask the publisher for at most the steered rate on every video line that negotiated
  	/// REMB, and schedule the next repeat.
  	fn send_remb(&mut self) {
-@@ -471,6 +637,21 @@ impl IngestRate {
+@@ -471,6 +687,21 @@ impl IngestRate {
  }
  
  /// Ask the publisher of `mid` for a keyframe with PLI.
@@ -1186,7 +1516,7 @@ index af0e9816..f4788392 100644
  fn request_keyframe(
  	agent: &mut crate::ice::Agent,
  	mid: str0m::media::Mid,
-@@ -808,7 +989,14 @@ impl Bridges {
+@@ -808,7 +1039,18 @@ impl Bridges {
  		Ok(())
  	}
  
@@ -1197,6 +1527,10 @@ index af0e9816..f4788392 100644
 +			.iter()
 +			.filter_map(|(&mid, bridge)| bridge.join_sample().map(|(wanted, largest)| (mid, wanted, largest)))
 +			.collect()
++	}
++
++	pub fn demand(&mut self, mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
++		self.inner.get(&mid).and_then(|bridge| bridge.demand())
 +	}
 +
  	pub fn discontinuity(&mut self, mid: str0m::media::Mid) -> Result<()> {

@@ -117,6 +117,10 @@ impl session::MediaSink for IngestSink {
 		self.bridges.join_samples()
 	}
 
+	fn demand(&mut self, mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
+		self.bridges.demand(mid)
+	}
+
 	fn abort(&mut self, err: moq_net::Error) {
 		self.catalog.clone().abort(err.clone());
 		self.bridges.abort(err);

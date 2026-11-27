@@ -51,6 +51,10 @@ impl codec::Bridge for Bridge {
 	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 		Some(self.import.join_sample())
 	}
+
+	fn demand(&self) -> Option<moq_net::track::Demand> {
+		Some(self.import.demand())
+	}
 }
 
 #[cfg(test)]

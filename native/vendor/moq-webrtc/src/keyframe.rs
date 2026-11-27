@@ -76,12 +76,25 @@ impl Cause {
 	}
 }
 
+/// Why the one armed deadline exists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Wake {
+	#[default]
+	Period,
+	/// A held request becomes sendable at the floor boundary.
+	Send,
+}
+
 /// One held request: a bit, a cause mask, and one deadline.
 #[derive(Clone, Debug, Default)]
 pub struct Gate {
 	pending: bool,
 	causes: u8,
 	deadline: Option<Instant>,
+	wake: Wake,
+	/// A refused or missing writer. The timer stays disarmed until media arrives
+	/// or a cause schedules a strictly future instant.
+	parked: bool,
 	last_sent: Option<Instant>,
 	last_keyframe: Option<Instant>,
 	/// How many sends were held because the writer was missing or refused.
@@ -103,21 +116,46 @@ impl Gate {
 		Self { pli, ..Self::default() }
 	}
 
-	pub fn note(&mut self, cause: Cause, when: Instant) {
+	/// Enabled video line. Arms the period immediately when the line can send PLI,
+	/// before any RTP. A line that did not negotiate PLI contributes no timer.
+	pub fn open(policy: &Keyframes, now: Instant, pli: bool) -> Self {
+		let mut gate = Self::new(pli);
+		if policy.enabled && pli {
+			gate.arm_period(policy, now);
+		}
+		gate
+	}
+
+	pub fn note(&mut self, cause: Cause, when: Instant, policy: &Keyframes) {
 		self.pending = true;
 		self.causes |= cause.bit();
-		if self.deadline.is_none() {
-			self.deadline = Some(when);
+		let at = self.earliest_send(policy, when);
+		// A cause whose send is strictly after `when` is the future re-arm that
+		// lifts a parked line. An immediate cause stays parked until media arrives.
+		if self.parked && at <= when {
+			return;
 		}
+		self.parked = false;
+		self.schedule_send(policy, when);
+	}
+
+	/// Media arrived on a parked line. Schedule the held request, at the floor if one is still in force.
+	pub fn on_receiver(&mut self, policy: &Keyframes, now: Instant) {
+		if !(self.parked && self.pending && self.pli) {
+			return;
+		}
+		self.parked = false;
+		self.schedule_send(policy, now);
 	}
 
 	/// A keyframe cancels the held request and starts the period from now.
 	pub fn on_keyframe(&mut self, policy: &Keyframes, now: Instant) {
 		self.pending = false;
 		self.causes = 0;
+		self.parked = false;
 		self.deadline = None;
 		self.last_keyframe = Some(now);
-		if policy.enabled {
+		if policy.enabled && self.pli {
 			self.arm_period(policy, now);
 		}
 	}
@@ -130,16 +168,51 @@ impl Gate {
 			(None, None) => now,
 		};
 		self.deadline = Some(base.saturating_add(policy.period));
+		self.wake = Wake::Period;
 	}
 
-	/// The armed deadline, once. A past deadline is cleared so it is not returned again.
-	pub fn take_deadline(&mut self, now: Instant) -> Option<Instant> {
-		match self.deadline {
-			Some(at) if now >= at => {
-				self.deadline = None;
-				Some(at)
+	fn earliest_send(&self, policy: &Keyframes, not_before: Instant) -> Instant {
+		match self.last_sent {
+			Some(sent) => not_before.max(sent.saturating_add(policy.floor)),
+			None => not_before,
+		}
+	}
+
+	/// Arm the soonest send that still respects the floor. Never replaces an earlier deadline.
+	fn schedule_send(&mut self, policy: &Keyframes, not_before: Instant) {
+		if !self.pli {
+			self.deadline = None;
+			return;
+		}
+		let at = self.earliest_send(policy, not_before);
+		let sooner = self.deadline.is_none_or(|existing| at < existing);
+		if sooner {
+			self.deadline = Some(at);
+			self.wake = Wake::Send;
+		}
+	}
+
+	/// The armed instant was reached. Period is recorded only when this wake is the period itself.
+	/// A floor-blocked request is rescheduled at the floor. A line without PLI is left disarmed.
+	pub fn on_timer(&mut self, policy: &Keyframes, now: Instant) {
+		let wake = self.wake;
+		self.deadline = None;
+		if !self.pli {
+			return;
+		}
+		if wake == Wake::Period {
+			self.pending = true;
+			self.causes |= Cause::Period.bit();
+		}
+		if self.parked || !self.pending {
+			return;
+		}
+		if let Some(sent) = self.last_sent {
+			let floor = sent.saturating_add(policy.floor);
+			if now < floor {
+				self.deadline = Some(floor);
+				self.wake = Wake::Send;
 			}
-			_ => None,
 		}
 	}
 
@@ -171,9 +244,8 @@ impl Gate {
 		let causes = self.causes;
 		if !writer_accepted {
 			self.held += 1;
-			if self.deadline.is_some_and(|at| now >= at) {
-				self.deadline = None;
-			}
+			self.parked = true;
+			self.deadline = None;
 			return Some(Send::Held { causes });
 		}
 		self.pending = false;
@@ -183,13 +255,6 @@ impl Gate {
 		Some(Send::Sent { causes })
 	}
 
-	/// A strictly future deadline from another cause re-arms a disarmed line.
-	#[allow(dead_code)] // Used by the unit test. The non-test lib target does not see it.
-	pub fn rearm(&mut self, at: Instant, now: Instant) {
-		if at > now {
-			self.deadline = Some(at);
-		}
-	}
 }
 
 /// Earliest armed instant. A disarmed line contributes nothing.
@@ -200,20 +265,30 @@ where
 	times.into_iter().flatten().min()
 }
 
-/// Join against the live demand. The first reading requests nothing.
+/// Join against live demand. The ratio itself is the track's payload-byte refresh.
+/// This watch only sees the group that demand already asked for, and the first
+/// reading is the baseline.
 #[derive(Clone, Debug, Default)]
 pub struct JoinWatch {
-	seen: bool,
+	/// `None` until the first sample. The sample's wanted value is the baseline.
+	baseline: Option<Option<u64>>,
 	fired_at: Option<u64>,
 }
 
 impl JoinWatch {
 	/// `wanted` is the group consumers want. `largest` is the largest written group, `None` when empty.
+	///
+	/// Fires when `wanted` changes past the baseline to a group strictly after `largest`.
+	/// An empty track's group 0 is not a join. The same sample never fires twice.
 	pub fn observe(&mut self, policy: &Keyframes, wanted: Option<u64>, largest: Option<u64>) -> bool {
-		if !self.seen {
-			self.seen = true;
+		if self.baseline.is_none() {
+			self.baseline = Some(wanted);
 			return false;
 		}
+		if self.baseline == Some(wanted) {
+			return false;
+		}
+		self.baseline = Some(wanted);
 		if !policy.enabled || !policy.on_join {
 			return false;
 		}
@@ -223,9 +298,10 @@ impl JoinWatch {
 		if largest.is_none() && wanted == 0 {
 			return false;
 		}
-		let largest = largest.unwrap_or(0);
-		let over = wanted > largest && wanted - largest >= u64::from(policy.ratio);
-		if over && self.fired_at != Some(wanted) {
+		let Some(largest) = largest else {
+			return false;
+		};
+		if wanted > largest && self.fired_at != Some(wanted) {
 			self.fired_at = Some(wanted);
 			true
 		} else {
@@ -272,9 +348,9 @@ mod tests {
 		let policy = Keyframes::trial();
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
-		gate.note(Cause::Startup, t0);
+		gate.note(Cause::Startup, t0, &policy);
 		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
-		gate.note(Cause::Step, t0);
+		gate.note(Cause::Step, t0, &policy);
 		assert!(gate.poll_send(&policy, t0, true).is_none(), "inside the floor");
 		let later = t0.saturating_add(policy.floor);
 		assert!(matches!(gate.poll_send(&policy, later, true), Some(Send::Sent { .. })));
@@ -286,7 +362,7 @@ mod tests {
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
 		for cause in [Cause::Startup, Cause::Step, Cause::Period, Cause::Loss, Cause::Join] {
-			gate.note(cause, t0);
+			gate.note(cause, t0, &policy);
 		}
 		match gate.poll_send(&policy, t0, true) {
 			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup", "step", "period", "loss", "join"]),
@@ -300,7 +376,7 @@ mod tests {
 		let policy = Keyframes::trial();
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
-		gate.note(Cause::Startup, t0);
+		gate.note(Cause::Startup, t0, &policy);
 		gate.on_keyframe(&policy, t0);
 		assert!(gate.poll_send(&policy, t0, true).is_none());
 	}
@@ -311,13 +387,12 @@ mod tests {
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
 		let sent_at = t0.saturating_add(Duration::from_secs(2));
-		gate.note(Cause::Period, sent_at);
+		gate.note(Cause::Period, sent_at, &policy);
 		assert!(matches!(gate.poll_send(&policy, sent_at, true), Some(Send::Sent { .. })));
 		let deadline = gate.deadline().unwrap();
 		assert_eq!(deadline, sent_at.saturating_add(Duration::from_secs(2)));
-		assert!(gate.take_deadline(sent_at).is_none(), "not due yet");
-		assert!(gate.take_deadline(deadline).is_some());
-		assert!(gate.take_deadline(deadline).is_none(), "a past deadline is returned once");
+		gate.on_timer(&policy, deadline);
+		assert!(gate.deadline().is_none_or(|at| at > deadline), "the matured period is not armed again at the same instant");
 	}
 
 	#[test]
@@ -325,7 +400,7 @@ mod tests {
 		let policy = Keyframes::trial();
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
-		gate.note(Cause::Startup, t0);
+		gate.note(Cause::Startup, t0, &policy);
 		assert!(matches!(gate.poll_send(&policy, t0, false), Some(Send::Held { .. })));
 		assert_eq!(gate.held, 1);
 		assert!(gate.last_sent.is_none());
@@ -336,28 +411,186 @@ mod tests {
 	fn a_line_without_pli_never_sends() {
 		let policy = Keyframes::trial();
 		let mut gate = Gate::new(false);
-		gate.note(Cause::Startup, Instant::now());
+		gate.note(Cause::Startup, Instant::now(), &policy);
 		assert!(gate.poll_send(&policy, Instant::now(), true).is_none());
 	}
 
 	#[test]
-	fn a_future_deadline_rearms() {
+	fn held_loss_is_scheduled_at_the_floor_not_the_period() {
+		let policy = Keyframes::trial();
 		let mut gate = Gate::new(true);
-		let now = Instant::now();
-		gate.take_deadline(now);
-		let later = now.saturating_add(Duration::from_secs(3));
-		gate.rearm(later, now);
-		assert_eq!(gate.deadline(), Some(later));
+		let t0 = Instant::now();
+		gate.note(Cause::Startup, t0, &policy);
+		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
+		let loss_at = t0.saturating_add(Duration::from_millis(300));
+		gate.note(Cause::Loss, loss_at, &policy);
+		let floor = t0.saturating_add(policy.floor);
+		assert_eq!(gate.deadline(), Some(floor));
+		assert!(floor > loss_at);
+		assert!(gate.deadline().is_some_and(|at| at == floor));
+		gate.on_timer(&policy, floor);
+		match gate.poll_send(&policy, floor, true) {
+			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["loss"]),
+			other => panic!("{other:?}"),
+		}
 	}
 
 	#[test]
-	fn the_first_join_reading_requests_nothing() {
+	fn a_period_shorter_than_the_floor_wakes_once_then_waits() {
+		let mut policy = Keyframes::trial();
+		policy.period = Duration::from_millis(100);
+		let t0 = Instant::now();
+		let mut gate = Gate::new(true);
+		gate.note(Cause::Startup, t0, &policy);
+		assert!(matches!(gate.poll_send(&policy, t0, true), Some(Send::Sent { .. })));
+		let early = t0.saturating_add(policy.period);
+		assert_eq!(gate.deadline(), Some(early));
+		gate.on_timer(&policy, early);
+		let floor = t0.saturating_add(policy.floor);
+		assert_eq!(gate.deadline(), Some(floor));
+		for _ in 0..100 {
+			assert!(gate.deadline().is_some_and(|at| early < at));
+			if gate.deadline().is_some_and(|at| early >= at) {
+				gate.on_timer(&policy, early);
+			}
+		}
+		gate.on_timer(&policy, floor);
+		match gate.poll_send(&policy, floor, true) {
+			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["period"]),
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn a_line_without_pli_contributes_no_timer() {
+		let mut policy = Keyframes::trial();
+		policy.period = Duration::from_millis(100);
+		let t0 = Instant::now();
+		let mut gate = Gate::open(&policy, t0, false);
+		assert!(gate.deadline().is_none());
+		gate.on_keyframe(&policy, t0);
+		assert!(gate.deadline().is_none());
+		let later = t0.saturating_add(Duration::from_secs(10));
+		for _ in 0..100 {
+			if gate.deadline().is_some_and(|at| later >= at) {
+				gate.on_timer(&policy, later);
+			}
+			assert!(gate.deadline().is_none());
+		}
+	}
+
+	#[test]
+	fn silence_parks_a_missing_writer_until_media() {
+		let policy = Keyframes::trial();
+		let t0 = Instant::now();
+		let mut gate = Gate::open(&policy, t0, true);
+		let due = t0.saturating_add(policy.period);
+		assert_eq!(gate.deadline(), Some(due));
+		gate.on_timer(&policy, due);
+		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
+		assert!(gate.deadline().is_none(), "parked, so ten seconds of silence do not spin");
+		let later = due.saturating_add(Duration::from_secs(10));
+		assert!(gate.poll_send(&policy, later, true).is_some());
+		// The direct retry above is the caller asking again. The timer path stays quiet
+		// until a receiver or a future cause. Rebuild the parked state and wait for media.
+		let mut gate = Gate::open(&policy, t0, true);
+		gate.on_timer(&policy, due);
+		assert!(matches!(gate.poll_send(&policy, due, false), Some(Send::Held { .. })));
+		gate.on_receiver(&policy, later);
+		assert_eq!(gate.deadline(), Some(later));
+		gate.on_timer(&policy, later);
+		match gate.poll_send(&policy, later, true) {
+			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["period"]),
+			other => panic!("{other:?}"),
+		}
+	}
+
+	#[test]
+	fn the_first_join_reading_is_a_baseline() {
 		let policy = Keyframes::trial();
 		let mut watch = JoinWatch::default();
-		assert!(!watch.observe(&policy, Some(8), Some(0)));
-		assert!(watch.observe(&policy, Some(8), Some(0)), "the same demand, once it is a change past the first read");
-		assert!(!watch.observe(&policy, Some(2), Some(0)), "under the ratio");
+		assert!(!watch.observe(&policy, None, None));
+		assert!(watch.observe(&policy, Some(1), Some(0)), "demand moved past the baseline to the next group");
+		assert!(!watch.observe(&policy, Some(1), Some(0)), "unchanged demand");
+		let mut high = JoinWatch::default();
+		assert!(!high.observe(&policy, Some(1), Some(0)), "the first reading, even when already eligible");
+		assert!(!high.observe(&policy, Some(1), Some(0)), "the same initial demand is not a change");
+		assert!(!watch.observe(&policy, Some(0), Some(0)), "not past the largest group");
 		assert!(!watch.observe(&policy, Some(0), None), "an empty track's group 0");
+		let mut again = JoinWatch::default();
+		assert!(!again.observe(&policy, Some(1), Some(0)), "a rendition's first sample is its own baseline");
+	}
+
+	#[test]
+	fn a_real_track_join_past_ratio_four_asks_for_the_next_group_once() {
+		let broadcast = moq_net::broadcast::Info::new().produce();
+		let track = broadcast
+			.unique_track("v", moq_net::track::Info::default().with_refresh(Some(4)))
+			.unwrap();
+		let mut group = track.create_group(moq_net::group::Info { start: 1 }).unwrap();
+		group
+			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
+			.unwrap();
+		group
+			.write_frame(moq_net::Timestamp::unscaled(1), vec![0u8; 13])
+			.unwrap();
+		group.finish().unwrap();
+		let largest = track.largest().map(|position| position.group);
+		let demand = track.demand();
+		let policy = Keyframes::trial();
+		let mut watch = JoinWatch::default();
+		assert!(!watch.observe(&policy, demand.wanted(), largest));
+		let _subscriber = track.subscribe(None);
+		let wanted = demand.wanted();
+		assert_eq!(wanted, Some(largest.unwrap() + 1));
+		assert!(watch.observe(&policy, wanted, largest));
+		assert!(!watch.observe(&policy, demand.wanted(), largest));
+
+		let under = broadcast
+			.unique_track("u", moq_net::track::Info::default().with_refresh(Some(4)))
+			.unwrap();
+		let mut group = under.create_group(moq_net::group::Info { start: 1 }).unwrap();
+		group
+			.write_frame(moq_net::Timestamp::unscaled(1), &b"key"[..])
+			.unwrap();
+		group.finish().unwrap();
+		let largest = under.largest().map(|position| position.group);
+		let mut watch = JoinWatch::default();
+		assert!(!watch.observe(&policy, under.demand().wanted(), largest));
+		let _subscriber = under.subscribe(None);
+		assert_eq!(under.demand().wanted(), Some(0));
+		assert!(!watch.observe(&policy, under.demand().wanted(), largest));
+	}
+
+	#[tokio::test]
+	async fn a_disarmed_timer_does_not_starve_the_peer_event() {
+		let mut policy = Keyframes::trial();
+		policy.period = Duration::from_millis(100);
+		let mut gate = Gate::open(&policy, Instant::now(), false);
+		let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+		tx.try_send(()).unwrap();
+		let peer = tokio::time::timeout(Duration::from_secs(1), async {
+			tokio::select! {
+				biased;
+				_ = async {
+					loop {
+						match gate.deadline() {
+							Some(at) => {
+								kio::clock::sleep_until(at).await;
+								let now = Instant::now();
+								if gate.deadline().is_some_and(|due| now >= due) {
+									gate.on_timer(&policy, now);
+								}
+							}
+							None => std::future::pending::<()>().await,
+						}
+					}
+				} => panic!("the timer arm ended"),
+				_ = rx.recv() => {}
+			}
+		})
+		.await;
+		assert!(peer.is_ok(), "a line without PLI left the peer event unpolled");
 	}
 
 	#[tokio::test(start_paused = true)]
@@ -376,9 +609,9 @@ mod tests {
 		let mut gate = Gate::new(true);
 		let t0 = Instant::now();
 		if policy.on_loss {
-			gate.note(Cause::Loss, t0);
+			gate.note(Cause::Loss, t0, &policy);
 		}
-		gate.note(Cause::Startup, t0);
+		gate.note(Cause::Startup, t0, &policy);
 		match gate.poll_send(&policy, t0, true) {
 			Some(Send::Sent { causes }) => assert_eq!(cause_names(causes), ["startup"]),
 			other => panic!("{other:?}"),

@@ -63,6 +63,11 @@ pub trait Bridge: Send {
 	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 		None
 	}
+
+	/// A clone of the video track's demand, when this bridge has one.
+	fn demand(&self) -> Option<moq_net::track::Demand> {
+		None
+	}
 }
 
 /// A bridge's finished track, held so a finished broadcast keeps serving it.
@@ -184,6 +189,10 @@ impl<I: DeferredImport> DeferredVideo<I> {
 	pub fn join_sample(&self) -> (Option<u64>, Option<u64>) {
 		let largest = self.track.largest().map(|position| position.group);
 		(self.demand.wanted(), largest)
+	}
+
+	pub fn demand(&self) -> moq_net::track::Demand {
+		self.demand.clone()
 	}
 
 	/// Decode a frame, creating the importer on first use.

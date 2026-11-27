@@ -1,0 +1,18 @@
+R1–R4 scheduler fix, Mac rustc, 2026-11-26.
+
+Framework (192.168.0.108 and 100.121.90.25) timed out on SSH before this build.
+No second Cargo job was started there. The reviewer's /tmp/kf-after run had
+already died with the host. This suite is the Mac lib suite, not that run.
+
+cargo test --offline --lib on native/vendor/moq-webrtc: 115 passed, 0 failed.
+That is the previous 99 upstream tests plus the gate tests, including:
+- held loss at 300ms is scheduled at the 1s floor, and the send is cause loss
+- a 100ms period wakes once, then waits until the floor, cause period
+- a line without PLI arms no timer, and a biased select still reads the peer event
+- ten seconds after a refused writer stays disarmed until on_receiver
+- join uses wanted > largest after a real ratio-4 track (key plus 13 byte delta)
+- the first demand sample is a baseline; the same sample does not fire again
+
+K2: vendored moq-webrtc matches pin 4a6f52248.
+Adoption is not claimed. A/B/C/D2/E/F were not re-measured: the host is down,
+and the previous after row stays partial. Loss was not relabeled from period.

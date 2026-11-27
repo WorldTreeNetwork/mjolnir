@@ -70,6 +70,11 @@ pub trait MediaSink: Send {
 		Vec::new()
 	}
 
+	/// A clone of one video line's demand, when the sink publishes one.
+	fn demand(&mut self, _mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
+		None
+	}
+
 	/// Called once when the peer ends the session cleanly after its final media: finish
 	/// every track and return the broadcast. The finished tracks stay servable while the sink
 	/// is held.
@@ -132,12 +137,16 @@ pub struct Session {
 	keyframes: Option<crate::keyframe::Keyframes>,
 	gates: HashMap<str0m::media::Mid, crate::keyframe::Gate>,
 	joins: HashMap<str0m::media::Mid, crate::keyframe::JoinWatch>,
+	/// Join demand, watched outside the select so a change wakes this loop.
+	demand_tx: mpsc::UnboundedSender<()>,
+	demand_rx: mpsc::UnboundedReceiver<()>,
 }
 
 impl Session {
 	/// Convenience for the ingest case (WHIP server, WHEP client). The socket's
 	/// `inbound` comes from the server mux, or [`crate::ice::reader`] for a 1:1 client socket.
 	pub fn ingest(rtc: Rtc, socket: crate::ice::Socket, sink: Box<dyn MediaSink>) -> Result<Self> {
+		let (demand_tx, demand_rx) = mpsc::unbounded_channel();
 		Ok(Self {
 			agent: crate::ice::Agent::new(rtc, socket)?,
 			role: MediaRole::Ingest(sink),
@@ -151,6 +160,8 @@ impl Session {
 			keyframes: None,
 			gates: HashMap::new(),
 			joins: HashMap::new(),
+			demand_tx,
+			demand_rx,
 		})
 	}
 
@@ -159,6 +170,7 @@ impl Session {
 	pub fn egress(rtc: Rtc, socket: crate::ice::Socket, mut source: EgressSource) -> Result<Self> {
 		let writes_rx = source.take_writes();
 		let catalog_end = source.take_catalog_end();
+		let (demand_tx, demand_rx) = mpsc::unbounded_channel();
 		Ok(Self {
 			agent: crate::ice::Agent::new(rtc, socket)?,
 			role: MediaRole::Egress(Box::new(source)),
@@ -172,6 +184,8 @@ impl Session {
 			keyframes: None,
 			gates: HashMap::new(),
 			joins: HashMap::new(),
+			demand_tx,
+			demand_rx,
 		})
 	}
 
@@ -289,6 +303,12 @@ impl Session {
 						self.send_remb();
 					}
 					self.fire_gates();
+				}
+
+				Some(()) = self.demand_rx.recv() => {
+					if let Some(policy) = self.keyframes {
+						self.observe_joins(policy);
+					}
 				}
 
 				event = self.agent.next() => match event {
@@ -428,9 +448,32 @@ impl Session {
 				let video = kind == str0m::media::MediaKind::Video;
 				let pli = negotiated.iter().any(|params| params.fb_pli());
 				self.ingest_order.open(mid, video, pli, Instant::now());
-				if video && self.keyframes.is_some() {
-					self.gates.insert(mid, crate::keyframe::Gate::new(pli));
+				if video && let Some(policy) = self.keyframes {
+					self.gates.insert(mid, crate::keyframe::Gate::open(&policy, Instant::now(), pli));
 					self.joins.insert(mid, crate::keyframe::JoinWatch::default());
+					if let MediaRole::Ingest(sink) = &mut self.role
+						&& let Some(demand) = sink.demand(mid)
+					{
+						let tx = self.demand_tx.clone();
+						tokio::spawn(async move {
+							let mut demand = demand;
+							let mut waiter = None;
+							loop {
+								let step = std::future::poll_fn(|cx| {
+									waiter.get_or_insert_with(|| kio::Waiter::new(cx.waker().clone()));
+									match demand.poll_wanted_changed(waiter.as_ref().expect("waiter")) {
+										std::task::Poll::Ready(Ok(_)) => std::task::Poll::Ready(true),
+										std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(false),
+										std::task::Poll::Pending => std::task::Poll::Pending,
+									}
+								})
+								.await;
+								if !step || tx.send(()).is_err() {
+									break;
+								}
+							}
+						});
+					}
 				}
 				// REMB only where the publisher negotiated it; str0m offers it on video alone.
 				if let Some(rate) = &mut self.rate
@@ -467,15 +510,19 @@ impl Session {
 		let now = Instant::now();
 		let mids: Vec<_> = self.gates.keys().copied().collect();
 		for mid in mids {
-			let due = self.gates.get_mut(&mid).and_then(|gate| gate.take_deadline(now));
-			if due.is_some()
-				&& let Some(gate) = self.gates.get_mut(&mid)
-			{
-				gate.note(crate::keyframe::Cause::Period, now);
+			let due = self
+				.gates
+				.get(&mid)
+				.and_then(|gate| gate.deadline())
+				.is_some_and(|at| now >= at);
+			if !due {
+				continue;
+			}
+			if let Some(gate) = self.gates.get_mut(&mid) {
+				gate.on_timer(&policy, now);
 			}
 			self.flush_gate(policy, mid, None);
 		}
-		self.observe_joins(policy);
 	}
 
 	fn observe_joins(&mut self, policy: crate::keyframe::Keyframes) {
@@ -491,7 +538,7 @@ impl Session {
 				.observe(&policy, wanted, largest);
 			if request {
 				if let Some(gate) = self.gates.get_mut(&mid) {
-					gate.note(crate::keyframe::Cause::Join, Instant::now());
+					gate.note(crate::keyframe::Cause::Join, Instant::now(), &policy);
 				}
 				self.flush_gate(policy, mid, None);
 			}
@@ -539,6 +586,9 @@ impl Session {
 		let now = Instant::now();
 		let media_us = media_time_to_micros(&data.time);
 		let keyframe = data.is_keyframe();
+		if let Some(gate) = self.gates.get_mut(&data.mid) {
+			gate.on_receiver(&policy, now);
+		}
 		if keyframe
 			&& let Some(gate) = self.gates.get_mut(&data.mid)
 		{
@@ -547,7 +597,7 @@ impl Session {
 		if policy.on_loss && !data.contiguous && !keyframe
 			&& let Some(gate) = self.gates.get_mut(&data.mid)
 		{
-			gate.note(crate::keyframe::Cause::Loss, now);
+			gate.note(crate::keyframe::Cause::Loss, now, &policy);
 		}
 		let decision = self.ingest_order.admit(data.mid, keyframe, media_us, now);
 		match decision {
@@ -558,7 +608,7 @@ impl Session {
 			}
 			Admit::Request => {
 				if let Some(gate) = self.gates.get_mut(&data.mid) {
-					gate.note(crate::keyframe::Cause::Startup, now);
+					gate.note(crate::keyframe::Cause::Startup, now, &policy);
 				}
 				self.flush_gate(policy, data.mid, data.rid);
 				return Ok(());
@@ -569,7 +619,7 @@ impl Session {
 		if mapped.deferred
 			&& let Some(gate) = self.gates.get_mut(&data.mid)
 		{
-			gate.note(crate::keyframe::Cause::Step, now);
+			gate.note(crate::keyframe::Cause::Step, now, &policy);
 		}
 		let stepped = mapped.stepped;
 		let timestamp_us = mapped.timestamp_us;
@@ -995,6 +1045,10 @@ impl Bridges {
 			.iter()
 			.filter_map(|(&mid, bridge)| bridge.join_sample().map(|(wanted, largest)| (mid, wanted, largest)))
 			.collect()
+	}
+
+	pub fn demand(&mut self, mid: str0m::media::Mid) -> Option<moq_net::track::Demand> {
+		self.inner.get(&mid).and_then(|bridge| bridge.demand())
 	}
 
 	pub fn discontinuity(&mut self, mid: str0m::media::Mid) -> Result<()> {

@@ -65,4 +65,8 @@ impl codec::Bridge for Bridge {
 	fn join_sample(&self) -> Option<(Option<u64>, Option<u64>)> {
 		Some((self.demand.wanted(), self.track.largest().map(|position| position.group)))
 	}
+
+	fn demand(&self) -> Option<moq_net::track::Demand> {
+		Some(self.demand.clone())
+	}
 }
