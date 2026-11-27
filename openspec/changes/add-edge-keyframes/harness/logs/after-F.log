@@ -1,14 +1,7 @@
-# F. Cost. Same WHIP VP8 route, cap 2.5 Mbit/s, 1280x720@30 fixture. Probe is harness raw, video track bytes only.
-# A keyframe byte is the first frame of each MoQ group. Window is the raw subscriber's wall span (~8 s).
-# quality_difference=missing (no PSNR/SSIM alignment against the y4m was run).
-#
-# policy=off:       frames=239 groups=1 share=0.0061 bitrate=1536.7 kbps wall_ms=7986. Gate sends: none.
-# policy=trial:     frames=238 groups=4 share=0.0411 bitrate=1578.3 kbps wall_ms=7900. Gate: period x4 (~2 s).
-# policy=saturated: frames=236 groups=8 share=0.1098 bitrate=1638.1 kbps wall_ms=7881. Gate: period-bit x8 (~1 s).
-#
-# Bitrate minus off: trial +41.6 kbps, saturated +101.4 kbps.
-# Share minus off: trial +0.0350, saturated +0.1037.
-# The saturated row is KEYFRAME_POLICY=saturated, which sets keyframes.saturate and floor=1s.
-# The log still says causes=["period"] because the floor wake reuses the period cause bit.
-# The cadence separates them: 8 sends in ~8 s against trial's 4. A 1 s period is not this hook;
-# on_keyframe would restart that period, and off sent nothing.
+# F index. Dirs /tmp/kf-adopt-f2-off, f2-trial, f2-sat. quality_difference=missing.
+# Recount from f.live, logs/trace/f-*-share.txt and the first raw line of each group in f-*-groups.txt.
+# off    frames=239 groups=1 bytes=1533963 kf_bytes=9398  share=0.006127 wall_ms=7986 bitrate_kbps=1536.652  gate sends: none (trace/f-off-gate.log)
+# trial  frames=238 groups=4 bytes=1558585 kf_bytes=64026 share=0.041080 wall_ms=7900 bitrate_kbps=1578.314  period sends at 19:46:41,43,45,47Z
+# sat    frames=236 groups=8 bytes=1613773 kf_bytes=177170 share=0.109786 wall_ms=7881 bitrate_kbps=1638.140 period-bit sends every ~1 s from 19:46:50 through 19:46:57Z
+# Saturated is KEYFRAME_POLICY=saturated (keyframes.saturate, floor 1s). The cause string is still "period". The cadence is the difference. Off sent no gate line.
+# Each of these three edge logs contains: connected version=moq-lite-06 transport=webtransport.

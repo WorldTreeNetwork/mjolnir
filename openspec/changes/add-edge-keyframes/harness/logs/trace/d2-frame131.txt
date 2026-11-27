@@ -1,0 +1,1 @@
+frame_index=131 showinfo n:0 pts:131 pts_time:4.366667 fmt:yuv420p s:1280x720 i:P iskey:1 type:I checksum:4B1B4DE5 mean:[127 127 126]

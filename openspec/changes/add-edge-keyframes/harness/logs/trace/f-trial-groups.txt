@@ -1,0 +1,4 @@
+raw-frame track=0.vp8 group_start=0 bytes=7627 media=10383µs wall_ms=2
+raw-frame track=0.vp8 group_start=1 bytes=9738 media=2110383µs wall_ms=1778
+raw-frame track=0.vp8 group_start=2 bytes=21614 media=4143814µs wall_ms=3865
+raw-frame track=0.vp8 group_start=3 bytes=25047 media=6210624µs wall_ms=5930

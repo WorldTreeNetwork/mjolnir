@@ -1,0 +1,3 @@
+/tmp/kf-wire/reader.log:2026-11-27T19:59:57.727879Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+/tmp/kf-wire/edge.log:2026-11-27T19:59:54.945928Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+run=wire-reader-2026-11-27 separate from the ten joins; same binaries; original B readers logged at warn and did not print this info line

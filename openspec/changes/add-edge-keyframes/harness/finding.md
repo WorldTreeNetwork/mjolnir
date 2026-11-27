@@ -1,5 +1,7 @@
 # Spike S4 `moq-webrtc-embed` and S7 `protected-refusal`: findings
 
+This file is the 2026-11-25 spike. It is not the keyframe adoption report. The adoption evidence is `logs/adoption-2026-11-27.md` and `logs/trace/`.
+
 Date: 2026-11-25/26 (UTC). moq pinned at `4a6f522483168ace392718d68b58a402533c897d` (`moq-webrtc` 0.3.12, str0m 0.25.0).
 Harness: in-process `moq-relay` with the Mjolnir WebTransport decider (`mjolnir_relay::spawn_web_decider`), room
 tokens shaped as `Mjolnir.Relay.Mint` signs them, default wire versions (sessions negotiated `moq-lite-06` over
@@ -244,7 +246,3 @@ See `README.md` and `run-all.sh`.
 ## Addendum 2026-11-25: claim 8 on Linux (orchestrator run)
 
 Claim 8's Linux half is now **GO on Arch x86_64**: the edge builds with the relay's toolchain (1.95.0) in under three minutes cold, links only libc, libm and libgcc, and a clean build with Node tools replaced by tripwires called none of them. Log: `logs/claim8-linux.log`. Ubuntu 24.04 is still unchecked.
-
-## Addendum 2026-11-27: trial defaults adopted on Framework Arch
-
-WHIP Chromium source, patched ingest `1491c33c`, pin `4a6f52248`, cap 2.5 Mbit/s, testsrc2 1280x720@30. Logs: `after-A.log` through `after-F.log`. A, B, D2, E, and F meet their gates. D1 is recorded and does not block. Quality difference is missing. Ubuntu is still a separate platform proof. This host is Arch, not Ubuntu. `.13` waits on a parent accepting this evidence. Upstream port U1 is not started.

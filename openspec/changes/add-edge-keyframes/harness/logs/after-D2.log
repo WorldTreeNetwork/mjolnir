@@ -1,14 +1,16 @@
-# D2. Publisher RTP/RTX suppression, then a 1.5 s publisher-leg blackout. policy=trial. STRIP=1 so the browser cannot skip the proxy.
-# SRTP hides the VP8 P bit. The proxy used the clear RTP header: after one completed frame on the largest SSRC,
-# it dropped the next timestamp's sequence numbers and, for 0.8 s, every other payload type (RTX).
-# media_ssrc=4036068831 media_pt=96
-# delta_suppress range 28097-28102 n=6
-# counts: to_edge 3477, to_edge_dropped 398, delta_dropped 6, rtx_dropped 70, to_client_dropped 0
-# burst_window 1.5 s dir=edge after the suppression.
-# Ingest gate (not a period relabel):
-# 2026-11-27T19:51:18.476436Z causes=["loss"] sent=true
-# 2026-11-27T19:51:24.601431Z causes=["loss"] sent=true
-# Reader groups around the burst end (1795809084.339, raw start 1795809079.152):
-# group 2 wall_ms=2402 media=4.697 s, 2.785 s before the burst end
-# group 3 wall_ms=5262 media=6.796 s, 0.075 s after the burst end
-# First post-burst keyframe group is 75 ms after the burst end. Gate is 1.2 s. PASS.
+# D2 index. Run /tmp/kf-adopt-3.log, dir /tmp/kf-adopt-d2b. Source lines: logs/trace/d2-edge.log, d2-proxy.log, d2-groups.txt, d2-frame131.txt.
+# Clocks below are the host's UTC converted with datetime.timestamp(), same epoch as the proxy's time.time().
+#
+# 1795809077.875 delta_suppress start seq=28097 ts=3790735546
+# 1795809077.876 delta_suppress range 28097-28102 n=6
+# 1795809078.476 loss send (log 2026-11-27T19:51:18.476436Z). 0.601 s after the suppress start. 5.938 s before group 3.
+# 1795809079.477 join send
+# 1795809082.839 burst start, dir=edge, 1.5 s
+# 1795809084.339 burst end. Proxy later: to_edge_dropped 398, delta_dropped 6, rtx_dropped 70, to_client_dropped 0.
+# 1795809084.414 group 3 first frame received (raw wall_ms=5262, media=6796009µs). 0.075 s after burst end.
+# 1795809084.601 second loss send (log 2026-11-27T19:51:24.601431Z). 0.187 s AFTER group 3 was already received.
+#
+# Group 3 is IVF frame index 131. ffmpeg showinfo: 1280x720 yuv420p iskey:1 type:I checksum 4B1B4DE5.
+# A loss cause was sent twice, and a post-burst keyframe was decoded. The second loss send cannot have caused that frame.
+# The first loss send is six seconds earlier and is timed with the delta drop, not with this frame.
+# The log does not attribute the 75 ms keyframe to a specific PLI. It may be periodic, or the encoder answering an earlier request, or the first complete frame after the blackout.

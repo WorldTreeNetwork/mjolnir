@@ -8,11 +8,13 @@ Counting. `harness raw` prints each video frame's payload size and MoQ group ind
 
 | run | groups | keyframe byte share | bitrate |
 | --- | ---: | ---: | ---: |
-| off | 1 | 0.0061 | 1536.7 kbps |
-| trial (period 2 s) | 4 | 0.0411 | 1578.3 kbps |
-| saturated (floor 1 s) | 8 | 0.1098 | 1638.1 kbps |
+| off | 1 | 0.006127 | 1536.652 kbps |
+| trial (period 2 s) | 4 | 0.041080 | 1578.314 kbps |
+| saturated (floor 1 s) | 8 | 0.109786 | 1638.140 kbps |
 
-Against off, trial costs +41.6 kbps and +0.0350 share. Saturated costs +101.4 kbps and +0.1037 share. Saturated is the named floor hook. Its log line still carries the period cause bit; the 1 s cadence, against trial's 2 s cadence and off's silence, is what identifies it.
+The counted lines are `harness/logs/trace/f-*-share.txt` and `f-*-groups.txt`. Gate lines are `f-*-gate.log`. Quality difference missing.
+
+Against off, trial costs +41.662 kbps and +0.034953 share. Saturated costs +101.488 kbps and +0.103659 share. Saturated is the named floor hook. Its log line still carries the period cause bit; the 1 s cadence, against trial's 2 s cadence and off's silence, is what identifies it.
 
 Reproduce from a checkout that already has the harness binaries built with `CARGO_TARGET_DIR` set, debug info off, and incremental off:
 

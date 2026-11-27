@@ -1,0 +1,7 @@
+framework_git=b3be2ae02c483cd2af07125de3f5b38378426de4
+edge_sha256=61850aa2b137c39a22d582b3b005b48f891264b9f561a1e6ecd3fe05f56cbaf7
+harness_sha256=e30cbee53636ffb0a2fde78a7aa79ba7c7acd6cbe39631459183e671662e0367
+/tmp/kf-after/debug/edge 104810088 2026-11-27 11:28:12.836515911 -0800
+/tmp/kf-after/debug/harness 114582104 2026-11-27 11:28:13.896515874 -0800
+79c933c110c9b93e21715bad852f42633d7aa39b0c5cde111702686eed3ad99d  /home/dorje/work/WorldTree/mjolnir/native/vendor/moq-webrtc/src/keyframe.rs
+2c5e0a6f7a23c8f4b17aaf21269a704155149296b16dad1cc46d4a7ae9c4ad25  /home/dorje/work/WorldTree/mjolnir/native/vendor/moq-webrtc/src/session.rs

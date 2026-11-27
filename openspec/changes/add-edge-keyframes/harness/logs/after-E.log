@@ -1,9 +1,7 @@
-# E. Viewer feedback is observed and is not an ingest cause. policy=trial. RUST_LOG=info,moq_webrtc=debug.
-# A healthy run (no viewer loss) left Chromium pliCount at 0 for one and four viewers. That grep is not this row.
-# This row is WHIP VP8 through the edge, viewers on WHEP, LOSS_CLIENT=0.25 on the viewer leg, STRIP=1.
-# One viewer, 20 s: video pliCount 0 then 4. framesDecoded 4 then 13. Picture path decoded VP8.
-# Four viewers, 20 s, pliCount first sample then last sample:
-# erin 16 -> 22, frank 10 -> 16, dave 2 -> 6, grace 5 -> 10.
-# Edge log: 61 lines "keyframe request from peer" (egress session, debug). That is the received viewer PLI/FIR.
-# Ingest gate over the same log: join x1, period x22. cause_names has no viewer cause, and none was added.
-# The 61 viewer requests were not forwarded. PASS. This is the negative control, not the saturation hook.
+# E index. Run /tmp/kf-adopt-e4.log, dir /tmp/kf-adopt-e4. RUST_LOG=info,moq_webrtc=debug. LOSS_CLIENT=0.25 STRIP=1.
+# Viewer stats, uncut: logs/trace/e-e1.out and e-e4-*.out. pliCount pairs are the 2.5 s sample and the end sample.
+# e1 0,4. erin 16,22. frank 10,16. dave 2,6. grace 5,10.
+# Peer PLIs and the ingest gate are logs/trace/e-edge-requests.log.
+# Example: 2026-11-27T19:52:57.926981Z DEBUG moq_webrtc::session: keyframe request from peer req=KeyframeRequest { mid: Mid(0), rid: None, kind: Pli }
+# 61 such lines. Gate lines in that file are join once and period 22 times. No other cause name appears.
+# Session line in the same log: connected version=moq-lite-06 transport=webtransport.

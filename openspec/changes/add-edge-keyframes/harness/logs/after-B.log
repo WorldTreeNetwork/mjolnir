@@ -1,12 +1,13 @@
-# B. Ten WHIP-origin MoQ joins with a simultaneous probe. Same host, pin, cap, fixture, and route as after-A.log.
-# policy=trial. Probe token held alice/cam for the whole run. Ten later raw subscribers, 3 s each.
-# First raw-frame wall_ms (subscribe to first video frame): 3 2 5 3 2 2 5 3 2 4. Max 5 ms. Gate is 1.0 s. PASS.
-# Lag = probe newest media timestamp at that wall minus the joiner's first media timestamp:
-# 0.134 1.100 2.033 0.934 1.834 0.634 1.466 0.266 1.234 2.100 seconds. Max 2.100 s. Gate is 2.2 s. PASS.
-# Every first frame is the subscriber's group 0 (a keyframe group) on track 0.vp8.
+# B index. Run /tmp/kf-adopt-2.log section ROW_A_DONE..ROW_B_DONE. Dir /tmp/kf-adopt-b.
+# wall_ms on raw-frame is when the harness received the MoQ frame. It is not a decoder clock.
+# Each join's first VP8 frame was written to b-N.ivf and decoded with ffmpeg/ffprobe on Framework.
+# ffprobe_first is key_frame,pkt_size,width,height,pict_type. All ten are key_frame=1, 1280x720, type I, decode_rc=0.
+# Verbatim receive lines, the probe line used for lag, and the ffprobe lines: logs/trace/b-lag.txt and b-decode.txt.
+# Lag max 2.100052 s. Receive wall_ms max 5. Gate is 1.0 s to a decodable frame and 2.2 s lag.
+# The IVF decode is the decodable-frame proof. group_start=0 alone is not.
 #
-# Wire. Neither the relay nor the client sets a version. Pin rs/moq-net/src/version.rs ALPNS[0] is moq-lite-06.
-# moq-lite-07-wip is not in the default set. lite-06 has_refresh is false, so a later join cannot cross the open upstream hop.
-# This run's ingest gate, while the probe stayed subscribed: causes period x16, join x0.
-# An earlier trial on the same binary (ten raw joins, no long-lived probe) logged join x1 and period x15, so the cause does fire when demand qualifies.
-# The ten later joins in this run did not add a join cause. That is the later relay-side join trace.
+# Wire, this run's WHIP session only (edge log, not an ALPN guess):
+# 2026-11-27T19:45:52.666014Z INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+# The ten harness subscribers logged at warn and did not print a version line. That line is absent from b-N.live.
+# A later subscribe with the same binaries, run wire-reader-2026-11-27, logged the same version. It is not one of these ten joins.
+# See logs/trace/wire-reader.txt and b-edge-version-gate.log (period x16, join x0 while the probe stayed up).

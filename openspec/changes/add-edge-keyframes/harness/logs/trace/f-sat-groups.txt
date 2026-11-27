@@ -1,0 +1,8 @@
+raw-frame track=0.vp8 group_start=0 bytes=9559 media=25355µs wall_ms=2
+raw-frame track=0.vp8 group_start=1 bytes=14263 media=1025355µs wall_ms=975
+raw-frame track=0.vp8 group_start=2 bytes=15219 media=2025355µs wall_ms=1972
+raw-frame track=0.vp8 group_start=3 bytes=21483 media=3024623µs wall_ms=2968
+raw-frame track=0.vp8 group_start=4 bytes=26497 media=4024647µs wall_ms=4014
+raw-frame track=0.vp8 group_start=5 bytes=27870 media=5024554µs wall_ms=5012
+raw-frame track=0.vp8 group_start=6 bytes=30522 media=6025382µs wall_ms=6020
+raw-frame track=0.vp8 group_start=7 bytes=31757 media=7025500µs wall_ms=7014

@@ -1,0 +1,33 @@
+probe_start wall=1795808754.928132607 source=b-run header in /tmp/kf-adopt-2.log
+lag_s = (probe media us of last probe frame with wall_ms <= (join_wall-probe_start)*1000 + receive wall_ms) - join first media us, / 1e6
+receive wall_ms is harness raw arrival, not a decoder clock. decode proof is separate ffprobe/ffmpeg of the ivf.
+join 1 subscribe_wall=1795808756.934252 receive_wall_ms=3 first_media_us=4155628 probe_wall_ms=2008 probe_media_us=4289628 lag_s=0.134000
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=21303 media=4155628µs wall_ms=3
+  PROBE raw-frame track=0.vp8 group_start=1 bytes=6170 media=4289628µs wall_ms=2008
+join 2 subscribe_wall=1795808759.983963 receive_wall_ms=2 first_media_us=6222022 probe_wall_ms=5044 probe_media_us=7322142 lag_s=1.100120
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=24916 media=6222022µs wall_ms=2
+  PROBE raw-frame track=0.vp8 group_start=2 bytes=7008 media=7322142µs wall_ms=5044
+join 3 subscribe_wall=1795808763.026270 receive_wall_ms=5 first_media_us=8289131 probe_wall_ms=8043 probe_media_us=10322123 lag_s=2.032992
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=24638 media=8289131µs wall_ms=5
+  PROBE raw-frame track=0.vp8 group_start=3 bytes=8771 media=10322123µs wall_ms=8043
+join 4 subscribe_wall=1795808766.070909 receive_wall_ms=3 first_media_us=12488672 probe_wall_ms=11142 probe_media_us=13422516 lag_s=0.933844
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=28536 media=12488672µs wall_ms=3
+  PROBE raw-frame track=0.vp8 group_start=5 bytes=7626 media=13422516µs wall_ms=11142
+join 5 subscribe_wall=1795808769.120379 receive_wall_ms=2 first_media_us=14622851 probe_wall_ms=14178 probe_media_us=16456804 lag_s=1.833953
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=32062 media=14622851µs wall_ms=2
+  PROBE raw-frame track=0.vp8 group_start=6 bytes=8210 media=16456804µs wall_ms=14178
+join 6 subscribe_wall=1795808772.168125 receive_wall_ms=2 first_media_us=18888737 probe_wall_ms=17241 probe_media_us=19522431 lag_s=0.633694
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=35027 media=18888737µs wall_ms=2
+  PROBE raw-frame track=0.vp8 group_start=8 bytes=6325 media=19522431µs wall_ms=17241
+join 7 subscribe_wall=1795808775.214450 receive_wall_ms=5 first_media_us=21022278 probe_wall_ms=20209 probe_media_us=22488121 lag_s=1.465843
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=36322 media=21022278µs wall_ms=5
+  PROBE raw-frame track=0.vp8 group_start=9 bytes=7438 media=22488121µs wall_ms=20209
+join 8 subscribe_wall=1795808778.265734 receive_wall_ms=3 first_media_us=25289516 probe_wall_ms=23314 probe_media_us=25555869 lag_s=0.266353
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=34142 media=25289516µs wall_ms=3
+  PROBE raw-frame track=0.vp8 group_start=11 bytes=7072 media=25555869µs wall_ms=23314
+join 9 subscribe_wall=1795808781.307320 receive_wall_ms=2 first_media_us=27421345 probe_wall_ms=26377 probe_media_us=28655391 lag_s=1.234046
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=35351 media=27421345µs wall_ms=2
+  PROBE raw-frame track=0.vp8 group_start=12 bytes=7274 media=28655391µs wall_ms=26377
+join 10 subscribe_wall=1795808784.353588 receive_wall_ms=4 first_media_us=29555138 probe_wall_ms=29377 probe_media_us=31655190 lag_s=2.100052
+  JOIN raw-frame track=0.vp8 group_start=0 bytes=35125 media=29555138µs wall_ms=4
+  PROBE raw-frame track=0.vp8 group_start=13 bytes=7582 media=31655190µs wall_ms=29377

@@ -1,0 +1,20 @@
+join=1 receive_line=raw-frame track=0.vp8 group_start=0 bytes=21303 media=4155628µs wall_ms=3
+join=1 ffprobe_first=1,21299,1280,720,I decode_rc=0 decode_err=
+join=2 receive_line=raw-frame track=0.vp8 group_start=0 bytes=24916 media=6222022µs wall_ms=2
+join=2 ffprobe_first=1,24912,1280,720,I decode_rc=0 decode_err=
+join=3 receive_line=raw-frame track=0.vp8 group_start=0 bytes=24638 media=8289131µs wall_ms=5
+join=3 ffprobe_first=1,24634,1280,720,I decode_rc=0 decode_err=
+join=4 receive_line=raw-frame track=0.vp8 group_start=0 bytes=28536 media=12488672µs wall_ms=3
+join=4 ffprobe_first=1,28532,1280,720,I decode_rc=0 decode_err=
+join=5 receive_line=raw-frame track=0.vp8 group_start=0 bytes=32062 media=14622851µs wall_ms=2
+join=5 ffprobe_first=1,32058,1280,720,I decode_rc=0 decode_err=
+join=6 receive_line=raw-frame track=0.vp8 group_start=0 bytes=35027 media=18888737µs wall_ms=2
+join=6 ffprobe_first=1,35023,1280,720,I decode_rc=0 decode_err=
+join=7 receive_line=raw-frame track=0.vp8 group_start=0 bytes=36322 media=21022278µs wall_ms=5
+join=7 ffprobe_first=1,36318,1280,720,I decode_rc=0 decode_err=
+join=8 receive_line=raw-frame track=0.vp8 group_start=0 bytes=34142 media=25289516µs wall_ms=3
+join=8 ffprobe_first=1,34138,1280,720,I decode_rc=0 decode_err=
+join=9 receive_line=raw-frame track=0.vp8 group_start=0 bytes=35351 media=27421345µs wall_ms=2
+join=9 ffprobe_first=1,35347,1280,720,I decode_rc=0 decode_err=
+join=10 receive_line=raw-frame track=0.vp8 group_start=0 bytes=35125 media=29555138µs wall_ms=4
+join=10 ffprobe_first=1,35121,1280,720,I decode_rc=0 decode_err=

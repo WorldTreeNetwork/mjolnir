@@ -1,0 +1,1 @@
+frames=238 groups=4 bytes=1558585 kf_bytes=64026 share=0.041080 wall_ms=7900 bitrate_kbps=1578.314
