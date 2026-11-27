@@ -34,6 +34,15 @@ impl Shared {
     pub async fn closed(&self) {
         let _ = self.conn.clone().closed().await;
     }
+
+    /// Stop this session on every clone. Callers that only watch `closed` must not hold `Arc<Self>`.
+    pub fn close(&self) {
+        self.conn.abort(moq_net::Error::Cancel);
+    }
+
+    pub fn connection(&self) -> moq_tokio::Connection {
+        self.conn.clone()
+    }
 }
 
 /// Typed negotiation/transport failure. Expiry is applied by the caller, not here.

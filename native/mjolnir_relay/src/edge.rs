@@ -105,6 +105,7 @@ pub struct Edge {
     snap: Mutex<Snapshot>,
     pool: Mutex<Pool>,
     dials: AtomicU64,
+    draining: AtomicBool,
     allow_test_dial: AtomicBool,
     moq: Mutex<Option<crate::moq_session::MoqConfig>>,
     test_dial_wait: Mutex<Duration>,
@@ -237,6 +238,7 @@ impl Edge {
                 moq_paths: Vec::new(),
             }),
             dials: AtomicU64::new(0),
+            draining: AtomicBool::new(false),
             allow_test_dial: AtomicBool::new(false),
             moq: Mutex::new(None),
             test_dial_wait: Mutex::new(Duration::from_millis(30)),
@@ -276,11 +278,30 @@ impl Edge {
     }
 
     /// Emergency drain. Distinct from a bad key file: a later good reload does not reopen it.
+    /// The flag is stored before the pool lock so an in-flight publish either is swept here
+    /// or observes the flag in the same critical section that would insert its hold.
     pub fn drain(self: &Arc<Self>) {
         self.snap.lock().expect("snap").draining = true;
-        let tokens: Vec<String> = self.pool.lock().expect("pool").holds.keys().cloned().collect();
-        for token in tokens {
-            self.drop_token(&token);
+        self.draining.store(true, Ordering::SeqCst);
+        let shareds = {
+            let mut pool = self.pool.lock().expect("pool");
+            let gens: Vec<(String, u64)> = pool.holds.iter().map(|(token, hold)| (token.clone(), hold.generation)).collect();
+            let mut shareds = Vec::new();
+            for (token, generation) in gens {
+                if let Some(shared) = self.detach_locked(&mut pool, &token, generation) {
+                    shareds.push(shared);
+                }
+            }
+            let flights: Vec<Arc<Flight>> = pool.flights.drain().map(|(_, flight)| flight).collect();
+            for flight in flights {
+                for waiter in flight.waiters.lock().expect("waiters").drain(..) {
+                    let _ = waiter.send(Err(AdmitError::SetupFailed));
+                }
+            }
+            shareds
+        };
+        for shared in shareds {
+            shared.close();
         }
     }
 
@@ -328,8 +349,7 @@ impl Edge {
                     pool.next_id += 1;
                     id
                 };
-                self.insert_session(&reservation, &id, checked);
-                reservation.disarm();
+                self.commit_session(&mut reservation, &id, checked)?;
                 return Ok(Negotiated {
                     id,
                     answer: "v=0\r\n".into(),
@@ -382,8 +402,7 @@ impl Edge {
         }
         let id = response.resource_id.clone();
         let answer = response.answer.clone();
-        self.insert_session(&reservation, &id, checked);
-        reservation.disarm();
+        self.commit_session(&mut reservation, &id, checked)?;
         Ok(Negotiated {
             id,
             answer,
@@ -570,13 +589,36 @@ impl Edge {
             pool.next_id += 1;
             id
         };
-        self.insert_session(&reservation, &id, checked);
-        reservation.disarm();
+        self.commit_session(&mut reservation, &id, checked)?;
         Ok(id)
     }
 
-    fn insert_session(&self, reservation: &Reservation, id: &str, checked: &Checked) {
+    /// Insert, or on expiry drop the whole generation. A drain or generation miss leaves the reservation armed so its Drop releases only its own ref.
+    fn commit_session(&self, reservation: &mut Reservation, id: &str, checked: &Checked) -> Result<(), AdmitError> {
+        if let Err(error) = self.insert_session(reservation, id, checked) {
+            if error == AdmitError::BadToken {
+                reservation.disarm();
+                self.drop_token(&checked.token);
+            }
+            return Err(error);
+        }
+        reservation.disarm();
+        Ok(())
+    }
+
+    /// Generation, expiry, and drain are decided in the same critical section as the insert.
+    fn insert_session(&self, reservation: &Reservation, id: &str, checked: &Checked) -> Result<(), AdmitError> {
         let mut pool = self.pool.lock().expect("pool");
+        if self.draining.load(Ordering::SeqCst) {
+            return Err(AdmitError::SetupFailed);
+        }
+        if SystemTime::now() >= checked.exp {
+            return Err(AdmitError::BadToken);
+        }
+        match pool.holds.get(&checked.token) {
+            Some(hold) if hold.generation == reservation.generation => {}
+            _ => return Err(AdmitError::SetupFailed),
+        }
         pool.sessions.insert(
             id.to_string(),
             Session {
@@ -586,6 +628,7 @@ impl Edge {
                 exp_unix: checked.exp_unix,
             },
         );
+        Ok(())
     }
 
     async fn acquire(
@@ -727,9 +770,20 @@ impl Edge {
         guard.armed = false;
         let generation = {
             let mut pool = self.pool.lock().expect("pool");
-            if pool.flights.get(token).is_some_and(|flight| Arc::ptr_eq(flight, &guard.flight)) {
-                pool.flights.remove(token);
+            let owns_flight = pool.flights.get(token).is_some_and(|flight| Arc::ptr_eq(flight, &guard.flight));
+            if self.draining.load(Ordering::SeqCst) || !owns_flight {
+                if owns_flight {
+                    pool.flights.remove(token);
+                }
+                for waiter in guard.flight.waiters.lock().expect("waiters").drain(..) {
+                    let _ = waiter.send(Err(AdmitError::SetupFailed));
+                }
+                if let Ok(Dialed::Live(shared)) = &dialed {
+                    shared.close();
+                }
+                return Err(AdmitError::SetupFailed);
             }
+            pool.flights.remove(token);
             match dialed {
                 Ok(dialed) => {
                     let generation = pool.next_gen;
@@ -759,11 +813,11 @@ impl Edge {
                 }
             }
         };
-        if let Some(shared) = self.pool.lock().expect("pool").links.get(token).and_then(|link| link.shared.clone()) {
+        if let Some(conn) = self.pool.lock().expect("pool").links.get(token).and_then(|link| link.shared.as_ref().map(|shared| shared.connection())) {
             let edge = Arc::clone(self);
             let watched = token.to_string();
             tokio::spawn(async move {
-                shared.closed().await;
+                let _ = conn.closed().await;
                 edge.drop_token_gen(&watched, generation);
             });
         }
@@ -822,8 +876,13 @@ impl Edge {
     }
 
     fn release_gen(&self, token: &str, generation: u64) {
-        let mut pool = self.pool.lock().expect("pool");
-        release_locked(&mut pool, token, generation);
+        let shared = {
+            let mut pool = self.pool.lock().expect("pool");
+            release_locked(&mut pool, token, generation)
+        };
+        if let Some(shared) = shared {
+            shared.close();
+        }
     }
 
     fn runner_finished(pool: &mut Pool) {
@@ -840,42 +899,47 @@ impl Edge {
     }
 
     fn drop_token_gen(&self, token: &str, generation: u64) {
-        let matches = self.pool.lock().expect("pool").holds.get(token).is_some_and(|hold| hold.generation == generation);
-        if matches {
-            self.drop_token(token);
+        let shared = {
+            let mut pool = self.pool.lock().expect("pool");
+            self.detach_locked(&mut pool, token, generation)
+        };
+        if let Some(shared) = shared {
+            shared.close();
         }
     }
 
     fn drop_token(&self, token: &str) {
-        let (ids, generation) = {
-            let pool = self.pool.lock().expect("pool");
-            let generation = pool.holds.get(token).map(|hold| hold.generation);
-            let ids: Vec<String> = pool
-                .sessions
-                .iter()
-                .filter(|(_, session)| session.token == token && generation.is_none_or(|generation| session.generation == generation))
-                .map(|(id, _)| id.clone())
-                .collect();
-            (ids, generation)
-        };
-        for id in &ids {
-            if let Some(generation) = generation {
-                self.finish_id(id, generation, true);
-            }
+        let generation = self.pool.lock().expect("pool").holds.get(token).map(|hold| hold.generation);
+        if let Some(generation) = generation {
+            self.drop_token_gen(token, generation);
         }
-        let mut pool = self.pool.lock().expect("pool");
-        if generation.is_some_and(|generation| pool.holds.get(token).is_some_and(|hold| hold.generation == generation))
-            || generation.is_none()
-        {
-            pool.holds.remove(token);
-            pool.links.remove(token);
+    }
+
+    /// Validate and detach one generation, including its sessions, under one pool lock.
+    fn detach_locked(&self, pool: &mut Pool, token: &str, generation: u64) -> Option<Arc<crate::moq_session::Shared>> {
+        let matches = pool.holds.get(token).is_some_and(|hold| hold.generation == generation);
+        if !matches {
+            return None;
         }
-        if let Some(flight) = pool.flights.remove(token) {
-            for waiter in flight.waiters.lock().expect("waiters").drain(..) {
-                let _ = waiter.send(Err(AdmitError::BadToken));
-            }
-        }
+        let ids: Vec<String> = pool
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.token == token && session.generation == generation)
+            .map(|(id, _)| id.clone())
+            .collect();
         let legs = ids.len();
+        for id in &ids {
+            let Some(session) = pool.sessions.remove(id) else { continue };
+            let until = session.exp_unix.saturating_add(TOMBSTONE.as_secs());
+            pool.tombstones.insert(id.clone(), Tombstone { digest: session.digest, until_unix: until });
+            self.end_runner(pool, id);
+        }
+        pool.holds.remove(token);
+        let shared = if pool.links.get(token).is_some_and(|link| link.generation == generation) {
+            pool.links.remove(token).and_then(|link| link.shared)
+        } else {
+            None
+        };
         tracing::info!(
             legs,
             sessions = pool.sessions.len(),
@@ -883,6 +947,7 @@ impl Edge {
             links = pool.links.len(),
             "expired token dropped"
         );
+        shared
     }
 
     fn finish_id(&self, id: &str, generation: u64, abort_runner: bool) {
@@ -903,13 +968,15 @@ impl Edge {
             pool.runners.remove(id);
         }
         pool.tombstones.insert(id.to_string(), Tombstone { digest, until_unix: until });
-        release_locked(&mut pool, &token, generation);
-        tracing::info!(
-            sessions = pool.sessions.len(),
-            runners = pool.runners.len(),
-            links = pool.links.len(),
-            "session finished"
-        );
+        let shared = release_locked(&mut pool, &token, generation);
+        let sessions = pool.sessions.len();
+        let runners = pool.runners.len();
+        let links = pool.links.len();
+        drop(pool);
+        if let Some(shared) = shared {
+            shared.close();
+        }
+        tracing::info!(sessions, runners, links, "session finished");
     }
 
     pub fn runner_count(&self) -> usize {
@@ -967,10 +1034,10 @@ impl Edge {
     }
 }
 
-fn release_locked(pool: &mut Pool, token: &str, generation: u64) {
+fn release_locked(pool: &mut Pool, token: &str, generation: u64) -> Option<Arc<crate::moq_session::Shared>> {
     let gone = if let Some(hold) = pool.holds.get_mut(token) {
         if hold.generation != generation {
-            return;
+            return None;
         }
         hold.refs = hold.refs.saturating_sub(1);
         hold.refs == 0
@@ -980,9 +1047,10 @@ fn release_locked(pool: &mut Pool, token: &str, generation: u64) {
     if gone {
         pool.holds.remove(token);
         if pool.links.get(token).is_some_and(|link| link.generation == generation) {
-            pool.links.remove(token);
+            return pool.links.remove(token).and_then(|link| link.shared);
         }
     }
+    None
 }
 
 struct PreAdmit {
@@ -1104,6 +1172,9 @@ impl http_body::Body for QueuedBody {
         if let Some(data) = this.data.take() {
             return std::task::Poll::Ready(Some(Ok(http_body::Frame::data(data))));
         }
+        // hyper 1.8.1 `proto/h1/dispatch.rs` polls the body to EOF while `can_buffer_body` (a small SDP fits), then flushes.
+        // `http_body::Body` has no write-completion callback, and `collect()` polls this same EOF. Disarming only on Drop
+        // aborts a successful runner; leaving the guard armed past EOF leaks a BrokenPipe that happens after the flush.
         if let Some(guard) = this.guard.as_mut() {
             guard.armed = false;
         }
@@ -1155,13 +1226,14 @@ async fn cors(
 
 fn origin_allowed(edge: &Edge, origin: &str, host: &str) -> bool {
     let snap = edge.snap.lock().expect("snap");
-    if snap.origins.iter().any(|allowed| allowed == origin) {
-        return true;
+    if !snap.origins.is_empty() {
+        return snap.origins.iter().any(|allowed| allowed == origin);
     }
     if host.is_empty() {
         return false;
     }
-    origin == format!("https://{host}") || origin == format!("http://{host}")
+    // This listener is plain HTTP. An empty list is that one scheme plus this host, not both schemes.
+    origin == format!("http://{host}")
 }
 
 fn cors_headers(mut response: Response, origin: Option<&str>, allowed: bool) -> Response {
@@ -1814,6 +1886,135 @@ mod tests {
         edge.snap.lock().unwrap().keys_ok = true;
         edge.snap.lock().unwrap().keys = set;
         assert!(edge.admit(Some(&token), Some(&root), None, Op::Publish, "alice/cam", SystemTime::now()).is_ok());
+    }
+
+    #[test]
+    fn configured_origins_are_an_exact_list() {
+        let (set, _, _) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.set_origins(vec!["https://named-peer.test".into()]);
+        assert!(origin_allowed(&edge, "https://named-peer.test", "edge.test"));
+        assert!(!origin_allowed(&edge, "http://edge.test", "edge.test"));
+        assert!(!origin_allowed(&edge, "https://edge.test", "edge.test"));
+        edge.set_origins(Vec::new());
+        assert!(origin_allowed(&edge, "http://edge.test", "edge.test"));
+        assert!(!origin_allowed(&edge, "https://edge.test", "edge.test"));
+        assert!(!origin_allowed(&edge, "http://other.test", "edge.test"));
+    }
+
+    #[tokio::test]
+    async fn drain_during_dial_does_not_register() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        *edge.test_dial_wait.lock().expect("wait") = Duration::from_millis(400);
+        let checked = edge.admit(Some(&token), Some(&root), None, Op::Publish, "alice/cam", SystemTime::now()).unwrap();
+        let worker = edge.clone();
+        let task = tokio::spawn(async move { worker.open_session(&checked, "v=0").await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while edge.dials() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dial started");
+        edge.drain();
+        let result = tokio::time::timeout(Duration::from_secs(2), task).await.expect("dial finished").unwrap();
+        assert!(matches!(result, Err(AdmitError::SetupFailed)));
+        assert_eq!((edge.session_count(), edge.link_count(), edge.flight_count()), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn stale_generation_cleanup_leaves_the_replacement() {
+        let (set, token, root) = mint_shaped_open();
+        let edge = Edge::new(set);
+        edge.enable_test_dial();
+        let checked = edge.admit(Some(&token), Some(&root), None, Op::Publish, "alice/cam", SystemTime::now()).unwrap();
+        let deadline = setup_deadline(checked.exp).unwrap();
+        let first = edge.acquire(&checked.token, checked.exp, &deadline).await.unwrap();
+        let old = first.generation;
+        drop(first);
+        assert_eq!(edge.link_count(), 0);
+        let second = edge.acquire(&checked.token, checked.exp, &deadline).await.unwrap();
+        let replacement = second.generation;
+        assert_ne!(old, replacement);
+        edge.drop_token_gen(&checked.token, old);
+        assert_eq!(edge.refs(&checked.token), 1);
+        assert_eq!(edge.link_count(), 1);
+        edge.drop_token_gen(&checked.token, replacement);
+        assert_eq!((edge.refs(&checked.token), edge.link_count()), (0, 0));
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn last_release_closes_the_real_relay_connection() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Mutex;
+
+        let _ = moq_tokio::crypto::install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".into()]).unwrap().self_signed(&key).unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key.serialize_pem()).unwrap();
+        let mut cfg = moq_relay::Config::default();
+        cfg.listen.bind = Some("127.0.0.1:0".parse().unwrap());
+        cfg.listen.tls.cert = vec![cert_path.clone()];
+        cfg.listen.tls.key = vec![key_path];
+        cfg.web.ws = false;
+        let mut relay = moq_relay::Relay::load(cfg).await.unwrap().with_signals(false);
+        let addr = relay.quic_addr().unwrap();
+        let admissions = relay.admissions().unwrap();
+        let ready = relay.ready();
+        let relay_task = tokio::spawn(async move { relay.run().await });
+        ready.wait().await.unwrap();
+
+        let (set, token, root) = mint_shaped_open();
+        crate::spawn_web_decider(
+            admissions,
+            Arc::new(Mutex::new(set.clone())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+            crate::DEFAULT_MAX_TTL,
+        );
+        let edge = Edge::new(set);
+        edge.set_moq(crate::moq_session::MoqConfig {
+            relay: format!("https://localhost:{}", addr.port()).parse().unwrap(),
+            tls_root: Some(cert_path),
+            media: moq_webrtc::Server::bind("127.0.0.1:0".parse().unwrap(), Default::default()).await.unwrap(),
+        });
+        let checked = edge.admit(Some(&token), Some(&root), None, Op::Publish, "alice/cam", SystemTime::now()).unwrap();
+        let deadline = setup_deadline(checked.exp).unwrap();
+        let reservation = edge.acquire(&checked.token, checked.exp, &deadline).await.unwrap();
+        let weak = std::sync::Arc::downgrade(edge.pool.lock().expect("pool").links[&checked.token].shared.as_ref().unwrap());
+        assert!(weak.upgrade().is_some_and(|shared| !shared.dead()));
+        drop(reservation);
+        assert_eq!(edge.link_count(), 0);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while weak.upgrade().is_some_and(|shared| !shared.dead()) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("released connection stays connected");
+        let next = edge.acquire(&checked.token, checked.exp, &deadline).await.unwrap();
+        assert_eq!(edge.dials(), 2);
+        assert!(weak.upgrade().is_none_or(|shared| shared.dead()));
+        let current = edge.pool.lock().expect("pool").links[&checked.token].shared.as_ref().unwrap().clone();
+        assert!(!current.dead());
+        drop(next);
+        assert_eq!(edge.link_count(), 0);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !current.dead() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("second connection stays connected after release");
+        edge.drain();
+        relay_task.abort();
     }
 
     #[test]

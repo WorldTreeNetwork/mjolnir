@@ -89,7 +89,7 @@ async fn verified_root_dials_and_a_foreign_root_does_not() {
         .await
         .unwrap();
     let bad = mjolnir_relay::moq_session::MoqConfig {
-        relay: url,
+        relay: url.clone(),
         tls_root: Some(wrong.path().to_path_buf()),
         media,
     };
