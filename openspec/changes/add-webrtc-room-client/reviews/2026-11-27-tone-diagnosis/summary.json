@@ -1,0 +1,592 @@
+{
+  "kind": "tone-diagnosis",
+  "productMutated": false,
+  "hook": "measurement-only RTCPeerConnection recorder",
+  "pageErrors": [],
+  "samples": [
+    {
+      "name": "join",
+      "bob": {
+        "status": "In the room.",
+        "owner": "1:1",
+        "caption": "Playing.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 640,
+          "videoHeight": 360
+        },
+        "play": "resolved",
+        "tracks": [
+          {
+            "id": "27e87b1f-a748-4aa3-bd75-e671c025a9b0",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "16f3273d-baee-4293-b1ff-3b48ee30290b",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "inbound": [
+          {
+            "kind": "audio",
+            "bytesReceived": 599,
+            "packetsReceived": 7,
+            "packetsLost": 0,
+            "audioLevel": 0.013519699697866757,
+            "totalAudioEnergy": 0.000018278227992049848,
+            "totalSamplesReceived": 5280,
+            "jitter": 0.001
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 4865,
+            "packetsReceived": 15,
+            "packetsLost": 0,
+            "jitter": 0.046,
+            "framesDecoded": 1,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ],
+        "tone": {
+          "attachedTo": "27e87b1f-a748-4aa3-bd75-e671c025a9b0",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -55.5,
+          "rms": 0.0284,
+          "streamTrackIds": [
+            "27e87b1f-a748-4aa3-bd75-e671c025a9b0"
+          ]
+        },
+        "toneAgain": {
+          "attachedTo": "27e87b1f-a748-4aa3-bd75-e671c025a9b0",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -65,
+          "rms": 0.0095,
+          "streamTrackIds": [
+            "27e87b1f-a748-4aa3-bd75-e671c025a9b0"
+          ]
+        },
+        "inboundAgain": [
+          {
+            "kind": "audio",
+            "bytesReceived": 7213,
+            "packetsReceived": 88,
+            "packetsLost": 0,
+            "audioLevel": 0.023712881862849818,
+            "totalAudioEnergy": 0.0033899887305791077,
+            "totalSamplesReceived": 84000,
+            "jitter": 0
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 15349,
+            "packetsReceived": 64,
+            "packetsLost": 0,
+            "jitter": 0.002,
+            "framesDecoded": 53,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ]
+      },
+      "alice": {
+        "status": "In the room.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 640,
+          "videoHeight": 360
+        },
+        "tracks": [
+          {
+            "id": "b72e5710-1026-4a36-962e-e969da92b0ec",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "80020c4a-95d1-43b5-a903-c52dcd2a18a3",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "outbound": [
+          {
+            "kind": "audio",
+            "bytesSent": 5274,
+            "packetsSent": 67
+          },
+          {
+            "kind": "video",
+            "bytesSent": 17811,
+            "packetsSent": 60,
+            "framesEncoded": 40
+          }
+        ],
+        "sessions": [
+          "/session/91573f83-5724-49b3-bb46-a59ed6d8cf01",
+          "/session/adcdb33e-8ab3-4be6-8698-78251d142c33"
+        ],
+        "incumbent": 1
+      }
+    },
+    {
+      "name": "replace",
+      "bob": {
+        "status": "In the room.",
+        "owner": "1:2",
+        "caption": "Playing.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 640,
+          "videoHeight": 360
+        },
+        "play": "resolved",
+        "tracks": [
+          {
+            "id": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "6f13f1d3-3b06-406b-b37a-dd8d5d50393f",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "inbound": [
+          {
+            "kind": "audio",
+            "bytesReceived": 810,
+            "packetsReceived": 10,
+            "packetsLost": 0,
+            "audioLevel": 0.026886806848353526,
+            "totalAudioEnergy": 0.00005994703492981765,
+            "totalSamplesReceived": 8640,
+            "jitter": 0
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 6804,
+            "packetsReceived": 32,
+            "packetsLost": 0,
+            "jitter": 0.019,
+            "framesDecoded": 32,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ],
+        "tone": {
+          "attachedTo": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -65,
+          "rms": 0.0095,
+          "streamTrackIds": [
+            "844454e7-0abb-4e17-aae3-8d62abf3cc93"
+          ]
+        },
+        "toneAgain": {
+          "attachedTo": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -65,
+          "rms": 0.0095,
+          "streamTrackIds": [
+            "844454e7-0abb-4e17-aae3-8d62abf3cc93"
+          ]
+        },
+        "inboundAgain": [
+          {
+            "kind": "audio",
+            "bytesReceived": 7290,
+            "packetsReceived": 90,
+            "packetsLost": 0,
+            "audioLevel": 0.013611255226294748,
+            "totalAudioEnergy": 0.0003794693281151527,
+            "totalSamplesReceived": 85920,
+            "jitter": 0
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 10687,
+            "packetsReceived": 80,
+            "packetsLost": 0,
+            "jitter": 0.001,
+            "framesDecoded": 80,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ]
+      },
+      "alice": {
+        "status": "In the room.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 960,
+          "videoHeight": 540
+        },
+        "tracks": [
+          {
+            "id": "fca1bfcf-6cbf-4455-a3f4-779544b1d822",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "ab956db4-1d8b-4ef5-a64d-9dcbd14e7e8f",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "outbound": [
+          {
+            "kind": "audio",
+            "bytesSent": 40325,
+            "packetsSent": 499
+          },
+          {
+            "kind": "video",
+            "bytesSent": 76630,
+            "packetsSent": 319,
+            "framesEncoded": 299
+          }
+        ],
+        "sessions": [
+          "/session/96a73df5-491e-4cd6-afbc-db8ffbf5855d",
+          "/session/adbbbb1c-945b-4800-a268-d32d99ac3388"
+        ],
+        "incumbent": 2
+      }
+    },
+    {
+      "name": "renew-immediate",
+      "bob": {
+        "status": "In the room.",
+        "owner": "1:2",
+        "caption": "Playing.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 640,
+          "videoHeight": 360
+        },
+        "play": "resolved",
+        "tracks": [
+          {
+            "id": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "6f13f1d3-3b06-406b-b37a-dd8d5d50393f",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "inbound": [
+          {
+            "kind": "audio",
+            "bytesReceived": 14418,
+            "packetsReceived": 178,
+            "packetsLost": 0,
+            "audioLevel": 0.0004577776421399579,
+            "totalAudioEnergy": 0.0007462825231488375,
+            "totalSamplesReceived": 195360,
+            "jitter": 0.001
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 15493,
+            "packetsReceived": 133,
+            "packetsLost": 0,
+            "jitter": 0,
+            "framesDecoded": 133,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ],
+        "tone": {
+          "attachedTo": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 6,
+          "peakDb": null,
+          "rms": 0,
+          "streamTrackIds": [
+            "844454e7-0abb-4e17-aae3-8d62abf3cc93"
+          ]
+        },
+        "toneAgain": {
+          "attachedTo": "844454e7-0abb-4e17-aae3-8d62abf3cc93",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 6,
+          "peakDb": null,
+          "rms": 0,
+          "streamTrackIds": [
+            "844454e7-0abb-4e17-aae3-8d62abf3cc93"
+          ]
+        },
+        "inboundAgain": [
+          {
+            "kind": "audio",
+            "bytesReceived": 14418,
+            "packetsReceived": 178,
+            "packetsLost": 0,
+            "audioLevel": 0,
+            "totalAudioEnergy": 0.0007462834452144635,
+            "totalSamplesReceived": 272640,
+            "jitter": 0.001
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 15493,
+            "packetsReceived": 133,
+            "packetsLost": 0,
+            "jitter": 0,
+            "framesDecoded": 133,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ]
+      },
+      "alice": {
+        "status": "In the room.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 1280,
+          "videoHeight": 720
+        },
+        "tracks": [
+          {
+            "id": "7abcd735-87f4-4af1-ab88-977aaadbd363",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "45f60276-7abb-4503-98e4-6df536b657e4",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "outbound": [
+          {
+            "kind": "audio",
+            "bytesSent": 5250,
+            "packetsSent": 66
+          },
+          {
+            "kind": "video",
+            "bytesSent": 22544,
+            "packetsSent": 59,
+            "framesEncoded": 39
+          }
+        ],
+        "sessions": [
+          "/session/b9e5d16f-1c61-4697-958f-b01055a48718",
+          "/session/d637bd6e-ff37-4c0b-8151-e9595f7f9be0"
+        ],
+        "incumbent": 3
+      }
+    },
+    {
+      "name": "renew-new-track",
+      "bob": {
+        "status": "In the room.",
+        "owner": "1:3",
+        "caption": "Playing.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 640,
+          "videoHeight": 360
+        },
+        "play": "resolved",
+        "tracks": [
+          {
+            "id": "c96dde45-a8b8-4757-b0dd-5427c5845178",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "f4ba1e52-232e-4e78-88a6-de92cb025904",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "inbound": [
+          {
+            "kind": "audio",
+            "bytesReceived": 729,
+            "packetsReceived": 9,
+            "packetsLost": 0,
+            "audioLevel": 0.023438215277565844,
+            "totalAudioEnergy": 0.00003802422612687501,
+            "totalSamplesReceived": 7680,
+            "jitter": 0
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 1084,
+            "packetsReceived": 7,
+            "packetsLost": 0,
+            "jitter": 0.003,
+            "framesDecoded": 7,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ],
+        "tone": {
+          "attachedTo": "c96dde45-a8b8-4757-b0dd-5427c5845178",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -65,
+          "rms": 0.0095,
+          "streamTrackIds": [
+            "c96dde45-a8b8-4757-b0dd-5427c5845178"
+          ]
+        },
+        "toneAgain": {
+          "attachedTo": "c96dde45-a8b8-4757-b0dd-5427c5845178",
+          "contextState": "running",
+          "sampleRate": 48000,
+          "peakHz": 439,
+          "peakDb": -65,
+          "rms": 0.0095,
+          "streamTrackIds": [
+            "c96dde45-a8b8-4757-b0dd-5427c5845178"
+          ]
+        },
+        "inboundAgain": [
+          {
+            "kind": "audio",
+            "bytesReceived": 7209,
+            "packetsReceived": 89,
+            "packetsLost": 0,
+            "audioLevel": 0.013550218207342753,
+            "totalAudioEnergy": 0.0003571327633183865,
+            "totalSamplesReceived": 84960,
+            "jitter": 0
+          },
+          {
+            "kind": "video",
+            "bytesReceived": 5046,
+            "packetsReceived": 56,
+            "packetsLost": 0,
+            "jitter": 0,
+            "framesDecoded": 56,
+            "frameWidth": 640,
+            "frameHeight": 360
+          }
+        ]
+      },
+      "alice": {
+        "status": "In the room.",
+        "element": {
+          "id": "",
+          "muted": false,
+          "volume": 1,
+          "paused": false,
+          "readyState": 4,
+          "videoWidth": 1280,
+          "videoHeight": 720
+        },
+        "tracks": [
+          {
+            "id": "7abcd735-87f4-4af1-ab88-977aaadbd363",
+            "kind": "audio",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          },
+          {
+            "id": "45f60276-7abb-4503-98e4-6df536b657e4",
+            "kind": "video",
+            "readyState": "live",
+            "muted": false,
+            "enabled": true
+          }
+        ],
+        "outbound": [
+          {
+            "kind": "audio",
+            "bytesSent": 45345,
+            "packetsSent": 561
+          },
+          {
+            "kind": "video",
+            "bytesSent": 84733,
+            "packetsSent": 356,
+            "framesEncoded": 336
+          }
+        ],
+        "sessions": [
+          "/session/b9e5d16f-1c61-4697-958f-b01055a48718",
+          "/session/d637bd6e-ff37-4c0b-8151-e9595f7f9be0"
+        ],
+        "incumbent": 3
+      }
+    }
+  ]
+}
