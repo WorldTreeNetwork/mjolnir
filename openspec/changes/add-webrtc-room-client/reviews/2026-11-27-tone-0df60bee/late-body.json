@@ -1,0 +1,31 @@
+{
+  "joined": true,
+  "during": {
+    "status": "Replacing the connection…",
+    "held": true,
+    "hook": "labeled init: hold the next WHIP 201 body until __releaseBody"
+  },
+  "bobDuring": {
+    "owner": "1:1",
+    "caption": "Playing.",
+    "srcObject": true,
+    "width": 640
+  },
+  "leaveWhileHeld": {
+    "status": "Left the room.",
+    "tiles": 0,
+    "local": false,
+    "captions": [],
+    "held": true,
+    "released": false
+  },
+  "after": {
+    "status": "Left the room.",
+    "tiles": 0,
+    "local": false,
+    "captions": [],
+    "released": true
+  },
+  "errors": [],
+  "hook": "init-script holds WHIP 201 body"
+}

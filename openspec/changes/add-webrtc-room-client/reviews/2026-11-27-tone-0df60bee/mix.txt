@@ -1,0 +1,342 @@
+warning: the VM is running with native name encoding of latin1 which may cause Elixir to malfunction as it expects utf8. Please ensure your locale is set to UTF-8 (which can be verified by running "locale" in your shell) or set the ELIXIR_ERL_OPTIONS="+fnu" environment variable
+     warning: the following clause will never match:
+
+         {:error, _} = err ->
+
+     it is expected to match on type:
+
+         dynamic(:error)
+
+     type warning found at:
+     \x{2502}
+ 668 \x{2502}       {:error, _} = err -> err
+     \x{2502}                   ~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/secret_store.ex:668:19: Mjolnir.SecretStore.verify_identity_bootstrap/2
+
+    warning: the following clause will never match:
+
+        :absent ->
+
+    because it attempts to match on the result of:
+
+        parse_params(identity)
+
+    which has type:
+
+        dynamic(
+          {:error, term()} or
+            {:ok,
+             %{auth_tag: nil or binary(), env: term(), private_key_nsec: binary(), relay_url: binary()}}
+        )
+
+    type warning found at:
+    \x{2502}
+ 78 \x{2502}       :absent ->
+    \x{2502}       ~~~~~~~~~~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/identity.ex:78: Mjolnir.Identity.put/2
+
+    warning: unused require Logger
+    \x{2502}
+ 20 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/secrets/quiesce.ex:20:3
+
+      warning: comparison between distinct types found:
+
+          result == {:error, :peer_key_refused}
+
+      given types:
+
+          dynamic(not {:error, :peer_key_refused}) == {:error, :peer_key_refused}
+
+      where "result" was given the types:
+
+          # type: dynamic()
+          # from: lib/mjolnir/vm.ex
+          {result, nil}
+
+          # type: dynamic(not {:error, :peer_key_refused})
+          # from: lib/mjolnir/vm.ex
+          {result, nil}
+
+      While Elixir can compare across all types, you are comparing across types which are always disjoint, and the result is either always true or always false
+
+      type warning found at:
+      \x{2502}
+ 1729 \x{2502}         result == {:error, :peer_key_refused}
+      \x{2502}                ~
+      \x{2502}
+      \x{2514}\x{2500} lib/mjolnir/vm.ex:1729:16: Mjolnir.VM.handle_call/3
+
+      warning: this clause of defp cid_or_nil/1 is never used (or it will always fail/warn when invoked)
+      \x{2502}
+ 2601 \x{2502}   defp cid_or_nil(_), do: nil
+      \x{2502}        ~
+      \x{2502}
+      \x{2514}\x{2500} lib/mjolnir/vm.ex:2601:8: Mjolnir.VM.cid_or_nil/1
+
+      warning: the following clause will never match:
+
+          :skipped ->
+
+      because it attempts to match on the result of:
+
+          maybe_configure_identity(state, probe, vsock_path, state.id, api_url, locators)
+
+      which has type:
+
+          dynamic(:ok or {:error, term()})
+
+      type warning found at:
+      \x{2502}
+ 2891 \x{2502}         :skipped -> Logger.info("VM identity present, skipped for VM #{state.id}")
+      \x{2502}         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      \x{2502}
+      \x{2514}\x{2500} lib/mjolnir/vm.ex:2891: Mjolnir.VM.complete_guest_setup/1
+
+      warning: this clause of defp maybe_unlock_secrets/2 is never used (or it will always fail/warn when invoked)
+      \x{2502}
+ 3911 \x{2502}   defp maybe_unlock_secrets(_state, _vsock_path), do: :skipped
+      \x{2502}        ~
+      \x{2502}
+      \x{2514}\x{2500} lib/mjolnir/vm.ex:3911:8: Mjolnir.VM.maybe_unlock_secrets/2
+
+    warning: unused require Logger
+    \x{2502}
+ 11 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/api/adopt.ex:11:3
+
+    warning: the variable "length" is accessed inside size(...) of a bitstring but it was defined outside of the match. You must precede it with the pin operator
+    \x{2502}
+ 53 \x{2502}     <<payload::binary-size(length), remaining::binary>> = rest
+    \x{2502}                            ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/vsock/protocol.ex:53:28: Mjolnir.Vsock.Protocol.decode_frame/1
+
+    warning: the following clause is redundant:
+
+        {:error, reason} ->
+
+    previous clauses have already matched on the following types:
+
+        {term(), term()}
+
+    where "reason" was given the type:
+
+        # type: dynamic()
+        # from: lib/mjolnir/git_signing.ex
+        {:error, reason}
+
+    type warning found at:
+    \x{2502}
+ 62 \x{2502}       {:error, reason} ->
+    \x{2502}                        ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/git_signing.ex:62:24: Mjolnir.GitSigning.generate/0
+
+     warning: the following clause will never match:
+
+         false ->
+
+     it is expected to match on type:
+
+         dynamic({:error, :invalid_delegation or :invalid_keypair or :keypair_mismatch or :wrong_edge_xid})
+
+     type warning found at:
+     \x{2502}
+ 125 \x{2502}       false -> {:error, :invalid_delegation}
+     \x{2502}       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/auth/edge_keys.ex:125: Mjolnir.Auth.EdgeKeys.delegate/4
+
+     warning: the following clause will never match:
+
+         false ->
+
+     it is expected to match on type:
+
+         dynamic(
+           {:error,
+            :delegation_outside_validity or :invalid_delegation or :invalid_delegation_signature or
+              :invalid_identity_public or :missing_pin or :pin_mismatch or :wrong_edge_xid}
+         )
+
+     type warning found at:
+     \x{2502}
+ 145 \x{2502}       false -> {:error, :invalid_delegation}
+     \x{2502}       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/auth/edge_keys.ex:145: Mjolnir.Auth.EdgeKeys.verify_delegation/4
+
+     warning: the following clause will never match:
+
+         false ->
+
+     it is expected to match on type:
+
+         dynamic(
+           ({:error, :bad_permissions} and
+              not {:ok,
+               %{
+                 current_kid: term(),
+                 current_private: binary(),
+                 delegations: term(),
+                 edge_xid: term(),
+                 restore_ids: term(),
+                 stable_public: binary(),
+                 supersessions: term()
+               }} and not {:error, :legacy_edge_pin} and not {:error, :unsafe_auth_path} and
+              not {:ok, term()} and not {:error, :enoent}) or
+             ({:error, :invalid_supersession} and not {:ok, term()} and
+                not {:ok, %{exp_now: integer(), kid: binary(), next_kid: binary(), signature: term()}}) or
+             ({:error, :legacy_edge_pin} and
+                not {:ok,
+                 %{
+                   current_kid: term(),
+                   current_private: binary(),
+                   delegations: term(),
+                   edge_xid: term(),
+                   restore_ids: term(),
+                   stable_public: binary(),
+                   supersessions: term()
+                 }} and not {:error, :enoent}) or
+             ({:error, :invalid_keypair or :keypair_mismatch} and not {:ok, term()} and
+                not {:ok, %{exp_now: integer(), kid: binary(), next_kid: binary(), signature: term()}}) or
+             ({:error, :invalid_operational_state} and
+                not {:ok,
+                 %{
+                   current_kid: term(),
+                   current_private: binary(),
+                   delegations: term(),
+                   edge_xid: term(),
+                   restore_ids: term(),
+                   stable_public: binary(),
+                   supersessions: term()
+                 }}) or
+             ({:error, :missing_operational_state} and
+                not {:ok,
+                 %{
+                   current_kid: term(),
+                   current_private: binary(),
+                   delegations: term(),
+                   edge_xid: term(),
+                   restore_ids: term(),
+                   stable_public: binary(),
+                   supersessions: term()
+                 }}) or
+             ({:error, :stable_private_unavailable} and
+                not {:ok, %{..., ed25519_public: term()} or binary()}) or
+             ({:error, :unsafe_auth_path} and not {:ok, binary()}) or
+             ({:error, :invalid_delegation or :invalid_keypair or :keypair_mismatch or :wrong_edge_xid} and
+                not {:ok,
+                 %{
+                   edge_xid: term(),
+                   exp: term(),
+                   kid: term(),
+                   nbf: float() or integer(),
+                   no_onward: term(),
+                   op_public: term(),
+                   purposes: term(),
+                   signature: term()
+                 }}) or ({:error, term()} and not {:error, :bad_permissions or :enoent}) or
+             {:error, term()}
+         )
+
+     type warning found at:
+     \x{2502}
+ 320 \x{2502}       false -> {:error, :rotation_failed}
+     \x{2502}       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/auth/edge_keys.ex:320: Mjolnir.Auth.EdgeKeys.rotate/1
+
+    warning: this clause of defp validate_ident/1 is never used (or it will always fail/warn when invoked)
+    \x{2502}
+ 92 \x{2502}   defp validate_ident(s), do: {:error, {:invalid_ident, s}}
+    \x{2502}        ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/postgres/tenants.ex:92:8: Mjolnir.Postgres.Tenants.validate_ident/1
+
+    warning: unused require Logger
+    \x{2502}
+ 26 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/entropy/probe.ex:26:3
+
+     warning: the variable "i" is accessed inside size(...) of a bitstring but it was defined outside of the match. You must precede it with the pin operator
+     \x{2502}
+ 112 \x{2502}     <<_::binary-size(i), byte, _::binary>> = bin
+     \x{2502}                      ~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/sites/wrap_shape.ex:112:22: Mjolnir.Sites.WrapShape.header/2
+
+     warning: the variable "n" is accessed inside size(...) of a bitstring but it was defined outside of the match. You must precede it with the pin operator
+     \x{2502}
+ 129 \x{2502}     <<arg::unsigned-big-integer-size(n * 8)>> = binary_part(bin, i, n)
+     \x{2502}                                      ~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/sites/wrap_shape.ex:129:38: Mjolnir.Sites.WrapShape.read_be/4
+
+     warning: the variable "nbytes" is accessed inside size(...) of a bitstring but it was defined outside of the match. You must precede it with the pin operator
+     \x{2502}
+ 337 \x{2502}       <<bytes::binary-size(nbytes), _rest::bitstring>> = bits
+     \x{2502}                            ~
+     \x{2502}
+     \x{2514}\x{2500} lib/mjolnir/gateway/classify.ex:337:28: Mjolnir.Gateway.Classify.z32_node?/1
+
+    warning: unused require Logger
+    \x{2502}
+ 10 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/runner/config_writer.ex:10:3
+
+    warning: unused require Logger
+    \x{2502}
+ 50 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/sites/storage/recrypt.ex:50:3
+
+    warning: unused require Logger
+    \x{2502}
+ 37 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/api/domains.ex:37:3
+
+    warning: unused require Logger
+    \x{2502}
+ 14 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/health/vsock_connection.ex:14:3
+
+    warning: unused require Logger
+    \x{2502}
+ 25 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/sites/server.ex:25:3
+
+    warning: unused require Logger
+    \x{2502}
+ 19 \x{2502}   require Logger
+    \x{2502}   ~
+    \x{2502}
+    \x{2514}\x{2500} lib/mjolnir/health/iroh_connection.ex:19:3
+
+
+17:28:57.615 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=alice kind=open jti=ZBjVZdHjQc8OuHU-JeUd2w exp=1795829937
+minted alice ttl=600
+
+17:28:57.619 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=alice kind=open jti=gPeHfogTLkpkt0q-KLRLhA exp=1795829937
+minted alice2 ttl=600
+
+17:28:57.619 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=bob kind=open jti=5u6sHBbADk_SNk-gwyXBtQ exp=1795829937
+minted bob ttl=600

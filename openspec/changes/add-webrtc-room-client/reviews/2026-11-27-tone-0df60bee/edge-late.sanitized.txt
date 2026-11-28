@@ -1,0 +1,36 @@
+[2m2026-11-28T01:30:24.918815Z[0m [32m INFO[0m [2mmoq_webrtc::server::mux[0m[2m:[0m webrtc media mux listening [3mcandidates[0m[2m=[0m[127.0.0.1:38797] [3mbound[0m[2m=[0m127.0.0.1:38797
+[2m2026-11-28T01:30:24.918851Z[0m [32m INFO[0m [2mmjolnir_edge[0m[2m:[0m edge admission listening on 127.0.0.1:18457
+[2m2026-11-28T01:30:25.806148Z[0m [33m WARN[0m [2mmoq_sock::bind[0m[2m:[0m UDP receive buffer is smaller than requested; raise `net.core.rmem_max` or expect packet loss under load [3mwanted[0m[2m=[0m8388608 [3mgranted[0m[2m=[0m4194304
+[2m2026-11-28T01:30:25.806196Z[0m [33m WARN[0m [2mmoq_sock::bind[0m[2m:[0m UDP send buffer is smaller than requested; raise `net.core.wmem_max` or expect packet loss under load [3mwanted[0m[2m=[0m8388608 [3mgranted[0m[2m=[0m4194304
+[2m2026-11-28T01:30:25.806530Z[0m [32m INFO[0m [2mmoq_net::reconnect[0m[2m:[0m connecting [3mpeer[0m[2m=[0mhttps://localhost:19457
+[2m2026-11-28T01:30:25.808846Z[0m [32m INFO[0m [2mmoq_tokio::client[0m[2m:[0m connected [3mversion[0m[2m=[0mmoq-lite-06 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T01:30:25.808870Z[0m [32m INFO[0m [2mmoq_tokio::connection[0m[2m:[0m connected [3mpeer[0m[2m=[0mhttps://localhost:19457 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T01:30:25.811418Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0m57b45d5ef605b1ea8d942a2cf51c7376 [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T01:30:25.819517Z[0m [32m INFO[0m [2mmoq_net::reconnect[0m[2m:[0m connecting [3mpeer[0m[2m=[0mhttps://localhost:19457
+[2m2026-11-28T01:30:25.821149Z[0m [32m INFO[0m [2mmoq_tokio::client[0m[2m:[0m connected [3mversion[0m[2m=[0mmoq-lite-06 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T01:30:25.821169Z[0m [32m INFO[0m [2mmoq_tokio::connection[0m[2m:[0m connected [3mpeer[0m[2m=[0mhttps://localhost:19457 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T01:30:25.823107Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0mbob/cam [3minstance[0m[2m=[0m2af61d16e599abd71f17ec5e5f8d1ada [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T01:30:26.512081Z[0m [32m INFO[0m [2mmoq_webrtc::session[0m[2m:[0m ingest keyframe gate [3mmid[0m[2m=[0mMid(1) [3mcauses[0m[2m=[0m["join"] [3msent[0m[2m=[0mtrue
+[2m2026-11-28T01:30:26.537916Z[0m [32m INFO[0m [2mmoq_webrtc::session[0m[2m:[0m ingest keyframe gate [3mmid[0m[2m=[0mMid(1) [3mcauses[0m[2m=[0m["join"] [3msent[0m[2m=[0mtrue
+[2m2026-11-28T01:30:26.547164Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m current group evicted; skipping to next buffered group [3mtrack[0m[2m=[0m"1.vp8" [3mgroup[0m[2m=[0m10695 [3merror[0m[2m=[0mMoq(Stream(Old))
+[2m2026-11-28T01:30:26.547212Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m current group evicted; skipping to next buffered group [3mtrack[0m[2m=[0m"1.vp8" [3mgroup[0m[2m=[0m0 [3merror[0m[2m=[0mMoq(Stream(Old))
+[2m2026-11-28T01:30:27.898598Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0mc85ea933ec20204fc425444ffc4609a5 [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T01:30:28.547078Z[0m [32m INFO[0m [2mmoq_webrtc::session[0m[2m:[0m ingest keyframe gate [3mmid[0m[2m=[0mMid(1) [3mcauses[0m[2m=[0m["period"] [3msent[0m[2m=[0mtrue
+[2m2026-11-28T01:30:28.547697Z[0m [32m INFO[0m [2mmoq_webrtc::session[0m[2m:[0m ingest keyframe gate [3mmid[0m[2m=[0mMid(1) [3mcauses[0m[2m=[0m["period"] [3msent[0m[2m=[0mtrue
+[2m2026-11-28T01:30:28.582361Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m current group evicted; skipping to next buffered group [3mtrack[0m[2m=[0m"1.vp8" [3mgroup[0m[2m=[0m443695 [3merror[0m[2m=[0mMoq(Stream(Old))
+[2m2026-11-28T01:30:28.583853Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m current group evicted; skipping to next buffered group [3mtrack[0m[2m=[0m"1.vp8" [3mgroup[0m[2m=[0m433000 [3merror[0m[2m=[0mMoq(Stream(Old))
+[2m2026-11-28T01:30:28.790570Z[0m [32m INFO[0m [2mmjolnir_relay::edge[0m[2m:[0m session finished [3msessions[0m[2m=[0m4 [3mrunners[0m[2m=[0m4 [3mlinks[0m[2m=[0m2
+[2m2026-11-28T01:30:28.791479Z[0m [33m WARN[0m [2mmoq_net::lite::subscriber[0m[2m:[0m subscribe error [3mbroadcast[0m[2m=[0malice/cam [3mtrack[0m[2m=[0m1.vp8 [3merr[0m[2m=[0munroutable
+[2m2026-11-28T01:30:28.791479Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m current group evicted; skipping to next buffered group [3mtrack[0m[2m=[0m"1.vp8" [3mgroup[0m[2m=[0m2481516 [3merror[0m[2m=[0mMoq(Stream(Unroutable))
+[2m2026-11-28T01:30:28.791594Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m track failed; ending the reader [3mtrack[0m[2m=[0m"1.vp8" [3merror[0m[2m=[0mMoq(Stream(Unroutable))
+[2m2026-11-28T01:30:28.791616Z[0m [33m WARN[0m [2mmoq_webrtc::egress[0m[2m:[0m egress track error [3mmid[0m[2m=[0mMid(0) [3mrendition[0m[2m=[0m"1.vp8" [3merr[0m[2m=[0mmux error: moq: unroutable
+[2m2026-11-28T01:30:28.791845Z[0m [33m WARN[0m [2mmoq_net::lite::subscriber[0m[2m:[0m subscribe error [3mbroadcast[0m[2m=[0malice/cam [3mtrack[0m[2m=[0mcatalog.json [3merr[0m[2m=[0munroutable
+[2m2026-11-28T01:30:28.791883Z[0m [33m WARN[0m [2mmoq_net::lite::subscriber[0m[2m:[0m subscribe error [3mbroadcast[0m[2m=[0malice/cam [3mtrack[0m[2m=[0m0.opus [3merr[0m[2m=[0munroutable
+[2m2026-11-28T01:30:28.791911Z[0m [33m WARN[0m [2mmoq_webrtc::egress[0m[2m:[0m egress catalog failed [3merr[0m[2m=[0mmoq: unroutable
+[2m2026-11-28T01:30:28.791971Z[0m [33m WARN[0m [2mmoq_mux::container::consumer[0m[2m:[0m track failed; ending the reader [3mtrack[0m[2m=[0m"0.opus" [3merror[0m[2m=[0mMoq(Stream(Unroutable))
+[2m2026-11-28T01:30:28.791989Z[0m [33m WARN[0m [2mmoq_webrtc::egress[0m[2m:[0m egress track error [3mmid[0m[2m=[0mMid(1) [3mrendition[0m[2m=[0m"0.opus" [3merr[0m[2m=[0mmux error: moq: unroutable
+[2m2026-11-28T01:30:28.791999Z[0m [33m WARN[0m [2mmoq_webrtc::session[0m[2m:[0m session ended [3merr[0m[2m=[0mmux error: moq: unroutable [3mrole[0m[2m=[0m"whep server"
+[2m2026-11-28T01:30:28.792133Z[0m [32m INFO[0m [2mmjolnir_relay::edge[0m[2m:[0m session finished [3msessions[0m[2m=[0m3 [3mrunners[0m[2m=[0m3 [3mlinks[0m[2m=[0m2
+[2m2026-11-28T01:30:28.793082Z[0m [32m INFO[0m [2mmjolnir_relay::edge[0m[2m:[0m session finished [3msessions[0m[2m=[0m2 [3mrunners[0m[2m=[0m2 [3mlinks[0m[2m=[0m2
+[2m2026-11-28T01:30:28.799197Z[0m [32m INFO[0m [2mmjolnir_relay::edge[0m[2m:[0m session finished [3msessions[0m[2m=[0m1 [3mrunners[0m[2m=[0m1 [3mlinks[0m[2m=[0m1
+[2m2026-11-28T01:30:28.799745Z[0m [33m WARN[0m [2mmoq_net::lite::session[0m[2m:[0m session error [3merr[0m[2m=[0mno error
