@@ -42,6 +42,41 @@ function say(text) {
   status.textContent = text || "";
 }
 
+function registered(path, node, video, owner, stream) {
+  return peers.querySelector(`[data-path="${CSS.escape(path)}"]`) === node
+    && node.querySelector("video") === video && video.dataset.owner === owner
+    && video.srcObject === stream && !!owner;
+}
+
+function retireView(node) {
+  const video = node.querySelector("video");
+  node.dataset.owner = "";
+  video.dataset.owner = "";
+  video.dataset.blocked = "";
+  video.srcObject = null;
+  playback.delete(video);
+}
+
+function playView(path, node, video) {
+  const owner = video.dataset.owner;
+  const stream = video.srcObject;
+  const revision = (playback.get(video) || 0) + 1;
+  playback.set(video, revision);
+  const current = () => registered(path, node, video, owner, stream)
+    && playback.get(video) === revision;
+  video.play().then(() => {
+    if (!current()) return;
+    video.dataset.blocked = "";
+    setCaption(path, "Playing.");
+    refreshResume();
+  }).catch(() => {
+    if (!current()) return;
+    video.dataset.blocked = "1";
+    setCaption(path, "Playback is blocked. Use Play media.");
+    refreshResume();
+  });
+}
+
 function tile(path) {
   let node = peers.querySelector(`[data-path="${CSS.escape(path)}"]`);
   if (node) return node;
@@ -52,12 +87,13 @@ function tile(path) {
   node.innerHTML = `<h2></h2><video autoplay playsinline></video><p></p>`;
   node.querySelector("h2").textContent = path;
   const video = node.querySelector("video");
-  video.addEventListener("playing", () => setCaption(path, "Playing."));
+  const current = () => registered(path, node, video, video.dataset.owner, video.srcObject);
+  video.addEventListener("playing", () => { if (current() && video.dataset.blocked !== "1") setCaption(path, "Playing."); });
   video.addEventListener("waiting", () => {
-    if (video.dataset.blocked === "1") return;
+    if (!current() || video.dataset.blocked === "1") return;
     setCaption(path, "Waiting — the other side must publish again.");
   });
-  video.addEventListener("ended", () => setCaption(path, "Waiting — the other side must publish again."));
+  video.addEventListener("ended", () => { if (current()) setCaption(path, "Waiting — the other side must publish again."); });
   peers.append(node);
   return node;
 }
@@ -121,18 +157,7 @@ const room = origin
           if (track.readyState === "ended" || track.kind === event.track.kind) stream.removeTrack(track);
         }
         stream.addTrack(event.track);
-        const played = owner;
-        video.play().then(() => {
-          if (video.dataset.owner !== played) return;
-          video.dataset.blocked = "";
-          setCaption(path, "Playing.");
-          refreshResume();
-        }).catch(() => {
-          if (video.dataset.owner !== played) return;
-          video.dataset.blocked = "1";
-          setCaption(path, "Playback is blocked. Use Play media.");
-          refreshResume();
-        });
+        playView(path, node, video);
       },
       onUpdate() { paint(); },
     })
@@ -148,6 +173,7 @@ function paint() {
   if (!room) return;
   const live = room.status();
   if (Object.prototype.hasOwnProperty.call(live, "incumbent") && !live.incumbent && !live.candidate) {
+    for (const node of peers.querySelectorAll(".tile")) retireView(node);
     peers.replaceChildren();
     if (shownGeneration) {
       localVideo.srcObject = null;
@@ -157,6 +183,15 @@ function paint() {
     refreshResume();
     return;
   }
+  for (const node of peers.querySelectorAll(".tile")) {
+    const peer = (live.peers || {})[node.dataset.path];
+    const expected = peer && `${live.incumbent}:${peer.attempt}`;
+    if (node.dataset.owner && (node.dataset.owner !== expected || peer?.failed || peer?.empty)) {
+      retireView(node);
+      node.querySelector("p").textContent = "Waiting — the other side must publish again.";
+    }
+  }
+  refreshResume();
   for (const [path, peer] of Object.entries(live.peers || {})) {
     const node = tile(path);
     const video = node.querySelector("video");
@@ -169,7 +204,7 @@ function paint() {
       node.querySelector("p").textContent = "Waiting — the other side must publish again.";
     }
   }
-  playback.clear();
+
 }
 
 async function run(action) {
@@ -202,6 +237,7 @@ function clearViews() {
   localVideo.srcObject = null;
   shownGeneration = 0;
   if (resume) resume.hidden = true;
+  for (const node of peers.querySelectorAll(".tile")) retireView(node);
   peers.replaceChildren();
 }
 
@@ -220,13 +256,8 @@ document.querySelector("#leave").addEventListener("click", async () => {
 });
 if (resume) resume.addEventListener("click", () => {
   for (const video of peers.querySelectorAll("video")) {
-    const owner = video.dataset.owner;
-    video.play().then(() => {
-      if (video.dataset.owner !== owner) return;
-      video.dataset.blocked = "";
-      setCaption(video.closest(".tile").dataset.path, "Playing.");
-      refreshResume();
-    }).catch(() => refreshResume());
+    const node = video.closest(".tile");
+    playView(node.dataset.path, node, video);
   }
 });
 

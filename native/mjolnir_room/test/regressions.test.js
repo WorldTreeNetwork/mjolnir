@@ -224,7 +224,7 @@ function pageHarness() {
         if (q.startsWith("[data-path=")) return this.children.find((n) => q === `[data-path="${n.dataset.path}"]`) || null;
         return this.parts[q];
       },
-      querySelectorAll() { return this.children.map((n) => n.parts.video).filter(Boolean); },
+      querySelectorAll(q) { return q === ".tile" ? this.children : this.children.map((n) => n.parts.video).filter(Boolean); },
       replaceChildren() { this.children = []; },
       closest() { return this; },
       parts: {},
@@ -492,4 +492,64 @@ test("an expiry update clears the in-room status and the peer tile", async () =>
   p.deps.onUpdate();
   assert.equal(p.nodes["#status"].textContent, "This token is not valid.");
   assert.equal(p.nodes["#peers"].children.length, 0);
+});
+
+
+test("late allocation after Leave deletes without waiting for SDP", async () => {
+  const headers = deferred(); let bodyRead = false;
+  const h = harness({ fetch(call) {
+    if (call.url.includes("/whip/")) return headers.promise;
+  }});
+  const joined = h.room.join(mint()); await tick();
+  await h.room.teardown();
+  headers.resolve({ status: 201, headers: new Headers({location:"/session/late"}),
+    text() { bodyRead = true; return new Promise(() => {}); } });
+  assert.equal((await joined).ok, false);
+  await tick();
+  assert.equal(bodyRead, false);
+  assert.ok(h.calls.some(c => c.init.method === "DELETE" && c.url.endsWith("/session/late")));
+});
+
+test("Leave settles a pending SDP body and deletes its allocation", async () => {
+  const h = harness({ fetch(call) {
+    if (call.url.includes("/whip/")) return {status:201, headers:new Headers({location:"/session/body"}), text:()=>new Promise(()=>{})};
+  }});
+  const joined = h.room.join(mint()); await tick();
+  await h.room.teardown();
+  assert.equal((await joined).ok, false);
+  assert.ok(h.tracks.every(t=>t.stopped));
+});
+
+test("generation commit without new tracks retires the old remote view", async () => {
+  const p = pageHarness(); p.live.incumbent = 1;
+  p.live.peers = {"bob/cam":{attempt:1}};
+  p.deps.onRemoteTrack("bob/cam",1,{track:{kind:"video"}},1); await tick();
+  const video=p.nodes["#peers"].children[0].parts.video;
+  p.live.incumbent=2; p.live.peers={}; p.deps.onUpdate();
+  assert.equal(video.srcObject,null);
+  assert.equal(p.nodes["#resume"].hidden,true);
+});
+
+test("detached tile events and playback completion cannot update replacement tile", async () => {
+  const p=pageHarness(); await p.ctx.window.roomClient.join();
+  const old=p.nodes["#peers"].children[0]; const pending=deferred();
+  old.parts.video.play=()=>pending.promise;
+  p.deps.onRemoteTrack("bob/cam",1,{track:{kind:"video"}},1);
+  await p.nodes["#leave"].click();
+  await p.ctx.window.roomClient.join();
+  p.deps.onRemoteTrack("bob/cam",1,{track:{kind:"video"}},2); await tick();
+  const current=p.nodes["#peers"].children[0];
+  pending.resolve(); await tick(); old.parts.video.handlers.playing();
+  assert.match(current.parts.p.textContent,/Playback is blocked/);
+});
+
+test("SDP body wait is bounded before commit and releases camera", async () => {
+  const h = harness({ fetch(call) {
+    if (call.url.includes("/whip/")) return {status:201, headers:new Headers({location:"/session/bound"}), text:()=>new Promise(()=>{})};
+  }});
+  const joined=h.room.join(mint()); await tick();
+  const bound=h.timers.find(t=>t.ms===5000 && !t.cleared);
+  assert.ok(bound); bound.fn();
+  assert.equal((await joined).ok,false);
+  assert.ok(h.tracks.every(t=>t.stopped));
 });

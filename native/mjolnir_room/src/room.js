@@ -470,12 +470,20 @@ export function createRoom(deps) {
         session = { location, token: admission.token, root: admission.root };
         gen.sessions.push(session);
       }
-      let text = "";
-      try {
-        text = await response.text();
-      } catch {
-        return { ok: false, error: "setup_failed", pc, session };
+      const afterHeaders = ownershipError(gen);
+      if (afterHeaders) return { ok: false, error: afterHeaders, pc, session };
+      const bodyGate = settleOnRetire(gen);
+      const bodyTimer = ownTimer(gen, () => bodyGate.finish("timeout"),
+        Math.max(0, Math.min(5000, admission.exp * 1000 - now())));
+      Promise.resolve().then(() => response.text()).then(
+        (text) => bodyGate.finish({ text }),
+        () => bodyGate.finish("failed"));
+      const body = await bodyGate.promise;
+      clear(bodyTimer);
+      if (!body || typeof body !== "object") {
+        return { ok: false, error: ownershipError(gen) || "setup_failed", pc, session };
       }
+      const text = body.text;
       if (!owns(gen)) return { ok: false, error: "stale", pc, session };
       const parsed = safeJson(text);
       const fail = (error) => ({ ok: false, error, status: response.status, pc, session });
