@@ -3,7 +3,7 @@
 Fresh advise of this text, then a green local `.13` slice, then the named-peer work. `.14` still blocks closing the node. The build grant is already recorded. Do not deploy.
 
 - [x] Fresh advise. Accepted a1be084f by independent reader in `reviews/2026-11-26-advise-3.md`.
-- [x] Module tests with a fake configured origin: bad status, real gateway `unexpected_root`, `room_not_open`, and comparator `kind_mismatch`, no `getUserMedia` before success. Invitation paths that are absolute URLs or contain `..` never fetch. `native/mjolnir_room` 11 tests.
+- [x] Module tests with a fake configured origin: bad status, real gateway `unexpected_root`, `room_not_open`, and comparator `kind_mismatch`, no `getUserMedia` before success. Invitation paths that are absolute URLs or contain `..` never fetch. Current accepted implementation `0df60bee`: 45 unit tests plus 17 reviewer probes and 4 independent boundary probes (review `00006627`).
 - [x] Partial renew rolls back only the new generation. A late `getUserMedia` from the old generation does not attach. The old timer does not close the new PeerConnection. `teardown` DELETEs with the admitting bearer.
 - [x] One Chromium page against the local gateway: notice before the prompt, coloured frames and tone on one named peer. `not_started` retry and WHIP `403` cleanup are covered by the module tests. Evidence: `reviews/2026-11-27-named-peer-slice.md`. The bead stays open.
 - [ ] Do not check the bead done.
@@ -18,9 +18,13 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 
 - [x] B1/B3: admit self publish and every named peer subscribe for immutable attempt inputs; reject expired-on-arrival admission before camera and cover late camera cleanup.
 - [x] B2: retain incumbent through bounded publisher readiness; same-path announcement is not atomic (the pin announces inside accept); overlapping incumbent/candidate callbacks; candidate tracks stop when publisher setup fails.
-- [ ] B4: reconcile actual gateway 403 translation with expected-root/kind journeys; distinguish comparator tests from real endpoint behavior.
+- [x] B4: typed real gateway refusals are preserved; comparator outcomes remain separate. Accepted code `0df60bee`, review `00006627`, and real gateway refusal/lifecycle evidence `1c83ad07` and subsequent current-page runs.
 
 ## Reconciliation after second review
 
 - [x] Fresh independent review of corrected admission/setup/lifecycle contract. Accepted a1be084f in `reviews/2026-11-26-advise-3.md`.
 - [x] Design D5 same-path failures on the accepted page `0df60bee` and gateway `4bd94d1d`: answer-body failure, `setRemoteDescription` failure, and publisher ICE timeout, each with an already-connected subscriber and a subscriber joining during the attempt. Evidence: `reviews/2026-11-27-d5-failures-0df60bee/`. Incumbent id, open PCs, and live local tracks stayed; the candidate publisher PC closed; no `Playing.` caption on a detached tile. Relay selection stayed non-atomic (a second `alice/cam` publish was accepted). No seamless rollback is claimed. Module regressions stay separate from that media run. This does not close `.15`.
+
+## Local integration acceptance
+
+Parent checked the served page hashes and D5 outcomes at `3a6df0f5` against accepted `0df60bee` and gateway `4bd94d1d`. Together with sustained current-track tone/color evidence `f2322149`, this completes the authorized local named-peer integration slice. Handover is non-atomic and may interrupt playback. No production deployment or whole-node closure is implied; the broader gates above remain open.
