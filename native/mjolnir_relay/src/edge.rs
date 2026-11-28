@@ -2303,6 +2303,7 @@ mod tests {
         HoldFlush,
         /// Hold writes until `release` is set.
         HoldWrite,
+        HoldVectoredWrite,
     }
 
     fn whip_bytes(token: &str, root: &str, path: &str, body: &str) -> Vec<u8> {
@@ -2386,6 +2387,22 @@ mod tests {
     }
 
     impl tokio::io::AsyncWrite for Captured {
+        fn is_write_vectored(&self) -> bool {
+            matches!(self.mode, WireMode::HoldVectoredWrite)
+        }
+
+        fn poll_write_vectored(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            bufs: &[std::io::IoSlice<'_>],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if !self.release.load(Ordering::SeqCst) {
+                *self.waker.lock().expect("waker") = Some(cx.waker().clone());
+                return std::task::Poll::Pending;
+            }
+            self.as_mut().poll_write(cx, bufs.first().map(|b| &b[..]).unwrap_or(&[]))
+        }
+
         fn poll_write(
             self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -2675,7 +2692,7 @@ mod tests {
         let bob_checked = edge.admit(Some(&bob), Some(&root), Some("standup"), Op::Publish, "bob/cam", SystemTime::now()).unwrap();
         let _incumbent = edge.attach(&alice_checked, offer, offer, SystemTime::now()).await.unwrap();
         let _other = edge.attach(&bob_checked, offer, offer, SystemTime::now()).await.unwrap();
-        for mode in [WireMode::HoldFlush, WireMode::HoldWrite] {
+        for mode in [WireMode::HoldFlush, WireMode::HoldWrite, WireMode::HoldVectoredWrite] {
             let (task, _release, _waker) = hold(&edge, &alice, &root, mode);
             until_sessions(&edge, 3).await;
             let pending = {

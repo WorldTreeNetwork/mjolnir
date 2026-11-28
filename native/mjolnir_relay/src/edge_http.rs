@@ -298,7 +298,14 @@ where
         cx: &mut Context<'_>,
         bufs: &[std::io::IoSlice<'_>],
     ) -> Poll<std::io::Result<usize>> {
-        self.project().inner.poll_write_vectored(cx, bufs)
+        let this = self.project();
+        if this.ctx.aborted(cx) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "pending answer invalidated",
+            )));
+        }
+        this.inner.poll_write_vectored(cx, bufs)
     }
 
     fn is_write_vectored(&self) -> bool {
