@@ -1,0 +1,7 @@
+body { font: 16px/1.4 system-ui, sans-serif; margin: 1.5rem; color: #1a1a1a; background: #f6f4ef; }
+#notice { font-weight: 650; }
+video { width: min(100%, 28rem); background: #111; }
+button { margin-right: 0.5rem; }
+#peers { display: flex; flex-wrap: wrap; gap: 1rem; }
+.tile { min-width: 12rem; }
+.tile p { margin: 0.25rem 0; }

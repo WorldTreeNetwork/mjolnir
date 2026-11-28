@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Open room</title>
+  <meta name="referrer" content="no-referrer">
+  <link rel="stylesheet" href="room.css">
+</head>
+<body>
+  <p id="notice">This room is open. The host can read the media.</p>
+  <p id="handover">If the other side publishes again, this page must play that path again. The relay does not follow a replacement by itself.</p>
+  <p id="status" role="status"></p>
+  <button id="join" type="button">Join</button>
+  <button id="replace" type="button">Replace</button>
+  <button id="renew" type="button">Renew</button>
+  <button id="leave" type="button">Leave</button>
+  <label>Renewal token <input id="renew-token" autocomplete="off"></label>
+  <section id="local"><h2>You</h2><video id="local-video" autoplay playsinline muted></video></section>
+  <section id="peers"></section>
+  <script src="config.js"></script>
+  <script type="module" src="boot.js"></script>
+</body>
+</html>

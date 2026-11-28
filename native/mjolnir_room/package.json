@@ -1,0 +1,11 @@
+{
+  "name": "mjolnir-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "MIT open-room page. It does not import the AGPL host.",
+  "scripts": {
+    "test": "node --test test/room.test.js"
+  }
+}

@@ -26,6 +26,7 @@ LICENSE file), not the AGPL:
   - native/mjolnir_api        — HTTP client + OIDC token store (also used by
                                 external apps such as Papyrus)
   - native/mjolnir_protocol   — vsock / PTY wire protocol
+  - native/mjolnir_room      — MIT open-room page and module (no AGPL import)
 
 These exist so consumers, other apps, and package managers can ship a
 Mjolnir client without AGPL obligations. They do not include the
