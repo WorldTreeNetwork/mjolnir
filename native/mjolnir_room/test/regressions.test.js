@@ -507,7 +507,7 @@ test("late allocation after Leave deletes without waiting for SDP", async () => 
   assert.equal((await joined).ok, false);
   await tick();
   assert.equal(bodyRead, false);
-  assert.ok(h.calls.some(c => c.init.method === "DELETE" && c.url.endsWith("/session/late")));
+  assert.equal(h.calls.filter(c => c.init.method === "DELETE" && c.url.endsWith("/session/late")).length, 1);
 });
 
 test("Leave settles a pending SDP body and deletes its allocation", async () => {
@@ -517,6 +517,7 @@ test("Leave settles a pending SDP body and deletes its allocation", async () => 
   const joined = h.room.join(mint()); await tick();
   await h.room.teardown();
   assert.equal((await joined).ok, false);
+  assert.equal(h.calls.filter(c => c.init.method === "DELETE" && c.url.endsWith("/session/body")).length, 1);
   assert.ok(h.tracks.every(t=>t.stopped));
 });
 
@@ -552,4 +553,18 @@ test("SDP body wait is bounded before commit and releases camera", async () => {
   assert.ok(bound); bound.fn();
   assert.equal((await joined).ok,false);
   assert.ok(h.tracks.every(t=>t.stopped));
+});
+
+
+test("matching in-flight retry tracks survive another peer update", async () => {
+  const p=pageHarness(); p.live.incumbent=1;
+  p.live.peers={"bob/cam":{attempt:2,empty:true,inflight:true},"carol/cam":{attempt:1,empty:true}};
+  p.deps.onRemoteTrack("bob/cam",2,{track:{kind:"video",id:"retry"}},1);
+  const tile=p.nodes["#peers"].children[0];
+  const stream=tile.parts.video.srcObject;
+  p.deps.onUpdate();
+  assert.equal(tile.parts.video.srcObject,stream);
+  p.live.peers["bob/cam"].inflight=false;
+  p.deps.onUpdate();
+  assert.equal(tile.parts.video.srcObject,null);
 });

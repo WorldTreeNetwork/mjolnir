@@ -510,7 +510,7 @@ export function createRoom(deps) {
 
   function discardAttempt(gen, result) {
     if (result && result.pc) closePc(gen, result.pc);
-    if (result && result.session) {
+    if (result && result.session && gen.sessions.includes(result.session)) {
       gen.sessions = gen.sessions.filter((item) => item !== result.session);
       void deleteOne(result.session);
     }

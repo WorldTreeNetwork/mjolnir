@@ -186,7 +186,7 @@ function paint() {
   for (const node of peers.querySelectorAll(".tile")) {
     const peer = (live.peers || {})[node.dataset.path];
     const expected = peer && `${live.incumbent}:${peer.attempt}`;
-    if (node.dataset.owner && (node.dataset.owner !== expected || peer?.failed || peer?.empty)) {
+    if (node.dataset.owner && (node.dataset.owner !== expected || (!peer?.inflight && (peer?.failed || peer?.empty)))) {
       retireView(node);
       node.querySelector("p").textContent = "Waiting — the other side must publish again.";
     }
