@@ -1,0 +1,562 @@
+{
+  "origin": "http://127.0.0.1:18451",
+  "pageOrigin": "http://127.0.0.1:18129",
+  "rootLength": 54,
+  "beforeJoin": {
+    "hash": "",
+    "notice": "This room is open. The host can read the media.",
+    "gum": 0,
+    "pcs": 0
+  },
+  "aliceWaiting": {
+    "status": "in the room",
+    "tiles": [
+      {
+        "path": "bob/cam",
+        "caption": "waiting — the other side must publish again",
+        "width": 0,
+        "height": 0
+      }
+    ],
+    "gum": 1,
+    "pcs": 2,
+    "sessions": [
+      "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e"
+    ],
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409
+      }
+    ]
+  },
+  "bobIn": {
+    "status": "in the room",
+    "tiles": [
+      {
+        "path": "alice/cam",
+        "caption": "playing",
+        "width": 640,
+        "height": 360
+      }
+    ],
+    "gum": 1,
+    "pcs": 2,
+    "sessions": [
+      "/session/b009fe47-c4e3-4fb1-b027-9689950a8a97",
+      "/session/ae473289-4415-40ce-a464-8dc948b83778"
+    ],
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/alice/cam",
+        "status": 201
+      }
+    ]
+  },
+  "decoded": {
+    "left": [
+      200,
+      49,
+      120
+    ],
+    "right": [
+      30,
+      160,
+      159
+    ],
+    "width": 640,
+    "height": 360,
+    "tracks": [
+      "audio",
+      "video"
+    ],
+    "audioPeakHz": 439,
+    "audioRms": 0.0095
+  },
+  "replace": {
+    "beforeSessions": [
+      "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e",
+      "/session/8ecc315a-e6af-42f7-8b4d-1e35dc9f0954"
+    ],
+    "afterSessions": [
+      "/session/d14139e8-c283-4bf4-9b28-fffda6c72bf9"
+    ],
+    "status": "in the room",
+    "gum": 2,
+    "pcs": 5,
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ],
+    "incumbent": 2,
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8ecc315a-e6af-42f7-8b4d-1e35dc9f0954",
+        "status": 204
+      }
+    ]
+  },
+  "bobAfterReplace": {
+    "status": "in the room",
+    "tiles": [
+      {
+        "path": "alice/cam",
+        "caption": "playing",
+        "width": 640,
+        "height": 360
+      }
+    ]
+  },
+  "badRenew": {
+    "status": "forbidden",
+    "sessions": [
+      "/session/d14139e8-c283-4bf4-9b28-fffda6c72bf9",
+      "/session/8fa14f45-518c-4b9e-8979-c1fc61b09b98"
+    ],
+    "sessionsUnchanged": false,
+    "gum": 2,
+    "gumUnchanged": true,
+    "pcs": 5,
+    "pcsUnchanged": true,
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8ecc315a-e6af-42f7-8b4d-1e35dc9f0954",
+        "status": 204
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 403
+      }
+    ],
+    "incumbent": 2
+  },
+  "goodRenew": {
+    "status": "in the room",
+    "sessions": [
+      "/session/2c5de697-38e3-44a0-9822-fe1374c7cef5",
+      "/session/1a9a4535-d03d-49f4-9b54-fbb2ff8733f7"
+    ],
+    "gum": 3,
+    "pcs": 7,
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ],
+    "incumbent": 4,
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8ecc315a-e6af-42f7-8b4d-1e35dc9f0954",
+        "status": 204
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 403
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/d14139e8-c283-4bf4-9b28-fffda6c72bf9",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8fa14f45-518c-4b9e-8979-c1fc61b09b98",
+        "status": 204
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      }
+    ]
+  },
+  "leave": {
+    "status": "left",
+    "tracks": 0,
+    "sessions": [],
+    "pcs": 0,
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ],
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/44f5cb80-7d4a-43a3-9b0d-3cbd78b1087e",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8ecc315a-e6af-42f7-8b4d-1e35dc9f0954",
+        "status": 204
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 403
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/d14139e8-c283-4bf4-9b28-fffda6c72bf9",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/8fa14f45-518c-4b9e-8979-c1fc61b09b98",
+        "status": 204
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 201
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/2c5de697-38e3-44a0-9822-fe1374c7cef5",
+        "status": 204
+      },
+      {
+        "method": "DELETE",
+        "path": "/session/1a9a4535-d03d-49f4-9b54-fbb2ff8733f7",
+        "status": 204
+      }
+    ]
+  },
+  "refusals": [
+    {
+      "name": "empty",
+      "status": "no_token",
+      "gum": 0,
+      "pcs": 0,
+      "http": [],
+      "hash": ""
+    },
+    {
+      "name": "bad",
+      "status": "bad_token",
+      "gum": 0,
+      "pcs": 0,
+      "http": [
+        {
+          "method": "POST",
+          "path": "/admit",
+          "status": 403
+        }
+      ],
+      "hash": ""
+    },
+    {
+      "name": "expired",
+      "status": "bad_token",
+      "gum": 0,
+      "pcs": 0,
+      "http": [
+        {
+          "method": "POST",
+          "path": "/admit",
+          "status": 403
+        }
+      ],
+      "hash": ""
+    }
+  ],
+  "pageErrors": []
+}

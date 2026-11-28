@@ -1,0 +1,13 @@
+2026-11-28T00:35:25.425235Z  INFO moq_webrtc::server::mux: webrtc media mux listening candidates=[127.0.0.1:38916] bound=127.0.0.1:38916
+2026-11-28T00:35:25.425286Z  INFO mjolnir_edge: edge admission listening on 127.0.0.1:18451
+2026-11-28T00:35:26.309352Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-28T00:35:26.309436Z  INFO moq_tokio::connection: connected peer=https://localhost:19451 transport=webtransport
+2026-11-28T00:35:26.312724Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=b4122cee55d0ad0f76f7538ec9138e8a cap=2500000
+2026-11-28T00:35:32.133596Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-28T00:35:32.133613Z  INFO moq_tokio::connection: connected peer=https://localhost:19451 transport=webtransport
+2026-11-28T00:35:32.135413Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=bob/cam instance=2470dc5f3a5bbf76d0accabf0457232e cap=2500000
+2026-11-28T00:35:34.181219Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=8956eff80927340c3c6ea737c51ca69f cap=2500000
+2026-11-28T00:35:34.481679Z  WARN moq_webrtc::session: session ended err=mux error: moq: cancelled role="whep server"
+2026-11-28T00:35:36.540511Z  INFO moq_tokio::client: connected version=moq-lite-06 transport=webtransport
+2026-11-28T00:35:36.540543Z  INFO moq_tokio::connection: connected peer=https://localhost:19451 transport=webtransport
+2026-11-28T00:35:36.542631Z  INFO moq_webrtc::server::whip: whip publish accepted broadcast=alice/cam instance=3dcc43aaafde82e7fb0de8a97826c04b cap=2500000

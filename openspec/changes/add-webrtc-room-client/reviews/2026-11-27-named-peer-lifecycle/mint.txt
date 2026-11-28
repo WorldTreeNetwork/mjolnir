@@ -1,0 +1,8 @@
+16:35:25.413 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=alice kind=open jti=MPNOVUJCkdWtoxRkBicX1A exp=1795826725
+minted alice ttl=600 root_len=54 exp=1795826725
+16:35:25.414 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=alice kind=open jti=iqP9Jr44ldgNHPOeK9YZ7w exp=1795826725
+minted alice2 ttl=600 root_len=54 exp=1795826725
+16:35:25.415 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=bob kind=open jti=s4Pplf_lzllPKJM2Yz0Xxw exp=1795826725
+minted bob ttl=600 root_len=54 exp=1795826725
+16:35:25.415 [info] relay mint sub=0909090909090909090909090909090909090909090909090909090909090909 owner=cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN room=r1 participant=alice kind=open jti=v6MZ27Bx9qL7ZTfjJ_G5ag exp=1795826127
+minted expired ttl=2 root_len=54 exp=1795826127

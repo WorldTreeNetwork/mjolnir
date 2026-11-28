@@ -1,0 +1,9 @@
+page_git_expected eb781150
+chromium Chromium 156.0.8078.79 Arch Linux
+node v26.13.1
+57a21527cd79204d23354337b957ec7efc1240d6f2ba0bf4b4e71f9b9900e343  /tmp/mj13-4bd-tgt/release/mjolnir-edge
+9c24f67c28fc612644d8ccf90ed833895b205089cddb1e30800d8c89ee72e344  /tmp/mj13-4bd-tgt/release/mjolnir-relay
+edge_buildid 2fd7314be7dce560ba6e179ceb0bc90270f615b9
+relay_buildid fe6c0a81c428142505e7c556db350f6c96fcc970
+file_edge ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 4.4.0, BuildID[sha1]=2fd7314be7dce560ba6e179ceb0bc90270f615b9, not stripped
+file_relay ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 4.4.0, BuildID[sha1]=fe6c0a81c428142505e7c556db350f6c96fcc970, not stripped
