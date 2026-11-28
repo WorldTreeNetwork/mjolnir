@@ -1,0 +1,16 @@
+[2m2026-11-28T00:58:21.640966Z[0m [32m INFO[0m [2mmoq_webrtc::server::mux[0m[2m:[0m webrtc media mux listening [3mcandidates[0m[2m=[0m[127.0.0.1:41171] [3mbound[0m[2m=[0m127.0.0.1:41171
+[2m2026-11-28T00:58:21.641022Z[0m [32m INFO[0m [2mmjolnir_edge[0m[2m:[0m edge admission listening on 127.0.0.1:18453
+[2m2026-11-28T00:58:22.401563Z[0m [32m INFO[0m [2mmoq_tokio::client[0m[2m:[0m connected [3mversion[0m[2m=[0mmoq-lite-06 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:58:22.401594Z[0m [32m INFO[0m [2mmoq_tokio::connection[0m[2m:[0m connected [3mpeer[0m[2m=[0mhttps://localhost:19453 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:58:22.403589Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0m0ab186bc932ab6ae917f63492b994d3e [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T00:58:28.258863Z[0m [32m INFO[0m [2mmoq_tokio::client[0m[2m:[0m connected [3mversion[0m[2m=[0mmoq-lite-06 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:58:28.258882Z[0m [32m INFO[0m [2mmoq_tokio::connection[0m[2m:[0m connected [3mpeer[0m[2m=[0mhttps://localhost:19453 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:58:28.260755Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0mbob/cam [3minstance[0m[2m=[0m44f45e24cd9359a7c5ea5875399afddf [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T00:58:30.320563Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0m4ef0fa8cdcffa9804af5093ed7568a21 [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T00:58:30.632902Z[0m [33m WARN[0m [2mmoq_webrtc::session[0m[2m:[0m session ended [3merr[0m[2m=[0mmux error: moq: unroutable [3mrole[0m[2m=[0m"whep server"
+[2m2026-11-28T00:58:41.383858Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0md98e2e8ac260917709384953e6dd1029 [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T00:58:41.694758Z[0m [33m WARN[0m [2mmoq_webrtc::session[0m[2m:[0m session ended [3merr[0m[2m=[0mmux error: moq: unroutable [3mrole[0m[2m=[0m"whep server"
+[2m2026-11-28T00:59:13.649230Z[0m [32m INFO[0m [2mmoq_tokio::client[0m[2m:[0m connected [3mversion[0m[2m=[0mmoq-lite-06 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:59:13.649252Z[0m [32m INFO[0m [2mmoq_tokio::connection[0m[2m:[0m connected [3mpeer[0m[2m=[0mhttps://localhost:19453 [3mtransport[0m[2m=[0mwebtransport
+[2m2026-11-28T00:59:13.660979Z[0m [32m INFO[0m [2mmoq_webrtc::server::whip[0m[2m:[0m whip publish accepted [3mbroadcast[0m[2m=[0malice/cam [3minstance[0m[2m=[0mb531a16610d9c0f5f8986372f0cf3210 [3mcap[0m[2m=[0m2500000
+[2m2026-11-28T00:59:13.978283Z[0m [33m WARN[0m [2mmoq_webrtc::session[0m[2m:[0m session ended [3merr[0m[2m=[0mmux error: moq: unroutable [3mrole[0m[2m=[0m"whep server"

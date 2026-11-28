@@ -1,0 +1,2 @@
+MJ15_GW_OK
+node_rc=0

@@ -1,0 +1,471 @@
+{
+  "kind": "accepted-gateway-4bd94d1d",
+  "origin": "http://127.0.0.1:18453",
+  "pageOrigin": "http://127.0.0.1:18133",
+  "rootLength": 54,
+  "beforeJoin": {
+    "hash": "",
+    "notice": "This room is open. The host can read the media.",
+    "gum": 0,
+    "pcsTotal": 0
+  },
+  "aliceJoined": {
+    "status": "In the room.",
+    "tiles": [
+      {
+        "path": "bob/cam",
+        "attempt": "",
+        "caption": "Waiting — the other side must publish again.",
+        "width": 0,
+        "height": 0,
+        "tracks": []
+      }
+    ],
+    "gum": 1,
+    "sessions": [
+      "/session/cb6beab0-519f-4bbb-8d0a-a86633e694fb"
+    ],
+    "incumbent": 1,
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/whip/r1/alice/cam",
+        "status": 201,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/whep/r1/bob/cam",
+        "status": 409,
+        "auth": "present",
+        "redirected": false
+      }
+    ]
+  },
+  "decoded": {
+    "decoded": true,
+    "left": [
+      200,
+      49,
+      120
+    ],
+    "right": [
+      30,
+      160,
+      159
+    ],
+    "width": 640,
+    "height": 360,
+    "caption": "Playing.",
+    "tracks": [
+      {
+        "kind": "audio",
+        "state": "live"
+      },
+      {
+        "kind": "video",
+        "state": "live"
+      }
+    ],
+    "audioPeakHz": 439,
+    "audioRms": 0.0095
+  },
+  "decodedCountsAsPlaying": true,
+  "replace": {
+    "incumbentBefore": 1,
+    "incumbentAfter": 2,
+    "sessionsBefore": [
+      "/session/cb6beab0-519f-4bbb-8d0a-a86633e694fb",
+      "/session/1b44ec69-24b6-4d12-96a7-6b10112dc8ca"
+    ],
+    "sessionsAfter": [
+      "/session/7fd48340-c777-41c6-bd0e-f9c88f6c2c49",
+      "/session/2ce6c165-5f7f-45e3-8f77-70def5c19c95"
+    ],
+    "previousTracks": [
+      {
+        "id": "fb87dd7c-ea53-4493-bba3-f4218ef6c296",
+        "kind": "audio",
+        "state": "ended"
+      },
+      {
+        "id": "a88aa0fa-bf0c-4a87-a4aa-6a3a095605d8",
+        "kind": "video",
+        "state": "ended"
+      }
+    ],
+    "currentTracks": [
+      {
+        "id": "5e93803f-9dfd-49f3-a8cc-50617ee29108",
+        "kind": "audio",
+        "state": "live"
+      },
+      {
+        "id": "9649a9c4-039f-433f-86e4-34299ceefe51",
+        "kind": "video",
+        "state": "live"
+      }
+    ],
+    "previousEnded": true,
+    "currentLive": true,
+    "previewIsPrevious": false
+  },
+  "bobAfterReplace": {
+    "tiles": [
+      {
+        "path": "alice/cam",
+        "attempt": "2",
+        "caption": "Playing.",
+        "width": 640,
+        "height": 360,
+        "tracks": [
+          {
+            "id": "0843f625-9b05-4db9-b5a6-5d815fccd038",
+            "kind": "audio",
+            "state": "live"
+          },
+          {
+            "id": "3d6c6621-9124-4a30-b2ab-6d620fc20434",
+            "kind": "video",
+            "state": "live"
+          }
+        ]
+      }
+    ],
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 640,
+      "height": 360,
+      "caption": "Playing.",
+      "tracks": [
+        {
+          "kind": "audio",
+          "state": "live"
+        },
+        {
+          "kind": "video",
+          "state": "live"
+        }
+      ],
+      "audioPeakHz": 439,
+      "audioRms": 0.0095
+    }
+  },
+  "autoplay": {
+    "blockedCaption": [
+      {
+        "path": "alice/cam",
+        "attempt": "3",
+        "caption": "Playback is blocked. Use Play media.",
+        "width": 0,
+        "height": 0,
+        "tracks": [
+          {
+            "id": "74faca24-a9d0-41f5-8914-7ce2681b9204",
+            "kind": "audio",
+            "state": "live"
+          },
+          {
+            "id": "abe999e8-1362-4157-af3c-ca93aaf122a7",
+            "kind": "video",
+            "state": "live"
+          }
+        ]
+      }
+    ],
+    "resumeWasHidden": false,
+    "afterResume": {
+      "tiles": [
+        {
+          "path": "alice/cam",
+          "attempt": "3",
+          "caption": "Playing.",
+          "width": 1280,
+          "height": 720,
+          "tracks": [
+            {
+              "id": "74faca24-a9d0-41f5-8914-7ce2681b9204",
+              "kind": "audio",
+              "state": "live"
+            },
+            {
+              "id": "abe999e8-1362-4157-af3c-ca93aaf122a7",
+              "kind": "video",
+              "state": "live"
+            }
+          ]
+        }
+      ],
+      "resumeHidden": false
+    },
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 1280,
+      "height": 720,
+      "caption": "Playing.",
+      "tracks": [
+        {
+          "kind": "audio",
+          "state": "live"
+        },
+        {
+          "kind": "video",
+          "state": "live"
+        }
+      ],
+      "audioPeakHz": 439,
+      "audioRms": 0.0095
+    }
+  },
+  "badRenew": {
+    "status": "This token cannot publish that path.",
+    "sessions": [
+      "/session/8ba04c38-ee94-47b2-b3b7-ffc54f326a34",
+      "/session/70be2f02-839c-4dbe-aabd-82489d3b9812"
+    ],
+    "sessionsUnchanged": true,
+    "gum": 3,
+    "gumUnchanged": true,
+    "incumbent": 3,
+    "renewalField": "",
+    "http": [
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 200,
+        "auth": "present",
+        "redirected": false
+      },
+      {
+        "method": "POST",
+        "path": "/admit",
+        "status": 403,
+        "auth": "present",
+        "redirected": false
+      }
+    ]
+  },
+  "goodRenew": {
+    "status": "In the room.",
+    "sessions": [
+      "/session/6c44c9ee-c9c2-408e-873c-81317d2d7c23",
+      "/session/084ac787-c9bf-49e2-ad8b-6390531ed268"
+    ],
+    "incumbent": 5,
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ],
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 1280,
+      "height": 720,
+      "caption": "Playing.",
+      "tracks": [
+        {
+          "kind": "audio",
+          "state": "live"
+        },
+        {
+          "kind": "video",
+          "state": "live"
+        }
+      ],
+      "audioPeakHz": 0,
+      "audioRms": 0
+    },
+    "bobPlaying": true
+  },
+  "leave": {
+    "status": "Left the room.",
+    "tracks": 0,
+    "sessions": [],
+    "pcs": 0,
+    "local": [],
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ]
+  },
+  "refusals": [
+    {
+      "name": "empty",
+      "status": "A token is required before the camera can open.",
+      "gum": 0,
+      "pcsTotal": 0,
+      "http": [],
+      "hash": ""
+    },
+    {
+      "name": "bad",
+      "status": "This token is not valid.",
+      "gum": 0,
+      "pcsTotal": 0,
+      "http": [
+        {
+          "method": "POST",
+          "path": "/admit",
+          "status": 403,
+          "auth": "present",
+          "redirected": false
+        }
+      ],
+      "hash": ""
+    },
+    {
+      "name": "expired",
+      "status": "This token is not valid.",
+      "gum": 0,
+      "pcsTotal": 0,
+      "http": [
+        {
+          "method": "POST",
+          "path": "/admit",
+          "status": 403,
+          "auth": "present",
+          "redirected": false
+        }
+      ],
+      "hash": ""
+    }
+  ],
+  "pageErrors": [
+    "alice console Failed to load resource: the server responded with a status of 404 (File not found)",
+    "alice console Failed to load resource: the server responded with a status of 404 (File not found)",
+    "alice console Failed to load resource: the server responded with a status of 409 (Conflict)",
+    "bob console Failed to load resource: the server responded with a status of 404 (File not found)",
+    "alice console Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  ]
+}
