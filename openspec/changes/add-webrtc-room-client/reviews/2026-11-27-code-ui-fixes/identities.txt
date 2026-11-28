@@ -1,0 +1,9 @@
+chromium Chromium 156.0.8078.79 Arch Linux
+node_tests local node --test 27 pass
+historical_repros unchanged openspec/changes/add-webrtc-room-client/reviews/2026-11-27-code-repros.mjs now 15 fail
+room_js 32b25c885b27fd6405fef42c8a9e594bd39f3378c8692e9293d70ed24b84c078
+boot_js 7065d95e58523d406a1e9af0fe1463fc64565155f17f5a9c34cc1f52f0f2e3db
+room_html d5a2a91f2dcfd906cf9569972590398a64db67e81b9fbcce26cb1d0d2876f415
+regressions b7c86391cfda04e63cbc0016fdf1df97bfdd4c419157f577b376754588c83763
+fixture http://127.0.0.1:18452 page http://127.0.0.1:18132
+gateway_source unchanged

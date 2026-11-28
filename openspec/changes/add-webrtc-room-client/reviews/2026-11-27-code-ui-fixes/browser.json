@@ -1,0 +1,55 @@
+{
+  "errors": [
+    "console error: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "console error: Failed to load resource: the server responded with a status of 409 (Conflict)",
+    "console error: Failed to load resource: the server responded with a status of 403 (Forbidden)"
+  ],
+  "expired": {
+    "status": "This token is not valid.",
+    "gum": 0,
+    "hash": "",
+    "notice": "This room is open. The host can read the media."
+  },
+  "afterRetry": {
+    "status": "In the room.",
+    "tile": "Waiting — the other side must publish again.",
+    "width": 0,
+    "sessions": ["/session/s1", "/session/s2"]
+  },
+  "afterReplace": {
+    "status": "Replacing the connection…",
+    "tile": "Playing.",
+    "resumeHidden": false,
+    "sessions": ["/session/s3", "/session/s4"],
+    "gum": 2
+  },
+  "afterResume": { "tile": "Playing.", "rejects": 2 },
+  "badRenew": {
+    "status": "This token cannot publish that path.",
+    "sessions": ["/session/s3", "/session/s4"],
+    "gum": 2,
+    "field": "",
+    "sessionsUnchanged": true
+  },
+  "leaveClearedMs": 44,
+  "leaveImmediate": { "status": "Leaving…", "local": null, "tiles": 0 },
+  "leaveFinal": "Left the room. The server has not confirmed cleanup.",
+  "hungDeletes": ["/session/s3", "/session/s4"],
+  "trace": [
+    { "method": "POST", "path": "/admit", "auth": "present" },
+    { "method": "POST", "path": "/admit", "operation": "publish", "broadcast": "alice/cam", "auth": "present" },
+    { "method": "POST", "path": "/admit", "operation": "subscribe", "broadcast": "bob/cam", "auth": "present" },
+    { "method": "POST", "path": "/whip/r1/alice/cam", "status": 201, "location": "/session/s1", "auth": "present" },
+    { "method": "POST", "path": "/whep/r1/bob/cam", "status": 409, "auth": "present" },
+    { "method": "POST", "path": "/whep/r1/bob/cam", "status": 201, "location": "/session/s2", "auth": "present" },
+    { "method": "POST", "path": "/admit", "operation": "publish", "broadcast": "alice/cam", "auth": "present" },
+    { "method": "POST", "path": "/admit", "operation": "subscribe", "broadcast": "bob/cam", "auth": "present" },
+    { "method": "POST", "path": "/whip/r1/alice/cam", "status": 201, "location": "/session/s3", "auth": "present" },
+    { "method": "DELETE", "path": "/session/s1", "status": 204, "auth": "present" },
+    { "method": "DELETE", "path": "/session/s2", "status": 204, "auth": "present" },
+    { "method": "POST", "path": "/whep/r1/bob/cam", "status": 201, "location": "/session/s4", "auth": "present" },
+    { "method": "POST", "path": "/admit", "auth": "present" },
+    { "method": "DELETE", "path": "/session/s3", "auth": "present" },
+    { "method": "DELETE", "path": "/session/s4", "auth": "present" }
+  ]
+}

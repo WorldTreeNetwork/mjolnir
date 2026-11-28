@@ -6,6 +6,6 @@
   "license": "MIT",
   "description": "MIT open-room page. It does not import the AGPL host.",
   "scripts": {
-    "test": "node --test test/room.test.js"
+    "test": "node --test test/room.test.js test/regressions.test.js"
   }
 }
