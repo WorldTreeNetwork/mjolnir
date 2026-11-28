@@ -1,0 +1,254 @@
+{
+  "kind": "accepted-gateway-4bd94d1d plus labeled hooks",
+  "decoded": {
+    "decoded": true,
+    "left": [
+      200,
+      49,
+      120
+    ],
+    "right": [
+      30,
+      160,
+      159
+    ],
+    "width": 640,
+    "height": 360,
+    "caption": "Playing.",
+    "audioPeakHz": 439,
+    "audioRms": 0.0095
+  },
+  "decodedCounts": true,
+  "waitingAtJoin": [
+    {
+      "path": "alice/cam",
+      "owner": "1:1",
+      "caption": "Playing.",
+      "width": 640,
+      "height": 360
+    }
+  ],
+  "replace": {
+    "before": 1,
+    "after": 2,
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 640,
+      "height": 360,
+      "caption": "Playing.",
+      "audioPeakHz": 0,
+      "audioRms": 0
+    }
+  },
+  "autoplay": {
+    "blocked": [
+      {
+        "path": "alice/cam",
+        "owner": "1:2",
+        "caption": "Playback is blocked. Use Play media.",
+        "width": 0,
+        "height": 0
+      }
+    ],
+    "resumeHiddenAfter": true,
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 640,
+      "height": 360,
+      "caption": "Playing.",
+      "audioPeakHz": 439,
+      "audioRms": 0.0095
+    }
+  },
+  "badRenew": {
+    "status": "This token cannot publish that path.",
+    "sessions": [
+      "/session/7ac5e260-8e4c-4c67-9782-fa7646bfe1e7",
+      "/session/ac10f6c4-3e46-4eab-a0a8-3fda183970ef"
+    ]
+  },
+  "goodRenew": {
+    "status": "In the room.",
+    "sessions": [
+      "/session/4694f50b-2272-4138-bdd5-6b15c3614c1b",
+      "/session/646df967-39da-4a47-ae78-644e95765581"
+    ],
+    "decoded": {
+      "decoded": true,
+      "left": [
+        200,
+        49,
+        120
+      ],
+      "right": [
+        30,
+        160,
+        159
+      ],
+      "width": 640,
+      "height": 360,
+      "caption": "Playing.",
+      "audioPeakHz": 0,
+      "audioRms": 0
+    }
+  },
+  "leave": {
+    "status": "Left the room.",
+    "sessions": [],
+    "deletes": [
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      },
+      {
+        "ok": true,
+        "status": 204
+      }
+    ]
+  },
+  "hooks": {
+    "construct": {
+      "mode": "construct",
+      "label": "harness hook on the real page and accepted gateway",
+      "status": "The room could not be connected.",
+      "sessions": [],
+      "streams": [
+        [
+          {
+            "id": "7694a3fe-8942-468b-a203-1842d9f6ef36",
+            "kind": "audio",
+            "state": "ended"
+          },
+          {
+            "id": "30b5197b-972f-485b-80d8-167f8b7af144",
+            "kind": "video",
+            "state": "ended"
+          }
+        ]
+      ],
+      "whip": []
+    },
+    "body": {
+      "mode": "body",
+      "label": "harness hook on the real page and accepted gateway",
+      "status": "The room could not be connected.",
+      "deletes": [
+        {
+          "method": "DELETE",
+          "path": "/session/67ba8a7f-5519-487f-a5c3-3eb6c040d879",
+          "status": 204,
+          "redirected": false
+        }
+      ],
+      "whip": [
+        {
+          "method": "POST",
+          "path": "/whip/r1/alice/cam",
+          "status": 201,
+          "redirected": false
+        }
+      ]
+    },
+    "ice": {
+      "mode": "ice",
+      "label": "harness hook on the real page and accepted gateway",
+      "status": "Left the room.",
+      "msNote": "left while ICE gathering was forced to stay gathering"
+    },
+    "shared": {
+      "mode": "shared",
+      "label": "harness hook on the real page and accepted gateway",
+      "status": "The room could not be connected.",
+      "incumbent": 1,
+      "beforeStreams": [
+        [
+          {
+            "id": "4668fc07-13cf-4758-a216-7c4a1fc11f31",
+            "kind": "audio",
+            "state": "live"
+          },
+          {
+            "id": "ddee285e-5c48-4b57-a285-10a7b6ec5dfd",
+            "kind": "video",
+            "state": "live"
+          }
+        ]
+      ],
+      "afterStreams": [
+        [
+          {
+            "id": "4668fc07-13cf-4758-a216-7c4a1fc11f31",
+            "kind": "audio",
+            "state": "live"
+          },
+          {
+            "id": "ddee285e-5c48-4b57-a285-10a7b6ec5dfd",
+            "kind": "video",
+            "state": "live"
+          }
+        ]
+      ]
+    },
+    "overlap": {
+      "mode": "overlap",
+      "label": "harness hook on the real page and accepted gateway",
+      "during": "In the room.",
+      "later": "In the room.",
+      "hungDelete": true
+    },
+    "expiry": {
+      "status": "This token is not valid.",
+      "tiles": [],
+      "local": []
+    }
+  },
+  "aliceSessionsAtRenew": [
+    "/session/7ac5e260-8e4c-4c67-9782-fa7646bfe1e7",
+    "/session/ac10f6c4-3e46-4eab-a0a8-3fda183970ef"
+  ],
+  "pageErrors": []
+}

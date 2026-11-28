@@ -3,7 +3,7 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { createRoom, validBroadcast } from "../src/room.js";
+import { canonicalBroadcast, createRoom, validBroadcast } from "../src/room.js";
 
 const root = `t/${"1".repeat(32)}/~open/r1`;
 const mint = (extra = {}) => ({
@@ -235,6 +235,7 @@ function pageHarness() {
   nodes["#notice"].textContent = "This room is open. The host can read the media.";
   nodes["#resume"].hidden = true;
   let deps;
+  let api;
   const live = { tracks: 1, peers: { "bob/cam": { empty: true } }, sessions: [], pcs: 0 };
   const media = deferred();
   const ctx = {
@@ -247,16 +248,17 @@ function pageHarness() {
     fetch() {}, RTCPeerConnection() {},
     createRoom(d) {
       deps = d;
-      return {
+      api = {
         join: async () => ({ ok: true }),
         replace: async () => ({ ok: false, error: "setup_failed" }),
         teardown: async () => ({ ok: true }),
         status: () => live,
       };
+      return api;
     },
   };
   vm.runInNewContext(boot, ctx);
-  return { ctx, nodes, live, deps, media, Stream };
+  return { ctx, nodes, live, deps, media, Stream, api };
 }
 
 test("a rejected play shows recovery instead of playing", async () => {
@@ -288,4 +290,206 @@ test("leaving clears the preview and a late camera does not restore it", async (
   await tick();
   assert.equal(p.nodes["#local-video"].srcObject, null);
   assert.match(p.nodes["#status"].textContent, /Left the room/);
+});
+
+function probeRoom(options = {}) {
+  const h = { calls: [], pcs: [], tracks: [], timers: [] };
+  h.room = createRoom({
+    origin: "http://127.0.0.1:1",
+    now: () => 1700000000000,
+    schedule(fn, ms) { const t = { fn, ms, cleared: false }; h.timers.push(t); return t; },
+    clear(t) { t.cleared = true; },
+    fetch: async (url, init) => {
+      const call = { url, init };
+      h.calls.push(call);
+      if (options.fetch) {
+        const custom = await options.fetch(call, h);
+        if (custom) return custom;
+      }
+      if (url.endsWith("/admit")) {
+        const intent = JSON.parse(init.body);
+        return new Response(JSON.stringify({ root, exp: 1700000060, ...intent }), { headers: { "cache-control": "no-store" } });
+      }
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response("v=0\r\n", { status: 201, headers: { location: `/session/id${h.calls.length}` } });
+    },
+    async getUserMedia() {
+      if (options.camera) return options.camera(h);
+      const track = { stopped: false, stop() { this.stopped = true; } };
+      h.tracks.push(track);
+      return { getTracks: () => [track] };
+    },
+    createPeerConnection() {
+      if (options.construct) options.construct(h);
+      const pc = {
+        connectionState: "new", closed: false, listeners: [],
+        addTrack() {}, addTransceiver() {},
+        addEventListener(type, fn) { this.listeners.push({ type, fn }); },
+        removeEventListener() {},
+        async createOffer() { if (options.offer) await options.offer(pc, h); return { type: "offer", sdp: "v=0\r\n" }; },
+        async setLocalDescription(description) { this.localDescription = description; if (options.local) await options.local(this, h); },
+        async setRemoteDescription() { this.connectionState = "connected"; },
+        close() { this.closed = true; this.connectionState = "closed"; },
+      };
+      h.pcs.push(pc);
+      return pc;
+    },
+    onLocal(stream, id) { h.local = { stream, id }; },
+  });
+  return h;
+}
+
+const deletes = (h) => h.calls.filter((call) => call.init.method === "DELETE");
+
+test("a throwing peer connection constructor releases the candidate camera", async () => {
+  const h = probeRoom({ construct() { throw new Error("resources exhausted"); } });
+  const result = await h.room.join(mint());
+  assert.equal(result.error, "setup_failed");
+  assert.equal(h.tracks[0].stopped, true);
+  assert.equal(h.room.status().candidate, null);
+});
+
+test("a body read failure still deletes the allocated session", async () => {
+  const h = probeRoom({
+    fetch({ url }) {
+      if (!url.includes("/whip/")) return null;
+      const response = new Response("v=0", { status: 201, headers: { location: "/session/allocated" } });
+      response.text = async () => { throw new Error("body reset"); };
+      return response;
+    },
+  });
+  assert.equal((await h.room.join(mint())).error, "setup_failed");
+  assert.equal(deletes(h).length, 1);
+  assert.equal(h.tracks[0].stopped, true);
+});
+
+test("leave deletes a session whose body is still pending", async () => {
+  const body = deferred();
+  const h = probeRoom({
+    fetch({ url }) {
+      if (!url.includes("/whip/")) return null;
+      const response = new Response("v=0", { status: 201, headers: { location: "/session/bodypending" } });
+      response.text = () => body.promise;
+      return response;
+    },
+  });
+  const join = h.room.join(mint());
+  await tick();
+  await h.room.teardown();
+  assert.equal(deletes(h).some((call) => call.url.endsWith("/session/bodypending")), true);
+  body.resolve("v=0");
+  assert.equal((await join).ok, false);
+});
+
+test("retiring a generation settles ICE gathering without a browser event", async () => {
+  const h = probeRoom({ local(pc) { pc.iceGatheringState = "gathering"; } });
+  let settled = false;
+  const join = h.room.join(mint()).then((result) => { settled = result; return result; });
+  await tick();
+  await h.room.teardown();
+  await tick();
+  assert.equal(settled.ok, false);
+  assert.equal(h.pcs[0].closed, true);
+  await join;
+});
+
+test("canonical broadcast matches one gateway decode", () => {
+  assert.equal(canonicalBroadcast("alice/%63am", root), "alice/cam");
+  assert.equal(canonicalBroadcast("alice/é", root), "alice/é");
+  assert.equal(canonicalBroadcast(".hidden/cam", root), ".hidden/cam");
+  assert.equal(canonicalBroadcast("alice/.hidden", root), "alice/.hidden");
+  assert.equal(validBroadcast("a/%2f/b", root), false);
+});
+
+test("an escaped path is admitted as its canonical text", async () => {
+  const h = probeRoom({
+    fetch({ url, init }) {
+      if (!url.endsWith("/admit")) return null;
+      const intent = JSON.parse(init.body);
+      return new Response(JSON.stringify({
+        root, exp: 1700000060, ...intent, broadcast: decodeURIComponent(intent.broadcast),
+      }), { headers: { "cache-control": "no-store" } });
+    },
+  });
+  assert.equal((await h.room.join(mint({ selfPath: "alice/%63am" }))).ok, true);
+  assert.equal(JSON.parse(h.calls[0].init.body).broadcast, "alice/cam");
+});
+
+test("a failed candidate does not stop a track the incumbent still owns", async () => {
+  const shared = { stopped: false, stop() { this.stopped = true; } };
+  const h = probeRoom({
+    camera: () => ({ getTracks: () => [shared] }),
+    offer(_pc, state) { if (state.pcs.length === 2) throw new Error("candidate"); },
+  });
+  assert.equal((await h.room.join(mint())).ok, true);
+  assert.equal((await h.room.replace(mint())).ok, false);
+  assert.equal(h.room.status().incumbent, 1);
+  assert.equal(shared.stopped, false);
+  await h.room.teardown();
+  assert.equal(shared.stopped, true);
+});
+
+test("a redirected media response is not a successful join", async () => {
+  const h = probeRoom({
+    fetch({ url, init }) {
+      if (url.endsWith("/admit")) return null;
+      const response = init.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : new Response("v=0", { status: 201, headers: { location: "/session/redirected" } });
+      Object.defineProperty(response, "redirected", { value: true });
+      Object.defineProperty(response, "url", { value: "https://foreign.example/session" });
+      return response;
+    },
+  });
+  assert.equal((await h.room.join(mint())).ok, false);
+  assert.equal(h.room.status().sessions.length, 0);
+});
+
+test("the next generation does not keep the previous generation's video", () => {
+  const p = pageHarness();
+  p.deps.onRemoteTrack("bob/cam", 1, { track: { id: "old-video", kind: "video", readyState: "live" } }, 1);
+  p.deps.onRemoteTrack("bob/cam", 1, { track: { id: "new-audio", kind: "audio", readyState: "live" } }, 2);
+  const tracks = p.nodes["#peers"].children[0].parts.video.srcObject.getTracks();
+  assert.deepEqual(tracks.map((track) => track.id), ["new-audio"]);
+});
+
+test("a stale play completion does not hide recovery for the current attempt", async () => {
+  const p = pageHarness();
+  await p.ctx.window.roomClient.join();
+  const tile = p.nodes["#peers"].children[0];
+  const gate = deferred();
+  tile.parts.video.play = () => gate.promise;
+  p.deps.onRemoteTrack("bob/cam", 1, { track: { kind: "video" } });
+  tile.parts.video.play = () => Promise.reject(new Error("blocked"));
+  p.deps.onRemoteTrack("bob/cam", 2, { track: { kind: "video" } });
+  await tick();
+  gate.resolve();
+  await tick();
+  assert.equal(p.nodes["#resume"].hidden, false);
+  assert.match(tile.parts.p.textContent, /Playback is blocked/);
+});
+
+test("an older leave does not overwrite a newer join", async () => {
+  const p = pageHarness();
+  const gate = deferred();
+  p.api.teardown = () => gate.promise;
+  const leave = p.nodes["#leave"].click();
+  await p.ctx.window.roomClient.join();
+  assert.equal(p.nodes["#status"].textContent, "In the room.");
+  gate.resolve({ ok: true });
+  await leave;
+  assert.equal(p.nodes["#status"].textContent, "In the room.");
+});
+
+test("an expiry update clears the in-room status and the peer tile", async () => {
+  const p = pageHarness();
+  await p.ctx.window.roomClient.join();
+  p.deps.onRemoteTrack("bob/cam", 1, { track: { id: "v", kind: "video", readyState: "live" } });
+  p.live.incumbent = null;
+  p.live.tracks = 0;
+  p.live.peers = {};
+  p.deps.onLocal(null, 1);
+  p.deps.onUpdate();
+  assert.equal(p.nodes["#status"].textContent, "This token is not valid.");
+  assert.equal(p.nodes["#peers"].children.length, 0);
 });

@@ -105,11 +105,14 @@ const room = origin
         shownGeneration = generation;
         localVideo.srcObject = stream;
       },
-      onRemoteTrack(path, attempt, event) {
+      onRemoteTrack(path, attempt, event, generation) {
         const node = tile(path);
         const video = node.querySelector("video");
-        if (node.dataset.attempt !== String(attempt)) {
+        const owner = generation == null ? `a:${attempt}` : `${generation}:${attempt}`;
+        if (node.dataset.owner !== owner) {
+          node.dataset.owner = owner;
           node.dataset.attempt = String(attempt);
+          video.dataset.owner = owner;
           video.srcObject = new MediaStream();
           video.dataset.blocked = "";
         }
@@ -118,23 +121,42 @@ const room = origin
           if (track.readyState === "ended" || track.kind === event.track.kind) stream.removeTrack(track);
         }
         stream.addTrack(event.track);
+        const played = owner;
         video.play().then(() => {
+          if (video.dataset.owner !== played) return;
           video.dataset.blocked = "";
-          if (resume) resume.hidden = true;
           setCaption(path, "Playing.");
+          refreshResume();
         }).catch(() => {
+          if (video.dataset.owner !== played) return;
           video.dataset.blocked = "1";
-          if (resume) resume.hidden = false;
           setCaption(path, "Playback is blocked. Use Play media.");
+          refreshResume();
         });
       },
       onUpdate() { paint(); },
     })
   : null;
 
+function refreshResume() {
+  if (!resume) return;
+  const blocked = [...peers.querySelectorAll("video")].some((video) => video.dataset.blocked === "1");
+  resume.hidden = !blocked;
+}
+
 function paint() {
   if (!room) return;
   const live = room.status();
+  if (Object.prototype.hasOwnProperty.call(live, "incumbent") && !live.incumbent && !live.candidate) {
+    peers.replaceChildren();
+    if (shownGeneration) {
+      localVideo.srcObject = null;
+      shownGeneration = 0;
+    }
+    say(COPY.bad_token);
+    refreshResume();
+    return;
+  }
   for (const [path, peer] of Object.entries(live.peers || {})) {
     const node = tile(path);
     const video = node.querySelector("video");
@@ -171,8 +193,9 @@ async function run(action) {
     return;
   }
   if (id !== actionId) return;
-  say(result.ok ? "In the room." : explain(result.error));
   paint();
+  if (id !== actionId) return;
+  say(result.ok ? "In the room." : explain(result.error));
 }
 
 function clearViews() {
@@ -186,22 +209,25 @@ document.querySelector("#join").addEventListener("click", () => run("join"));
 document.querySelector("#replace").addEventListener("click", () => run("replace"));
 document.querySelector("#renew").addEventListener("click", () => run("renew"));
 document.querySelector("#leave").addEventListener("click", async () => {
-  actionId += 1;
+  const id = ++actionId;
   clearViews();
   say("Leaving…");
   if (!room) return;
   let result = { ok: true };
   try { result = await room.teardown(); } catch { result = { ok: false, error: "setup_failed" }; }
+  if (id !== actionId) return;
   say(result && result.ok === false ? explain(result.error) : "Left the room.");
 });
 if (resume) resume.addEventListener("click", () => {
   for (const video of peers.querySelectorAll("video")) {
+    const owner = video.dataset.owner;
     video.play().then(() => {
+      if (video.dataset.owner !== owner) return;
       video.dataset.blocked = "";
       setCaption(video.closest(".tile").dataset.path, "Playing.");
-    }).catch(() => {});
+      refreshResume();
+    }).catch(() => refreshResume());
   }
-  if (![...peers.querySelectorAll("video")].some((video) => video.dataset.blocked === "1")) resume.hidden = true;
 });
 
 window.roomClient = {

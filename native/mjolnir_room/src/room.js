@@ -49,34 +49,43 @@ function forbiddenEscape(text) {
   return lower.includes("%2f") || lower.includes("%5c") || lower.includes("%2e%2e") || lower.includes("%2e.");
 }
 
+const utf8 = new TextEncoder();
+const utf8Decode = new TextDecoder("utf-8", { fatal: true });
+
 function percentDecodeOnce(raw) {
+  const bytes = utf8.encode(raw);
   const out = [];
-  for (let i = 0; i < raw.length; i += 1) {
-    if (raw[i] !== "%") {
-      out.push(raw.charCodeAt(i));
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] !== 0x25) {
+      out.push(bytes[i]);
       continue;
     }
-    const hex = raw.slice(i + 1, i + 3);
+    if (i + 2 >= bytes.length) throw new Error("bad-escape");
+    const hex = String.fromCharCode(bytes[i + 1], bytes[i + 2]);
     if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw new Error("bad-escape");
     out.push(Number.parseInt(hex, 16));
     i += 2;
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(out));
+  return utf8Decode.decode(new Uint8Array(out));
 }
 
-// Gateway canonical_broadcast: one decode, no slash/dot escapes, depth and byte bounds.
-export function validBroadcast(raw, root) {
-  if (typeof raw !== "string" || raw.length < 1 || raw.length > PATH_BOUND) return false;
-  if (raw.includes("\\") || /[?#]/.test(raw) || raw.includes("://") || raw.startsWith("/") || raw.startsWith(".")) return false;
-  if (forbiddenEscape(raw)) return false;
+// One UTF-8 decode, matching edge canonical_broadcast. Callers keep this string.
+export function canonicalBroadcast(raw, root) {
+  if (typeof raw !== "string" || raw.length < 1) return null;
+  const rawBytes = utf8.encode(raw);
+  if (rawBytes.length > PATH_BOUND || raw.includes("\\") || forbiddenEscape(raw)) return null;
   let decoded;
-  try { decoded = percentDecodeOnce(raw); } catch { return false; }
-  if (!decoded || decoded.includes("\\") || decoded.includes("%") || forbiddenEscape(decoded)) return false;
+  try { decoded = percentDecodeOnce(raw); } catch { return null; }
+  if (!decoded || decoded.includes("\\") || decoded.includes("%") || forbiddenEscape(decoded)) return null;
   const parts = decoded.split("/");
-  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return false;
+  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return null;
   const full = root ? `${root}/${decoded}` : decoded;
-  if (full.length > PATH_BOUND || full.split("/").length > DEPTH_BOUND) return false;
-  return true;
+  if (utf8.encode(full).length > PATH_BOUND || full.split("/").length > DEPTH_BOUND) return null;
+  return decoded;
+}
+
+export function validBroadcast(raw, root) {
+  return canonicalBroadcast(raw, root) !== null;
 }
 
 export function compareAdmission(expectedRoot, asked, mint, admitted) {
@@ -127,6 +136,32 @@ function configuredOrigin(value) {
   return null;
 }
 
+const trackOwners = new WeakMap();
+
+function retainTracks(tracks) {
+  return (tracks || []).map((track) => {
+    trackOwners.set(track, (trackOwners.get(track) || 0) + 1);
+    let released = false;
+    return {
+      id: track.id,
+      kind: track.kind,
+      get readyState() { return track.readyState; },
+      raw: track,
+      stop() {
+        if (released) return;
+        released = true;
+        const left = (trackOwners.get(track) || 1) - 1;
+        if (left <= 0) {
+          trackOwners.delete(track);
+          try { track.stop(); } catch { /* already ended */ }
+        } else {
+          trackOwners.set(track, left);
+        }
+      },
+    };
+  });
+}
+
 function stopTracks(tracks) {
   for (const track of tracks || []) {
     try { track.stop(); } catch { /* already ended */ }
@@ -175,6 +210,12 @@ export function createRoom(deps) {
     gen.shown = false;
   }
 
+  function trusted(response) {
+    if (!response || response.redirected) return false;
+    if (!response.url) return true;
+    try { return new URL(response.url, origin).origin === origin; } catch { return false; }
+  }
+
   async function request(url, init) {
     return fetchImpl(url, {
       ...init,
@@ -200,7 +241,7 @@ export function createRoom(deps) {
     } catch {
       return { ok: false, error: "setup_failed" };
     }
-    if (response.redirected) return { ok: false, error: "setup_failed" };
+    if (!trusted(response)) return { ok: false, error: "setup_failed" };
     const cache = response.headers.get("cache-control") || "";
     let body = {};
     try { body = await response.json(); } catch { body = {}; }
@@ -238,9 +279,22 @@ export function createRoom(deps) {
       pcs: [],
       sessions: [],
       timers: [],
+      cancels: [],
       peerState: {},
       admissions: new Map(),
     };
+  }
+
+  function settleOnRetire(gen) {
+    let finish = () => {};
+    const promise = new Promise((resolve) => {
+      finish = (value) => {
+        finish = () => {};
+        resolve(value);
+      };
+    });
+    gen.cancels.push(() => finish("retired"));
+    return { promise, finish };
   }
 
   function ownTimer(gen, fn, ms) {
@@ -267,6 +321,10 @@ export function createRoom(deps) {
     gen.retired = true;
     if (incumbent === gen) incumbent = null;
     if (candidate === gen) candidate = null;
+    const cancels = gen.cancels.splice(0);
+    for (const cancel of cancels) {
+      try { cancel(); } catch { /* already settled */ }
+    }
     for (const handle of gen.timers) clear(handle);
     gen.timers = [];
     for (const pc of gen.pcs) {
@@ -297,6 +355,11 @@ export function createRoom(deps) {
           signal: ctrl.signal,
           headers: { authorization: `Bearer ${session.token}`, "x-mjolnir-root": session.root },
         });
+        if (!trusted(response)) {
+          const outcome = { ok: false, reason: "redirected" };
+          deletes.push(outcome);
+          return outcome;
+        }
         const outcome = { ok: response.ok || response.status === 404, status: response.status };
         deletes.push(outcome);
         return outcome;
@@ -324,19 +387,16 @@ export function createRoom(deps) {
   async function waitIce(gen, pc, budgetMs) {
     if (!owns(gen)) return false;
     if (pc.connectionState === "connected") return true;
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (ok) => {
-        if (settled) return;
-        settled = true;
-        resolve(ok);
-      };
-      ownTimer(gen, () => finish(pc.connectionState === "connected" && owns(gen)), budgetMs);
-      pc.addEventListener("connectionstatechange", () => {
-        if (pc.connectionState === "connected" && owns(gen)) finish(true);
-        if (pc.connectionState === "failed" || pc.connectionState === "closed") finish(false);
-      });
-    });
+    const gate = settleOnRetire(gen);
+    ownTimer(gen, () => gate.finish(pc.connectionState === "connected" && owns(gen)), budgetMs);
+    const onState = () => {
+      if (pc.connectionState === "connected" && owns(gen)) gate.finish(true);
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") gate.finish(false);
+    };
+    pc.addEventListener("connectionstatechange", onState);
+    const ice = await gate.promise;
+    if (pc.removeEventListener) pc.removeEventListener("connectionstatechange", onState);
+    return ice === true;
   }
 
   async function negotiate(gen, kind, broadcast, admission) {
@@ -345,15 +405,24 @@ export function createRoom(deps) {
     if (!bound || bound.attempt !== admission.attempt || bound.token !== admission.token || bound.root !== admission.root) {
       return { ok: false, error: "stale" };
     }
-    const pc = deps.createPeerConnection();
+    let pc;
+    try {
+      pc = deps.createPeerConnection();
+    } catch {
+      return { ok: false, error: "setup_failed" };
+    }
     gen.pcs.push(pc);
     const Stream = deps.MediaStream || globalThis.MediaStream || MediaStreamShim;
-    const stream = new Stream();
+    let stream;
+    try { stream = new Stream(); } catch {
+      return { ok: false, error: "setup_failed", pc };
+    }
     try {
       if (kind === "whip") {
         for (const track of gen.tracks) {
-          pc.addTrack(track, stream);
-          if (stream.addTrack) stream.addTrack(track);
+          const raw = track.raw || track;
+          pc.addTrack(raw, stream);
+          if (stream.addTrack) stream.addTrack(raw);
         }
       } else {
         pc.addTransceiver("video", { direction: "recvonly" });
@@ -362,7 +431,7 @@ export function createRoom(deps) {
         pc.ontrack = (event) => {
           const state = gen.peerState[broadcast];
           if (incumbent !== gen || !state || state.attempt !== attempt) return;
-          if (deps.onRemoteTrack) deps.onRemoteTrack(broadcast, attempt, event);
+          if (deps.onRemoteTrack) deps.onRemoteTrack(broadcast, attempt, event, gen.id);
         };
       }
       const offer = await pc.createOffer();
@@ -370,15 +439,17 @@ export function createRoom(deps) {
       if (afterOffer) return { ok: false, error: afterOffer, pc };
       await pc.setLocalDescription(offer);
       if (pc.iceGatheringState && pc.iceGatheringState !== "complete") {
-        await new Promise((resolve) => {
-          const timer = ownTimer(gen, () => resolve(), 1500);
-          pc.addEventListener("icegatheringstatechange", () => {
-            if (pc.iceGatheringState === "complete") {
-              clear(timer);
-              resolve();
-            }
-          });
-        });
+        const gate = settleOnRetire(gen);
+        const timer = ownTimer(gen, () => gate.finish("timeout"), 1500);
+        const onIce = () => {
+          if (pc.iceGatheringState === "complete") {
+            clear(timer);
+            gate.finish("complete");
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", onIce);
+        await gate.promise;
+        if (pc.removeEventListener) pc.removeEventListener("icegatheringstatechange", onIce);
       }
       const beforePost = ownershipError(gen);
       if (beforePost) return { ok: false, error: beforePost, pc };
@@ -391,20 +462,29 @@ export function createRoom(deps) {
         },
         body: pc.localDescription.sdp,
       });
-      const text = await response.text();
+      if (!trusted(response)) return { ok: false, error: "setup_failed", pc };
+      const location = response.headers.get("location") || "";
+      let session = null;
+      if (response.status === 201) {
+        if (!SESSION_PATH.test(location)) return { ok: false, error: "setup_failed", pc };
+        session = { location, token: admission.token, root: admission.root };
+        gen.sessions.push(session);
+      }
+      let text = "";
+      try {
+        text = await response.text();
+      } catch {
+        return { ok: false, error: "setup_failed", pc, session };
+      }
+      if (!owns(gen)) return { ok: false, error: "stale", pc, session };
       const parsed = safeJson(text);
-      const fail = (error) => ({ ok: false, error, status: response.status, pc });
+      const fail = (error) => ({ ok: false, error, status: response.status, pc, session });
       if (response.status === 409 && parsed.error !== "codec_unavailable") return fail("not_started");
       if (response.status === 403) return fail(gatewayError(403, parsed));
       if (response.status !== 201) {
         if (parsed.error === "codec_unavailable" || KNOWN.has(parsed.error)) return fail(parsed.error);
         return fail("setup_failed");
       }
-      const location = response.headers.get("location") || "";
-      if (!SESSION_PATH.test(location)) return fail("setup_failed");
-      const session = { location, token: admission.token, root: admission.root };
-      gen.sessions.push(session);
-      if (!owns(gen)) return { ok: false, error: "stale", pc, session };
       try {
         await pc.setRemoteDescription({ type: "answer", sdp: text });
       } catch {
@@ -526,6 +606,11 @@ export function createRoom(deps) {
     const attempt = seq + 1;
     const gen = generation(mint);
     candidate = gen;
+    const selfPath = canonicalBroadcast(mint.selfPath, mint.expectedRoot);
+    const peerPaths = mint.peerPaths.map((path) => canonicalBroadcast(path, mint.expectedRoot));
+    if (!selfPath || peerPaths.some((path) => !path)) return failGen(gen, "bad_request");
+    mint.selfPath = selfPath;
+    mint.peerPaths = peerPaths;
     const intents = [{ operation: "publish", broadcast: mint.selfPath }, ...mint.peerPaths.map((broadcast) => ({ operation: "subscribe", broadcast }))];
     for (const intent of intents) {
       if (candidate !== gen || gen.retired) return { ok: false, error: "stale" };
@@ -544,7 +629,7 @@ export function createRoom(deps) {
     } catch {
       return failGen(gen, "setup_failed");
     }
-    gen.tracks = stream.getTracks();
+    gen.tracks = retainTracks(stream.getTracks());
     gen.stream = stream;
     const afterCamera = ownershipError(gen);
     if (afterCamera) {
@@ -552,7 +637,12 @@ export function createRoom(deps) {
       return failGen(gen, afterCamera);
     }
     const publish = gen.admissions.get(`publish:${mint.selfPath}`);
-    const whip = await negotiate(gen, "whip", mint.selfPath, publish);
+    let whip;
+    try {
+      whip = await negotiate(gen, "whip", mint.selfPath, publish);
+    } catch {
+      return failGen(gen, "setup_failed");
+    }
     if (!whip.ok) {
       discardAttempt(gen, whip);
       return failGen(gen, whip.error || "setup_failed");
