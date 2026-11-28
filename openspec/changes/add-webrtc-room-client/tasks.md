@@ -23,4 +23,4 @@ Send-back: `reviews/2026-11-26-advise-2.md`. Keep the fresh gate open; no activa
 ## Reconciliation after second review
 
 - [x] Fresh independent review of corrected admission/setup/lifecycle contract. Accepted a1be084f in `reviews/2026-11-26-advise-3.md`.
-- [ ] Implement and exercise every boundary/race regression added to design D5; report real media results separately from contract acceptance.
+- [x] Design D5 same-path failures on the accepted page `0df60bee` and gateway `4bd94d1d`: answer-body failure, `setRemoteDescription` failure, and publisher ICE timeout, each with an already-connected subscriber and a subscriber joining during the attempt. Evidence: `reviews/2026-11-27-d5-failures-0df60bee/`. Incumbent id, open PCs, and live local tracks stayed; the candidate publisher PC closed; no `Playing.` caption on a detached tile. Relay selection stayed non-atomic (a second `alice/cam` publish was accepted). No seamless rollback is claimed. Module regressions stay separate from that media run. This does not close `.15`.

@@ -1,0 +1,5 @@
+page_git 0df60bee32e02b8908e2438259ed8e3d10b38adc
+gateway_git 4bd94d1d
+chromium Chromium 156.0.8078.79 Arch Linux
+57a21527cd79204d23354337b957ec7efc1240d6f2ba0bf4b4e71f9b9900e343  /tmp/mj13-4bd-tgt/release/mjolnir-edge
+9c24f67c28fc612644d8ccf90ed833895b205089cddb1e30800d8c89ee72e344  /tmp/mj13-4bd-tgt/release/mjolnir-relay

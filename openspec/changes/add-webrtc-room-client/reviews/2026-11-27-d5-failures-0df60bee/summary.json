@@ -1,0 +1,4132 @@
+{
+  "source": "0df60bee32e02b8908e2438259ed8e3d10b38adc",
+  "productMutated": false,
+  "hook": "init-script labeled body reject, bad SDP, or stalled publisher connectionState",
+  "cases": [
+    {
+      "mode": "body",
+      "ready": true,
+      "before": {
+        "incumbent": 1,
+        "candidate": null,
+        "sessions": [
+          "/session/8408c3df-e544-4d20-902c-74d43cf06566",
+          "/session/16ff8996-e180-4cd5-a9e7-92c4dde0a41d"
+        ],
+        "pcs": 2,
+        "tracks": 2,
+        "localTracks": [
+          {
+            "id": "ac9c1c79-614b-4d7b-b216-afe0c607bdab",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "9309524b-f68c-49c0-8b05-24b2b65bd18e",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ]
+      },
+      "bobBefore": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 640,
+            "tracks": [
+              {
+                "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "settled": {
+        "status": "The room could not be connected.",
+        "ms": 202
+      },
+      "after": {
+        "status": "The room could not be connected.",
+        "incumbent": 1,
+        "candidate": null,
+        "tracks": 2,
+        "pcs": 2,
+        "sessions": [
+          "/session/8408c3df-e544-4d20-902c-74d43cf06566",
+          "/session/16ff8996-e180-4cd5-a9e7-92c4dde0a41d"
+        ],
+        "localTracks": [
+          {
+            "id": "ac9c1c79-614b-4d7b-b216-afe0c607bdab",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "9309524b-f68c-49c0-8b05-24b2b65bd18e",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ],
+        "pcsDetail": [
+          {
+            "publisher": true,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": false,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": true,
+            "stalled": false,
+            "closed": true
+          }
+        ],
+        "events": [
+          {
+            "t": 1795829678306,
+            "kind": "whip-201",
+            "mode": "body"
+          }
+        ],
+        "hook": "labeled D5: body reject, bad answer, or stalled publisher connectionState"
+      },
+      "bobEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 960,
+            "tracks": [
+              {
+                "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "carolEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 960,
+            "tracks": [
+              {
+                "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "bobTone": {
+        "attachedTo": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 960
+      },
+      "carolTone": {
+        "attachedTo": "b986a74a-9a6c-4694-8955-16e12229f391",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 960
+      },
+      "falseHits": [],
+      "traces": [
+        {
+          "ms": 4,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [],
+          "bobStatus": "In the room.",
+          "carolStatus": "Joining…"
+        },
+        {
+          "ms": 508,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Waiting — the other side must publish again.",
+              "srcObject": true,
+              "width": 0,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": true
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": true
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "Joining…"
+        },
+        {
+          "ms": 1011,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 1516,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2021,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2524,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3029,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3533,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4037,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4540,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5043,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5545,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6048,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6551,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7054,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7557,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8060,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8565,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9069,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9571,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10074,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10577,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11082,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11587,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "f8d39e53-29d1-4477-906c-1661fa05b6f6",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "96a761c8-812f-473b-98f4-a6b9ef9667d6",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "b986a74a-9a6c-4694-8955-16e12229f391",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "3f6356f0-e9a7-49c4-84a2-8434ee3b8c06",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "mode": "sdp",
+      "ready": true,
+      "before": {
+        "incumbent": 1,
+        "candidate": null,
+        "sessions": [
+          "/session/5f26a030-eba5-44e1-9216-7305d12efe6e",
+          "/session/128bcbb3-7036-4c84-80ff-78e9ba6561d7"
+        ],
+        "pcs": 2,
+        "tracks": 2,
+        "localTracks": [
+          {
+            "id": "e1643dd2-e1ef-4ccc-9dbc-5a6e4a33e380",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "8f8458c2-4833-487b-930f-2c29edba3e6a",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ]
+      },
+      "bobBefore": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 640,
+            "tracks": [
+              {
+                "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "settled": {
+        "status": "The room could not be connected.",
+        "ms": 204
+      },
+      "after": {
+        "status": "The room could not be connected.",
+        "incumbent": 1,
+        "candidate": null,
+        "tracks": 2,
+        "pcs": 2,
+        "sessions": [
+          "/session/5f26a030-eba5-44e1-9216-7305d12efe6e",
+          "/session/128bcbb3-7036-4c84-80ff-78e9ba6561d7"
+        ],
+        "localTracks": [
+          {
+            "id": "e1643dd2-e1ef-4ccc-9dbc-5a6e4a33e380",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "8f8458c2-4833-487b-930f-2c29edba3e6a",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ],
+        "pcsDetail": [
+          {
+            "publisher": true,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": false,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": true,
+            "stalled": false,
+            "closed": true
+          }
+        ],
+        "events": [
+          {
+            "t": 1795829693417,
+            "kind": "whip-201",
+            "mode": "sdp"
+          }
+        ],
+        "hook": "labeled D5: body reject, bad answer, or stalled publisher connectionState"
+      },
+      "bobEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 960,
+            "tracks": [
+              {
+                "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "carolEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 960,
+            "tracks": [
+              {
+                "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "bobTone": {
+        "attachedTo": "c0231023-832e-4834-9bee-473d25ba8adb",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 960
+      },
+      "carolTone": {
+        "attachedTo": "34778a8a-5397-422e-902e-7eff9148b953",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 960
+      },
+      "falseHits": [],
+      "traces": [
+        {
+          "ms": 5,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [],
+          "bobStatus": "In the room.",
+          "carolStatus": "Joining…"
+        },
+        {
+          "ms": 508,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Waiting — the other side must publish again.",
+              "srcObject": true,
+              "width": 0,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": true
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": true
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "Joining…"
+        },
+        {
+          "ms": 1012,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 1514,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2017,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2521,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3025,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3527,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4031,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4536,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5039,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5544,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6050,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6554,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7057,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7560,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8063,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8569,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9074,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9576,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10080,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10583,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11086,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11592,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "c0231023-832e-4834-9bee-473d25ba8adb",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "d874b420-b7e5-43d8-bdb4-8764958e89cd",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "34778a8a-5397-422e-902e-7eff9148b953",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "a754a892-df82-4afc-97fb-6c665a81fb81",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        }
+      ],
+      "errors": []
+    },
+    {
+      "mode": "ice",
+      "ready": true,
+      "before": {
+        "incumbent": 1,
+        "candidate": null,
+        "sessions": [
+          "/session/8093ddd7-0e64-4e31-a84a-8bf8df6fc262",
+          "/session/2efb5fbd-efcd-4604-80c3-4219c75e8d58"
+        ],
+        "pcs": 2,
+        "tracks": 2,
+        "localTracks": [
+          {
+            "id": "e3e9ce07-2ffc-4dc7-a39d-debfa0cc8a86",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "7f7c184e-05fe-45f4-b2e1-075c574dc86b",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ]
+      },
+      "bobBefore": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 640,
+            "tracks": [
+              {
+                "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "settled": {
+        "status": "The room could not be connected.",
+        "ms": 10296
+      },
+      "after": {
+        "status": "The room could not be connected.",
+        "incumbent": 1,
+        "candidate": null,
+        "tracks": 2,
+        "pcs": 2,
+        "sessions": [
+          "/session/8093ddd7-0e64-4e31-a84a-8bf8df6fc262",
+          "/session/2efb5fbd-efcd-4604-80c3-4219c75e8d58"
+        ],
+        "localTracks": [
+          {
+            "id": "e3e9ce07-2ffc-4dc7-a39d-debfa0cc8a86",
+            "kind": "audio",
+            "readyState": "live"
+          },
+          {
+            "id": "7f7c184e-05fe-45f4-b2e1-075c574dc86b",
+            "kind": "video",
+            "readyState": "live"
+          }
+        ],
+        "pcsDetail": [
+          {
+            "publisher": true,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": false,
+            "stalled": false,
+            "closed": false
+          },
+          {
+            "publisher": true,
+            "stalled": true,
+            "closed": true
+          }
+        ],
+        "events": [
+          {
+            "t": 1795829708379,
+            "kind": "stall-publisher-connectionState"
+          }
+        ],
+        "hook": "labeled D5: body reject, bad answer, or stalled publisher connectionState"
+      },
+      "bobEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:1",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 1280,
+            "tracks": [
+              {
+                "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "carolEnd": {
+        "status": "In the room.",
+        "local": true,
+        "tiles": [
+          {
+            "path": "alice/cam",
+            "owner": "1:2",
+            "caption": "Playing.",
+            "srcObject": true,
+            "width": 1280,
+            "tracks": [
+              {
+                "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                "kind": "audio",
+                "readyState": "live",
+                "muted": false
+              },
+              {
+                "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                "kind": "video",
+                "readyState": "live",
+                "muted": false
+              }
+            ]
+          }
+        ]
+      },
+      "bobTone": {
+        "attachedTo": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 1280
+      },
+      "carolTone": {
+        "attachedTo": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+        "peakHz": 439,
+        "rms": 0.0095,
+        "contextState": "running",
+        "caption": "Playing.",
+        "width": 1280
+      },
+      "falseHits": [],
+      "traces": [
+        {
+          "ms": 3,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 508,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 1013,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 1519,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2023,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 2526,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3029,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 3534,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4042,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 4546,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5051,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 640,
+              "tracks": [
+                {
+                  "id": "687b4c4f-a0e3-47d3-8d1d-7f61e10113fd",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "49dcac4d-e158-4f01-9fa7-a6f2b61c1a24",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 5555,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "",
+              "caption": "Waiting — the other side must publish again.",
+              "srcObject": false,
+              "width": 0,
+              "tracks": []
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6058,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "",
+              "caption": "Waiting — the other side must publish again.",
+              "srcObject": false,
+              "width": 0,
+              "tracks": []
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 6561,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 960,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "",
+              "caption": "Waiting — the other side must publish again.",
+              "srcObject": false,
+              "width": 0,
+              "tracks": []
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7066,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 7569,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8075,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 8579,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9083,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 9586,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10090,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 10594,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11098,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        },
+        {
+          "ms": 11601,
+          "bob": [
+            {
+              "path": "alice/cam",
+              "owner": "1:1",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "a1d65dac-d4af-48ba-ac72-6fd7b44033c8",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "ddc6dda7-1f89-422f-9c49-06474e1f5ba2",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "carol": [
+            {
+              "path": "alice/cam",
+              "owner": "1:2",
+              "caption": "Playing.",
+              "srcObject": true,
+              "width": 1280,
+              "tracks": [
+                {
+                  "id": "9a45320d-3099-402d-b2e7-e9ebd12ec35e",
+                  "kind": "audio",
+                  "readyState": "live",
+                  "muted": false
+                },
+                {
+                  "id": "327affaf-f33a-44bb-9958-fb154efc0154",
+                  "kind": "video",
+                  "readyState": "live",
+                  "muted": false
+                }
+              ]
+            }
+          ],
+          "bobStatus": "In the room.",
+          "carolStatus": "In the room."
+        }
+      ],
+      "errors": []
+    }
+  ]
+}
