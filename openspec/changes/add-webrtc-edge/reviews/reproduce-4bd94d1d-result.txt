@@ -1,0 +1,25 @@
+EXACT CHECKED-IN LIBRARY
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-0ok8vd1u/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-0ok8vd1u/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+rustc-LLVM ERROR: IO failure on output stream: No space left on device
+warning: `moq-webrtc` (lib) generated 1 warning
+error: could not compile `moq-webrtc` (lib); 1 warning emitted
+
+Caused by:
+  process didn't exit successfully: `/Users/dukejones/.rustup/toolchains/1.95.0-aarch64-apple-darwin/bin/rustc --crate-name moq_webrtc --edition=2024 /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-0ok8vd1u/native/vendor/moq-webrtc/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -C debuginfo=2 -C split-debuginfo=unpacked --cfg 'feature="server"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("default", "server"))' -C metadata=0b46d41ff0800d66 -C extra-filename=-49d1a9561c29767a --out-dir /Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps -L dependency=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps --extern axum=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libaxum-96e5d80584ed1246.rmeta --extern bytes=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libbytes-9a078178f778b278.rmeta --extern hang=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libhang-4bf70e13c7f3191f.rmeta --extern kio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libkio-4375f274b54b8fc1.rmeta --extern moq_crypto=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_crypto-2762419364d59765.rmeta --extern moq_mux=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_mux-6cfde07ebbc8a777.rmeta --extern moq_net=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_net-a2162e0783365a4c.rmeta --extern moq_tokio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libmoq_tokio-bb998fdd43ee7da4.rmeta --extern reqwest=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libreqwest-0229ae70f2d2c7d6.rmeta --extern rind_str0m=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/librind_str0m-d41e27660ad528fa.rmeta --extern str0m=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libstr0m-bfc38b012709a01d.rmeta --extern thiserror=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libthiserror-e463ba8e30302c78.rmeta --extern tokio=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtokio-6ac33cc6abed56b0.rmeta --extern tracing=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libtracing-e74c391d0d495351.rmeta --extern url=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/liburl-51cf59bea979a572.rmeta --extern uuid=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/libuuid-8a62f5fc6ffa9281.rmeta -L native=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/build/aws-lc-sys-83801b3fec7e4b61/out -L native=/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/build/ring-afb662c8e44e13a8/out` (exit status: 101)
+Traceback (most recent call last):
+  File "/Users/dukejones/work/IdentiKey/mjolnir/openspec/changes/add-webrtc-edge/reviews/reproduce-4bd94d1d.py", line 31, in <module>
+    subprocess.run(['cargo', '+1.95.0', 'test', '--offline', '--locked', '--lib', '--', '--test-threads=1'], cwd=crate, env=env, check=True, timeout=900)
+  File "/Users/dukejones/.local/share/mise/installs/python/3.12.13/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['cargo', '+1.95.0', 'test', '--offline', '--locked', '--lib', '--', '--test-threads=1']' returned non-zero exit status 101.

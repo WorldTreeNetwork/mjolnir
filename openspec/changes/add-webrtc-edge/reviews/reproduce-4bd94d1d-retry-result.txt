@@ -1,0 +1,124 @@
+EXACT CHECKED-IN LIBRARY
+   Compiling moq-webrtc v0.3.12 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-cmhrabif/native/vendor/moq-webrtc)
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-cmhrabif/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-cmhrabif/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2432:17
+     |
+2432 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.15s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-d138f60b9892a63a)
+
+running 37 tests
+test edge::tests::ack_expiry_removes_the_token_and_leaves_the_other ... ok
+test edge::tests::admit_open_mint_shape_does_not_dial_and_refuses_protected_and_wide ... ok
+test edge::tests::cancelled_waiter_does_not_stick_a_ref ... ok
+test edge::tests::candidate_timeout_keeps_the_other_token ... ok
+test edge::tests::concurrent_posts_share_one_dial_and_a_later_acquire_dials_again ... ok
+test edge::tests::configured_origins_are_an_exact_list ... ok
+test edge::tests::drain_during_dial_does_not_register ... ok
+test edge::tests::drain_is_not_cleared_by_a_good_reload ... ok
+test edge::tests::first_acquire_past_exp_is_bad_token ... ok
+test edge::tests::foreign_broadcast_header_mismatch_and_closed_admissions_do_not_dial ... ok
+test edge::tests::http_flush_ack_keeps_session_after_close_and_failures_do_not ... ok
+test edge::tests::http_single_decode_and_admit_envelope ... ok
+test edge::tests::invalidated_pending_wakes_held_write_and_flush_without_abort ... ok
+test edge::tests::last_release_aborts_before_the_slot_is_reusable ... ok
+test edge::tests::last_release_closes_the_real_relay_connection ... ok
+test edge::tests::parser_rejects_encoded_slash_backslash_and_dot_segments ... ok
+test edge::tests::paused_setup_bound_cancels_only_the_candidate_and_the_http_task ... ok
+test edge::tests::pipelined_second_response_failure_keeps_the_first_ack ... ok
+test edge::tests::preexpiry_deadline_does_not_drop_incumbents ... ok
+test edge::tests::rejected_leader_keeps_waiter_reservation ... ok
+test edge::tests::settled_tickets_do_not_accumulate_on_a_keepalive ... ok
+test edge::tests::stale_deadline_drain_and_generation_do_not_start_at_ack ... ok
+test edge::tests::stale_generation_cleanup_leaves_the_replacement ... ok
+test edge::tests::tombstone_horizon_reaps_without_another_delete ... ok
+test edge::tests::ttl_ceiling_is_the_snapshot_value ... ok
+test edge::tests::two_legs_one_token_one_dial_and_delete_matrix ... ok
+test edge::tests::untrusted_key_file_closes_admissions_and_keeps_old_keys ... ok
+test edge::tests::usable_video_rejects_port_zero_and_inactive ... ok
+test tests::a_key_file_that_becomes_readable_is_picked_up ... ok
+test tests::elixir_eddsa_token_verifies ... ok
+test tests::group_writable_key_file_is_refused ... ok
+test tests::key_directory_writable_by_others_is_refused ... ok
+test tests::loader_rejects_a_disallowed_algorithm ... ok
+test tests::loader_rejects_a_key_with_no_kid ... ok
+test tests::loader_rejects_a_private_key_an_empty_set_and_a_duplicate_kid ... ok
+test tests::refuses_missing_expiry_bad_owner_ticket_and_other_key ... ok
+test tests::room_rooted_token_isolates_rooms_and_participants_on_both_deciders ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s
+
+INDEPENDENT APPENDED REVIEW PROBES
+warning: method `causes` is never used
+   --> /private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-cmhrabif/native/vendor/moq-webrtc/src/keyframe.rs:272:9
+    |
+122 | impl Gate {
+    | --------- method in this implementation
+...
+272 |     pub fn causes(&self) -> u8 {
+    |            ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `moq-webrtc` (lib) generated 1 warning
+   Compiling mjolnir-relay v0.1.0 (/private/var/folders/2n/bmf28cr51l7456rv53ckjv7m0000gn/T/mj-edge-review-cmhrabif/native/mjolnir_relay)
+warning: unused variable: `n`
+    --> src/edge.rs:2432:17
+     |
+2432 |             let n = me.flushes.fetch_add(1, Ordering::SeqCst);
+     |                 ^ help: if this is intentional, prefix it with an underscore: `_n`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mjolnir-relay` (lib test) generated 1 warning (run `cargo fix --lib -p mjolnir-relay --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.74s
+     Running unittests src/lib.rs (/Users/dukejones/work/IdentiKey/mjolnir/native/target/debug/deps/mjolnir_relay-00b330170a8c5cb4)
+
+running 14 tests
+test edge::independent_review::real_ack_dead_relay_and_watcher_detach_generation ... ok
+test edge::independent_review::real_ack_expiry_detaches_generation ... ack-first expiry detached same-token incumbent, preserved other token
+ok
+test edge::independent_review::real_catalog_timeout_and_whole_token_expiry_regression ... ok
+test edge::independent_review::real_final_registration_distinguishes_deadline_and_expiry ... ok
+test edge::independent_review::real_held_output_terminates_on_all_invalidations ... invalidation deadline, vectored=false, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation delete, vectored=false, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation drain, vectored=false, refs/runners=(0, 0, 0): completed without socket wake or abort
+invalidation relay, vectored=false, refs/runners=(0, 1, 1): completed without socket wake or abort
+invalidation deadline, vectored=false, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation delete, vectored=false, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation drain, vectored=false, refs/runners=(0, 0, 0): completed without socket wake or abort
+invalidation relay, vectored=false, refs/runners=(0, 1, 1): completed without socket wake or abort
+invalidation deadline, vectored=true, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation delete, vectored=true, refs/runners=(1, 1, 2): completed without socket wake or abort
+invalidation drain, vectored=true, refs/runners=(0, 0, 0): completed without socket wake or abort
+invalidation relay, vectored=true, refs/runners=(0, 1, 1): completed without socket wake or abort
+ok
+test edge::independent_review::real_keepalive_post_delete_prunes_tickets ... ok
+test edge::independent_review::real_last_release_closes_under_lock_before_redial ... ok
+test edge::independent_review::real_missing_source_http_contract ... ok
+test edge::independent_review::real_pending_ack_gates_do_not_resurrect_or_start ... ok
+test edge::independent_review::real_pipelined_failure_commits_only_first ... ok
+test edge::independent_review::real_tcp_flush_runner_finish_and_cap ... ok
+test edge::independent_review::real_three_pipeline_success_and_h2_rejection ... ok
+test edge::independent_review::real_transport_failure_matrix_preserves_incumbent ... ok
+test edge::independent_review::real_unrun_drop_missing_context_and_relay_cleanup ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 61.82s
